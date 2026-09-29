@@ -30,8 +30,16 @@
 #   必须全部写成日文正字（選べます／係数／お支払い／プロフェッショナル／言語）——
 #   补翻采纳的三条硬判据之一是「残片数量严格变少」，桩不认这条就会整条链回退成"保留脏稿"。
 #
-# 用法：python3 mock_assist.py [port]        # 默认 8796
-# 统计：GET /uat/stats → {"calls":N,"gen":N,"rewrite":N,"canned":N}
+# 用法：python3 mock_assist.py [port] [run-tag] [mode]   # 默认 8796、mode=seq
+#   mode=seq   补翻那一枪回**第二稿**（残片变少 ⇒ 补翻被采用）——093x 四条腿的默认档；
+#   mode=echo  补翻那一枪**原样吐回**收到的上一稿（残片一个没少 ⇒ 三条硬判据必然拒用），
+#              这是 ★ 094x「补翻被拒之后的确定性正字表」那条腿的夹具：
+#              只有让补翻真的失败，才能证明就地改写那条二线防线接上了，而不是被补翻顺手修掉的。
+#   ⚠️ echo 档的 gen 会**额外挂一句** ECHO_EXTRA（见其定义）：094x 的第二类现网词形「费用」「什么」
+#      不在逐字原文里，而原文里带这两个字的那半句在 ※旁白括号内、出栈前会被末道卫生整段剥掉
+#      ⇒ HTTP 面观测不到。只锚「言語」会被脏稿里那句合法日文「文字数**と言語**に応じて」子串命中，
+#      实测成一条恒绿假锁（把出站腿拆掉它照样绿）——所以补一句括号外的形态，而不是放宽判据。
+# 统计：GET /uat/stats → {"ok":true,"run":"…","mode":"seq|echo","calls":N,"gen":N,"rewrite":N,"canned":N}
 # ============================================================================
 import json
 import sys
@@ -58,6 +66,16 @@ CLEAN_SECOND_DRAFT = (
     "能与へのご相談も歓迎です。[ pricing ページで詳細を確認]  （※日本語で回答するため、翻訳を実施。）"
 )
 
+# echo 档（W9 那台"补翻必拒"桩）专用的**追加句**。为什么要有它，而不是直接改上面的逐字原文：
+#   094x 的现网实证词形一共两类——第一类（选択／系数）已经在 DIRTY_FIRST_DRAFT 里，
+#   第二类「费用」「什么」是**换件当天复问**才抓到的（正字表里那两条 ★现网实证 注释即其来源）。
+#   DIRTY_FIRST_DRAFT 与单测 leakReply093x 是同一份"逐字录音"，动它＝把 093x 的 W1～W8 六条腿一起改了口径；
+#   所以第二类按**同一形态**拼成一句挂在 echo 档的尾巴上：判残与正字表要的是**词的射程**，不是第二份录音。
+#   ⚠️ 这句刻意不带括号、不带算式、不带品牌，免得踩到末道卫生／报价守卫／品牌归一任何一道
+#      ——被它们吃掉的话，W9c 就变成"永远达不到"的假红（本轮就在「入力语言」上真踩过一次：
+#      那个词只出现在 ※旁白括号里，出栈前整段被剥，HTTP 面根本观测不到）。
+ECHO_EXTRA = "実際の费用はどのくらいですか。为什么価格が変動するのでしょうか。"
+
 # canned（欢迎词／chips）用的干净短句：不含中文词形，免得打开词那半边被本段断言误伤。
 CANNED_REPLY = "LangCross へようこそ。ご質問があればお気軽にどうぞ。"
 
@@ -67,14 +85,53 @@ STATE = {"calls": 0, "gen": 0, "rewrite": 0, "canned": 0}
 # 而 curl 照样拿到 200 ——那台旧桩的 gen/rewrite 计数是上一轮攒下的，
 # W7「上游恰好两次」那条硬账就跟着失真（端口抢占既能造出假红也能造出假绿）。
 RUN_TAG = ""
+# 补翻那一枪的回法（argv[3]）：见文件头 mode 说明。默认 seq＝回第二稿（补翻被采用）。
+MODE = "seq"
+
+
+def last_user_content(payload):
+    """取请求体里最后一条 user 消息的正文（补翻提示词就在这一条里，见 han_residue.go）。"""
+    for msg in reversed(payload.get("messages") or []):
+        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            return msg["content"]
+    return ""
+
+
+def extract_draft(prompt):
+    """从补翻提示词里把「上一版译文」那段抠出来（mode=echo 用它原样回吐）。
+
+    提示词的固定收尾是「…【上一版日文译文】\\n<草稿>\\n---」（见 repairHanResidueBase）。
+    取**最后一次**出现的锚点：translateContract 那段口径文本里也带【】，只有最后一个是译文块。
+    抠不到（提示词改了收尾）就返回 None，调用方回干净第二稿——**宁可退回默认档，
+    也不许让桩返回一句空文本把整段判据打成"上游没通"**。
+    """
+    i = prompt.rfind("【上一版")
+    if i < 0:
+        return None
+    j = prompt.find("】", i)
+    if j < 0:
+        return None
+    tail = prompt[j + 1:]
+    if tail.startswith("\n"):
+        tail = tail[1:]
+    if tail.endswith("\n---"):
+        tail = tail[: -len("\n---")]
+    return tail
 
 
 def classify(payload):
     """按提示词里的稳定标记把请求分成三类，返回 (类别, 该回的内容)。"""
     blob = json.dumps(payload, ensure_ascii=False)
     if "整段重写一遍" in blob:
+        if MODE == "echo":
+            draft = extract_draft(last_user_content(payload))
+            if draft:
+                return "rewrite", draft
         return "rewrite", CLEAN_SECOND_DRAFT
     if "直接回复用户" in blob:
+        # echo 档多加一句 094x 的第二类现网词形（见 ECHO_EXTRA 的来处与"别放进括号"那条约束）
+        if MODE == "echo":
+            return "gen", DIRTY_FIRST_DRAFT + ECHO_EXTRA
         return "gen", DIRTY_FIRST_DRAFT
     return "canned", CANNED_REPLY
 
@@ -100,7 +157,7 @@ class H(BaseHTTPRequestHandler):
         # run 回的是本进程启动时拿到的标识（见 RUN_TAG）——就绪探针要认「应答的是本次起的这台桩」，
         # 只看"有人应答"会把上一轮残留的旧桩当自己起的那个，计数口径就错了（端口抢占形态真踩过）。
         if self.path.startswith("/uat/stats"):
-            self._send({"ok": True, "run": RUN_TAG, **STATE})
+            self._send({"ok": True, "run": RUN_TAG, "mode": MODE, **STATE})
         else:
             self._send({"ok": False, "error": "not found"}, 404)
 
@@ -132,9 +189,10 @@ class H(BaseHTTPRequestHandler):
 
 
 def main():
-    global RUN_TAG
+    global RUN_TAG, MODE
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8796
     RUN_TAG = sys.argv[2] if len(sys.argv) > 2 else ""
+    MODE = sys.argv[3] if len(sys.argv) > 3 else "seq"
     ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
 
 

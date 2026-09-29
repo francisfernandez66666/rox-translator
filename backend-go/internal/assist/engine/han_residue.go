@@ -47,6 +47,23 @@
 //	「[ pricing ページで詳細を確認]」就是补翻把【go:pricing】换形后原样出栈的），
 //	修法与判据见 engine.go 的 rehardenReplyRewrite。
 //
+// ★★★ 094x（2026-09-30，093x 换件**当天**的现网复问又抓到 3 条红）：这一批的红不在"判残尺子"上，
+//
+//	在"补翻被拒之后没有第二条路"上。日志实跑读数：同窗口 4 条未采用／2 条未改善／2 条成功，
+//	另有 10 条 provider 调用失败——**而那一行 Warn 里没有原因字段**，
+//	于是"上游抖了一下"和"模型改不动那几处"这两种完全不同的病在日志里长得一模一样，
+//	下一批该修哪一边全靠猜。本批据此做两件事：
+//	  ① 补翻底座第三个返回值＝拒绝原因（七个档，见 reject* 常量），两条路的 WARN 都带上它；
+//	  ② 日文对话正文在补翻被拒时过一道**确定性正字表**（applyJaResidueFixups）——
+//	     只收"同一个词／同一个字、日文只有一个写法"的形态（费用→費用、数据→データ、什么→何），
+//	     要在几个说法里挑一个的（プロfessional→専門?）一律不收，
+//	     并且四道前置（只动被判残点名的片段／数字序列逐字不变／行数不变／残片严格变少）
+//	     任一不过就整体作废回原稿。
+//	⚠️ canned 那一路**不做**本地替换：它有中文原文可退、且译文会落库缓存，
+//	把替换口径塞进去等于给缓存里灌一种新形态；对话正文没有可退的那一稿，才需要第二道防线。
+//	⇒ 因为 canned 这一路的最终形态逐字未变（只多了一个日志字段），本批**不抬** cannedPromptRev，
+//	  抬档的判据是"欢迎词／chips 的最终形态变了"，不是"这个文件被改过"。
+//
 // =============================================
 package engine
 
@@ -283,15 +300,15 @@ func lineCountOf(s string) int {
 	return n
 }
 
-// repairHanResidue 把残片点名，让模型整段重写一次；返回「新稿 + 是否采用」。
+// repairHanResidue 把残片点名，让模型整段重写一次；返回「新稿 + 是否采用 + 未采用的原因」。
 // 采用的三条硬判据：调用成功且没被 max_tokens 截断、行数与上一稿一致、残片数量**严格变少**。
-// 任一不成立就回 false，调用方保留上一稿并记 Warn——这里绝不做的是"拿一份没验过的新稿换掉旧稿"。
+// 任一不成立就回 false 并把原因交给调用方记日志——这里绝不做的是"拿一份没验过的新稿换掉旧稿"。
 //
 // 这一条是 canned（欢迎词／chips）那一路的入口：它有**中文原文**可比，
 // 所以判残用的是 hanResidueRuns（"必须在源文里原样找到"那一档才成立）。
 // 对话正文走 repairReplyHanResidue，判据换成 replyHanResidueRuns（没有源文，见那里）。
 func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLang, src, draft string,
-	leaks []string, maxTokens int) (string, bool) {
+	leaks []string, maxTokens int) (string, bool, string) {
 	return e.repairHanResidueBase(ctx, client, uiLang,
 		"\n【中文原文】\n"+src, draft, leaks, maxTokens,
 		func(out string) []string { return hanResidueRuns(uiLang, src, out) })
@@ -309,7 +326,9 @@ func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLan
 //  2. 额度用 replyLocalizeMaxTokens（一条回答可能二十行，400 会翻出半句，见 reply_lang_check.go）。
 //
 // 补翻只许改善、不许换坏：三条硬判据一条不落（未截断／行数一致／残片严格变少），
-// 不成立就原样留着并记 WARN——让客户看到「文件翻訳」这种半中半日的句子（丑但内容是真的），
+// 不成立就记 WARN 并带上**拒绝原因**（★ 094x）。日文正文还有一道确定性正字表兜底
+// （applyJaResidueFixups，只动被判残点名的词形、数字一字不动）；兜不住的那一类
+// 原样留着——让客户看到「文件翻訳」这种半中半日的句子（丑但内容是真的），
 // 也比拿一份可能被改坏额度数字的新稿覆盖旧稿安全。
 func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, rep *Reply) *Reply {
 	if rep == nil || rep.Content == "" {
@@ -327,12 +346,26 @@ func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, r
 		return rep
 	}
 	client := e.ensureLLM(ctx)
-	fixed, ok := e.repairHanResidueBase(ctx, client, answerLang, "", rep.Content, leaks,
+	fixed, ok, reason := e.repairHanResidueBase(ctx, client, answerLang, "", rep.Content, leaks,
 		replyLocalizeMaxTokens, func(out string) []string { return replyHanResidueRuns(answerLang, out) })
 	if !ok {
+		// ★ 094x：补翻失败分两半处理。**先按确定性正字表兜一刀**（只动被判残点名的那几个词形，
+		// 数字／行数／残片数三道前置全过才生效），再把"没兜住的"照旧原样留着并记 WARN。
+		// 为什么只有这一路做本地替换、canned 那一路不做：欢迎词／chips 是有**中文原文**和落库缓存的，
+		// 补翻失败会退回出中文原文（访客看得见的是"没翻"而不是"翻坏了"），
+		// 而对话正文没有原文可退，留残片就是客户屏幕上的常态——这一路才需要第二道确定性防线。
+		if patched, applied := applyJaResidueFixups(answerLang, rep.Content, leaks); len(applied) > 0 {
+			observability.Warn(ctx, "assist.engine 对话正文补翻未采用，已按确定性正字表就地改写",
+				"lang", canonicalLang(answerLang), "source", rep.Source,
+				"reason", reason, "before", len(leaks),
+				"after", len(replyHanResidueRuns(answerLang, patched)),
+				"fixed", strings.Join(applied, ","), "leaks", strings.Join(leaks, ","))
+			rep.Content = patched
+			return rep
+		}
 		observability.Warn(ctx, "assist.engine 对话正文汉字残留补翻未采用，保留原稿",
 			"lang", canonicalLang(answerLang), "source", rep.Source,
-			"count", len(leaks), "leaks", strings.Join(leaks, ","))
+			"reason", reason, "count", len(leaks), "leaks", strings.Join(leaks, ","))
 		return rep
 	}
 	observability.Info(ctx, "assist.engine 对话正文汉字残留已出站补翻",
@@ -347,11 +380,21 @@ func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, r
 // 为什么要抽这一层而不是复制一份提示词：同一族缺陷在两处各修一次，
 // 迟早长成「canned 修好了、对话正文照漏」的形态（本仓 074x/082x 两批都是这么收尾的，
 // 见 han_residue.go 文件头）。提示词、三条硬判据、温度与截断口径都必须只有一份。
+//
+// ★ 094x（2026-09-30 换件后现网复问抓到"拒绝但说不出为什么"）第三个返回值是**拒绝原因**：
+//
+//	采用时回空串，未采用时回下面那五个常量之一。加这一腿前，日志只有
+//	「补翻未采用，保留原稿 + count + leaks」，而现网同一时间窗里躺着 10 条 provider 调用失败——
+//	于是"上游抖了一下"和"模型改不动那几处、新稿残片没变少"这两种完全不同的病在日志里长得一模一样，
+//	前者该等重试、后者该加本地兜底，判错方向就把整条修治带偏。这一腿**只加观测、不改任何判定**。
 func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, uiLang, srcBlock, draft string,
-	leaks []string, maxTokens int, afterLeaks func(string) []string) (string, bool) {
+	leaks []string, maxTokens int, afterLeaks func(string) []string) (string, bool, string) {
 	label := langLabel(uiLang)
-	if label == "" || client == nil || !client.Enabled() || len(leaks) == 0 {
-		return "", false
+	if label == "" || client == nil || !client.Enabled() {
+		return "", false, rejectNoUpstream
+	}
+	if len(leaks) == 0 {
+		return "", false, rejectNoLeaks
 	}
 	prompt := "上一版" + label + "译文里有这些片段没写成" + label + "（照抄了中文词形／简体字形，" +
 		"或一个词被劈成假名＋英文）：" + strings.Join(leaks, "、") +
@@ -363,15 +406,161 @@ func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, u
 		srcBlock + "\n【上一版" + label + "译文】\n" + draft + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})
-	if err != nil || usage.Truncated {
-		return "", false
+	if err != nil {
+		return "", false, rejectUpstreamError
+	}
+	if usage.Truncated {
+		return "", false, rejectTruncated
 	}
 	out = cleanTranslated(out)
-	if out == "" || lineCountOf(out) != lineCountOf(draft) {
-		return "", false
+	if out == "" {
+		return "", false, rejectEmptyOutput
+	}
+	if lineCountOf(out) != lineCountOf(draft) {
+		return "", false, rejectLineCount
 	}
 	if len(afterLeaks(out)) >= len(leaks) {
-		return "", false // 没改善就收手，别拿一份同样带残片的新稿去覆盖
+		return "", false, rejectNotImproved // 没改善就收手，别拿一份同样带残片的新稿去覆盖
 	}
-	return out, true
+	return out, true, ""
+}
+
+// 补翻拒绝原因（★ 094x，只用于日志分档，不参与任何判定）。
+//
+// 这五个名字把 repairHanResidueBase 的五个出口一一对上：前两个是"根本没打这一枪"
+// （没有可用上游／没有残片），中间两个是"这一枪没拿到能用的稿"（上游报错／被 max_tokens 截断），
+// 最后两个是"拿到了但按硬判据不许采用"（行数变了／残片没变少）。
+// ⚠️ 加新出口必须同步加一个名字并在这里点名，否则日志里又是一个"拒绝但说不出为什么"。
+const (
+	rejectNoUpstream    = "no_upstream"    // 上游没配好或不可用（这一路本来就没资格打补翻那一枪）
+	rejectNoLeaks       = "no_leaks"       // 残片清单为空（调用方判据不该走到这儿，出现即说明两边尺子分叉了）
+	rejectUpstreamError = "upstream_error" // 上游报错（现网 09-30 同窗 10 条 provider 失败即此类）
+	rejectTruncated     = "truncated"      // 新稿被 max_tokens 截断（半份稿子绝不能采用）
+	rejectEmptyOutput   = "empty_output"   // 上游回空／清洗后为空
+	rejectLineCount     = "line_count"     // 行数与上一稿不一致（chips 靠行数拆回，少了行＝删内容）
+	rejectNotImproved   = "not_improved"   // 残片没严格变少（模型没把点名的每一处都改掉）
+)
+
+// jaResidueFixups 补翻被拒时的**确定性正字表**（★ 094x，2026-09-30 换件后现网复问抓到 3 条红）。
+//
+// 先说清它**不是**什么：不是"服务端替模型写作文"。jaLatinIntrusions 那条腿的注释里
+// 「命中只送去补翻、绝不就地替换」的原则**原样保留**——「プロfessional」该落成「専門」还是
+// 「プロフェッショナル」这种**要在几个说法里挑一个**的形态，本地一律不动。
+// 这张表只收「同一个词、日文正字法只有一个写法（或有一个压倒性主力的写法）」的形态：
+// 「费用→費用」是**同一个字的简繁之别**，「数据→データ」是**同一个词的固定对译**，
+// 换成别的说法就是写错。挑不出第二个说法，才配进这张表。
+//
+// 为什么补翻之外还要这一层：换件后现网那三条红全部是**判残抓到了、补翻被拒**
+// （拒绝原因当时还没分档，分不清是上游抖动还是模型改不动）。而这两类的后果本来完全不同——
+// 上游抖动下一句就自己好了，模型改不动则每一句都留残片。既然漏出的形态是**封闭的一小批词**，
+// 让它们在补翻失败时也有一条确定性的出路，比等客户再截一张图划算。
+//
+// 三条前置（都写在 applyJaResidueFixups 里，逐条可反证）：
+//   - 只动**已被判残点名的片段**里出现过的键，正常日文一律不碰；
+//   - 数字序列必须逐字不变（本表全是文字替换，任何数字变化都说明表被写坏了）；
+//   - 替换后重新判残，残片数必须**严格变少**，否则整段作废回原稿。
+//
+// 收录门槛与逐字理由见下面每一条的行内注释；表值本身由 ja_residue_fixup_test.go 逐条过判残（正向锁）。
+var jaResidueFixups = []jaFixupPair{
+	// —— 简繁字形之别：同一个词，日文正字法就长这样 ——
+	{from: "翻译", to: "翻訳"}, // 译 U+8BD1 是简体字形，日文写 訳；本产品最高频的一个词
+	{from: "价格", to: "価格"}, // 价→価（cp932 能编进去但那是厂商扩展位，日文正字仍是 価）
+	{from: "费用", to: "費用"}, // ★ 现网 09-30 实证（A/B 两条红的残片就是这个）
+	{from: "语言", to: "言語"}, // ★ 现网 09-30「入力语言」那一族的词根
+	{from: "输入", to: "入力"}, // 输→入（日文汉字写作「入力」，"输入"两字组合不是日文词）
+	{from: "输出", to: "出力"}, // 同上，与 输入 成对收录
+	{from: "系数", to: "係数"}, // 数学"系数"日文写 係数（亻旁），"系数"这个组合在日文里不成立
+	{from: "选択", to: "選択"}, // ★ 现网 09-30 实证：选 U+9009 是简体字形、択 已是日文写法，这种半简半日只差一个字
+	{from: "选择", to: "選択"}, // 同上，两个简体字一起写的形态
+	// —— 固定对译：日文侧只有一个说法 ——
+	{from: "数据", to: "データ"},  // 日文的"数据"就是 データ，没有汉字写法
+	{from: "文件", to: "ファイル"}, // 同上（082x 第八条那条现网残留正是这个词形）
+	{from: "邮件", to: "メール"},
+	{from: "软件", to: "ソフトウェア"},
+	{from: "搜索", to: "検索"},
+	{from: "信息", to: "情報"}, // 情報 是日文正常词形，判残表刻意不收它，所以替换后不会再被判回来
+	{from: "折扣", to: "割引"},
+	{from: "账号", to: "アカウント"}, // 本产品语境里的"账号"＝アカウント（口座 只用于银行；这里取压倒性主力说法）
+	{from: "积分", to: "ポイント"},  // 与 reply_lang.go 的 pointsTermByLang["ja"] 同档，两处口径由测试交叉锁住
+	// —— 疑问词：现网实证的红腿，替换后句子仍读得通 ——
+	{from: "为什么", to: "なぜ"}, // 必须排在 什么 之前（applyJaResidueFixups 按表序替换，长词先走）
+	{from: "什么", to: "何"},   // ★ 现网 09-30 实证（C 条红的残片）；日文没有"什么"这个写法
+}
+
+// jaFixupPair 正字表的一行。
+type jaFixupPair struct {
+	from string // 译文里被判残点中的中文词形／简体字形
+	to   string // 日文正字法里那一个写法
+}
+
+// applyJaResidueFixups 对**补翻已失败**的日文正文做确定性正字替换。
+//
+// 返回「新文本 + 实际改掉的键列表」。改掉的键为空＝原样返回，调用方保留上一稿。
+// 四道前置逐道都能反证（见上面那张表的注释），任何一道不过就整体作废：
+//
+//	① 只对**已被判残点名的片段**里出现过的键动手；② 数字序列逐字不变；
+//	③ 非空行数不变；④ 替换后重新判残，残片数严格变少。
+//
+// 只在日文档调用（其余语种一个汉字都不该出现，"正字"这个概念不成立，见函数开头的语种判断）。
+func applyJaResidueFixups(answerLang, text string, leaks []string) (string, []string) {
+	if canonicalLang(answerLang) != "ja" || text == "" || len(leaks) == 0 {
+		return text, nil
+	}
+	out := text
+	applied := make([]string, 0, len(leaks))
+	for _, fp := range jaResidueFixups {
+		// 前置①：这个键必须出现在某个被判残点名的片段里。
+		// 这一条把射程钉死在"判残已经认定有问题的那几段"，正常日文（含 情報／検索 这类
+		// 和表值同形的词）永远走不到替换这一步。
+		hit := false
+		for _, leak := range leaks {
+			if strings.Contains(leak, fp.from) {
+				hit = true
+				break
+			}
+		}
+		if !hit || !strings.Contains(out, fp.from) {
+			continue
+		}
+		out = strings.ReplaceAll(out, fp.from, fp.to)
+		applied = append(applied, fp.from)
+	}
+	if len(applied) == 0 {
+		return text, nil
+	}
+	// 前置②：数字一字不动。表里没有数字，所以这一步红＝表被写坏了或撞进了带数字的词形，
+	// 宁可放弃这次替换（现网报价守卫那条"不许改数字"是同一条口径）。
+	if digitSeqOf(out) != digitSeqOf(text) {
+		return text, nil
+	}
+	// 前置③：行数不变（替换不引入换行，这条防的是将来往表里塞带换行的值）。
+	if lineCountOf(out) != lineCountOf(text) {
+		return text, nil
+	}
+	// 前置④：残片必须**严格变少**——和补翻用的是同一把尺子。
+	// 变少之外还要求"改掉的每一个键都不再被判残"，否则就是拿一种残留换另一种。
+	if len(replyHanResidueRuns(answerLang, out)) >= len(leaks) {
+		return text, nil
+	}
+	return out, applied
+}
+
+// digitSeqOf 按出现顺序拼出串里所有连续数字段（用 | 分隔）。
+// 「数字序列逐字不变」判据的读数口径：分段拼串比"只数总个数"严——
+// 把 150 改成 1500 个数不变但段变了，而那种恰好是最要命的报价数字改动。
+func digitSeqOf(s string) string {
+	var b strings.Builder
+	inRun := false
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			inRun = true
+			continue
+		}
+		if inRun {
+			b.WriteRune('|')
+			inRun = false
+		}
+	}
+	return b.String()
 }
