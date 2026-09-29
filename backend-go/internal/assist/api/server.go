@@ -395,11 +395,14 @@ func (s *Server) handleFeatures(w http.ResponseWriter, r *http.Request) {
 
 // configKeyWhitelist 管理端可写的配置键白名单：
 //   - UI 五项：welcome/persona/temperature/max_tokens/quick_chips
+//     ★ 080x（2026-09-29）新增 tone_rules「说话方式」：现网实证 temperature 不是音色旋钮
+//     （0.7 与 1.0 两条回复同四件事、同顺序、同长度，只换词的摆放），真正的旋钮是系统提示词里
+//     那段语气规范。它此前硬编码在 engine.go，运营想改个口气必须发一次版——挪进配置后改完即生效。
 //   - ★ LLM 四项（R0.4）：base_url/api_key/model/model_backup 允许后台在线配置，
 //     engine 侧配合惰性重建实现热加载；api_key_backup 复用主 Key 故不单列。
 //     env（ASSIST_LLM_*）显式配置优先于 configs 表（见 engine.llmClient）。
 var configKeyWhitelist = map[string]bool{
-	"welcome": true, "persona": true, "temperature": true, "max_tokens": true, "quick_chips": true,
+	"welcome": true, "persona": true, "tone_rules": true, "temperature": true, "max_tokens": true, "quick_chips": true,
 	"llm_base_url": true, "llm_api_key": true, "llm_model": true, "llm_model_backup": true,
 	// R0.1 同义词归一表（逗号分隔：词=同义词1|同义词2，多组换行）
 	"synonyms": true,

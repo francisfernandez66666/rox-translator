@@ -3,6 +3,8 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -488,5 +490,98 @@ func TestCompoundIntentYield(t *testing.T) {
 	rep2 := e.Respond(context.Background(), "s-ci2", "多少钱", "/", nil)
 	if rep2.Source != "rule" || rep2.Content != "按积分计费" {
 		t.Fatalf("纯价格问句应仍直配: source=%s content=%s", rep2.Source, rep2.Content)
+	}
+}
+
+// TestSystemPromptCarriesToneSpec ★ 080x（2026-09-29「temperature 改到 1 还是冷冰冰」）：
+// 音色那段规矩必须真出现在组装后的 system prompt 里。
+// 旧口径只限长度（「2-4句话，120字以内，别啰嗦」），既没要求「先接住用户这句话」，
+// 也没给收尾方式——模型的最优解就是把知识库那条「企业版能力：①…②…③…⑤」编号清单
+// 逐条压缩念一遍（现网回复正是这个形状），用户读到的就是产品参数表，不是人在说话。
+// 判据三腿：新结构要求在 / 库里 tone_rules 现值必须压过代码默认（改口气不必发版）/ 旧长度档不许复活。
+func TestSystemPromptCarriesToneSpec(t *testing.T) {
+	e := newTestEngine(t)
+	sys := e.buildSystemPrompt(nil)
+	// ① 新的说话方式四要素：接话 → 只挑最相关 → 收尾给下一步 → 正反对照片
+	for _, want := range []string{"先接住", "最相关", "反面示例", "正面示例", "200 字以内", "不许编价格"} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("说话方式缺 %q：\n%s", want, sys)
+		}
+	}
+	// 人设默认值也在（第一段），且拼在说话方式之前
+	if !strings.Contains(sys, "AI翻译平台的销售顾问") || strings.Index(sys, "销售顾问") > strings.Index(sys, "先接住") {
+		t.Fatalf("人设没拼在说话方式之前：\n%s", sys)
+	}
+	// ② 旧口径不得复活——它就是把回复打成参数表的那一条
+	for _, gone := range []string{"2-4句话，120字以内", "【语气铁律】"} {
+		if strings.Contains(sys, gone) {
+			t.Fatalf("旧语气口径复活：%s", gone)
+		}
+	}
+	// ③ 库里现值压过代码默认（与 max_tokens 同一条教训：代码默认会被库里现值盖住，
+	//    反过来说库里必须能盖住，运营后台改语气才是真能改）
+	_ = e.db.SetConfig("tone_rules", "只说一句话：好的。")
+	sys2 := e.buildSystemPrompt(nil)
+	if !strings.Contains(sys2, "只说一句话：好的。") {
+		t.Fatalf("tone_rules 库里现值没生效：\n%s", sys2)
+	}
+	if strings.Contains(sys2, "先接住") || strings.Contains(sys2, "正面示例") {
+		t.Fatalf("默认语气没被库值整体替换（会和运营写的叠成两套规矩）：\n%s", sys2)
+	}
+}
+
+// TestTemperatureDoesNotChangeTone ★ 080x：把「温度不是音色旋钮」钉成机械断言。
+// 现场：用户把 temperature 从 0.7 拧到 1，回复照旧冷——同一问题的两条现网回复是
+// 「同样的四件事、同样的顺序、同样的长度，只换了词的摆放」。
+// 原因就在这条断言的两半上：换温度 ⇒ 出站请求的 temperature 字段确实变了（配置链路是通的，
+// 不是"改了没生效"那种故障），但 messages（含 system prompt）逐字节不变 ⇒ 语气一个字没动。
+// 以后谁想把语气挂到温度上，这条直接红灯，逼他回到真旋钮（persona / tone_rules）。
+func TestTemperatureDoesNotChangeTone(t *testing.T) {
+	var bodyMu sync.Mutex
+	var last string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		bodyMu.Lock()
+		last = string(b)
+		bodyMu.Unlock()
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"好的。"},"finish_reason":"stop"}]}`))
+	}))
+	defer srv.Close()
+
+	e := newTestEngine(t)
+	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
+
+	// askOnce 以指定温度问一次，返回（出站 temperature 文本, 出站 messages 原文）
+	askOnce := func(temp string) (string, string) {
+		bodyMu.Lock()
+		last = ""
+		bodyMu.Unlock()
+		if err := e.db.SetConfig("temperature", temp); err != nil {
+			t.Fatalf("set temperature: %v", err)
+		}
+		e.llmReply(context.Background(), "epub 支持吗", nil)
+		bodyMu.Lock()
+		body := last
+		bodyMu.Unlock()
+		if body == "" {
+			t.Fatalf("温度 %s 下没打到上游", temp)
+		}
+		var v struct {
+			Temperature float64         `json:"temperature"`
+			Messages    json.RawMessage `json:"messages"`
+		}
+		if err := json.Unmarshal([]byte(body), &v); err != nil {
+			t.Fatalf("解析出站体: %v\n%s", err, body)
+		}
+		return fmt.Sprintf("%g", v.Temperature), string(v.Messages)
+	}
+
+	t1, m1 := askOnce("0.2")
+	t2, m2 := askOnce("1")
+	if t1 == t2 {
+		t.Fatalf("两档温度出站字段相同（%s），配置链路断了", t1)
+	}
+	if m1 != m2 {
+		t.Fatalf("换温度连 messages 都换了——语气不该由温度承担：\n%s\n---\n%s", m1, m2)
 	}
 }
