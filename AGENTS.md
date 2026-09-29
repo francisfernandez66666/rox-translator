@@ -345,3 +345,7 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
   所以关键词/文案修订必须随批跑一次 `python3 scripts/assist_kb_sync.py --host <服务器>`（默认只读打差异，
   确认后 `--apply`，写前自动备份）——这一步此前长期挂「待人工执行」，2026-09-23 已由脚本收口，
   口径见《部署指南》§十三。同理「线上管理台在线改的内容」优先级高于 seed，脚本**绝不 DELETE**。
+  ★ 2026-09-29 起同步面从 `kb_entries` 扩到**四张表**（`scripts` 话术 / `flows` 流程 / `feature_links` 功能卡）：
+  只修 kb 不够——话术直配与流程步进**不经过模型**，库里那句超承诺文案会原样发给客户（判据见
+  `internal/assist/seed/seed_gate_test.go`）。只有 kb 的 UPDATE 带 `updated_at` bump（向量索引指纹），
+  另三张按 key/关键词精确直出、刷指纹无意义。`--only kb,scripts` 可分段跑。
