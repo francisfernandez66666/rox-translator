@@ -324,6 +324,45 @@
   租户管理员 403、匿名 401；客户面任何页面／导出／对外接口**不得出现该字段**。改这块时先确认读点还在这一道闸后面。
 
 
+### 12. 文件转换远端派发：只走 `fpdexec` 协议（★ 2026-09-30 〇-AE 立为硬约定）
+
+- 体验机 `fpd` 账号被 sshd 的 `ForceCommand=fpd-bridge` 钉死，**只认「stdin 第一行 = base64(JSON header)」这一种协议**。
+  因此 `backend-go/internal/fileproc/fileproc_remote.go` 里**禁止**出现裸 `ssh <host> <任意命令>` 与 `scp`：
+  建目录／上传／查尺寸／取回一律走 `put`/`stat`/`get`（`put` 自己按协议建会话目录，**别再补一次 mkdir 往返**）。
+  09-29 的现网事故就是这两条死腿：开关一开、第一次派发死在建目录，然后被降级链静默兜回本地，
+  表现是「派发开了但从没真跑过一次」——**有自动降级的链路，"产物能打开"不算验收**。
+- **上传与回拉必须各比一次 sha256 逐字节等值**才算成功（`TestDispatchRunByteEqualRoundTrip`），失败必须显式降级并记 WARN，
+  **不许**把"远端没拨通"写成"这单已处理"。
+- **就绪判据不许吃零值**：`selftest`／`expire_date`／`caps.rlimit_as_set` 任一缺字段即判未就绪
+  （`TestProbeRejectsMissingSelftestField`——远端删掉字段＝主站静默放行，这是反向锁的存在理由）。
+  `/api/health` 只出**状态词**（`dispatch`／`dispatch_expire`／`dispatch_mem_cap`／`dispatch_selftest`），
+  **禁止**出现远端 IP／主机名／绝对路径。
+- 探测缓存是 **TTL**（`FILEPROC_DISPATCH_PROBE_TTL_SEC`，默认 600s），**不是 `sync.Once`**：
+  远端「到期即拒」当天，跑着的进程必须自己翻旧；失败侧只缓存一个短退避窗口（旧形态"失败一次永不翻身"）。
+  ⚠️ 重探**不许**进 `procGate`/远端闸临界区（同 goroutine 重入 `sync.Once` 的死锁在这条链上踩过两次）。
+- 桩只认协议：假 `ssh`/`scp` 桩对裸命令分别退 **78**／**255**（`TestFakeStubsThemselvesRejectDeadLegs`），
+  谁把死腿写回来当场红——这条锁是"改完还会退化"的唯一机械防线。
+- **开闸判据**＝`scripts/dispatch_preflight.sh` 的 **G5 真机全往返**（无样张时 G5 **判红不判跳过**；
+  G1~G4 全绿证明不了传输腿）＋**定档**：远端并发＝1（2G/2 核）、回传 ≈0.49 MB/s、产物膨胀 ≈3.4×
+  ⇒ `FILEPROC_DISPATCH_MIN_MB` 必须按**产物尺寸**而不是输入尺寸抬档（现默认 8 MiB 偏低，粗算盈亏平衡点在输入 ≈15–20 MB 以上）。
+  凭据口径见《deploy/dispatch/README.md》「凭据面」：运维走 `fpdbox` 别名的 `ubuntu`，派发私钥不进本机 config。
+
+### 13. 挂件出栈守卫链：四道守卫只在 `Engine.Respond` 这一条咽喉上（★ 2026-09-30 〇-AE）
+
+- 顺序钉死（`internal/assist/engine/engine.go` 的 `Respond` 尾部）：
+  `repairReplyHanResidue`（判残补翻）→ `rehardenReplyRewrite`（**补翻产物再过一遍卫生**：旁白括号／裸方括号／回声）
+  → `guardReplyQuote`（报价：剥乘法算式、复算不出的总额一律不出口）→ `guardReplyBrand`（品牌名走不可译占位符）。
+  新增守卫一律挂这条链，**不许**挂进四道回复分支或 `fallbackReply` 里各写一份。
+- 守卫判据只问**作答语言**（`effectiveReplyLang`，见 §三 那条 〇-AC 口径），**不许**再直接读挂件送来的 `uiLang`。
+- **确定性正字表（`applyJaResidueFixups`）的四道前置一个都不许放宽**：只动被判残点名的片段／`digitSeqOf` 数字序列逐字不变／
+  `lineCountOf` 行数不变／残片数严格变少——任一不过就**保留原稿**并记 WARN。
+  它是"补翻失败之后"的第二道防线（欢迎词/chips 那一路不做本地替换，因为有中文原文可退；对话正文没有原文可退）。
+- **补翻拒绝原因分档常量是对外排障契约**：`no_upstream`/`no_leaks`/`upstream_error`/`truncated`/`empty_output`/`line_count`/`not_improved`，
+  单测**逐字钉字面量**、adopt（成功）出口必须回空串。日志里的 `reason`/`before`/`after`/`fixed`/`leaks` 字段是现网定位的唯一抓手
+  （094x 就是靠 `reason=line_count` 才把"补翻没生效"和"上游本来就不通"分开）。
+- 改「canned 译文的最终形态」（提示词措辞／出栈卫生／判残与补翻口径）必须同步抬 `cannedPromptRev`，
+  否则换件后老缓存继续投旧形态＝**换件没修**（本批真踩两次，见 §三 那条）。
+
 ---
 
 ## 二、提交前闸门（必须全绿）
