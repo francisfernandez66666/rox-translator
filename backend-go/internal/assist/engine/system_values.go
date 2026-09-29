@@ -13,20 +13,27 @@
 //		比语气冷冰冰严重得多。所以价格、语种数这类会变的数字，一律不落在知识条目里，
 //		改成每次建 prompt 时取现值。
 //
-// ★ 三条硬口径（改这个文件前先读完）：
+// ★ 四条硬口径（改这个文件前先读完）：
 //
 //  1. **只取匿名公开口，不越权**：/api/pricing/meta 与 /api/translation/langs
 //     都是官网自己也在用的公开口，且已在「公开接口零 token 裸值」的约束下折算成积分口径。
 //     本文件禁止改成调超管接口或直接读主库：assist 与主服务是两套部署单元，
 //     跨库读（store.ReadMainDBConfig）只在 SQLite 形态可用，生产 PG 下直接失效，
 //     而且那等于让挂件持有主库凭据。
+//
 //  2. **取不到就整段不出现，绝不兜旧值**（与官网定价页同一条判据：
 //     「取不到系数就渲染空态，不许兜底旧价」）。这里的兜底代价比前端更高——
 //     模型拿到一份写死的旧数字就会把它当事实念给客户。所以失败分支返回空串，
 //     话术由 promise.go 第二条接住（「现值没出现就说不支持报数，发你一份清单」）。
+//
 //  3. **失败也要占缓存位**：失败后同样把 sysValAt 推到当下，TTL 内不再重试。
 //     否则主服务一挂，每条对话都要先等两次 HTTP 超时才建 prompt（挂件首响应被拖到秒级），
 //     比"暂时取不到现值"更难受。
+//
+//  4. **算术不交给模型**（★ 082x 第七条，2026-09-29 现网两条英文轮各错一次）：
+//     总额由 renderQuoteExamples 在服务端按现值算好写成「现算示例」，配一条报价纪律禁自乘除、
+//     禁把字数换算成字符数。只给系数的话模型真的会当场做乘法，还会做错（对外错报价）。
+//     这块的判据在 system_values_test.go，改动请连带跑它。
 //
 // 缓存口径：成功/失败都进 60s TTL；管理台改 main_base_url 后最迟 60s 生效，不必重启
 // （与 LLM 配置热加载同一节奏）。想看当前取到了什么，管理台 GET /api/assist/admin/system_values。
@@ -38,6 +45,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -194,8 +202,55 @@ func renderSystemValues(base string, pricing *pricingMetaDoc, langCount int) str
 		}
 		sb.WriteString("\n")
 		sb.WriteString("- 积分单价：1 积分 ≈ " + trimNum(pricing.PointsPriceMoney) + " 元（积分与人民币的换算口径；客户实际付多少以套餐页面为准，别拿它当套餐价报）\n")
+		sb.WriteString(renderQuoteExamples(pricing))
 	}
 	return strings.TrimRight(sb.String(), "\n")
+}
+
+// quoteExampleTiers 现算示例给的源字符档。
+// 为什么是这三档：1000 是系数本身（客户问「一个字多少」时唯一能诚实回答的形状），
+// 5000／20000 覆盖现网挂件实际被问到的那份量级（一份合同、一份中等文档），
+// 再多就是给模型一份可以随意摘抄的数字表——**示例是给它的引用面，不是计算器**。
+var quoteExampleTiers = []int{1000, 5000, 20000}
+
+// renderQuoteExamples 把「N 源字符花多少积分、约合多少元」在**服务端**算好交给模型引用。
+//
+// ★ 082x 第七条（2026-09-29 现网复问第二批取证，两条英文轮各错一次）：
+//
+//	光给系数等于给模型出题——它真的会当场做乘法，而且做错：
+//	一条把 2000 个英文单词按「1 词 ≈ 400 字符」折算（平台按**源字符**计费，字数与字符之间
+//	从来没有官方换算），另一条直接报出「800credits + 7.5 = 807.5 credits（约 ¥80）」
+//	这类谁都没核过的总额。**这是对外错报，不是措辞问题**：客户拿这个数去理解账单，
+//	和官网报价页、和实际扣费三条口径打架（AGENTS §一·5 那条单一事实源最怕这个）。
+//
+//	修法不是再写一句更凶的「不许自己算」（那还是请求）：**把算术从模型手里拿走**。
+//	总额由这里算完、连人民币约等数一起写好，它只能整条引用；
+//	数字对不上就是没取到现值，走文件头那条「整段不出现」的 fail-soft 而不是现编。
+func renderQuoteExamples(pricing *pricingMetaDoc) string {
+	if pricing == nil || len(pricing.Modes) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("- 现算示例（下面每个总额都是系统按上面的系数**算好的**，报数时整条引用，不许自己再算、也不许报这里没有的总额）：\n")
+	for _, m := range pricing.Modes {
+		segs := make([]string, 0, len(quoteExampleTiers))
+		for _, chars := range quoteExampleTiers {
+			points := m.PointsPer1kChars*float64(chars)/1000 + m.PointsFixed
+			segs = append(segs, strconv.Itoa(chars)+" 源字符 = "+trimNum(points)+" 积分（约 "+trimNum(round2(points*pricing.PointsPriceMoney))+" 元）")
+		}
+		sb.WriteString("  " + modeLabel(m.Code) + "：" + strings.Join(segs, "；") + "\n")
+	}
+	sb.WriteString("- 报价纪律：平台按**源字符**计费，字数与字符之间没有官方换算——" +
+		"客户给的是字数时，禁止把字数换算成字符数、禁止自己做任何乘除、禁止报上面示例之外的总额；" +
+		"只报「每 1000 源字符 = 上面的系数」这条单价，再补一句总额看实际字符量、把文件发过来就能估准。" +
+		"人民币金额只许引用上面算好的那个「约 X 元」，不许自己按汇率或单价现算。\n")
+	return sb.String()
+}
+
+// round2 人民币约等数收到两位小数（分）。为什么不留六位：现值那份 trimNum 的六位是给**单价**用的，
+// 总额报出「12.717442 元」既不是客户能核对的数、也不会让他更信，反而像计算器漏出来的尾巴。
+func round2(v float64) float64 {
+	return math.Round(v*100) / 100
 }
 
 // modeLabel 计费模式代码转客户听得见的说法（未知代码原样带出，不猜语义）
