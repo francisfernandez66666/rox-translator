@@ -134,6 +134,10 @@ func (s *Server) markupMultiplier() float64 {
 // 关闭时 Meter→LogUsage 仅留痕计量、不扣余额（体验包/免费策略）。
 // tid<=0（品牌主站根租户，无归属）或用量<=0 时直接放行。
 // 覆盖即时翻译、翻译工单、OpenAPI 三类入口——三者共用同一 llm.Client，故一处生效全局实时计量。
+// ★ 2026-09-29 〇-AD：ctx 上带 llm.WithPlatformCost 标记的用量（知识库 Embedding、
+//
+//	行业包采集等**平台自己该吃成本**的通路）走「留痕不扣费」分支且不写收集器，
+//	超管侧按 llm.PlatformCostSummary 单列核算；默认（无标记）仍是扣租户余额。
 func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, completion int64) error {
 	if s.Bill == nil || s.Store == nil {
 		return nil
@@ -172,10 +176,31 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	// 就与台账逐笔等值。旧形态是展示侧自己再乘一次 markup：默认值不同源（1.5 vs 策略值）、
 	// 不读模式因子，客户按报文算出来的账与实扣差一截且无从发现。
 	// 免费模式（charge=false）同样记录：台账按 billed 留痕（quantity 一致），出参口径才能对得上。
+	uid := tenant.UserFromContext(ctx)
+	// ★ 2026-09-29 〇-AD：平台承担用量（知识库 Embedding、行业包采集等后台任务）
+	//   一律**只留痕、不扣租户余额**，并且**不写收集器**——收集器是对外「本次消耗多少积分」
+	//   的唯一口径（F-49① 的等值承诺就是「出参 = 实扣」），把平台承担的量也记进去，
+	//   客户报文里的 points_used 就会比自己实际掉的积分多一截，正是 F-49① 立约要消灭的形态。
+	//   task_type 落标签（kb_embed / pack_scrape…）供超管侧单列核算；
+	//   rate_card 未为该标签配行时 unitPrice 回退 (1, 1.0)，与 'translate' 同价，
+	//   所以留痕行的 cost 仍等于「本该收客户多少」，平台承担账才是可比金额。
+	if reason, ok := llm.PlatformCostFromCtx(ctx); ok {
+		// ★ 〇-AD 补丁二：reason 落进 task_type 后，额度侧那条腿就自动安全了——
+		//   usage_daily 的写点（LogUsage/LogUsageBatch）与读点（DailyUsage 兜底、当日回填）
+		//   都按 store.PlatformTaskTypeExclPred 同一个名单排掉平台承担的用量。
+		//   不排的话就是「积分没扣、额度照样被吃」：CheckDailyQuota 拿着我们的后台任务量
+		//   把客户拦在「已达到今日用量上限」，同一只 bug 的第二张脸。
+		// ★ 自备台账的 ctx（知识库索引重建按租户字符占比分摊后自己落 LogUsageBatch）不再补行，
+		//   否则同一笔 token 记两次、超管看板的「平台承担」翻倍。
+		if !llm.IsSelfLedgeredUsage(ctx) {
+			_ = s.Store.LogUsage(tid, uid, reason, model, model, tenant.LangFromContext(ctx), billed, "platform", mode)
+		}
+		s.metrics.addUsage(0)
+		return nil
+	}
 	if uc := llm.CollectorFrom(ctx); uc != nil {
 		uc.AddBilled(billed)
 	}
-	uid := tenant.UserFromContext(ctx)
 	if hasRule && !rule.Charge {
 		// 免费模式：仅留痕计量（用量看板可见、cost=0），不扣双桶台账
 		_ = s.Store.LogUsage(tid, uid, "translate", model, model, tenant.LangFromContext(ctx), billed, "text", mode)
@@ -690,6 +715,9 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 		// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如全站批量 LLM 调用）的用量
 		//   未出现在 users 列表，但不计入 total 会让「全站仅后台任务」的日期按日查询恒为 0。
 		//   单独归一行（沙箱用户）并入 total，保证日期口径连续一致。
+		// ★ 2026-09-29 〇-AD 后的实际形态：UsageAllByUser 已只数客户自己的用量（无归因留痕行被排掉），所以这一行现在
+		//   **只在真有「扣了钱却没归属用户」的流水时**才出现（历史 B1 之前的计量）。
+		//   平台承担部分不再长在这里——它按 task_type 归到 /usage/cost 的 platform 块。
 		if c0 := costByUser[0]; c0 > 0 {
 			total += c0
 			out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: 0, OrgID: 0, Status: "active"}, OrgName: "平台", Cost: s.Store.PointsFromTokens(c0)})
@@ -747,6 +775,12 @@ func (s *Server) handleUsageOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 2026-09-05 修复：系统/未登录任务（user_id=0，如批量 LLM 调用）并入 total，
 	//   避免「当日仅系统任务」时按日查询 total 恒为 0，且明细可见该部分消耗。
+	// ★ 2026-09-29 〇-AD（★ 本批用户明确要求的可见性收口）：UsageByOrg 现在只数实扣，
+	//   留痕行（知识库 Embedding、行业包采集、Judge 抽样、推广期免费、欠费批次）
+	//   根本不进 costByUser，这行因此不再出现——租户/个人用户看到的「本层累计」
+	//   从此等于「自己真掉的积分」；平台承担金额改在 /usage/cost（level 4 专属）单列。
+	//   ⚠️ 不许为了让这一行「看起来还在」而把谓词放宽回 SUM 全量：那正是
+	//   现网 337,819 积分冒充客户消耗的形成路径。
 	if c0 := costByUser[0]; c0 > 0 {
 		orgTotal += c0
 		out = append(out, orgUsage{User: &store.User{ID: 0, Username: "system", DisplayName: "系统/后台任务", Role: "system", TenantID: tid, OrgID: 0, Status: "active"}, OrgName: "系统", Cost: s.Store.PointsFromTokens(c0)})
@@ -770,8 +804,22 @@ func usageDateRange(r *http.Request) (from, to string) {
 }
 
 // handleUsageCost 全平台模型成本核算看板（超级管理员）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求。
-// 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（query: from/to=YYYY-MM-DD，与 usage/org 同口径）。
+// 返回: success=true 时携带 costs（map[provider/model]=cost）与 quants（map[provider/model]=quantity），
+// 以及 ★ 2026-09-29 〇-AD 新增的 platform 块（平台承担成本单列）。
+//
+// ★ 可见性口径：个人/组织看板自 〇-AD 起只数**客户自己的用量**（store.CustomerUsagePred：
+//
+//	  排掉平台承担的用途标签行与 uid=0 的留痕/结算行），
+//
+//		被移出的那部分金额不能凭空消失，就在这一只 level-4 专属接口里以 platform 块单列——
+//		「平台替客户垫了多少」只有运营方需要知道，客户侧出现这个字段只会引发
+//		「我没消耗过为什么有这一行」的追问（现网正是反过来：337,819 积分挂在
+//		「系统/后台任务」一行，把 725 积分的真实消费彻底淹掉）。
+//		platform 内部再分两档，因为「平台承担」其实是两件不同的事：
+//		① policy_borne＝按政策本就平台该吃的（知识库 Embedding、行业包采集、Judge 抽样、后台任务）；
+//		② other_log＝历史留痕（推广期免费、非强制计费期、欠费批次落账）；
+//		settled＝欠费清零调整，属坏账口径，单列且绝不并入上面两档。
 func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		s.writeAuthzError(w, r, err) // ★ F-64①：未登录→401、等级不足→403（见 server.go writeAuthzError）
@@ -784,8 +832,36 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
+	from, to := usageDateRange(r)
+	platform := map[string]interface{}{}
+	if pc, perr := s.Store.PlatformCostSummary(from, to); perr != nil {
+		// 取不到就整块缺席（回空对象），**不许回吐一堆 0**：
+		// 「0 元平台承担」会被读成「平台一分钱没垫」，而真值只是这一次查不动
+		observability.Warn(r.Context(), "用量看板：平台承担成本聚合失败", "err", perr.Error())
+	} else if pc != nil {
+		policy, other := int64(0), int64(0)
+		for reason, cost := range pc.ByReason {
+			switch reason {
+			case llm.PlatformKBEmbed, llm.PlatformPackScrape, llm.PlatformEvals, llm.PlatformSystemTask:
+				policy += cost
+			default:
+				other += cost
+			}
+		}
+		platform = map[string]interface{}{
+			"total":        s.Store.PointsFromTokens(pc.Total),
+			"policy_borne": s.Store.PointsFromTokens(policy),
+			"other_log":    s.Store.PointsFromTokens(other),
+			"settled":      s.Store.PointsFromTokens(pc.Settled),
+			"by_reason":    s.pointsMapJSON(pc.ByReason),
+			"by_model":     s.pointsMapJSON(pc.ByModel),
+		}
+	}
 	// ★ 2026-09-19 积分口径：模型费用合计折积分出参（quants 仍为用量单位数）
-	writeJSON(w, 200, map[string]interface{}{"success": true, "costs": s.pointsMapJSON(costs), "quants": quants})
+	writeJSON(w, 200, map[string]interface{}{
+		"success": true, "costs": s.pointsMapJSON(costs), "quants": quants,
+		"platform": platform, "from": from, "to": to,
+	})
 }
 
 // 编译期引用占位：保留 strings 导入（模板片段按构建标签条件编译时使用）。

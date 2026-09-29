@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"translator/internal/llm"
 	"translator/internal/store"
 )
 
@@ -59,7 +60,15 @@ type SourceDeps struct {
 // 对每个启用源：若当日已完成（SourceDone）或处于高频冷却（freq_hours 未到）则跳过；
 // 否则 RunSource 采集（低占用驱动，可中断续传）。
 // 参数 ctx=上下文（可取消）；返回完成源数。
+//
+// ★ 2026-09-29 〇-AD：本函数在入口统一打「平台承担成本」标记——采集产出的是**平台共享
+//
+//	数据**（行业包/语言文化包），不是客户下单的翻译。收在这里而不是两个调用方各标一次：
+//	调用方除了定时器（context.Background，tid=0 本就不扣费）还有管理台「立即采集」
+//	（admin_scrape.go 传 r.Context()，超管切户时 ctx 里带着**那个客户的 tenant_id**），
+//	后者过去会真扣客户积分。咽喉标注后，将来再加调用入口也不会漏。
 func (c *Crawler) RunDaily(ctx context.Context) (int, error) {
+	ctx = llm.WithPlatformCost(ctx, llm.PlatformPackScrape)
 	if c.St == nil {
 		return 0, fmt.Errorf("store 未初始化")
 	}

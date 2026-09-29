@@ -131,7 +131,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		if limit > 100000 {
 			limit = 100000
 		}
-		recs, uerr := s.Store.UsageLedgerForExport(tid, from, to, limit)
+		recs, uerr := s.Store.UsageLedgerForExport(tid, from, to, limit, !super) // ★ 〇-AD 补丁二：非超管只导实扣行
 		if uerr != nil {
 			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：CSV 取数失败是存储层故障。
 			//   此处仍在写任何响应头之前（Content-Type/BOM 都在下面），可安全回错误状态码；
@@ -165,7 +165,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		trend = map[string]int64{}
 	}
 	// 用量明细（分页）
-	ledger, err := s.Store.UsageLedgerList(s.effTenant(r, u), atoiDef(r.URL.Query().Get("limit"), 50), int(atol(r.URL.Query().Get("offset"))))
+	ledger, err := s.Store.UsageLedgerList(s.effTenant(r, u), atoiDef(r.URL.Query().Get("limit"), 50), int(atol(r.URL.Query().Get("offset"))), !super) // ★ 〇-AD 补丁二：客户面明细不含平台承担留痕行
 	if err != nil {
 		ledger = []*store.UsageLedger{}
 	}

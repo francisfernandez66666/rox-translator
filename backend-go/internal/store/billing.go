@@ -504,7 +504,11 @@ func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 			tid, r.UserID, r.TaskType, r.Provider, r.Model, r.Quantity, price, cost, r.BizKind, r.BizMode, ts); e != nil {
 			return e
 		}
-		sumCost += cost
+		// ★ 〇-AD 补丁二：日计数器只累**客户自发**的量（同 LogUsage 一个名单）。
+		//   KB 索引重建的分摊留痕就走这里，以前会把租户的 max_daily_chars 一路垫满。
+		if !isPlatformTaskType(r.TaskType) {
+			sumCost += cost
+		}
 	}
 	// ★ C5：同 RecordUsageBatch，累加入事务
 	if err := incrementDailyUsageTx(tx, tid, sumCost); err != nil {
@@ -525,8 +529,12 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model, lang stri
 		// charge_kind='log'：留痕行不参与退款消耗核算（P1-2）
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'log',?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
-	if err == nil {
-		s.incrementDailyUsage(tid, cost) // ★ 性能优化 B6：同步累加日计数器
+	if err == nil && !isPlatformTaskType(taskType) {
+		// ★ 性能优化 B6：同步累加日计数器。〇-AD 补丁二：平台承担的那几类用途标签
+		//   （知识库 Embedding／后台任务／行业包采集／Judge 抽样）**不累加**——
+		//   billing.CheckDailyQuota 读的正是 usage_daily，累加了就等于客户的「今日额度」
+		//   被平台自己的后台任务吃掉，积分没扣但请求会被「已达到今日用量上限」拦死。
+		s.incrementDailyUsage(tid, cost)
 	}
 	return err
 }
@@ -661,8 +669,11 @@ func (s *Store) ListRateCards() ([]*RateCard, error) {
 
 // UsageStats 租户用量汇总（按任务类型分组统计费用）。
 // 参数：tid=租户 ID；返回 map[任务类型]=总费用 与 全部费用合计。
+// ★ 2026-09-29 〇-AD：加客户面谓词 CustomerUsagePred（本函数出栈给租户账单概览与 OpenAPI 用量，
+//
+//	平台承担的标签行与无归因留痕行不该让租户当成自己的「消耗」）。
 func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? GROUP BY task_type", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT task_type, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND "+CustomerUsagePred+" GROUP BY task_type", tid)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -683,9 +694,14 @@ func (s *Store) UsageStats(tid int64) (map[string]int64, int64, error) {
 
 // UsageStatsByProvider 用量按供应商/模型拆分统计（多供应商成本核算）。tid<=0 时统计全平台。
 // 参数：tid=租户 ID（<=0 表示全平台）；返回 map["供应商 / 模型"]=总费用。
+// ★ 2026-09-29 〇-AD：加客户面谓词 CustomerUsagePred——本函数的租户分支出栈给客户账单页；
+//
+//	全平台分支（tid<=0，超管「真实成本」视角）读的是模型侧花费，会因此看不到
+//	留痕那部分平台承担成本，该缺口由 PlatformCostSummary 在 /usage/cost 一侧补齐，
+//	两个视角合起来才是全账。
 func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 	// 把空供应商归为 global，空模型归为 ?，拼接成展示键
-	q := "SELECT COALESCE(NULLIF(provider,''),'global') || ' / ' || COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0) FROM usage_ledger WHERE provider!=''"
+	q := "SELECT COALESCE(NULLIF(provider,''),'global') || ' / ' || COALESCE(NULLIF(model,''),'?'), COALESCE(SUM(cost),0) FROM usage_ledger WHERE provider!='' AND " + CustomerUsagePred
 	args := []interface{}{}
 	if tid > 0 {
 		q += " AND tenant_id=?" // 租户过滤（tid<=0 查全平台）
@@ -712,6 +728,7 @@ func (s *Store) UsageStatsByProvider(tid int64) (map[string]int64, error) {
 // UsageTrend 租户按日用量趋势（最近 N 天）。
 // 参数：tid=租户 ID，days=最近天数（默认 7，最大 90）。
 // 返回：map[日期YYYY-MM-DD]=当日总费用。
+// ★ 2026-09-29 〇-AD：加客户面谓词（租户账单页的日趋势，与 UsageStats 同尺）。
 func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	if days <= 0 || days > 90 {
 		days = 7 // 非法天数收敛到 7
@@ -719,7 +736,7 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 	// 计算起始日期（不含今天，往前 days-1 天）
 	start := time.Now().AddDate(0, 0, -(days - 1)).Format("2006-01-02")
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? GROUP BY day ORDER BY day",
+		"SELECT substr(created_at,1,10) AS day, COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND "+CustomerUsagePred+" AND created_at>=? GROUP BY day ORDER BY day",
 		tid, start)
 	if err != nil {
 		return nil, err
@@ -738,14 +755,24 @@ func (s *Store) UsageTrend(tid int64, days int) (map[string]int64, error) {
 }
 
 // UsageLedgerList 用量明细列表（租户隔离，分页）。
-// 参数：tid=租户 ID，limit=每页条数（默认 50，最大 500），offset=偏移量。
+// 参数：tid=租户 ID，limit=每页条数（默认 50，最大 500），offset=偏移量，
+//
+//	chargedOnly=只回**客户自己的用量**行（★ 2026-09-29 〇-AD 补丁二立、补丁三定尺）。客户面的明细页传 true：
+//	平台承担的留痕行（知识库 Embedding、后台任务、Judge 抽样）不是客户的账，
+//	列进明细就是「我没消耗过为什么有一行」；超管面与 GDPR 全量导出传 false。
+//	谓词引用包内唯一那份 CustomerUsagePred（〇-AD 补丁三），不在调用方另抄。
+//
 // 返回：用量明细列表，按 ID 倒序。
-func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, error) {
+func (s *Store) UsageLedgerList(tid int64, limit, offset int, chargedOnly bool) ([]*UsageLedger, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 50 // 非法 limit 收敛到 50
 	}
+	where := "WHERE tenant_id=?"
+	if chargedOnly {
+		where += " AND " + CustomerUsagePred
+	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger WHERE tenant_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
+		"SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), created_at FROM usage_ledger "+where+" ORDER BY id DESC LIMIT ? OFFSET ?",
 		tid, limit, offset)
 	if err != nil {
 		return nil, err
@@ -767,13 +794,20 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int) ([]*UsageLedger, e
 // 超出部分按 id 倒序截断最新段——报表面向「近期用量导出」场景，历史全量走 GDPR 导出）。
 // 时间口径：usage_ledger.created_at 统一 UTC RFC3339（★ C22 写点约定），
 // 故 from/to 按前缀字典序比较即可（from=YYYY-MM-DD 补 00:00:00，to 补 23:59:59）。
-// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数。
-func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int) ([]*UsageLedger, error) {
+// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数；
+//
+//	chargedOnly=只导**客户自己的用量**行（★ 〇-AD 补丁二，与 UsageLedgerList 同判据）。
+//	这份 CSV 是「财务/对账取数」，混进平台承担的留痕行就是让客户对着
+//	自己没消耗过的行做账，且与面板数字对不上（面板已收进同一谓词）。
+func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int, chargedOnly bool) ([]*UsageLedger, error) {
 	if limit <= 0 || limit > 100000 {
 		limit = 100000 // 导出行数硬上限（防拖库式全量拉取放大内存/IO）
 	}
 	q := "SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), COALESCE(charge_kind,''), created_at FROM usage_ledger WHERE tenant_id=?"
 	args := []interface{}{tid}
+	if chargedOnly {
+		q += " AND " + CustomerUsagePred
+	}
 	if from != "" {
 		q += " AND created_at>=?"
 		args = append(args, from+"T00:00:00")
@@ -814,7 +848,10 @@ func (s *Store) DailyUsage(tid int64) (int64, error) {
 		return cost, nil
 	}
 	// 兜底（表缺失/无当日行）：回退 ledger 当日 LIKE 扫描
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ?", tid, day+"%").Scan(&cost)
+	// ★ 〇-AD 补丁二：兜底重算要排掉平台承担的用途标签（与写点同一个名单）——
+	//   否则 usage_daily 当日行缺失时，平台垫的 Embedding/后台任务会被读成客户的今日用量，
+	//   CheckDailyQuota 就拿这个数把客户的请求拦死。
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ? AND "+PlatformTaskTypeExclPred, tid, day+"%").Scan(&cost)
 	return cost, err
 }
 
@@ -850,13 +887,23 @@ func (s *Store) incrementDailyUsage(tid, amount int64) {
 // 参数：tid=租户 ID，userID=用户 ID，from/to=日期区间（YYYY-MM-DD；均空=累计+当日口径，
 // from 缺省=to、to 缺省=from；from==to 即单日查询）。
 // 返回累计费用、当日费用、记录条数（区间查询时 total 与 today 均为区间值）。
+//
+// ★ 2026-09-29 〇-AD（补丁三改尺）：三条 SUM 一律加客户面谓词 CustomerUsagePred——
+//
+//	排掉平台承担的用途标签行，也排掉没归因到具体用户的留痕/结算行；
+//	推广期免费（charge=false）那类客户自己的 'log' 行**必须可见**，
+//	拿实扣当尺子会把他们的流水整页抹空（run_uat T59 现场抓到的红灯）。
+//
+//	留痕行（'log'）与欠费清零调整（'settle'）**没有扣这个用户的积分**，混进 SUM 就把
+//	「我的消耗」写成了「全系统跑过的量」。同一条尺子退款核算早都在用（见 A3/P1-2 注释），
+//	看板却是唯一没接的地方。
 func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, int64, error) {
 	var total, today, cnt int64
 	// 区间口径（from/to 任一非空）：total=today=区间值
 	if pred, args := usageDatePred(from, to); args != nil {
 		// 按租户+用户+created_at 区间聚合费用与笔数
 		err := db.QueryRow(s.db, db.CurrentDialect(),
-			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at "+pred,
+			"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+CustomerUsagePred+" AND created_at "+pred,
 			append([]interface{}{tid, userID}, args...)...).Scan(&total, &cnt)
 		if err != nil {
 			return 0, 0, 0, err
@@ -865,14 +912,14 @@ func (s *Store) UsageByUser(tid, userID int64, from, to string) (int64, int64, i
 	}
 	// 全部时间口径：total=全量，today=当日
 	err := db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=?", tid, userID).
+		"SELECT COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+CustomerUsagePred, tid, userID).
 		Scan(&total, &cnt)
 	if err != nil {
 		return 0, 0, 0, err
 	}
 	// 当日费用：created_at 前缀匹配今天
 	_ = db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at LIKE ?",
+		"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND "+CustomerUsagePred+" AND created_at LIKE ?",
 		tid, userID, time.Now().UTC().Format("2006-01-02")+"%").Scan(&today)
 	return total, today, cnt, nil
 }
@@ -909,12 +956,24 @@ func usageDatePred(from, to string) (string, []interface{}) {
 // ★ 2026-09-05 修复：不再过滤 l.user_id>0——系统/未登录任务（user_id=0）的用量也归入区间口径，
 //
 //	否则仅含后台任务的日期（如全站批量 LLM 调用）按日查询恒为 0。user_id=0 由 API 层单独归一行。
+//
+// ★ 2026-09-29 〇-AD（覆盖上面那条的一半语境，补丁三定稿为 CustomerUsagePred）：
+//
+//	本层 SUM 排掉「平台垫的标签行」与「uid=0 的留痕/结算行」，其余照旧进看板。
+//
+//	上面「user_id=0 也要归入区间」的动机是**按日 total 不能凭空为 0**，但把留痕行
+//	（'log'：平台承担/推广期免费/欠费批次）一起 SUM 的后果是现网实测的形态——
+//	组织「本层累计 338,544 积分」里 337,819 落在虚构的「系统/后台任务」一行，
+//	而这一行绝大部分**一分都没扣**。留痕金额没有消失，它改由
+//	PlatformCostSummary 单列，只在超管侧出栈（api.handleUsageCost）。
+//	仍保留 user_id=0 不加过滤：真有实扣落在 uid=0（历史 B1 之前的工单计量）时
+//	那是客户实际掉掉的积分，藏起来会让 total 与余额对不上。
 func (s *Store) UsageByOrg(tid int64, orgIDs []int64, from, to string) (map[int64]int64, error) {
 	out := map[int64]int64{}
 	// 基础 FROM：仅 usage_ledger 自身
 	selectFrom := "FROM usage_ledger l"
-	// 条件积累：租户恒等过滤为第一项
-	whereClauses := []string{"l.tenant_id=?"}
+	// 条件积累：租户恒等过滤为第一项，客户面谓词为第二项（带 l. 前缀的同尺子，见 CustomerUsagePredWith）
+	whereClauses := []string{"l.tenant_id=?", CustomerUsagePredWith("l.")}
 	args := []interface{}{tid}
 	// 组织过滤占位符：org_id IN (...)
 	filters := []string{}
@@ -1790,7 +1849,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 		//   导致 consumed 虚高、应退金额被低估，直接损害退款用户。
 		var consumed int64
 		if err := db.QueryRow(tx, d,
-			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND charge_kind IN ('','charge')",
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND "+RealDebitPred,
 			tid, paidAt).Scan(&consumed); err != nil {
 			return err
 		}
@@ -2185,13 +2244,16 @@ func randSuffix(n int) string {
 // UsageAllByUser 跨租户聚合每用户用量（超管平台视角）。
 // 参数：from/to=指定日期区间（YYYY-MM-DD，均空=全部时间，仅给一个视同单日/单边）。
 // 返回：用户 ID → 消耗量。
+// ★ 2026-09-29 〇-AD：加客户面谓词（与 UsageByOrg 同尺），平台视角的「每用户消耗」
+//
+//	同样只数真扣掉的积分；留痕部分由 PlatformCostSummary 单列。
 func (s *Store) UsageAllByUser(from, to string) (map[int64]int64, error) {
 	// 基础聚合：按用户汇总 quantity（平台视角以用量为口径）
-	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger"
+	q := "SELECT user_id, COALESCE(SUM(quantity),0) FROM usage_ledger WHERE " + CustomerUsagePred
 	args := []interface{}{}
 	// 指定日期区间：追加 created_at 区间谓词（空=全部时间）
 	if pred, cargs := usageDatePred(from, to); cargs != nil {
-		q += " WHERE created_at " + pred
+		q += " AND created_at " + pred
 		args = cargs
 	}
 	q += " GROUP BY user_id"

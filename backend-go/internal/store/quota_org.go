@@ -44,17 +44,28 @@ func (s *Store) OrgTokensUsedThisMonth(tid, orgID int64) (int64, error) {
 	placeholders = placeholders[:len(placeholders)-1]
 	q := `SELECT COALESCE(SUM(l.quantity),0) FROM usage_ledger l
 	      JOIN users u ON u.id=l.user_id
-	      WHERE l.tenant_id=? AND l.created_at>=? AND u.org_id IN (` + placeholders + `)`
+	      WHERE l.tenant_id=? AND l.created_at>=? AND l.` + PlatformTaskTypeExclPred + ` AND u.org_id IN (` + placeholders + `)`
 	var total int64
 	err = db.QueryRow(s.db, db.CurrentDialect(), q, args...).Scan(&total)
 	return total, err
 }
 
 // TenantTokensUsedThisMonth 统计全租户本月 token 消耗（含未分配部门的直属用户）。
+//
+// ★ 2026-09-29 〇-AD 补丁二（与上面部门腿同口径，一起排掉平台承担的用途标签）：
+// 这两条 SUM 不是「看看而已」——CheckBudgetWalls 拿它们判**部门墙/组织墙**，
+// 命中即 gateUsage 直接拦下客户的翻译请求（「部门 token 已耗尽」）。
+// 平台承担的行（知识库 Embedding、行业包采集、Judge 抽样、后台任务）以前照单计入，
+// 于是「平台自己垫的成本会把客户的月度预算吃穿」：客户一分积分没掉，
+// 却被告知预算用尽——本批第一只口子（不扣积分）修完，这只是必须同批修的第二只。
+// ⚠️ 这里用的**不是** RealDebitPred：额度侧问的是「这量是不是客户自己下单产生的」，
+//
+//	未开强制计费的租户全是 charge_kind='log' 的行，套实扣谓词会把他们的预算墙判成
+//	「一点没用」、防超支失效（名单与语义见 store.PlatformTaskTypeExclPred）。
 func (s *Store) TenantTokensUsedThisMonth(tid int64) (int64, error) {
 	var total int64
 	err := db.QueryRow(s.db, db.CurrentDialect(),
-		`SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=?`,
+		`SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND `+PlatformTaskTypeExclPred,
 		tid, monthStart()).Scan(&total)
 	return total, err
 }

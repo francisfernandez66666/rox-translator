@@ -16,13 +16,17 @@ type DailyUsagePoint struct {
 
 // MyDailyUsage 近 N 天「当前用户」每日消耗序列（升序返回，缺日无行——前端按日期轴补零）。
 // 参数：tid=租户 ID；uid=用户 ID；days=回看天数（默认 30，上限 90）。
+// ★ 2026-09-29 〇-AD（补丁三）：只数客户自己的用量（CustomerUsagePred）——自服务账单里的「每日消耗」
+//
+//	必须与客户实际掉的积分一致，留痕行（平台承担的 embed/采集/免费期）出现在这里
+//	就是「账单上有、余额里没有」，客户照着对账永远对不平。
 func (s *Store) MyDailyUsage(tid, uid int64, days int) []DailyUsagePoint {
 	if days <= 0 || days > 90 {
 		days = 30
 	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT substr(created_at,1,10) d, COALESCE(SUM(cost),0), COUNT(*) FROM usage_ledger
-		 WHERE tenant_id=? AND user_id=? GROUP BY d ORDER BY d DESC LIMIT ?`, tid, uid, days)
+		 WHERE tenant_id=? AND user_id=? AND `+CustomerUsagePred+` GROUP BY d ORDER BY d DESC LIMIT ?`, tid, uid, days)
 	if err != nil {
 		return nil
 	}
@@ -43,6 +47,10 @@ func (s *Store) MyDailyUsage(tid, uid int64, days int) []DailyUsagePoint {
 
 // MyLedgerPage 当前用户用量台账分页（可选 biz_kind=text/file 过滤）。
 // 返回：行（id 倒序）、总笔数。
+// ★ 2026-09-29 〇-AD（补丁三）：加客户面谓词 CustomerUsagePred——这是客户能逐条翻的「我的流水」，
+//
+//	留痕/结算行必须与 MyDailyUsage、usage/me 同进同出，否则同一账户两张面孔
+//	（汇总 0 元、明细里躺着几百积分）。总数与行共用同一 where，天然一致。
 func (s *Store) MyLedgerPage(tid, uid int64, bizKind string, limit, offset int) ([]*UsageLedger, int64, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 20
@@ -51,7 +59,7 @@ func (s *Store) MyLedgerPage(tid, uid int64, bizKind string, limit, offset int) 
 		offset = 0
 	}
 	d := db.CurrentDialect()
-	where := "tenant_id=? AND user_id=?"
+	where := "tenant_id=? AND user_id=? AND " + CustomerUsagePred
 	args := []interface{}{tid, uid}
 	if bizKind != "" {
 		where += " AND COALESCE(biz_kind,'')=?"

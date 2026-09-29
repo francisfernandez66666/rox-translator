@@ -684,9 +684,41 @@ export function UsageP() {
     </div>
   )
 
-  /** 模型成本：按模型的成本/用量两张表 */
+  /** 模型成本：平台承担成本单列 + 按模型的成本/用量两张表 */
+  // ★ 2026-09-29 〇-AD：`platform` 块只在本接口（/api/billing/usage/cost，level 4 专属）
+  //   回吐，租户/个人用户既取不到也不渲染——他们看到的「消耗」从此等于真扣掉的积分。
+  //   空对象＝后端这次聚合失败（不回吐 0 假数），整块不渲染，比「平台承担 0 积分」诚实。
   const costTables = (d: Any) => !d ? <EmptyState title="—" /> : (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16 }}>
+      {!!d.platform && Object.keys(d.platform).length > 0 && (
+        <div style={{ flex: '1 1 100%', minWidth: 320 }}>
+          <h4 style={{ fontSize: 16, margin: '4px 0' }}>{t('usage.platformTitle')}</h4>
+          <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('usage.platformHint')}</p>
+          <div className="stat-grid">
+            {[
+              ['total', 'usage.platformTotal'], ['policy_borne', 'usage.platformPolicy'],
+              ['other_log', 'usage.platformOtherLog'], ['settled', 'usage.platformSettled'],
+            ].map(([k, label]) => (
+              <div key={k} className="stat-card">
+                <div style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t(label)}</div>
+                <b>{fmtPoints(Number(d.platform?.[k]) || 0)} <span style={{ fontSize: 14, fontWeight: 400, color: 'var(--adm-faint)' }}>{t('ss2.unitPoints')}</span></b>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, marginTop: 8 }}>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <DataTable<any> rowKey={(row) => String(row.k)}
+                rows={Object.entries(d.platform.by_reason || {}).map(([k, v]) => ({ k, v }))}
+                columns={[{ key: 'k', title: t('usage.platformReason') }, { key: 'v', title: t('usage.colCost'), render: (row) => fmtPoints(Number(row.v)) }]}  />
+            </div>
+            <div style={{ flex: 1, minWidth: 280 }}>
+              <DataTable<any> rowKey={(row) => String(row.k)}
+                rows={Object.entries(d.platform.by_model || {}).map(([k, v]) => ({ k, v }))}
+                columns={[{ key: 'k', title: t('usage.colModel') }, { key: 'v', title: t('usage.colCost'), render: (row) => fmtPoints(Number(row.v)) }]}  />
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ flex: 1, minWidth: 320 }}>
         <h4 style={{ fontSize: 16, margin: '4px 0' }}>{t('usage.costBy')}</h4>
         <DataTable<any> rowKey={(row) => String(row.k)} rows={Object.entries(d.costs || {}).map(([k, v]) => ({ k, v }))}

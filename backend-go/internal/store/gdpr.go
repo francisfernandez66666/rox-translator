@@ -43,7 +43,7 @@ func (s *Store) ExportTenantData(tid int64) (map[string]interface{}, error) {
 	}
 
 	// 用量明细
-	if ledger, err := s.UsageLedgerList(tid, 100000, 0); err == nil {
+	if ledger, err := s.UsageLedgerList(tid, 100000, 0, false); err == nil { // 数据主体导出＝全量流水（含留痕行），不按实扣过滤
 		out["usage"] = ledger
 	}
 
