@@ -73,8 +73,11 @@ type Engine struct {
 
 	// ★ 081x（2026-09-29）：主服务现值缓存（价格系数/语种数），见 system_values.go。
 	// 与 vec/syn 同一范式：缓存本体由自己的锁保护，失败也占位以防每条对话都超时。
+	// sysValDoc 是同一份现值的**结构化**形态（092x 红腿二：出栈报价核验要按系数复算，
+	// 从渲染文本里反解数字等于把文案当判据），与 sysValBlock 同一次刷新、同一个锁写入。
 	sysValMu    sync.Mutex
 	sysValBlock string
+	sysValDoc   *pricingMetaDoc
 	sysValAt    time.Time
 }
 
@@ -596,7 +599,17 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 		observability.Info(ctx, "assist.engine 访客输入语言与界面语言不符，本轮作答语言按输入接管",
 			"ui_lang", canonicalLang(uiLang), "answer_lang", answer, "chars", utf8.RuneCountInString(input))
 	}
-	return e.enforceReplyLang(ctx, e.respond(ctx, sessionID, input, pageURL, answer, history), answer)
+	rep := e.enforceReplyLang(ctx, e.respond(ctx, sessionID, input, pageURL, answer, history), answer)
+	// ★ 092x 三条出站保证（2026-09-29 现网复问抓到的第四条，逐条只治自己那一族，判据见各文件头）：
+	// 顺序是刻意的——补翻可能整段重写，所以品牌归一必须排在它后面；
+	// 报价核验换的是服务端现算出来的句子，不含品牌名也不含汉字残留，放最后不会再被前两条动到。
+	rep = e.repairReplyHanResidue(ctx, answer, rep) // 红腿一：日文里嵌「文件」「費」这类混排
+	rep = e.guardReplyQuote(ctx, answer, rep)       // 红腿二：剥掉模型自算的算式与复算不出的总额
+	rep = e.guardReplyBrand(ctx, answer, rep)       // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 082x 第十条：旁白观测（只记 WARN 不改正文）。词表追不上模型措辞是这条链的常态，
+	// 没有这条计数就只能等用户下一次带截图来报——见 reply_lang_check.go 的 unstrippedAsides。
+	e.observeVisitorAsides(ctx, answer, rep)
+	return rep
 }
 
 // respond Respond 的四道主体（进行中的流程 / 话术直配 / 流程触发 / LLM+知识库＋兜底），

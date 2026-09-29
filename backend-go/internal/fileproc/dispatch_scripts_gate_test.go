@@ -21,6 +21,8 @@
 //	④ 集合面：三侧脚本清单等值（sync 同步的 ＝ preflight 校验的 ＝ fpdexec 白名单）；
 //	⑤ 资产面：脚本里点名的每个同步对象在仓库里真实存在（缺一个＝半套同步）；
 //	⑥ 写读同源：apply 写进 env 的每个 FILEPROC_DISPATCH* 键，二进制侧必须真读它。
+//	⑦ 传输腿面（★ 2026-09-30 加，今日开发内容入闸）：主站二进制真用的每一种 fpdexec mode，
+//	   preflight 必须在真机上验到；且取回腿必须做**逐字节等值**（sha 比对），只比 size 不算。
 //
 // 本文件只读仓库文本、只在临时目录里执行脚本的前置校验分支，
 // **绝不碰主站配置、绝不拨任何远端**（负路径用例都在 FPD_SSH/root 守卫处就退出）。
@@ -230,6 +232,108 @@ func TestDispatchHeaderProtocolIsBase64(t *testing.T) {
 					rel, i+1, strings.TrimSpace(line))
 			}
 		}
+	}
+}
+
+// TestDispatchTransportLegsCoveredAndCompared ⑦ 传输腿面（2026-09-30，今日改造的守门条）。
+//
+// 为什么要这一条：交接文档第一节的教训是**判据与实现分家**——
+// Go 侧早就改走 fpdexec 的 put/stat/get 协议了，preflight 却还在用裸 `ssh mkdir` + `scp`
+// 那两条被 ForceCommand 打死的腿，于是"门禁全绿"和"传输通路根本不通"能同时成立。
+// 集合面（A 段）保证以后再加第五条 mode（比如远端批量清理）时，
+// **主站真用的每一条腿都在开闸前被真机验过一次**，而不是只有单测里的假桩验过。
+//
+// 等值面（B 段）保证取回腿不许退化成"只看字节数相同"：
+// 现网 D5 那类"两侧各自看都健康、合起来半盲"的形态，正是 size 相同而内容不同的文件。
+// 判据刻意写成"任意两个 *SHA 变量在同一行做等值比较"而不钉死变量名，
+// 免得将来把 GOT_SHA/WANT_SHA 改名就把闸门判红（标识符锁被子串命中的老坑）。
+//
+// 反证（本轮在临时副本上实跑过，见测试内注释与 〇-AD 批次记录）：
+//   - 从 preflight 删掉 get 腿 ⇒ A 段点名"主站用了却没验"判红；
+//   - 把取回腿的 sha 等值比较改成只比 size ⇒ B 段判红。
+func TestDispatchTransportLegsCoveredAndCompared(t *testing.T) {
+	root := findDispatchRepoRoot(t)
+
+	// —— A 段：Go 侧真发的 mode 集合 ⊆ preflight 真拨的 mode 集合
+	goText := readRepoText(t, root, "backend-go/internal/fileproc/fileproc_remote.go")
+	// 两种书写形态都要收到：单行 map（"mode": "put"）与多行键值（"mode":    "run",）
+	goModes := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"mode":\s*"([a-z]+)"`).FindAllStringSubmatch(goText, -1) {
+		goModes[m[1]] = true
+	}
+	// 量级守卫：解析器一旦因写法变更恒返回空，A 段就成了"空集 ⊆ 任何集合"的恒真假绿
+	if len(goModes) < 4 {
+		t.Fatalf("Go 侧只解析到 %d 种 fpdexec mode（%v）⇒ 判据前提变了（协议写法变更或本包不再拨远端），先改这里", len(goModes), sortedKeys(goModes))
+	}
+	pre := readRepoText(t, root, "scripts/dispatch_preflight.sh")
+	preModes := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\{"mode":"([a-z]+)"`).FindAllStringSubmatch(pre, -1) {
+		preModes[m[1]] = true
+	}
+	var missing []string
+	for k := range goModes {
+		if !preModes[k] {
+			missing = append(missing, k)
+		}
+	}
+	sort.Strings(missing)
+	if len(missing) > 0 {
+		t.Errorf("主站二进制会发这些 mode，而 preflight 没在真机上验过：%v（preflight 已验 %v）\n⇒ 开闸绿灯只代表内容一致，不代表这些腿能通（交接文档第一节的原病）",
+			missing, sortedKeys(preModes))
+	}
+
+	// —— B 段：取回之后必须有一次 sha 级等值比较（只比 size 不算验过传输）
+	// ★ 判据必须是**两条**等值比较 + 一条**顺序**锁，而不是一把"文件里某处比过 sha"：
+	//   反证（本轮实跑）把取回腿的 `[ "$GOT_SHA" = "$WANT_SHA" ]` 摘掉后，
+	//   只查"存在一次摘要比对"的版本仍然绿——因为上传腿那一条（LOCAL_SHA vs PUT_SHA）替它顶上了。
+	//   现象正是"上传验得很严、回拉只量尺寸"，而客户拿到的是**回拉**这一侧的坏文件。
+	shaCompare := regexp.MustCompile(`\$[A-Za-z_]*SHA"?\s*=\s*"\$[A-Za-z_]*SHA`)
+	lines := stripShellCommentLines(pre)
+	var compIdx []int
+	getIdx := -1
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		if shaCompare.MatchString(l) {
+			compIdx = append(compIdx, i)
+		}
+		if getIdx < 0 && strings.Contains(l, `{"mode":"get"`) {
+			getIdx = i
+		}
+	}
+	if len(compIdx) < 2 {
+		t.Errorf("preflight 只做 %d 次「摘要变量等值比较」（要 ≥2：上传侧一次、回拉侧一次）⇒ 某一侧只比字节数，字节数相同而内容不同的件会被判通过", len(compIdx))
+	}
+	// 取不到任何比较时 last=-1，判红而不 panic（空切片取末位是运行时崩溃，闸门不该崩）
+	last := -1
+	if len(compIdx) > 0 {
+		last = compIdx[len(compIdx)-1]
+	}
+	if getIdx >= 0 && last < getIdx {
+		t.Errorf("取回腿在第 %d 行，而最后一次摘要等值比较在第 %d 行（更早或根本没有）⇒ 顺序反了：回拉之后没有再算一次摘要，"+
+			"『传输被截断/被兜底页替换』这一问就没有判据", getIdx+1, last+1)
+	}
+	// 回拉件还得验魔数：主站 spa.go 对不存在的路径也回 200，"有字节"不等于"是对的字节"
+	if getIdx >= 0 {
+		magicAfter := false
+		for _, l := range lines[getIdx:] {
+			if strings.Contains(l, `%PDF`) {
+				magicAfter = true
+				break
+			}
+		}
+		if !magicAfter {
+			t.Error("取回腿之后没有 PDF 魔数校验 ⇒ 取回件是 HTML 兜底页/半截文件时，只看 size 与 sha 都可能被兜住")
+		}
+	}
+	// 同一份 digest 工具必须既用于"上传前"也用于"取回后"：只调用一次说明只验了单向
+	digestCalls := 0
+	for _, l := range lines {
+		digestCalls += len(regexp.MustCompile(`\bDIGEST "`).FindAllString(l, -1))
+	}
+	if digestCalls < 2 {
+		t.Errorf("preflight 只调了 %d 次 DIGEST（<2）⇒ 上传或回拉其中一侧没算摘要，G5 的两段等值只剩一段", digestCalls)
 	}
 }
 

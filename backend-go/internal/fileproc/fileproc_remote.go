@@ -13,9 +13,21 @@
 //  3. **远端不持有数据**：会话目录用完即由远端 sweep timer 回收；本文件回拉产物后
 //     立即校验（存在 / 非空 / 文件头合法），校验不过就判失败 ⇒ 主站会走本地重跑。
 //
-// ★ 本实现刻意不用 sftp 协议库，而是复用本机 ssh/scp 二进制：
+// ★ 本实现刻意不用 sftp 协议库，而是复用本机 ssh 二进制：少一个第三方依赖、少一处需要长期维护的安全面；
 //
-//	少一个第三方依赖、少一处需要长期维护的安全面；代价是需要密钥文件与 BatchMode=yes。
+//	代价是需要密钥文件与 BatchMode=yes。
+//
+// ★★ 2026-09-29 传输腿改造（交接文档第一节，动这块前必读）：
+//
+//	体验机的 sshd 给 fpd 账号配了 `ForceCommand=/opt/fpdispatch/bin/fpd-bridge` ＋ `PermitTTY no`
+//	（这是方案本来的红线：不给交互 shell、忽略 SSH_ORIGINAL_COMMAND）。于是：
+//	  · 裸 `ssh host 'mkdir -p …'` 会被顶成 bridge，bridge 只把 stdin 喂给 fpdexec，
+//	    那条 mkdir 永远不会被执行 → 实测退 78「stdin 缺 header 行」，目录压根没建出来；
+//	  · `scp` 要的是远端 `scp -t/-f` 进程或 sftp 子系统，两者都不存在 → 回拉挂到墙钟超时、
+//	    上送静默非零退出，连错误文本都拿不到。
+//	⇒ 三条腿（建目录/上送/回拉）一律改走 fpdexec 自己的 put/stat/get 协议（stdin 第一行 base64(header)）。
+//	   put 内部就 makedirs，所以建目录那条多余往返直接删掉；
+//	   上送与回拉两侧都按 sha256 **逐字节比对**——scp 时代没有这一比对，"传半截"会当成传成功。
 //
 // ================================================================
 package fileproc
@@ -24,6 +36,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -31,6 +44,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -53,7 +67,7 @@ const (
 	envDispatchTTL     = "FILEPROC_DISPATCH_SESSION_TTL_SEC"
 	// envDispatchFont：pdfwrite 那条腿专用的**远端字体路径**。
 	// 为什么必须显式配：pdfwrite.py 的 argv[2] 是字体文件（主站是 NotoSansCJK 的 .ttc，约 20MB），
-	// 不配的话每次派发都要先把它 scp 过去——搬 20MB 字体去换一次 fpdf2 排版，纯亏。
+	// 不配的话每次派发都要先把它整份搬到远端——搬 20MB 字体去换一次 fpdf2 排版，纯亏。
 	// 配了它就把字体参数换成远端自己的路径（不搬运），不配则** pdfwrite 一律不派**（宁可不派，不派错）。
 	envDispatchFont = "FILEPROC_DISPATCH_FONT"
 )
@@ -166,26 +180,71 @@ func acquireRemoteGateCtx(ctx context.Context) func() {
 // ---------------- 就绪探测（启动时握手，缓存 + 连续失败降级） ----------------
 
 // DispatchProbe 远端实测值（来自 fpdexec.py probe；JSON 字段对齐方案 §5.1）
+//
+// ★ 2026-09-29 补三个字段，因为它们都是**同一类空转**：判据写在 Go 侧、远端从没吐过，
+//
+//	json.Unmarshal 把缺失键留成零值，那道腿结构上恒通过。远端 fpdexec 已同期上报，
+//	这里接上才算数；配套反向锁见 fileproc_remote_test.go 的 TestProbeRejectsFailedSelftest
+//	与 TestDispatchReadinessStatusWords。
 type DispatchProbe struct {
-	OK         bool              `json:"ok"`
-	MemGB      float64           `json:"mem_gb"`
-	ScriptSHA  map[string]string `json:"script_sha"`
-	Selftest   int               `json:"selftest"`
-	Expired    bool              `json:"expired"`
-	PybinExist bool              `json:"pybin_exists"`
-	Pymupdf    string            `json:"pymupdf"`
+	OK        bool              `json:"ok"`
+	MemGB     float64           `json:"mem_gb"`
+	ScriptSHA map[string]string `json:"script_sha"`
+	// Selftest 用**指针**接：0 与"远端根本没吐这个键"在值上必须能区分开。
+	// 曾经是 `int`，于是"删掉远端那个字段"这种改名式破坏会解成零值 0＝自检通过，
+	// 就绪闸第三条腿当场变回恒真——而这正是 09-28 那批空转判据的成因，不能留第二份土壤。
+	// 远端 fpdexec 的 probe 现在无条件吐 `selftest`（真实退出码），所以 nil 只有一种解释：对端不是这一版。
+	Selftest   *int   `json:"selftest"`
+	Expired    bool   `json:"expired"`
+	PybinExist bool   `json:"pybin_exists"`
+	Pymupdf    string `json:"pymupdf"`
+	// ExpireDate：远端配置的到期日（YYYY-MM-DD）。此前结构体里连这个键都没有，
+	// 等于「到期即拒」这件事主站侧只能靠人记住一个日期——现在它是读数。
+	ExpireDate string `json:"expire_date"`
+	Caps       struct {
+		// RlimitAsSet：远端是否真的读到了内存帽配置（false＝fpd.env 或 fpd-bridge 那一环断了）。
+		RlimitAsSet bool `json:"rlimit_as_set"`
+		// Clamped：配置值高于系统硬上限 ⇒ setrlimit 会失败 ⇒ 「帽配了但没戴上」的现网形态。
+		Clamped bool `json:"clamped"`
+	} `json:"caps"`
 }
 
-// 进程内派发状态（就绪一次缓存 + 连续失败降级）。
+// 进程内派发状态（就绪缓存 + 连续失败降级）。
 var (
-	probeOnce  sync.Once
-	probeRes   *DispatchProbe
-	probeErr   error
+	// probeMu＋probeAt：★ 已不再是 sync.Once（2026-09-29 改造第三节）。
+	//
+	//	Once 的语义是"首次成功后永不重探"，于是**远端到期当天，一直在跑的主站进程仍报 online**，
+	//	每次派发靠真实失败＋降级链兜住＝"能用是靠运气，不是靠判据"。现在按 TTL 重探（见 dispatchProbe）。
+	probeMu  sync.Mutex
+	probeRes *DispatchProbe
+	probeErr error
+	probeAt  time.Time
+	// probeErrAt：★ 失败也要缓存一小段（probeFailBackoff），但只缓存 30s，不是一整个 TTL。
+	//
+	//	两头的坑都真踩过：sync.Once 时代"失败一次就永远不再探"⇒ 换件后不重启就永远 degraded；
+	//	而完全不留缓存 ⇒ 远端一旦宕掉，**每一次 /api/health 都会现拨一次 ssh**（最坏 15s 一次），
+	//	健康面自己先被放大成慢接口。30s 比健康检查的节奏慢得多、又比 10 分钟快得多，恢复后不用等太久。
+	probeErrAt time.Time
+	// probeFailBackoff 失败缓存时长（独立成变量是为了单测能把它压到 0 验"确实会重拨"）。
+	probeFailBackoff = 30 * time.Second
+
 	dispatchMu sync.Mutex
-	// degradedUntil：连续失败后的静默期（§5.2），期间不再浪费<｜hy_place▁holder▁no▁813｜> RTT 去拨一台坏机器。
+	// degradedUntil：连续失败后的静默期（§5.2），期间不再浪费一次 RTT 去拨一台坏机器。
 	degradedUntil time.Time
 	failStreak    int
 )
+
+// probeTTL 就绪缓存的重探周期（FILEPROC_DISPATCH_PROBE_TTL_SEC，默认 600s）。
+// 为什么默认 10 分钟：到期判定最坏晚 10 分钟翻旧，而派发本身还有 `expired`＋远端 78 拒绝两层；
+// 再密就是拿公网 RTT 换排场，这一条腿本来就是"增益路径"。
+func probeTTL() time.Duration {
+	if v := os.Getenv("FILEPROC_DISPATCH_PROBE_TTL_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 600 * time.Second
+}
 
 // DispatchStatus 给 /api/health 的三态状态词（★ 只出状态词，不出主机与路径，见 #42 口径）
 func DispatchStatus() string {
@@ -203,14 +262,96 @@ func DispatchStatus() string {
 	return "online"
 }
 
-// dispatchProbe 远端就绪探测（进程内只成功一次；失败可重探）。
+// DispatchReadiness 派发面的健康读数（★ 2026-09-29 第二节：到期日与内存帽要能在健康面看见）。
+//
+// 口径：**只出状态词，绝不出远端主机名/IP/绝对路径**，也不把 probe 的 JSON 原样透出
+// （那是把一个外部机器的字段表挂到自家公开健康面上，字段一变就跟着变，没法写断言）。
+// MemCap 四档是刻意分开的——"配置齐全但帽没戴上"（clamped）与"配置根本没读到"（off）
+// 在现场是两件事，合成一档就看不出该去查 env 文件还是查系统硬上限。
+type DispatchReadiness struct {
+	Status     string `json:"dispatch"`          // off / online / degraded
+	ExpireDate string `json:"dispatch_expire"`   // 远端到期日（取不到=空串，不是"没有到期"）
+	MemCap     string `json:"dispatch_mem_cap"`  // on / clamped / off / unknown
+	Selftest   string `json:"dispatch_selftest"` // pass / missing_asset / failed / unknown
+}
+
+// DispatchStatusWords 把一次 probe 的实值翻成状态词（DispatchReadiness 与单测共用同一份翻译，
+// 免得"健康面显示 on、门禁判的是另一套"这种分叉长出来）。
+func DispatchStatusWords(p *DispatchProbe) (expire, memCap, selftest string) {
+	if p == nil {
+		return "", "unknown", "unknown"
+	}
+	expire = p.ExpireDate
+	switch {
+	case p.Caps.Clamped:
+		memCap = "clamped"
+	case p.Caps.RlimitAsSet:
+		memCap = "on"
+	default:
+		memCap = "off"
+	}
+	switch {
+	case p.Selftest == nil:
+		selftest = "unknown" // 对端没吐这个键：不是"自检通过"，是"不知道"
+	case *p.Selftest == 0:
+		selftest = "pass"
+	case *p.Selftest == 2:
+		selftest = "missing_asset"
+	default:
+		selftest = "failed"
+	}
+	return expire, memCap, selftest
+}
+
+// DispatchReadinessSnapshot 组一份健康面读数（三态＋到期日＋内存帽＋自检状态词）。
+// ★ 它取的是**缓存的 probe**，不额外拨远端；派发关着时其余字段留空（"没配"不等于"配了但坏了"）。
+func DispatchReadinessSnapshot() DispatchReadiness {
+	st := DispatchStatus()
+	r := DispatchReadiness{Status: st}
+	if st == "off" {
+		return r
+	}
+	// 只在缓存上取：dispatchProbe 命中 TTL 内缓存时零网络成本；过期会重探一次（同一把锁、同一判据）
+	p, err := dispatchProbe(context.Background())
+	if err != nil {
+		// 探不到就把"取不到"如实写成 unknown，绝不填一个看起来正常的默认值
+		r.ExpireDate, r.MemCap, r.Selftest = "", "unknown", "unknown"
+		return r
+	}
+	r.ExpireDate, r.MemCap, r.Selftest = DispatchStatusWords(p)
+	return r
+}
+
+// dispatchProbe 远端就绪探测（★ 按 TTL 缓存：首次成功后复用 probeTTL()，过期或从没成功过才重探）。
+//
+// 三条纪律，都是踩过的位置：
+//  1. **静默期内不拨**（degradedUntil）：重探本身也要计入降级，否则等于拿公网 RTT 去反复拨一台已知坏的机器；
+//  2. **临界区里不许调用**：本函数只在 DispatchRun 取远端闸**之前**、以及健康面用；
+//     闸容量由 probe 的 mem_gb 反推（remoteGateMax），若在持闸后重探就形成同 goroutine 重入（2026-09-28 死锁本体）；
+//  3. **锁内只跑 ssh**，不再回调任何会取闸/取锁的函数（Go 的 Mutex 不可重入，重入即永久挂死）。
 func dispatchProbe(ctx context.Context) (*DispatchProbe, error) {
-	probeOnce.Do(func() {
-		probeRes, probeErr = doDispatchProbe(ctx)
-	})
-	if probeRes == nil {
+	probeMu.Lock()
+	defer probeMu.Unlock()
+	// 双检：拿到锁后先看别人是否已经把这一轮探完了
+	if probeRes != nil && time.Since(probeAt) < probeTTL() {
+		return probeRes, nil
+	}
+	// 失败短缓存：30s 内不重复拨（否则远端宕掉时每次健康检查都付一次最坏 15s 的 ssh）。
+	// TTL=0 是显式"每次都真探"的档（单测与排障用），这时失败缓存也必须让位，否则"重探"这条腿名存实亡。
+	if probeErr != nil && probeTTL() > 0 && time.Since(probeErrAt) < probeFailBackoff {
 		return nil, probeErr
 	}
+	if probeRes == nil && time.Now().Before(degradedUntil) {
+		return nil, probeErr
+	}
+	res, err := doDispatchProbe(ctx)
+	if err != nil {
+		// 失败只缓存 probeFailBackoff 这么久就允许重探（旧形态是 sync.Once：失败一次就永不翻身，
+		// 换件不重启也修不好——2026-09-28 实测过一次）。成功读数 probeRes 保持到 TTL 到期。
+		probeErr, probeErrAt = err, time.Now()
+		return nil, err
+	}
+	probeRes, probeErr, probeAt = res, nil, time.Now()
 	return probeRes, nil
 }
 
@@ -221,11 +362,11 @@ func dispatchProbe(ctx context.Context) (*DispatchProbe, error) {
 //	2026-09-28 单测实测：这里曾直接发裸 JSON，远端 fpdexec 解不出来 ⇒ 探测恒失败，
 //	而失败被降级链兜住后表现为"派发从没生效过"，是最难发现的一类静默死分支。
 func doDispatchProbe(ctx context.Context) (*DispatchProbe, error) {
-	hb, err := json.Marshal(map[string]string{"mode": "probe"})
+	header, err := encodeDispatchHeader(map[string]interface{}{"mode": "probe"})
 	if err != nil {
 		return nil, err
 	}
-	stdout, stderr, err := dispatchSSH(ctx, append([]byte(base64.StdEncoding.EncodeToString(hb)), '\n'), nil, subTimeout())
+	stdout, stderr, err := dispatchSSH(ctx, header, nil, subTimeout())
 	if err != nil {
 		return nil, fmt.Errorf("远端探针失败: %w\n%s", err, truncateTail(stderr))
 	}
@@ -234,8 +375,17 @@ func doDispatchProbe(ctx context.Context) (*DispatchProbe, error) {
 	if err := json.Unmarshal([]byte(line), &p); err != nil {
 		return nil, fmt.Errorf("远端探针返回不可解析（%s）: %w", line, err)
 	}
-	if !p.OK || p.Expired || p.Selftest != 0 {
-		return nil, fmt.Errorf("远端未就绪 ok=%v expired=%v selftest=%d", p.OK, p.Expired, p.Selftest)
+	// ★ 就绪四腿（`selftest` 缺失也算一腿）。`Selftest != 0` 这一条在 09-28 是**空转**的：远端 probe 从没吐过该键，
+	//
+	//	反序列化永远是零值 0 ⇒ 判据恒通过（"深判据一次都没执行过"）。远端 09-29 已改成真跑真上报，
+	//	主站侧接上真值并把字段改成指针（nil＝没吐键＝不就绪），配套反向锁见
+	//	TestProbeRejectsFailedSelftest 与 TestProbeRejectsMissingSelftestField——
+	//	零值陷阱不配反向锁，下一次谁再删掉远端那个字段，主站照样静默放行。
+	if p.Selftest == nil {
+		return nil, errors.New("远端未就绪：probe 没上报 selftest 字段（对端不是 fpdexec 09-29 版，深判据无从执行）")
+	}
+	if !p.OK || p.Expired || *p.Selftest != 0 {
+		return nil, fmt.Errorf("远端未就绪 ok=%v expired=%v selftest=%d", p.OK, p.Expired, *p.Selftest)
 	}
 	return &p, nil
 }
@@ -346,9 +496,13 @@ func DispatchArtifactGuard(p string, allowedRoots ...string) error {
 
 // ---------------- 会话与传输 ----------------
 
+// dispatchWorkRoot 远端工作目录根（fpdexec 里叫 WORK=root/w）。
+// put/stat/get 的 `rel` 就是相对这里；run 的 argv 用它的绝对形态。两处同源，别各拼一遍。
+func dispatchWorkRoot() string { return dispatchRoot() + "/w" }
+
 // dispatchSessionDir 本次会话在远端的工作目录（会话粒度：同一工单多语种共用一个目录）。
 func dispatchSessionDir(sessionID string) string {
-	return dispatchRoot() + "/w/" + sanitizeSession(sessionID)
+	return dispatchWorkRoot() + "/" + sanitizeSession(sessionID)
 }
 
 // sanitizeSession 会话号清洗（防 ../ 与 shell 元字符——这个是拼进远端路径的，必须锁死字符集）。
@@ -366,6 +520,38 @@ func sanitizeSession(s string) string {
 		return "anon"
 	}
 	return b.String()
+}
+
+// dispatchRemoteName 把声明的产物名换成远端会话目录里的安全文件名（前缀 out_ 便于与输入件区分）。
+//
+// ★ 保留扩展名（2026-09-29）：早先直接 `"out_" + sanitizeSession(rel)`，于是 `out.pdf` 变成 `out_pdf`。
+//
+//	远端脚本现在没按后缀分派，但"产物名丢掉后缀"这类形态变更迟早让某个下游按后缀认格式时踩坑，
+//	而远端目录里的文件名也是要给人排障看的。故只清洗主干，扩展名过白名单后原样带上。
+//	白名单：以 "." 开头、1～8 个字母/数字；不合就把整个名字清洗掉（宁可丢后缀，也不放宽字符集）。
+func dispatchRemoteName(rel string) string {
+	stem := rel
+	ext := path.Ext(rel)
+	if ext != "" && validRemoteExt(ext) {
+		stem = strings.TrimSuffix(rel, ext)
+		return "out_" + sanitizeSession(stem) + strings.ToLower(ext)
+	}
+	return "out_" + sanitizeSession(rel)
+}
+
+// validRemoteExt 扩展名白名单：`.pdf` `.docx` `.txt` 这类；其余（含点号、超长、空主干）一律不合。
+func validRemoteExt(ext string) bool {
+	if len(ext) < 2 || len(ext) > 9 || ext[0] != '.' {
+		return false
+	}
+	for i := 1; i < len(ext); i++ {
+		c := ext[i]
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // DispatchRun 远端执行一次脚本会话：登记 → 搬运输入 → 跑 → 回拉产物 → 校验 → 落位。
@@ -386,22 +572,23 @@ func DispatchRun(ctx context.Context, sessionID, script string, args []string, s
 		return nil, errors.New("派发未启用")
 	}
 	// 零产物是合法的：`extract` 的产物就在 stdout 上（下面会用「stdout 非空」兜住这条）。
-	p, err := dispatchProbe(ctx)
-	if err != nil {
+	// probe 现在按 TTL 重探（见 dispatchProbe），到期当天跑着的进程也会翻旧成 degraded 而不是永远 online。
+	if _, err := dispatchProbe(ctx); err != nil {
 		noteDispatchResult(ctx, false, err)
 		return nil, err
 	}
-	_ = p
 
 	release := acquireRemoteGateCtx(ctx)
 	defer release()
 
 	dir := dispatchSessionDir(sessionID)
-	// ① 建远端会话目录（幂等；cat remote mkdir 走一次 ssh）
-	if err := dispatchMkdir(ctx, dir); err != nil {
-		noteDispatchResult(ctx, false, err)
-		return nil, fmt.Errorf("远端会话目录创建失败: %w", err)
-	}
+	// ① ★ 2026-09-29：这里**不再有"建远端目录"这一腿**。裸 `ssh host 'mkdir -p …'` 在这台机器上是死路
+	//
+	//	（sshd 的 ForceCommand 把它顶成 fpd-bridge，bridge 只认 stdin 协议 → 实测退 78、目录压根没建出来），
+	//	而 fpdexec 的 cmd_put 内部就是 makedirs(dirname)，所以上传输入件时目录顺手就建好了。
+	//	只剩一种会话没有输入件可上传：pdfwrite 降级重建链（原文/译文都在 payload 里）——
+	//	它走 ensureDispatchDir 那一次 marker put，仍然在同一条协议里，不多造第二条通路。
+	uploaded := false
 
 	// ② 产物映射先建、输入映射后建（★ 顺序不能反）：
 	//    apply 的 argv 里**同时**含输入路径与输出路径，两者都长得像"一个绝对路径"。
@@ -416,7 +603,7 @@ func DispatchRun(ctx context.Context, sessionID, script string, args []string, s
 			noteDispatchResult(ctx, false, err)
 			return nil, fmt.Errorf("产物落点不合法 %s: %w", local, err)
 		}
-		safeRel := "out_" + sanitizeSession(rel)
+		safeRel := dispatchRemoteName(rel)
 		remote := dir + "/" + safeRel
 		outRemote[local] = remote
 		outRels = append(outRels, remote)
@@ -431,29 +618,49 @@ func DispatchRun(ctx context.Context, sessionID, script string, args []string, s
 			remoteArgs = append(remoteArgs, r) // 声明过的产物：换成远端会话目录内的名字
 			continue
 		}
+		// ★ 只有**绝对路径**才有资格当输入件（2026-09-29 由单测抓到的真缺陷）：
+		//
+		//	argv[0] 在主站形态下是裸脚本名 "pdf_overlay.py"，而这份 .py 与二进制同目录，
+		//	只要进程的工作目录恰好落在脚本目录（本地 `go test` 就是这个形态），旧的 `os.Stat(a)`
+		//	就会命中 ⇒ argv[0] 被换成远端路径 ⇒ 远端第一个参数不再是脚本名，派发必败、又被降级链
+		//	兜成"看起来从没生效过"的静默死分支。**判据不许挂在进程 CWD 上**；
+		//	且远端 _check_paths 本来就只认 WORK 之下的绝对路径，相对路径即使搬过去也跑不通。
+		if !filepath.IsAbs(a) {
+			remoteArgs = append(remoteArgs, a) // 子命令/语种码/脚本名：原样透传
+			continue
+		}
 		if fi, err := os.Stat(a); err == nil && !fi.IsDir() {
 			rel := "in_" + filepath.Base(a)
 			if err := dispatchPut(ctx, a, dir+"/"+rel); err != nil {
 				noteDispatchResult(ctx, false, err)
 				return nil, fmt.Errorf("输入搬运失败 %s: %w", a, err)
 			}
+			uploaded = true // ★ 这一次 put 同时把会话目录建出来了（见上方 ①）
 			remoteArgs = append(remoteArgs, dir+"/"+rel)
 			continue
 		}
-		remoteArgs = append(remoteArgs, a) // 非文件路径：子命令/语种码，原样透传
+		remoteArgs = append(remoteArgs, a) // 绝对路径但本地不存在：原样透传，由远端守卫判死
 	}
 
-	header := map[string]interface{}{
+	// ③b 没有输入件的会话（pdfwrite 降级重建链）补一次 marker put 建目录——
+	//     走的是同一条 fpdexec 协议，**不是**把裸 ssh mkdir 换个写法捡回来。
+	if !uploaded {
+		if err := ensureDispatchDir(ctx, dir); err != nil {
+			noteDispatchResult(ctx, false, err)
+			return nil, fmt.Errorf("远端会话目录准备失败: %w", err)
+		}
+	}
+
+	header, err := encodeDispatchHeader(map[string]interface{}{
 		"mode":    "run",
 		"script":  script,
 		"argv":    remoteArgs,
 		"outputs": outRels,
-	}
-	hb, err := json.Marshal(header)
+	})
 	if err != nil {
 		return nil, err
 	}
-	stdout, stderr, rerr := dispatchSSH(ctx, append([]byte(base64.StdEncoding.EncodeToString(hb)), '\n'), stdin, fileprocTimeout())
+	stdout, stderr, rerr := dispatchSSH(ctx, header, stdin, fileprocTimeout())
 	if rerr != nil {
 		noteDispatchResult(ctx, false, rerr)
 		return nil, fmt.Errorf("远端执行失败: %w\n%s", rerr, truncateTail(stderr))
@@ -520,7 +727,7 @@ func verifyDispatchArtifact(path string) error {
 	}
 }
 
-// ---------------- ssh / scp 原语（外部二进制，统一走 BatchMode） ----------------
+// ---------------- fpdexec 协议原语（唯一外部二进制：ssh，统一走 BatchMode） ----------------
 
 // sshBaseArgs ssh 通用参数（BatchMode=yes：密钥不可读时必须失败而不是静默等口令，见 §6.3）
 func sshBaseArgs() []string {
@@ -531,55 +738,234 @@ func sshBaseArgs() []string {
 	return args
 }
 
-// dispatchSSH 走 ssh 调 fpdexec.py：stdin 第一行是 base64(header)，其后是 payload。
-// ★ 为什么不走 "-o ... <<here string"：stderr 与退出码都要能拿回来给排障用，必须 exec.Command。
+// dispatchCmd 走 ssh 调 fpdexec.py 的**唯一出口**（probe/selftest/run/put/stat/get 全在这一条上）。
+//
+//	协议：stdin 第一行是 base64(header)，其后紧跟 payload（put＝文件本体，run＝译文映射 JSON）。
+//	远端 main() 用 `sys.stdin.buffer.readline()` 取 header、再 `read()` 取 payload，
+//	所以 header 行**必须自带换行符**，且 payload 只在 run/put 两种模式读——
+//	给 stat/get 也留着管道不关，远端就会一路等到墙钟超时（症状是"远端没报错但派发死活不返回"）。
+//
+// ★ 为什么不走 here-string：stderr 与退出码都要能拿回来给排障用，必须 exec.Command。
 //
 // ★★ 这里**刻意不取远端闸**（gate=nil），理由是两个实测踩到的永久死锁（2026-09-28）：
 //
 //	① 重入死锁：闸的容量由探测回的 mem_gb 自适应算出 ⇒ "取闸"会触发"闸初始化"，
-//	   初始化又要跑一次探测 ssh；若探测也取闸，就形成同 goroutine 对同一个 sync.Once
-//	   的重入，Once.Do 会一直等第一次调用返回，而第一次又在等它 ⇒ 进程永久挂死。
+//	   初始化又要跑一次探测 ssh；若探测也取闸，就形成同 goroutine 重入 ⇒ 进程永久挂死。
 //	② 自持死锁：DispatchRun 已经为**整个会话**持有了那一个名额（2G 机容量=1），
-//	   会话内部的 ssh/scp 再去取一次 ⇒ 自己等自己。
+//	   会话内部的传输原语再去取一次 ⇒ 自己等自己。
 //	⇒ 结论：远端闸只在 DispatchRun 的会话层取一次，传输原语一律不取闸。
 //	  并发上限的真正含义是"同时在远端的会话数"，不是"同时在跑的 ssh 进程数"。
-func dispatchSSH(ctx context.Context, headerLine, payload []byte, timeout time.Duration) ([]byte, []byte, error) {
-	var stdin bytes.Buffer
-	stdin.Write(headerLine)
+//
+// to 非 nil 时 stdout **直接写进 to**（回拉产物走这里：几 MB 到几十 MB 的字节必须边收边落盘，
+// 内存缓冲版会把超过 4MB 的部分静默丢掉，于是"截半截的 PDF"被当成品交付）。
+func dispatchCmd(ctx context.Context, headerLine []byte, payload io.Reader, to io.Writer,
+	timeout time.Duration) ([]byte, []byte, error) {
+	var stdin io.Reader = bytes.NewReader(headerLine)
 	if payload != nil {
-		stdin.Write(payload)
+		stdin = io.MultiReader(bytes.NewReader(headerLine), payload)
 	}
 	args := append(sshBaseArgs(), dispatchHost(), dispatchPyBin(), dispatchFpdexec)
-	return runSubprocessGated(ctx, timeout, "ssh", args, stdin.Bytes(), nil)
+	if to != nil {
+		// 流式落盘：stdout 直接进调用方的文件句柄，这里只回收 stderr 给排障
+		stderr, err := runSubprocessGatedStream(ctx, timeout, "ssh", args, stdin, to, nil)
+		return nil, stderr, err
+	}
+	var buf limitedBuffer
+	buf.limit = 4 << 20
+	stderr, err := runSubprocessGatedStream(ctx, timeout, "ssh", args, stdin, &buf, nil)
+	return buf.b.Bytes(), stderr, err
 }
 
-// dispatchMkdir 远端建会话目录（幂等）。
-// ★ 不取远端闸：名额由 DispatchRun 在会话层持有（见 dispatchSSH 的死锁说明）。
-func dispatchMkdir(ctx context.Context, dir string) error {
-	remote := fmt.Sprintf("mkdir -p %q", dir)
-	_, stderr, err := runSubprocessGated(ctx, subTimeout(), "ssh", append(sshBaseArgs(), dispatchHost(), remote), nil, nil)
+// dispatchSSH 内存缓冲版调用（probe/run 用：它们的 stdout 就是几十 KB 的 JSON/脚本文本）。
+func dispatchSSH(ctx context.Context, headerLine, payload []byte, timeout time.Duration) ([]byte, []byte, error) {
+	var r io.Reader
+	if payload != nil {
+		r = bytes.NewReader(payload)
+	}
+	return dispatchCmd(ctx, headerLine, r, nil, timeout)
+}
+
+// encodeDispatchHeader 把 header 编成协议要求的"base64(一行 JSON) + 换行"。
+// 收成一个函数是因为这条编码在四条腿上都要用；抄两遍就迟早出现「probe 编码对了、put 忘了换行」。
+func encodeDispatchHeader(h map[string]interface{}) ([]byte, error) {
+	hb, err := json.Marshal(h)
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, truncateTail(stderr))
+		return nil, err
+	}
+	return append([]byte(base64.StdEncoding.EncodeToString(hb)), '\n'), nil
+}
+
+// dispatchRelOf 把远端**绝对路径**换成 fpdexec 的 put/stat/get 认的 `rel`（相对 w/ 的那一段）。
+//
+// ★ 两套路径口径不能混（这是我 09-29 真机自证时踩的第一坑）：
+//
+//	put/stat/get 的 rel 相对 w/；而 run 的 argv 必须是**绝对路径且落在 w/ 下**，
+//	由远端 _check_paths 机械拒绝越界。所以这里只做"剥掉 w/ 前缀"，绝不反过来把 run 的 argv 相对化。
+func dispatchRelOf(remoteAbs string) (string, error) {
+	// ★ 分隔符写死 "/"：这些是**远端（Linux）路径**，不是本地路径。
+	// 拿 os.PathSeparator 会在 Windows 交叉编译/本机排障时把比较变成恒假（另一类静默死分支）。
+	work := path.Clean(dispatchWorkRoot())
+	clean := path.Clean(remoteAbs)
+	if clean != work && !strings.HasPrefix(clean, work+"/") {
+		return "", fmt.Errorf("远端路径不在工作目录之下: %s", clean)
+	}
+	rel := strings.TrimPrefix(clean, work+"/")
+	if rel == "" || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("远端相对路径不合法: %q", rel)
+	}
+	return rel, nil
+}
+
+// sha256File 流式算本地文件的 sha256 与字节数（不整读进内存：派发省的就是内存）。
+func sha256File(path string) (string, int64, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	n, err := io.Copy(h, f)
+	if err != nil {
+		return "", 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
+// fpdPut 把 payload 落到远端绝对路径，并把远端回执的 size/sha256 与本地算出的**逐字节比一次**。
+//
+// ★ 为什么必须比：改造前用 scp，"传成功"的判据只有退出码，而 09-29 实测它在 ForceCommand 下
+//
+//	一会儿 exit=1、一会儿 exit=255 且**没有任何输出**——两轮取回码都不一致，说明错误码不能当判据。
+//	现在两侧都有哈希：传半截/传错文件当场暴露，且远端 cmd_put 自己还校验落盘字节数（双保险）。
+//	注意别按远端错误码分支判因，只按"字节对不上"判——超限（FPD_MAX_PUT_MB=80）就是非零退出＋一句文案。
+func fpdPut(ctx context.Context, remoteAbs string, payload io.Reader, wantSHA string, wantSize int64) error {
+	rel, err := dispatchRelOf(remoteAbs)
+	if err != nil {
+		return err
+	}
+	header, err := encodeDispatchHeader(map[string]interface{}{"mode": "put", "rel": rel})
+	if err != nil {
+		return err
+	}
+	stdout, stderr, err := dispatchCmd(ctx, header, payload, nil, fileprocTimeout())
+	if err != nil {
+		return fmt.Errorf("远端接收失败: %w\n%s", err, truncateTail(stderr))
+	}
+	var ack struct {
+		OK     bool   `json:"ok"`
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+	}
+	line := lastNonEmptyLine(string(stdout))
+	if e := json.Unmarshal([]byte(line), &ack); e != nil {
+		return fmt.Errorf("远端 put 回执不可解析: %s", line)
+	}
+	if !ack.OK || ack.SHA256 == "" {
+		return fmt.Errorf("远端 put 回执不合法: %s", line)
+	}
+	if ack.Size != wantSize || !strings.EqualFold(ack.SHA256, wantSHA) {
+		return fmt.Errorf("上传字节不等值 本地 size=%d sha=%s / 远端 size=%d sha=%s",
+			wantSize, wantSHA, ack.Size, ack.SHA256)
 	}
 	return nil
 }
 
-// dispatchPut 上传单个文件到远端会话目录（scp -p 保 mtime，便于远端 sweep 判闲置）。
+// dispatchPut 上传单个本地文件到远端会话目录（顺带把会话目录建出来——fpdexec 的 cmd_put
+// 内部就是 os.makedirs(dirname)，所以**不再有裸 ssh mkdir 这条腿**）。
 func dispatchPut(ctx context.Context, local, remote string) error {
-	target := dispatchHost() + ":" + remote
-	_, stderr, err := runSubprocessGated(ctx, fileprocTimeout(), "scp", append(sshBaseArgs(), local, target), nil, nil)
+	wantSHA, size, err := sha256File(local)
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, truncateTail(stderr))
+		return fmt.Errorf("本地输入件读不了 %s: %w", filepath.Base(local), err)
 	}
-	return nil
+	f, err := os.Open(local)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return fpdPut(ctx, remote, f, wantSHA, size)
 }
 
-// dispatchGet 下载远端产物到本地临时文件。
-func dispatchGet(ctx context.Context, remote, local string) error {
-	src := dispatchHost() + ":" + remote
-	_, stderr, err := runSubprocessGated(ctx, fileprocTimeout(), "scp", append(sshBaseArgs(), src, local), nil, nil)
+// ensureDispatchDir 保证远端会话目录存在（★ 只在"这一单没有输入件"时才走）。
+//
+// pdfwrite 那条腿的原文与译文都在 payload 里、没有输入文件，于是没有任何一次 put 顺带建目录，
+// 而 run 的产物路径需要一个已存在的目录（cmd_run 自己不建）。
+// 这里**不造第二条 ssh 协议**：用一次 1 字节的 marker put 达到同样效果（cmd_put 会 makedirs），
+// 代价是多一次往返，但只在降级重建链上发生，且仍在同一条 ForceCommand 允许的协议里。
+func ensureDispatchDir(ctx context.Context, dir string) error {
+	const marker = "k"
+	sum := sha256.Sum256([]byte(marker))
+	return fpdPut(ctx, dir+"/.keep", strings.NewReader(marker),
+		hex.EncodeToString(sum[:]), int64(len(marker)))
+}
+
+// dispatchStat 查远端文件的 size 与 sha256（排障腿：主站报"产物取不到"时，
+// 先分清是"远端没做出来"还是"做出来了没搬回"——09-29 实测远端 3s 就能做出 6MB 产物、
+// 而回传要 11.8s，没有这一腿这两件事在现场完全长一个样）。
+func dispatchStat(ctx context.Context, remote string) (int64, string, error) {
+	rel, err := dispatchRelOf(remote)
 	if err != nil {
-		return fmt.Errorf("%w\n%s", err, truncateTail(stderr))
+		return 0, "", err
+	}
+	header, err := encodeDispatchHeader(map[string]interface{}{"mode": "stat", "rel": rel})
+	if err != nil {
+		return 0, "", err
+	}
+	stdout, stderr, err := dispatchCmd(ctx, header, nil, nil, subTimeout())
+	if err != nil {
+		return 0, "", fmt.Errorf("远端查尺寸失败: %w\n%s", err, truncateTail(stderr))
+	}
+	var ack struct {
+		OK     bool   `json:"ok"`
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+	}
+	line := lastNonEmptyLine(string(stdout))
+	if e := json.Unmarshal([]byte(line), &ack); e != nil {
+		return 0, "", fmt.Errorf("远端 stat 回执不可解析: %s", line)
+	}
+	if !ack.OK || ack.SHA256 == "" {
+		return 0, "", fmt.Errorf("远端 stat 回执不合法: %s", line)
+	}
+	return ack.Size, ack.SHA256, nil
+}
+
+// dispatchGet 回拉远端文件到本地临时文件：**先 stat 拿期望值，再流式收字节，落盘后逐字节比**。
+//
+// ★ fpdexec 的 get 刻意让 stdout 只放原始文件字节（不掺 JSON），就是为了这条比对能成立；
+//
+//	任何一句日志混进 stdout 都会让产物变成坏文件，所以这里也不能用内存缓冲版收。
+func dispatchGet(ctx context.Context, remote, local string) error {
+	wantSize, wantSHA, err := dispatchStat(ctx, remote)
+	if err != nil {
+		return err
+	}
+	rel, err := dispatchRelOf(remote)
+	if err != nil {
+		return err
+	}
+	header, err := encodeDispatchHeader(map[string]interface{}{"mode": "get", "rel": rel})
+	if err != nil {
+		return err
+	}
+	f, err := os.Create(local)
+	if err != nil {
+		return err
+	}
+	_, stderr, err := dispatchCmd(ctx, header, nil, f, fileprocTimeout())
+	syncErr, closeErr := f.Sync(), f.Close()
+	if err != nil {
+		return fmt.Errorf("产物回拉中断: %w\n%s", err, truncateTail(stderr))
+	}
+	if syncErr != nil || closeErr != nil {
+		return fmt.Errorf("产物落盘失败: sync=%v close=%v", syncErr, closeErr)
+	}
+	gotSHA, gotSize, err := sha256File(local)
+	if err != nil {
+		return fmt.Errorf("取回的产物读不了: %w", err)
+	}
+	if gotSize != wantSize || !strings.EqualFold(gotSHA, wantSHA) {
+		return fmt.Errorf("回拉字节不等值 远端 size=%d sha=%s / 主站 size=%d sha=%s",
+			wantSize, wantSHA, gotSize, gotSHA)
 	}
 	return nil
 }

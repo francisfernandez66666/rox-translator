@@ -157,6 +157,53 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
       *)       bad "dispatch=$DISP（非法状态词，只允许 off/online/degraded）" ;;
     esac
   fi
+  # ★★ 2026-09-30 追加：派发第二节新增的三个健康面读数（到期日／内存帽／远端自检）一起验收。
+  # 判据不是"有值就好"，而是**写读同源的一致性**——三档由 fileproc 的 DispatchStatusWords 翻出，
+  # 与上面的状态词必须互相咬合：
+  #   · 关着（off）⇒ 三档全空串（空＝"没配"，与"配了但坏了"的 unknown 是两件事，混了就排不动障）；
+  #   · 生效中（online）⇒ 自检必须是 pass、内存帽不许 unknown、到期日不许空。
+  # 为什么要拿 online 去反推自检：状态词为 online 的前提就是 probe 成功，而 probe 成功的前提
+  # 是远端 selftest 返回 0（第二节立的深判据）。**如果健康面出现 online 而 selftest=unknown，
+  # 只有一个解释**：出栈那三个键没接上、或接的是另一套默认值——现象正是"闸门看着绿、远端其实在降级"。
+  # 键缺失单独报（旧二进制上 .get 会回 None，那会被下面的等值判据吞成"值不对"，指错方向）。
+  DX_READ=$(echo "$HBODY" | python3 -c 'import sys,json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("__bad__|__bad__|__bad__")
+    raise SystemExit(0)
+out = []
+for k in ("dispatch_expire", "dispatch_mem_cap", "dispatch_selftest"):
+    v = d.get(k, "__missing__")
+    out.append("" if v is None else str(v))
+sys.stdout.write("|".join(out) + "\n")' 2>/dev/null)
+  IFS='|' read -r DX_EXPIRE DX_MEMCAP DX_SELFTEST <<<"$DX_READ"
+  case "$DX_EXPIRE|$DX_MEMCAP|$DX_SELFTEST" in
+    *__missing__*) bad "健康面缺 dispatch_expire/dispatch_mem_cap/dispatch_selftest 三键之一 ⇒ 二进制没换或第二节出栈没接上" ;;
+    __bad__*)      bad "健康面不是合法 JSON，派发三档读不出（先看服务是否起着）" ;;
+    *)
+      if [ "$DISP" = "off" ]; then
+        if [ -z "$DX_EXPIRE$DX_MEMCAP$DX_SELFTEST" ]; then
+          ok "派发关闭态三档全空（＝没配，与「配了但坏了」可区分）"
+        else
+          bad "dispatch=off 却带着读数 expire=$DX_EXPIRE mem_cap=$DX_MEMCAP selftest=$DX_SELFTEST ⇒ 三档取值链和状态词不同源（关着时不该拨远端）"
+        fi
+      else
+        DXT_BAD=""
+        [ -n "$DX_EXPIRE" ] || DXT_BAD="$DXT_BAD 到期日为空（取不到不等于没有到期）"
+        case "$DX_MEMCAP" in on|clamped) ;; *) DXT_BAD="$DXT_BAD 内存帽=$DX_MEMCAP（应为 on/clamped）" ;; esac
+        [ "$DX_SELFTEST" = "pass" ] || DXT_BAD="$DXT_BAD 自检=$DX_SELFTEST（状态词已是 $DISP，自检却不是 pass）"
+        if [ -z "$DXT_BAD" ]; then
+          ok "派发三档一致（expire=$DX_EXPIRE mem_cap=$DX_MEMCAP selftest=$DX_SELFTEST）"
+        else
+          bad "$DISP 态下派发三档不自洽：$DXT_BAD ⇒ 详见 fileproc_remote.go 的 DispatchStatusWords"
+        fi
+        if [ "$DX_MEMCAP" = "clamped" ]; then
+          echo "  ↳ 内存帽 clamped＝配了值但被系统硬上限压住：要查体验机侧的 rlimit 配置（这一档不判失败，是情报）"
+        fi
+      fi
+      ;;
+  esac
   # 状态词只回三态词，不得夹带主机/路径等拓扑情报（同 /readyz 那条口径）
   if echo "$HBODY" | grep -Eq 'FILEPROC_DISPATCH_HOST|fpdispatch|/opt/'; then
     bad "/api/health 的 dispatch 段泄露远端拓扑（主机/路径）"

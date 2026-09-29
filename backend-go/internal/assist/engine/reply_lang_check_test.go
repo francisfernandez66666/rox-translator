@@ -383,6 +383,124 @@ func TestPostProcessSanitizesAndKeepsGoMarkers(t *testing.T) {
 	}
 }
 
+// TestSanitizeStripsQuoteMechanicsAside ★ 082x 第十条（2026-09-29 用户带截图报「括号里的内容没清洗掉」）。
+//
+// 现网原文（中文轮问比价，红框里那一段整段是模型在执行提示词时的自我说明）：
+//
+//	（注：根据规则，此处需在最后单独输出标记，且 key 必须来自指定列表。
+//	 用户输入"deep"属于延续比较场景，故推荐对比页面入口。）
+//
+// 第八条那 19 条形态一个都没命中（不含"接住/提示词/用户可能"任何一个），containsAny 判假 ⇒ 原样送出。
+// 这一条断言钉三件事：① 新八条词条真在清单里；② 它们真被 sanitize 这条链消费（不是又一张死表）；
+// ③ 收窄判据没被"多收几条"顺手推宽——同屏那条正常报价说明「（1000 字符约 40.61 元）」必须原样留着。
+func TestSanitizeStripsQuoteMechanicsAside(t *testing.T) {
+	prod := "专业模式按 2000×400+7.5 计约 150 积分（注：根据规则，此处需在最后单独输出标记，" +
+		"且 key 必须来自指定列表。用户输入\"deep\"属于延续比较场景，故推荐对比页面入口。）如需精确额度请把文件发我。"
+	got := sanitizeVisitorText(prod)
+	for _, leaked := range []string{"注：", "根据规则", "指定列表", "用户输入", "推荐对比页面入口", "延续比较场景"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("旁白没剥净（残留 %q）：%q", leaked, got)
+		}
+	}
+	// 正文两头都必须活着：剥的是括号段，不是整句。
+	for _, want := range []string{"专业模式按 2000×400+7.5 计约 150 积分", "如需精确额度请把文件发我。"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("正事被一起吃掉了 %q：%q", want, got)
+		}
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("剥完是非法 UTF-8：%q", got)
+	}
+
+	t.Run("同屏那条正常报价说明一个字都不许动", func(t *testing.T) {
+		for _, s := range []string{
+			"1000 字符约 40.61 元（1000字符约40.61元）。",
+			"可以交付 PDF（输出为 PDF，按套餐规则计费），版式保留。",
+			"标签在后台维护（需要登录后台看标签列表）。",
+			"域名解析从这里开始（此处需填写你的域名）。",
+			"你可以上传样本，我帮你看（用户手册里写的那三步）。",
+		} {
+			if g := sanitizeVisitorText(s); g != s {
+				t.Fatalf("合格文案被误伤：%q → %q", s, g)
+			}
+		}
+	})
+
+	t.Run("新八条逐条独立生效（改名式破坏必须当场红）", func(t *testing.T) {
+		// 每条各配一个只含它自己的括号段：少一条词条＝这一行红，
+		// 而不是"清单少一项、整表还是绿的"那种清单式锁。
+		for _, mk := range []string{
+			"根据规则", "此处需在最后", "单独输出", "输出标记", "指定列表", "用户输入", "本轮输入", "思考过程",
+		} {
+			if !strings.Contains(strings.Join(selfNarrationMarkers, ","), mk) {
+				t.Fatalf("旁白清单缺 %q", mk)
+			}
+			s := "价格以套餐页为准（" + mk + "）。"
+			if g := sanitizeVisitorText(s); strings.Contains(g, mk) || g != "价格以套餐页为准。" {
+				t.Fatalf("词条 %q 在清单里却没被这条链消费：%q → %q", mk, s, g)
+			}
+		}
+	})
+
+	t.Run("括号只吃命中那条，不吃邻居", func(t *testing.T) {
+		s := "支持原格式（保留版式）与表格（根据规则这里是一段旁白说明）。"
+		g := sanitizeVisitorText(s)
+		if g != "支持原格式（保留版式）与表格。" {
+			t.Fatalf("该留的括号被吃或该剥的没剥干净：%q", g)
+		}
+	})
+}
+
+// TestUnstrippedAsidesOnlyLogsNeverEdits ★ 第十条的第二条腿：词表追不上模型措辞时，
+// 观测腿负责把候选形态打进 WARN，但它**一个字都不许改正文**——
+// 误删的代价是客户要看的说明，误报的代价只是人看一眼日志，两者不能换。
+//
+// 反证方向与上面那条相反：这里断言的是"报了但留着"，
+// 所以谁把观测腿误接成清洗腿（顺手删正文），这一条会当场红。
+func TestUnstrippedAsidesOnlyLogsNeverEdits(t *testing.T) {
+	t.Run("非中文语种：整段中文括号备注进候选", func(t *testing.T) {
+		s := "Sure, layout is kept（这条备注的词表还没收进来）。"
+		got := sanitizeVisitorText(s)
+		if got != s {
+			t.Fatalf("词表外的括号被观测腿误删了：%q → %q", s, got)
+		}
+		if len(unstrippedAsides("en", s)) != 1 {
+			t.Fatalf("观测腿没抓到非中文轮里的中文备注，下一批就没有词条证据：%q", s)
+		}
+	})
+	t.Run("中文轮：按形态抓（元说明起手＋内部名词）", func(t *testing.T) {
+		s := "总额看实际字符量（备注：模型需要先确认列表是否可用）。"
+		if got := sanitizeVisitorText(s); got != s {
+			t.Fatalf("观测形态被误删：%q → %q", s, got)
+		}
+		if len(unstrippedAsides("zh", s)) != 1 {
+			t.Fatalf("中文轮的元说明备注没被抓出来：%q", s)
+		}
+	})
+	t.Run("正常说明不进候选", func(t *testing.T) {
+		for _, s := range []string{
+			"1000 字符约 40.61 元（1000字符约40.61元）。",
+			"域名解析从这里开始（此处需填写你的域名）。",
+			"标签在后台维护（需要登录后台看标签列表）。",
+		} {
+			if got := unstrippedAsides("zh", s); len(got) != 0 {
+				t.Fatalf("正常补充说明被当成候选：%q → %v", s, got)
+			}
+		}
+	})
+	t.Run("命中词表的段不再重复报告", func(t *testing.T) {
+		s := "价格以套餐页为准（根据规则这里应当补一句说明）。"
+		if got := unstrippedAsides("zh", s); len(got) != 0 {
+			t.Fatalf("已被清洗的形态又进候选，计数会虚高：%v", got)
+		}
+	})
+	t.Run("未闭合括号不报（那是截断，有自己的 WARN）", func(t *testing.T) {
+		if got := unstrippedAsides("en", "Truncated aside（根据规则"); len(got) != 0 {
+			t.Fatalf("截断被观测腿当成旁白候选：%v", got)
+		}
+	})
+}
+
 // TestTruncatedTranslationKeepsOriginal 补翻被 max_tokens 截断时**判失败**，不许把半句译文送出去。
 // 这是「LLM 输出链静默失效」那批形态里最阴的一种：请求成功、状态 200、产物能读，
 // 只有 finish_reason 说真话——半句英文回答比整段中文更接近对外错报。
