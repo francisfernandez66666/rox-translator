@@ -80,3 +80,37 @@ func TestAssistAdminMonochromeTruth(t *testing.T) {
 		t.Error("对话框遮罩 ≠ §1.4 的 72% 黑")
 	}
 }
+
+// TestAssistAdminExposesPromiseAndLiveValues ★ 081x（2026-09-29）：
+// 管理台必须把「承诺边界」「主服务地址」「现值读数」三件事单独摆出来。
+// 为什么钉在静态锁上：这一批的全部意义是「运营能自己收紧对外承诺、能看见现值取到没有」。
+// 只要界面上没有这三个入口，代码里的 promise_rules / system_values 就等于不存在
+// （运营改不了、也查不到，最后只能回来找开发发版——那正是这批要拆掉的动作）。
+func TestAssistAdminExposesPromiseAndLiveValues(t *testing.T) {
+	page := string(AdminHTML)
+	for _, want := range []string{
+		"promise_rules", // 承诺边界单列一栏（与 tone_rules 分开）
+		"tone_rules",    // 说话方式仍在
+		"main_base_url", // 现值拨向哪个主服务，可改
+		"saveMainBase",  // 有保存动作
+		"system-values", // 有现值读数口调用
+		"loadSystemValues",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("管理台缺 %q：承诺口径/现值必须运营自己可改可查，不能只活在代码里", want)
+		}
+	}
+	// 承诺与语气必须是两个独立输入框（把承诺塞进语气栏＝一次改口把事实闸擦掉，见 engine/promise.go）
+	if strings.Count(page, `data-k="${esc(k)}"`) == 0 {
+		t.Errorf("配置项渲染循环不见了，promise_rules/tone_rules 无法各自成栏")
+	}
+	for _, k := range []string{"promise_rules", "tone_rules"} {
+		if !strings.Contains(page, k+":'") {
+			t.Errorf("CFG_DEFS 里少了 %s 这一栏的说明文案", k)
+		}
+	}
+	// 温度那行的老误述不许复活（运维照它拧旋钮就会得出「改了没用」的结论）
+	if strings.Contains(page, "温度（0-1）'") {
+		t.Errorf("temperature 的旧说明复活：必须写清它只管用词多样、不管语气")
+	}
+}

@@ -785,7 +785,7 @@ export const dict: Record<string, string> = {
   "chat.assistPlaceholder": "Was möchten Sie wissen? Zum Beispiel: Wie halte ich Fachbegriffe konsistent?",
   "chat.assistSendFail": "Diese Nachricht konnte nicht gesendet werden (Netzwerk- oder Dienstfehler). Erneut versuchen?",
   "chat.assistSub": "Empfang · Anleitung · Schnellzugriff",
-  "chat.assistTitle": "Nengyan AI-Assistent",
+  "chat.assistTitle": "LangCross AI-Assistent",
   "chat.balance": "Noch {n} Sätze",
   "chat.balanceTip": "Meine verbleibenden Übersetzungssätze (Quellsätze × Anzahl Zielsprachen)",
   "chat.balanceTokens": "Guthaben {n} Punkte ≈ {s} Sätze",

@@ -313,7 +313,7 @@ export const en: Record<string, string> = {
   'msg.type.webp': 'Image',
   // ---- AI 销售/客服常驻挂件（AiAssist）文案 ----
   'chat.assistFabLabel': 'AI Assistant',
-  'chat.assistTitle': 'Nengyan AI Assistant',
+  'chat.assistTitle': 'LangCross AI Assistant',
   'chat.assistSub': 'Reception · Guidance · Quick access',
   'chat.assistOffline': 'The assistant is temporarily unreachable (service not started). Please try again later, or use the feature pages directly.',
   'chat.timeoutTicket': 'The service timed out while processing. Please send long texts as a translation ticket instead.',
