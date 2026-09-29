@@ -321,6 +321,48 @@ func TestSanitizeVisitorTextStripsOnlyInternalEcho(t *testing.T) {
 	})
 }
 
+// TestSanitizeStripsModelSelfNarration ★ 082x 第八条：模型把**给自己看的说话策略**写进正文时的末道卫生。
+//
+// 现网实测（lang=en 问「能否保留 PDF 原版式并自动重算公式」）：回答主体是合格英文，
+// 句中嵌着「（先接住，用户可能期待否定或肯定，这里肯定但自带前提）」与「（同样引用边界）」
+// ——50 个汉字混在英文气泡里。占比判据救不了它（汉字只占全篇一小部分，补翻闸门按主体语言放行），
+// 所以这一段既不该翻、也不该留，只能剥：那是**旁白**，不是内容。
+func TestSanitizeStripsModelSelfNarration(t *testing.T) {
+	prod := "Sure! But PDF layout and formula recalculation are tricky.（先接住，用户可能期待否定或肯定，这里肯定但自带前提）" +
+		" We keep structure where we can.（同样引用边界） Let me know if you send a sample file."
+	got := sanitizeVisitorText(prod)
+	if strings.ContainsAny(got, "接住期待引用边界") {
+		t.Fatalf("旁白没剥净：%q", got)
+	}
+	for _, want := range []string{"PDF layout and formula recalculation are tricky.", "keep structure where we can.", "sample file"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("剥旁白把英文正文一起吃掉了 %q：%q", want, got)
+		}
+	}
+	// 负向对照：面向访客的正常补充说明、以及「期待您的文档」这类客服话术一个字都不许动。
+	// 这张清单之所以收得窄，就是因为误剥的后果是**吃掉客户要看的说明**。
+	for _, s := range []string{
+		"专业模式（保留版式）更适合合同，期待您的文件（40MB 以内）。",
+		"按字符计费（1 积分≈0.0997 元），以套餐页为准（客户常问的那条）。",
+		"你可以上传样本，我帮你看（用户手册里写的那三步）。",
+	} {
+		if got := sanitizeVisitorText(s); got != s {
+			t.Fatalf("合格文案被误伤：%q → %q", s, got)
+		}
+	}
+	// 清单本身要有对照：这三条都是旁白用词，缺一条就是又一轮 whack-a-mole
+	for _, mk := range []string{"接住", "引用边界", "自带前提"} {
+		if !strings.Contains(strings.Join(selfNarrationMarkers, ","), mk) {
+			t.Fatalf("旁白清单缺 %q（现网实测形态）", mk)
+		}
+	}
+	// 总表必须真的把两张源表都并进来（只改一张＝sanitize 仍旧漏，属于"改了没生效"）
+	if len(visitorDropMarkers) != len(internalEchoMarkers)+len(selfNarrationMarkers) {
+		t.Fatalf("visitorDropMarkers 没并全两张清单：%d ≠ %d+%d",
+			len(visitorDropMarkers), len(internalEchoMarkers), len(selfNarrationMarkers))
+	}
+}
+
 // TestPostProcessSanitizesAndKeepsGoMarkers 卫生挂在 postProcess 总口上，且不许影响【go:key】摘取
 // （摘标记在前、卫生在后；摘完留下的空行也要一并收）。
 func TestPostProcessSanitizesAndKeepsGoMarkers(t *testing.T) {
