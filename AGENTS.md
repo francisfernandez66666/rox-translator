@@ -324,7 +324,7 @@
   租户管理员 403、匿名 401；客户面任何页面／导出／对外接口**不得出现该字段**。改这块时先确认读点还在这一道闸后面。
 
 
-### 12. 文件转换远端派发：只走 `fpdexec` 协议（★ 2026-09-30 〇-AE 立为硬约定）
+### 12. 文件转换远端派发：只走 `fpdexec` 协议（★ 2026-09-30 〇-AE 立为硬约定；★ 2026-10-01 〇-AF 起**现网已开闸**，`/api/health` 回 `dispatch:"online"`，且 Go 腿用真件完整往返过一次——排障别再按「未开闸」假设）
 
 - 体验机 `fpd` 账号被 sshd 的 `ForceCommand=fpd-bridge` 钉死，**只认「stdin 第一行 = base64(JSON header)」这一种协议**。
   因此 `backend-go/internal/fileproc/fileproc_remote.go` 里**禁止**出现裸 `ssh <host> <任意命令>` 与 `scp`：
@@ -342,9 +342,33 @@
   ⚠️ 重探**不许**进 `procGate`/远端闸临界区（同 goroutine 重入 `sync.Once` 的死锁在这条链上踩过两次）。
 - 桩只认协议：假 `ssh`/`scp` 桩对裸命令分别退 **78**／**255**（`TestFakeStubsThemselvesRejectDeadLegs`），
   谁把死腿写回来当场红——这条锁是"改完还会退化"的唯一机械防线。
+- **`header.argv[0]` 只许出现一次脚本名（★ 2026-10-01 〇-AF 补丁五立为硬约定）**：
+  远端 `fpdexec.py` 的 `cmd_run` 是「拼好 timeout/解释器/脚本名之后只接 `argv[1:]`」——**按位置**砍掉 argv[0]，
+  不看内容。所以 `DispatchRun` 只能在调用方没写脚本名时补那一次（`args[0] != script` 才 prepend），
+  **产品侧调用形态本来自带脚本名**（`pdf_overlay.go`／`pdfwrite.go` 把 `"xxx.py"` 放在 `args[0]`）。
+  10-01 真机首跑抓到的就是双写：远端把第二个脚本名当子命令 ⇒ `未知子命令: pdf_overlay.py` 退 2
+  ⇒ 被降级链静默兜回本地，而**三条读数当时全绿**（probe 腿没有 argv／G5 是 bash 自己拼的单份脚本名／
+  假 ssh 桩当时压根不看 argv）⇒ 假 ssh 桩的 `run` 分支已同期改成按真机同一口径砍 argv[0] 并认子命令，
+  等值锁＝`TestDispatchRunArgvHasScriptNameOnce`（反证：写回无条件 prepend ⇒ 三条用例一起红）。
+- **页数只有一份事实源（★ 2026-10-01 〇-AF 补丁四）**：`fileproc.PdfPageCount`（解析器 ＞ 尾 `/Count` ＞
+  流式页标记，优先级不可颠倒——字体描述符里的 `/Count 255` 会把尾 `/Count` 那条腿骗过）。
+  `internal/api/upload.go` 的上传校验**必须薄委托**到它（锁＝`upload_pagecount_gate_test.go`，
+  反证是把委托换回本地 ledong 解析器即红），**禁止**再在调用方各数一遍——派发资格是「体积 ∧ 页数」两条腿，
+  页数读 0 会让 `TryDispatch` 直接判不合格、连一次远端都不拨，旧形态还**零日志**。
+  体积够档而页数取不到 ⇒ 必须打一条 WARN（`页数读数取不到`）；`PdfPageCountDiagnostics` 出四腿读数给排障。
+  ⚠️ 同族新缺陷：第三方解析器对「尾 100 字节全是换行」的畸形件 **panic（索引 -1）**，
+  会击穿同步上传校验路径 ⇒ 两个入口各自 `recover` 收成 error，不许让它把请求打成 500。
+- **真机往返探针＝`cmd/fpdprobe`**（`/api/health` 与预检都证明不了 Go 腿；用法见该文件头）：
+  `extract` 那一腿的判据**不许**问「stdout 里有没有远端路径」——它的回执结构上只有文本段（实测 `grep -c` 远端根路径回 0），
+  那样会把真派成功的一单判成红；extract 的证据是 `TryDispatch=true` 本身（降级一律 false，探针里没有本地兜底代码），
+  路径串只作**不参与判定**的纯读数。`apply` 那一腿才问远端路径，且必须问**整段 stdout**（问 tail 会自己削掉路径）。
 - **开闸判据**＝`scripts/dispatch_preflight.sh` 的 **G5 真机全往返**（无样张时 G5 **判红不判跳过**；
-  G1~G4 全绿证明不了传输腿）＋**定档**：远端并发＝1（2G/2 核）、回传 ≈0.49 MB/s、产物膨胀 ≈3.4×
-  ⇒ `FILEPROC_DISPATCH_MIN_MB` 必须按**产物尺寸**而不是输入尺寸抬档（现默认 8 MiB 偏低，粗算盈亏平衡点在输入 ≈15–20 MB 以上）。
+  G1~G4 全绿证明不了传输腿）＋**定档**：远端并发＝1（2G/2 核）；`FILEPROC_DISPATCH_MIN_MB` 必须按**产物尺寸**
+  而不是输入尺寸抬档（代码默认已是 **20 MiB**＋`MIN_PAGES=30`，两条腿**同时成立**才派；旧文里那句「默认 8 MiB 偏低」自 09-30 定档起作废）。
+  ⚠️ 传输速率与膨胀倍率的旧读数（回传 ≈0.49 MB/s、膨胀 ≈3.4×）已被 **10-01 真机复测覆盖**：
+  一份 24,101,554 B／32 页真件——上传 ≈11 MB/s（2 s 内落 `w/`）、远端 extract 3.4 s、apply 55.4 s、
+  **回传产物 24,101,170 B ⇒ inflation_x=1.00**（恒等映射写回几乎不涨；3.4× 那份是"小件＋嵌入字体"的另一形态）。
+  ⇒ 别拿单一读数定档，探针每次都会出 `inflation_x=`，调档前先看当天那一行。
   凭据口径见《deploy/dispatch/README.md》「凭据面」：运维走 `fpdbox` 别名的 `ubuntu`，派发私钥不进本机 config。
 
 ### 13. 挂件出栈守卫链：四道守卫只在 `Engine.Respond` 这一条咽喉上（★ 2026-09-30 〇-AE）
