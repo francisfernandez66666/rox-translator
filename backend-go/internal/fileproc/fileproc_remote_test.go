@@ -139,6 +139,23 @@ case "$HDR" in
     rm -rf "$TMPD"; exit 0 ;;
   *'"mode":"run"'*)
     if [ "${FPD_FAKE_EXPIRED:-0}" = "1" ]; then printf '%s\n' '[fpdexec] 已到期，拒绝执行' >&2; rm -rf "$TMPD"; exit 78; fi
+    # ★ argv 这一格必须按**真机 fpdexec 的口径**判（2026-10-01 〇-AF 补丁五同期补上）。
+    #   真机 cmd_run 把 timeout/PYBIN/脚本名拼好后，**只接 argv[1:]**：按位置砍掉 argv[0]（脚本名），
+    #   砍完的第一格才是脚本认识的子命令。旧桩完全不看 argv，于是主站侧把脚本名**双写**在头部的
+    #   形态（真机表现：pdf_overlay.py 报「未知子命令: pdf_overlay.py」、退 2，再被降级链兜回本地）
+    #   在单测里一路绿灯——G5 用 bash 拼单份脚本名也是绿的，三条读数全绿却从没真通过一次。
+    ARGV=$(printf '%s' "$HDR" | sed -n 's/.*"argv":\[\([^]]*\)\].*/\1/p')
+    if [ -z "$ARGV" ]; then printf '%s\n' '[fpdexec] run 模式缺 argv' >&2; rm -rf "$TMPD"; exit 78; fi
+    if [ -n "${FPD_FAKE_ARGV_LOG:-}" ]; then printf '%s\n' "$ARGV" >>"$FPD_FAKE_ARGV_LOG"; fi
+    SUB=$(printf '%s' "$ARGV" | tr ',' '\n' | sed 's/^ *//; s/ *$//; s/^"//; s/"$//' | sed -n '2p')
+    case "$SUB" in
+      *.py)
+        # 脚本名又出现在 argv[1] ⇒ 真机就是这句报错，这里照抄同一条退出码
+        printf '未知子命令: %s\n' "$SUB" >&2; rm -rf "$TMPD"; exit 2 ;;
+      "")
+        printf '%s\n' '[fpdexec] argv 砍掉脚本名后为空，没有可执行的子命令' >&2; rm -rf "$TMPD"; exit 2 ;;
+      *) : ;;
+    esac
     OUTS=$(printf '%s' "$HDR" | sed -n 's/.*"outputs":\[\([^]]*\)\].*/\1/p' | tr ',' '\n' | sed 's/[" ]//g')
     case "${FPD_FAKE_ARTIFACT:-pdf}" in
       pdf|trunc)
@@ -1003,6 +1020,87 @@ func TestDispatchRunByteEqualRoundTrip(t *testing.T) {
 	if _, err := DispatchRun(ctx, "rt4", "pdf_overlay.py",
 		[]string{"pdf_overlay.py", "apply", in, out, "zh"}, nil, outputs); err != nil {
 		t.Fatalf("上限放宽后仍失败（正向对照红 ⇒ 上面的负向锁恒真）: %v", err)
+	}
+}
+
+// TestDispatchRunArgvHasScriptNameOnce ★ 2026-10-01 〇-AF 补丁五：header.argv 头部**只许出现一次脚本名**。
+//
+// 真机 fpdexec 的 cmd_run 是 `cmd = [timeout…, PYBIN, str(script)] + argv[1:]`——按**位置**砍掉 argv[0]，
+// 不看内容。产品侧的调用形态本来自带脚本名（pdf_overlay.go 的 `append([]string{"pdf_overlay.py"}, args...)`、
+// pdfwrite.go 同理），而旧 DispatchRun 又无条件 prepend 一次 script ⇒ argv 头部双写
+// ⇒ 远端把第二个 "pdf_overlay.py" 当子命令交给脚本 ⇒ 真机实测报 `未知子命令: pdf_overlay.py`、退 2
+// ⇒ TryDispatch=false 被降级链静默兜回本地。
+//
+// 当时三条读数全绿却一条真路都没通，每条绿的原因各不相同（这才是最难防的形态）：
+//
+//	· /api/health 的 dispatch=online——probe 腿没有 argv 这一说；
+//	· 预检 G5 真机全往返——bash 自己拼的 header 送的是**单份**脚本名，照 fpdexec 文件头的示例写的；
+//	· 本包单测——假 ssh 桩的 run 分支当时**压根不看 argv**。
+//	⇒ 桩已同期改成按真机同一口径砍 argv[0] 并认子命令（见 fakeBinDir 里那段），本用例再问一次**字面等值**。
+//
+// ★反证（实跑过）：把 `if len(args) == 0 || args[0] != script` 写回无条件 `append(remoteArgs, script)` ⇒
+//
+//	本用例红在「派发失败」那一句（错误里带 `未知子命令: pdf_overlay.py`），
+//	且 TestDispatchRunByteEqualRoundTrip、TestDispatchRunWithoutInputUsesMarkerPut 同批一起红——
+//	三条一起红才证明桩真在按真机口径判，而不是把断言挪了个位置。
+func TestDispatchRunArgvHasScriptNameOnce(t *testing.T) {
+	enableDispatchForTest(t)
+	argvLog := filepath.Join(t.TempDir(), "argv.log")
+	t.Setenv("FPD_FAKE_ARGV_LOG", argvLog)
+	fakeBinDir(t, "pdf")
+	work := os.Getenv("FPD_FAKE_WORK")
+	dir := t.TempDir()
+	in := makeFakePDF(t, dir, "in.pdf", 1, 20)
+	out := filepath.Join(dir, "out.pdf")
+	outputs := map[string]string{"out.pdf": out}
+	ctx := context.Background()
+
+	// ① 产品形态：args[0] 已是脚本名 ⇒ 不许再插一次。
+	if _, err := DispatchRun(ctx, "argv-once", "pdf_overlay.py",
+		[]string{"pdf_overlay.py", "apply", in, out, "zh"}, nil, outputs); err != nil {
+		t.Fatalf("带脚本名的产品形态派发失败（argv 头部被双写时，桩按真机口径退 2）: %v", err)
+	}
+	// ② 漏写形态：args[0] 不是脚本名 ⇒ DispatchRun 必须补一次，否则远端把 "apply" 当脚本名砍掉。
+	if _, err := DispatchRun(ctx, "argv-fill", "pdf_overlay.py",
+		[]string{"apply", in, out, "zh"}, nil, outputs); err != nil {
+		t.Fatalf("未预置脚本名的调用派发失败（补写腿没生效）: %v", err)
+	}
+
+	b, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatalf("桩没记下 argv（FPD_FAKE_ARGV_LOG 那一条腿断了，本用例就成了恒真空转）: %v", err)
+	}
+	lines := 0
+	for _, raw := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lines++
+		cells := strings.Split(line, ",")
+		for i := range cells {
+			cells[i] = strings.Trim(strings.TrimSpace(cells[i]), `"`)
+		}
+		// 等值锁（不是"含不含"式的弱锁）：第一格恰为脚本名、第二格恰为子命令。
+		if cells[0] != "pdf_overlay.py" {
+			t.Fatalf("argv[0] 期望脚本名 pdf_overlay.py，实际 %q（整行 %s）", cells[0], line)
+		}
+		if cells[1] != "apply" {
+			t.Fatalf("远端砍掉 argv[0] 后第一个参数期望子命令 apply，实际 %q ⇒ 脚本名双写没被咬住（整行 %s）", cells[1], line)
+		}
+		if n := strings.Count(line, `"pdf_overlay.py"`); n != 1 {
+			t.Fatalf("argv 里脚本名出现次数期望 1 实际 %d（整行 %s）", n, line)
+		}
+		// 顺带钉住同一次映射里的另两条：输入件换成 w/ 下的 in_ 前缀、产物基名不许再被当输入件搬走。
+		if !strings.HasPrefix(cells[2], work+"/") || !strings.Contains(cells[2], "in_in.pdf") {
+			t.Fatalf("输入件没换成远端会话路径（期望前缀 %s/ 且带 in_ 前缀，实际 %q）", work, cells[2])
+		}
+		if strings.Count(line, "in_pdf_overlay.py") != 0 {
+			t.Fatalf("argv[0] 又被当输入件搬走了（出现 in_pdf_overlay.py）：%s", line)
+		}
+	}
+	if lines != 2 {
+		t.Fatalf("期望两次 run 的 argv 读数，实际 %d 行（少一行＝其中一腿没走到远端）", lines)
 	}
 }
 
