@@ -310,8 +310,18 @@ func TestPlatformCost08AD2_QuotaLegsExcludePlatform(t *testing.T) {
 		if err != nil {
 			t.Fatalf("TenantTokensUsedThisMonth 失败: %v", err)
 		}
-		if got != 1160 { // 100+40+30（实扣）＋20+900（客户自发的免费留痕）＋70（settle 行按量计，生产该行 quantity=0）
-			t.Fatalf("本月额度应=1160（5000 的平台承担必须缺席），实得 %d", got)
+		// 1160 = 100+40+30（实扣）＋20+900（客户自发的免费留痕）＋70（settle 行按量计，生产该行 quantity=0）
+		// ★ 其中那条 30 是「昨日实扣」（pcRows 用 now−1 天造数），而月度窗口按**本地历法**切月：
+		//   每月 1 号（本地零点起的一天内）昨天天然属于上月 ⇒ 期望值必须跟着日历走，
+		//   否则这条锁每年每月初都会红一次，而红的原因是"造数跨月"而不是"谓词写错"。
+		//   （2026-10-01 〇-AF 第一次撞上；同期修的是 monthStart 的时区自洽，两件事互不替代。）
+		want := int64(1160)
+		now := time.Now()
+		if y := now.UTC().AddDate(0, 0, -1).In(time.Local); y.Year() != now.Year() || y.Month() != now.Month() {
+			want -= 30
+		}
+		if got != want { // 100+40+30（实扣）＋20+900（客户自发的免费留痕）＋70（settle 行按量计，生产该行 quantity=0）
+			t.Fatalf("本月额度应=%d（5000 的平台承担必须缺席），实得 %d", want, got)
 		}
 		// 反向对照：展示腿（客户面尺子）在同一盘数据上是 190，和额度腿的 1160 必然不等
 		// ——这个差值就是「900 的无归因留痕算客户自发用量、但不进客户看板」这件事本身

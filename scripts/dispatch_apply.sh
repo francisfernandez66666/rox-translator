@@ -7,8 +7,16 @@
 #   会变成"忘了关"。到期回归、排障回退、验收完关掉，三种场景都得一键完成，
 #   所以开与关必须成对存在、且都不依赖人记得住配置文件的路径。
 #
-# 它做的四件事（不做第五件）：
+# 它做的事（★ 2026-09-30 开闸当天从"四件"长成"六件"，两条都是现网踩出来的）：
 #   ① 开闸前置：root + 服务在跑 + **preflight 全过**（环境不一致就不许开，这是硬前置）；
+#   ①b 凭据落位：**服务账号必须真读得到那把私钥**。首开实测——钥匙在 /etc/translator 里，
+#       该目录 750 root:root，而 translator 是 95:986 的服务账号，连目录都进不去；
+#       systemd 的 EnvironmentFile 由 PID 1(root) 读，所以开关值读到了、健康面只报 degraded，
+#       现象是"配置全对但永远拨不通"。判据一律问"服务账号 test -r"，不问"文件在不在"。
+#   ①c 主机指纹：给 ssh 一个 known_hosts 并预置远端主机键。服务账号**没有家目录**
+#       （passwd 里是 /home/translator，实际不存在）且 unit 开着 ProtectHome=yes ⇒
+#       accept-new 记不下任何键 ⇒ 每次拨都等于"谁给的主机键都认"。客户文件要在公路上走，
+#       这一腿不会报错、也不会进健康面，只能在这里显式铺好（键值先打指纹交人核对）。
 #   ② 写独立 env（0600，属主 translator）+ 独立 drop-in dispatch.conf（prod.conf 零改动）；
 #   ③ daemon-reload + restart，等 /livez 通，读 /api/health 的 dispatch 必须 = online；
 #   ④ 落一份到期日期，并启用主站侧到期回归 timer（到期自动关，不靠人记）。
@@ -17,19 +25,40 @@
 #   关掉派发只需要 dispatch_revert.sh（删 drop-in + 重启），与"派发从没开过"逐字节等价。
 #
 # 用法（服务器 **root** 执行）：
-#   FPD_SSH=fpd@1.2.3.4 FPD_KEY=/etc/translator/dispatch_ed25519 \
-#   FPD_EXPIRE_DATE=2026-10-28 [FPD_MIN_MB=8] [FPD_MIN_PAGES=15] [SKIP_PREFLIGHT=1] \
+#   FPD_SSH=fpd@1.2.3.4 [FPD_KEY=/etc/translator-dispatch/dispatch_ed25519] \
+#   [FPD_KNOWN_HOSTS=/etc/translator-dispatch/known_hosts] \
+#   FPD_EXPIRE_DATE=2026-10-26 [FPD_MIN_MB=20] [FPD_MIN_PAGES=30] [SKIP_PREFLIGHT=1] \
+#   [FPD_SAMPLE=/opt/translator/data/_uploads/one.pdf] \
 #   bash scripts/dispatch_apply.sh
+#   ★ FPD_SAMPLE 不是可选项的装饰：预检的 G5（真机全往返）**无样张即判红**，本脚本会把它透传给
+#   preflight。开闸前随手放一份真件（≥定档的体积与页数才有意义）在那儿，别用 SKIP_PREFLIGHT 绕。
+#   （★ 两个凭据路径的默认值与 dispatch_preflight.sh **逐字同值**，由
+#     fileproc/dispatch_scripts_gate_test.go 的 TestPreflightAndApplyShareCredentialPaths 钉住：
+#     两份脚本各写一个路径，就会出现"挪完钥匙、预检却说私钥不存在、于是有人跳过预检"这条链。）
+#
+# ★ 默认档位是**量出来的**（2026-09-30 定档，别再改回 8/15 那对占位数）：
+#   同一份 1.69MB/14 页真单据走原版式链，产物胀到 6.01MB（3.4 倍，本地同脚本同 venv 完全复现），
+#   公网回传实测 0.49MB/s ⇒ 派一单的代价按**产物**算而不是按输入算。
+#   输入 8MB 的 PDF 在这条链上产物可到 ≈27MB、回传 ≈55s，而远端转换本身只快几秒——
+#   盖不回来。粗算盈亏平衡点在输入 ≈15–20MB 以上，故体积腿取 20、页数腿取 30
+#   （两腿必须同时成立才派，见 Go 侧 DispatchEligible）。
+#   等值锁＝fileproc_remote_test.go 的 TestDispatchTierDefaultsMatchMeasuredBreakEven：
+#   本脚本的默认值与 Go 的默认值必须一致，任何一侧漂回 8/15 都会让"没装 drop-in 的环境"开始派小件。
 #
 # 退出码：0=已开闸且实测 online；非 0=**保持关闭**（失败即不改配置，不会留下半开状态）。
 # =============================================================================
 set -u
 
 FPD_SSH="${FPD_SSH:-}"
-FPD_KEY="${FPD_KEY:-/etc/translator/dispatch_ed25519}"
+# ★ 私钥默认落点＝/etc/translator-dispatch（**不是** /etc/translator）。
+#   原因见上面 ①b：/etc/translator 是 750 root:root，服务账号进不去，钥匙放那儿等于派发永远拨不通。
+FPD_KEY="${FPD_KEY:-/etc/translator-dispatch/dispatch_ed25519}"
+# 远端主机指纹文件（Go 侧按 FILEPROC_DISPATCH_KNOWN_HOSTS 取用，空则不加 -o UserKnownHostsFile）
+FPD_KNOWN_HOSTS="${FPD_KNOWN_HOSTS:-/etc/translator-dispatch/known_hosts}"
+FPD_PORT="${FPD_PORT:-22}"
 FPD_EXPIRE_DATE="${FPD_EXPIRE_DATE:-}"
-FPD_MIN_MB="${FPD_MIN_MB:-8}"
-FPD_MIN_PAGES="${FPD_MIN_PAGES:-15}"
+FPD_MIN_MB="${FPD_MIN_MB:-20}"      # ★ 2026-09-30 定档（产物 3.4× 膨胀＋0.49MB/s 回传实测），别改回 8
+FPD_MIN_PAGES="${FPD_MIN_PAGES:-30}" # ★ 与体积腿同时成立才派；15 页那档在 14 页就胀 3.4 倍的实测面前偏低
 SKIP_PREFLIGHT="${SKIP_PREFLIGHT:-0}"
 
 ENV_FILE=/etc/translator/dispatch.env
@@ -52,6 +81,78 @@ command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd"
 systemctl list-unit-files 'translator.service' >/dev/null 2>&1 || die "translator.service 不存在（本脚本只在主站跑）"
 
 log "[1/5] 前置检查"
+
+# ---------- ①b 凭据落位：问"服务账号读得到吗"，不问"文件在不在" ----------
+SVC_USER="$(systemctl show -p User --value translator.service 2>/dev/null || true)"
+SVC_USER="${SVC_USER:-root}"
+as_svc() {
+  # runuser 优先（util-linux 标配），没有就退回 sudo -u；两者都要 -n 语义（不口令）
+  if command -v runuser >/dev/null 2>&1; then runuser -u "$SVC_USER" -- "$@" 2>/dev/null
+  else sudo -u "$SVC_USER" "$@" 2>/dev/null; fi
+}
+[ -f "$FPD_KEY" ] || die "私钥不存在：$FPD_KEY
+  生成一把（**私钥永不离开本机**，只把 .pub 送去体验机）：
+    install -d -m 700 -o translator -g translator $(dirname "$FPD_KEY")
+    sudo -u translator ssh-keygen -t ed25519 -N '' -C langcross-dispatch-$(date +%Y) -f $FPD_KEY
+    sudo FPD_PUBKEY=$FPD_KEY.pub FPD_EXPIRE_DATE=<YYYY-MM-DD> bash deploy/dispatch/bootstrap-dispatch.sh"
+if [ "$SVC_USER" != "root" ] && ! as_svc test -r "$FPD_KEY"; then
+  bad "私钥在位但**服务账号 $SVC_USER 读不到**：$FPD_KEY"
+  bad "  目录口径：$(stat -c '%a %U:%G' "$(dirname "$FPD_KEY")" 2>/dev/null || echo 取不到)"
+  bad '  这就是「配置全对、健康面永远 degraded」的形态——EnvironmentFile 由 root(PID 1) 读，'
+  bad '  而 ssh 是服务进程自己起的：钥匙读不到只会退 Permission denied，不会有人告诉你为什么。'
+  bad "  修法（本脚本能自动做的只在 KEY_DIR=/etc/translator 这一种历史落位上）："
+  bad "    install -d -m 700 -o translator -g translator /etc/translator-dispatch"
+  bad "    mv /etc/translator/dispatch_ed25519* /etc/translator-dispatch/ && chown translator:translator /etc/translator-dispatch/*"
+  if [ "$(dirname "$FPD_KEY")" = "/etc/translator" ]; then
+    NEW_DIR=/etc/translator-dispatch
+    log "  检测到历史落位 /etc/translator（服务账号进不去）⇒ 自动把钥匙挪到 $NEW_DIR"
+    install -d -m 700 -o translator -g translator "$NEW_DIR" || die "建 $NEW_DIR 失败"
+    mv -f "$FPD_KEY" "$NEW_DIR/" 2>/dev/null || die "挪私钥失败"
+    mv -f "$FPD_KEY.pub" "$NEW_DIR/" 2>/dev/null || true
+    KEY_BASE="$(basename "$FPD_KEY")"
+    chmod 600 "$NEW_DIR/$KEY_BASE"
+    chown translator:translator "$NEW_DIR/$KEY_BASE" 2>/dev/null || true
+    [ -f "$NEW_DIR/$KEY_BASE.pub" ] && chmod 644 "$NEW_DIR/$KEY_BASE.pub" && chown translator:translator "$NEW_DIR/$KEY_BASE.pub" 2>/dev/null
+    FPD_KEY="$NEW_DIR/$KEY_BASE"
+    as_svc test -r "$FPD_KEY" || die "挪完仍读不到 ⇒ 不是目录权限问题，停下人工查（别让闸半开）"
+    ok "私钥已落位 $FPD_KEY（服务账号 $SVC_USER 实读通过）"
+  else
+    die "私钥对服务账号不可读，且落点不是已知的历史位置 ⇒ 不猜、不改，按上面两条手工修完再开闸"
+  fi
+else
+  ok "私钥 $FPD_KEY 服务账号（$SVC_USER）实读通过"
+fi
+
+# ---------- ①c 主机指纹：给 ssh 一个能用的 known_hosts，并把远端主机键钉进去 ----------
+FPD_HOST="${FPD_SSH#*@}"
+[ -n "$FPD_HOST" ] && [ "$FPD_HOST" != "$FPD_SSH" ] || die "FPD_SSH 要写成 fpd@<主机>（现在解析不出主机段）"
+KH_DIR="$(dirname "$FPD_KNOWN_HOSTS")"
+install -d -m 700 -o translator -g translator "$KH_DIR" 2>/dev/null || true
+if [ -s "$FPD_KNOWN_HOSTS" ] && grep -qF "$FPD_HOST " "$FPD_KNOWN_HOSTS"; then
+  ok "主机指纹已在 $FPD_KNOWN_HOSTS（$FPD_HOST）"
+else
+  TMPKH="$(mktemp)"
+  if ! ssh-keyscan -p "$FPD_PORT" -T 10 "$FPD_HOST" >"$TMPKH" 2>/dev/null; then
+    rm -f "$TMPKH"; die "ssh-keyscan 取不到 $FPD_HOST 的主机键 ⇒ 网络/端口不对，先排障再开闸"
+  fi
+  grep -vE '^\s*$|^\s*#' "$TMPKH" >"${TMPKH}.clean" || true
+  if [ ! -s "${TMPKH}.clean" ]; then
+    rm -f "$TMPKH" "${TMPKH}.clean"; die "ssh-keyscan 只回注释 ⇒ 该端口上没有 ssh 服务"
+  fi
+  cat "${TMPKH}.clean" >>"$FPD_KNOWN_HOSTS"
+  rm -f "$TMPKH" "${TMPKH}.clean"
+  chmod 600 "$FPD_KNOWN_HOSTS" 2>/dev/null || true
+  chown translator:translator "$FPD_KNOWN_HOSTS" 2>/dev/null || true
+  ok "已预置主机指纹到 $FPD_KNOWN_HOSTS（$FPD_HOST）"
+  warn "  ⚠️ 这是**首见即信**（TOFU）：开闸前请带外核对一次下面这几个指纹。"
+  warn "     对不上就不要开闸——把闸开在一条被人换过主机键的链上，客户文件就送给别人了。"
+  ssh-keygen -lf "$FPD_KNOWN_HOSTS" 2>/dev/null | sed 's/^/      /' || true
+fi
+# Go 侧只认这个开关；没它就不加 -o（本地快跑与单测维持原形态），所以这里必须显式配上。
+if ! as_svc test -r "$FPD_KNOWN_HOSTS"; then
+  die "known_hosts 对服务账号 $SVC_USER 不可读 ⇒ 钉不住主机键，先修属主/权限（chmod 600 + chown $SVC_USER）"
+fi
+
 if [ -z "$FPD_EXPIRE_DATE" ]; then
   warn "  未给 FPD_EXPIRE_DATE ⇒ 主站侧到期自动回归**不会启用**。"
   warn "  口径：这不是可选项——体验机到期那天若没人手工关闸，派发会一直拨一台已回收的机器。"
@@ -64,8 +165,12 @@ if [ "$SKIP_PREFLIGHT" = "1" ]; then
 else
   REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
   if [ -f "$REPO_ROOT/scripts/dispatch_preflight.sh" ]; then
-    FPD_SSH="$FPD_SSH" FPD_KEY="$FPD_KEY" bash "$REPO_ROOT/scripts/dispatch_preflight.sh" \
-      || die "preflight 未过 ⇒ **不开闸**（改环境后重跑本脚本；确实要强开请显式 SKIP_PREFLIGHT=1）"
+    FPD_SSH="$FPD_SSH" FPD_KEY="$FPD_KEY" FPD_KNOWN_HOSTS="$FPD_KNOWN_HOSTS" FPD_SAMPLE="${FPD_SAMPLE:-}" \
+      bash "$REPO_ROOT/scripts/dispatch_preflight.sh" \
+      || die "preflight 未过 ⇒ **不开闸**（改环境后重跑本脚本；确实要强开请显式 SKIP_PREFLIGHT=1）
+      ⚠️ 若红的是 G5：那是**真机全往返**没做成，不是格式问题。G5 无样张时刻意判红不判跳过
+      （09-29 那次事故就是「G1~G4 全绿、传输腿却是死路」），给它一份过档的样张再来：
+        FPD_SAMPLE=/opt/translator/data/_uploads/<一份 ≥20MiB 或 ≥30 页的 PDF>（本脚本按同一档位量吞吐）"
     ok "preflight 全过"
   else
     die "找不到 scripts/dispatch_preflight.sh（一致性门禁缺失，拒绝开闸）"
@@ -83,6 +188,7 @@ cat >"$ENV_FILE" <<EOF
 FILEPROC_DISPATCH=1
 FILEPROC_DISPATCH_HOST=$FPD_SSH
 FILEPROC_DISPATCH_SSH_KEY=$FPD_KEY
+FILEPROC_DISPATCH_KNOWN_HOSTS=$FPD_KNOWN_HOSTS
 FILEPROC_DISPATCH_MIN_MB=$FPD_MIN_MB
 FILEPROC_DISPATCH_MIN_PAGES=$FPD_MIN_PAGES
 EOF

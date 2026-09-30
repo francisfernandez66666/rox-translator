@@ -25,7 +25,7 @@
 #   它们从没判过**传输通路本身**：主站当时用的是裸 `ssh 'mkdir -p'` 与 `scp`，
 #   这两条腿在 ForceCommand 下是结构性死路（mkdir 实测退 78、scp 挂墙钟或静默非零），
 #   而本脚本当时照样四项全绿——因为它自己一直走协议，主站却不走。
-#   ⇒ 所以 09-29 把判据补成两条腿：
+#   ⇒ 所以 09-29 把判据补成两条腿（09-30 开闸当天又加第三条凭据腿，见下面 ③）：
 #     ① G5（本脚本）＝**真机**把"上传→转换→查尺寸→取回→逐字节等值"整条拨一遍，
 #        并就地打印定档要用的体积/耗时读数；无 FPD_SAMPLE 时 G5 **判红不判跳过**，
 #        因为"跳过还能全绿exit 0"正是上面那次事故的形状。
@@ -33,18 +33,36 @@
 #        裸 mkdir／scp 调用一律照真机一样判红，上传与回拉都比 sha256。
 #   开闸前两边都要绿，缺一边就是把"我编的远端"当成了真远端、或把"我编的脚本通路"当成了主站通路。
 #
+#   ③ ★ 2026-09-30 开闸当天再加一条硬前置（凭据面，见下面 [0/5] 段）：**服务账号真读得到那把私钥**，
+#      且远端主机键有一个能落盘的 known_hosts。首开实测——钥匙在 /etc/translator（750 root:root）里，
+#      服务账号 translator 连目录都进不去；systemd 的 EnvironmentFile 由 PID 1(root) 读，所以开关值读到了、
+#      健康面只回 degraded，现象正是"预检全绿＋配置全对、但一单都不派、全被降级链兜回本地"。
+#      这一腿过去只有 dispatch_apply.sh 会修，预检这把尺子量不到 ⇒ G1~G5 的绿灯会被读成"通路可用"，
+#      和 §★★ 段当年那句"与 Go 侧同一条协议"是同一类错。现在它判得着：不读＝判红，不跳过。
+#
 # 用法（在**主站**执行，须为 root 或 translator，且能 BatchMode 拨通体验机）：
-#   FPD_SSH=fpd@1.2.3.4 FPD_KEY=/etc/translator/dispatch_ed25519 \
+#   FPD_SSH=fpd@1.2.3.4 FPD_KEY=/etc/translator-dispatch/dispatch_ed25519 \
 #   FPD_SAMPLE=/opt/translator/data/_uploads/sample.pdf \
 #   bash scripts/dispatch_preflight.sh
+#   （★ 私钥默认落点与 dispatch_apply.sh 同一个目录，两份脚本不许各写一个路径——
+#     挪完钥匙再跑预检会直接报"私钥不存在"，那条绿灯也就没了。同源锁见
+#     fileproc/dispatch_scripts_gate_test.go 的 TestPreflightAndApplyShareCredentialPaths。）
 #
-# 退出码：0 = 五项全过（可以开闸）；非 0 = 任一不过（**保持派发关闭**）。
+# 退出码：0 = 凭据面＋G1~G5 全过（可以开闸）；非 0 = 任一不过（**保持派发关闭**）。
 #   ★ 口径：本脚本失败不修任何东西、不改任何配置，它只是一把尺子。
 # =============================================================================
 set -u
 
 FPD_SSH="${FPD_SSH:-}"
-FPD_KEY="${FPD_KEY:-/etc/translator/dispatch_ed25519}"
+# ★ 私钥默认落点＝/etc/translator-dispatch（与 dispatch_apply.sh 同值，2026-09-30 对齐）。
+#   这里过去写的是 /etc/translator/dispatch_ed25519——那个目录 750 root:root，服务账号进不去，
+#   apply 脚本已会把钥匙挪出到 translator 自有的目录；预检若还盯着旧路径，就会出现
+#   "挪完钥匙 ⇒ 预检报私钥不存在 ⇒ 有人把预检跳过去 ⇒ 开闸开的是一把没人量过的闸"。
+FPD_KEY="${FPD_KEY:-/etc/translator-dispatch/dispatch_ed25519}"
+# 远端主机指纹文件：默认取 apply 脚本铺的那份；若主站已写过 dispatch.env，
+# 就以 **dispatch.env 里的现值**为准（同一把锁只能有一个来源，见 [0/5] 段的凭据面判据）。
+FPD_KNOWN_HOSTS="${FPD_KNOWN_HOSTS:-/etc/translator-dispatch/known_hosts}"
+FPD_ENV_FILE="${FPD_ENV_FILE:-/etc/translator/dispatch.env}"
 FPD_PORT="${FPD_PORT:-22}"
 FPD_REMOTE_ROOT="${FPD_REMOTE_ROOT:-/opt/fpdispatch}"
 FPD_LOCAL_BIN="${FPD_LOCAL_BIN:-/opt/translator/bin}"
@@ -63,7 +81,57 @@ warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 [ -x "$FPD_LOCAL_PY" ] || FPD_LOCAL_PY="$(command -v python3 || true)"
 [ -n "$FPD_LOCAL_PY" ] || { bad "主站找不到 python3（G2/G4 需要它现读版本与跑样张）"; exit 2; }
 
-SSH=(ssh -i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -p "$FPD_PORT" "$FPD_SSH")
+# ---------------------------------------------------------------- 凭据面（★ 2026-09-30 开闸当天加的第三条腿）
+# 判的是"主站那个**跑业务的进程**能不能用这套凭据拨出去"，不是"我 root 手工能不能拨通"。
+# 这两件事在过去是分开的，于是出现过：预检 17 项全绿、配置写下去了、服务也重启了，
+# 健康面却永远回 degraded —— 因为钥匙在 750 root:root 的目录里，服务账号进不去。
+# 所以这里的判据一律问"服务账号 test -r"，并且**判不到就判红**（跳过＝把下一次事故的形状原样留给开闸）。
+SVC_USER=""
+if command -v systemctl >/dev/null 2>&1; then
+  SVC_USER="$(systemctl show -p User --value translator.service 2>/dev/null || true)"
+fi
+as_svc() {
+  if command -v runuser >/dev/null 2>&1; then runuser -u "$SVC_USER" -- "$@" 2>/dev/null
+  elif command -v sudo >/dev/null 2>&1; then sudo -n -u "$SVC_USER" "$@" 2>/dev/null
+  else return 127; fi
+}
+if [ -z "$SVC_USER" ]; then
+  bad "取不到 translator.service 的运行账号（systemctl 不可用或该 unit 不存在）⇒ 凭据面无法判读，不许开闸
+  本脚本只在主站执行；换机器跑请连 G1~G5 一起重跑，别拿这里的旧绿灯开闸。"
+elif [ "$SVC_USER" = "root" ]; then
+  ok "凭据面：服务以 root 运行 ⇒ 私钥可读性按当前用户判（$FPD_KEY 本脚本已确认可读）"
+elif ! as_svc test -r "$FPD_KEY"; then
+  bad "私钥 $FPD_KEY 对服务账号 $SVC_USER 不可读 ⇒ 派发一单都拨不出去（会被降级链静默兜回本地，客户无感、健康面只见 degraded）
+  目录口径：$(stat -c '%a %U:%G' "$(dirname "$FPD_KEY")" 2>/dev/null || echo 取不到)
+  修法见 dispatch_apply.sh 的 ①b 段（把钥匙挪进 $SVC_USER 自有目录并 chmod 600）。"
+else
+  ok "凭据面：私钥对服务账号 $SVC_USER 实读通过"
+fi
+
+# 主机键文件：以 dispatch.env 现值为准（生产钉哪个文件，预检就用哪个文件），没有则用默认落点。
+if [ -f "$FPD_ENV_FILE" ]; then
+  ENV_KH="$(grep -E '^FILEPROC_DISPATCH_KNOWN_HOSTS=' "$FPD_ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true)"
+  [ -n "$ENV_KH" ] && FPD_KNOWN_HOSTS="$ENV_KH"
+fi
+if [ -s "$FPD_KNOWN_HOSTS" ]; then
+  if [ -n "$SVC_USER" ] && [ "$SVC_USER" != "root" ] && ! as_svc test -r "$FPD_KNOWN_HOSTS"; then
+    bad "known_hosts $FPD_KNOWN_HOSTS 对服务账号 $SVC_USER 不可读 ⇒ 服务进程钉不住远端主机键"
+  else
+    ok "凭据面：远端主机键钉在 $FPD_KNOWN_HOSTS（$(grep -cvE '^[[:space:]]*$|^[[:space:]]*#' "$FPD_KNOWN_HOSTS" 2>/dev/null || echo 0) 条），ssh 与预检同用一个文件"
+  fi
+else
+  warn "没有可用的 known_hosts（$FPD_KNOWN_HOSTS 不存在或为空）⇒ 本次预检走首见即信（accept-new）。"
+  warn "  ⚠️ 服务账号（$SVC_USER）没有家目录且 unit 开了 ProtectHome=yes，accept-new 在生产上**记不下任何键**，"
+  warn '     等于「谁给的主机键都认」。开闸前请先跑 dispatch_apply.sh 的 ①c 段把指纹铺好并带外核对。'
+fi
+
+# ssh 参数：有指纹文件就显式指过去（与 Go 侧 FILEPROC_DISPATCH_KNOWN_HOSTS 同一件事）。
+#   刻意不用空数组展开——macOS bash 3.2 在 set -u 下会把它当未绑定变量打死。
+if [ -s "$FPD_KNOWN_HOSTS" ]; then
+  SSH=(ssh -i "$FPD_KEY" -o "UserKnownHostsFile=$FPD_KNOWN_HOSTS" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -p "$FPD_PORT" "$FPD_SSH")
+else
+  SSH=(ssh -i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new -p "$FPD_PORT" "$FPD_SSH")
+fi
 if command -v shasum >/dev/null 2>&1; then DIGEST() { shasum -a 256 "$1" | awk '{print $1}'; }
 else DIGEST() { sha256sum "$1" | awk '{print $1}'; }; fi
 

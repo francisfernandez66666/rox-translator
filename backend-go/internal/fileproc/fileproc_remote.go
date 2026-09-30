@@ -56,15 +56,23 @@ import (
 
 // 派发相关的环境变量（★ 全部默认关闭；真值写在独立 drop-in dispatch.conf 里）
 const (
-	envDispatch        = "FILEPROC_DISPATCH"         // 空=关；=1 才启用（唯一总闸）
-	envDispatchHost    = "FILEPROC_DISPATCH_HOST"    // fpd@<ip>
-	envDispatchRoot    = "FILEPROC_DISPATCH_ROOT"    // 远端根，默认 /opt/fpdispatch
-	envDispatchPyBin   = "FILEPROC_DISPATCH_PYBIN"   // 远端 venv 解释器
-	envDispatchKey     = "FILEPROC_DISPATCH_SSH_KEY" // 0600 私钥
-	envDispatchMinMB   = "FILEPROC_DISPATCH_MIN_MB"  // 分流阈值（体积腿）
-	envDispatchMinPage = "FILEPROC_DISPATCH_MIN_PAGES"
-	envDispatchMaxConc = "FILEPROC_DISPATCH_MAX_CONCURRENT"
-	envDispatchTTL     = "FILEPROC_DISPATCH_SESSION_TTL_SEC"
+	envDispatch      = "FILEPROC_DISPATCH"         // 空=关；=1 才启用（唯一总闸）
+	envDispatchHost  = "FILEPROC_DISPATCH_HOST"    // fpd@<ip>
+	envDispatchRoot  = "FILEPROC_DISPATCH_ROOT"    // 远端根，默认 /opt/fpdispatch
+	envDispatchPyBin = "FILEPROC_DISPATCH_PYBIN"   // 远端 venv 解释器
+	envDispatchKey   = "FILEPROC_DISPATCH_SSH_KEY" // 0600 私钥
+	// envDispatchKnownHosts：远端主机指纹文件（★ 2026-09-30 开闸当天补的一腿）。
+	// 为什么要有这一档：ssh 参数里写的是 `StrictHostKeyChecking=accept-new`，而 accept-new 的
+	// 前提是"能把新主机键记下来"。主站服务账号（translator）**没有家目录**（passwd 里是
+	// /home/translator，实际不存在），于是 ~/.ssh/known_hosts 建不出来 ⇒ 每一次拨都等于
+	// "谁给的主机键都认"——客户文件在公路上跑，这一腿不能靠运气。
+	// 配了它就把主机键钉在这个文件上（由 dispatch_apply.sh 预置并 chown 给服务账号）；
+	// 不配则维持原样（不加 -o UserKnownHostsFile），单测与本地快跑不受影响。
+	envDispatchKnownHosts = "FILEPROC_DISPATCH_KNOWN_HOSTS"
+	envDispatchMinMB      = "FILEPROC_DISPATCH_MIN_MB" // 分流阈值（体积腿）
+	envDispatchMinPage    = "FILEPROC_DISPATCH_MIN_PAGES"
+	envDispatchMaxConc    = "FILEPROC_DISPATCH_MAX_CONCURRENT"
+	envDispatchTTL        = "FILEPROC_DISPATCH_SESSION_TTL_SEC"
 	// envDispatchFont：pdfwrite 那条腿专用的**远端字体路径**。
 	// 为什么必须显式配：pdfwrite.py 的 argv[2] 是字体文件（主站是 NotoSansCJK 的 .ttc，约 20MB），
 	// 不配的话每次派发都要先把它整份搬到远端——搬 20MB 字体去换一次 fpdf2 排版，纯亏。
@@ -101,15 +109,33 @@ func dispatchPyBin() string {
 }
 
 // dispatchKey 派发专用 SSH 私钥路径（0600，属主 translator，只主站持有）。
+//
+// ★ 2026-09-30 开闸当天真踩过一次"路径对但读不到"：这把钥匙放在 /etc/translator 里，
+//
+//	那个目录是 750 root:root，服务进程以 translator 身份跑，**连目录都进不去**；
+//	而 systemd 的 EnvironmentFile 是 PID 1（root）读的，所以开关值本身读到了、健康面报 degraded，
+//	现象是"配置全对但永远拨不通"。判据别只问文件在不在，要问**服务账号读得到读不到**
+//	（apply 脚本里那条 runuser -u <服务账号> test -r 就是这个意思）。
 func dispatchKey() string { return os.Getenv(envDispatchKey) }
+
+// dispatchKnownHosts 远端主机指纹文件（空 ⇒ 不加 -o UserKnownHostsFile，见上面常量注释）。
+func dispatchKnownHosts() string { return os.Getenv(envDispatchKnownHosts) }
 
 // dispatchRemoteFont 远端字体路径（pdfwrite 那条腿用；空 ⇒ 不派 pdfwrite）。
 func dispatchRemoteFont() string { return os.Getenv(envDispatchFont) }
 
-// dispatchMinBytes 分流阈值的体积腿（字节）：FILEPROC_DISPATCH_MIN_MB × 1MiB，默认 8MiB。
-// ★ 待 §12-D2 带宽实测后上调，宁窄勿宽——别把小件派出去白付公网往返。
+// dispatchMinBytes 分流阈值的体积腿（字节）：FILEPROC_DISPATCH_MIN_MB × MiB，**默认 20MiB**。
+//
+// ★ 2026-09-30 定档（原默认 8MiB 是"没量过就先给个数字"的占位档，已作废）。口径不是拍脑袋，
+//
+//	是三份量出来的数拼出来的：产物膨胀 3.4×（同一份 1.69MB/14 页真单据，原版式产物 6.01MB，
+//	本地同脚本同 venv 完全复现 ⇒ 与体验机无关）＋回传实测 0.49MB/s（4Mbps 标称吻合）
+//	＋远端转换本身很快（14 页 3s，省下的那点时间盖不回搬运费）。
+//	于是"派一单"的真实代价按**产物**而不是输入算：输入 8MB 的 PDF 在这条链上产物可放大到 ≈27MB，
+//	回传要 ≈55s，盈亏平衡点粗算在输入 ≈15–20MB 以上 ⇒ 档位取 20，宁窄勿宽。
+//	配套等值锁见 fileproc_remote_test.go 的 TestDispatchTierDefaultsMatchMeasuredBreakEven。
 func dispatchMinBytes() int64 {
-	mb := 8 // §7 默认值（★ 待 §12-D2 带宽实测后上调，别把小件派出去白付往返）
+	mb := 20 // 定档值（2026-09-30 按产物尺寸与 0.49MB/s 回传实测算出，见上面注释）
 	if v := os.Getenv(envDispatchMinMB); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			mb = n
@@ -118,9 +144,15 @@ func dispatchMinBytes() int64 {
 	return int64(mb) << 20
 }
 
-// dispatchMinPages 分流阈值的页数腿（FILEPROC_DISPATCH_MIN_PAGES，默认 15）。
+// dispatchMinPages 分流阈值的页数腿（FILEPROC_DISPATCH_MIN_PAGES，**默认 30**）。
+//
+// ★ 2026-09-30 定档：与体积腿是**同时成立**才派（见 DispatchEligible），所以它的职责是
+//
+//	"别为一份薄而大的文件付公网往返"。旧默认 15 页偏低——实测 14 页就已经把产物胀到 3.4 倍，
+//	说明膨胀率跟页数关系弱、跟单页内容密度关系强，用页数只能当"这单值不值得占用并发＝1 的远端"的第二道筛。
+//	抬到 30 后，只有"又大又厚"的单子才走远端，与内存解耦这个唯一收益对齐。
 func dispatchMinPages() int {
-	n := 15
+	n := 30 // 定档值（2026-09-30，同上）
 	if v := os.Getenv(envDispatchMinPage); v != "" {
 		if p, err := strconv.Atoi(v); err == nil && p >= 0 {
 			n = p
@@ -734,6 +766,13 @@ func sshBaseArgs() []string {
 	args := []string{"-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "-o", "StrictHostKeyChecking=accept-new"}
 	if k := dispatchKey(); k != "" {
 		args = append(args, "-i", k)
+	}
+	// ★ 主机指纹钉死（2026-09-30 开闸当天实测的坑）：服务账号没有家目录 ⇒ accept-new 记不下主机键，
+	//
+	//	"每次都接受任何主机键"这件事不会报错、也不会进健康面，只能从 ssh 的参数上看出来。
+	//	配了 FILEPROC_DISPATCH_KNOWN_HOSTS 就把键文件显式指过去；不配维持历史行为（不加这一条 -o）。
+	if kh := dispatchKnownHosts(); kh != "" {
+		args = append(args, "-o", "UserKnownHostsFile="+kh)
 	}
 	return args
 }

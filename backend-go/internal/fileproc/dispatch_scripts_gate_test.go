@@ -35,6 +35,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -599,4 +600,138 @@ func mapValues(m map[string]string) []string {
 		out = append(out, v)
 	}
 	return out
+}
+
+// TestApplyTierDefaultsMatchBinaryDefaults ★ 2026-09-30 定档同源锁：dispatch_apply.sh 的两个
+// 默认档位（FPD_MIN_MB / FPD_MIN_PAGES 的 `:-` 兜底值）**必须等于 Go 侧不配 env 时的默认值**。
+//
+// 为什么单独一条：分流判据在 Go 里，档位默认值却同时抄了一份在 shell 脚本里。这两份一旦分叉，
+//
+//	现象是"我在脚本里开了 20MB，服务器起出来其实按 8MB 在派"（或反过来），
+//	而 /api/health 只会说 dispatch=online——不会有任何一层报错。
+//	上一条 TestApplyWritesOnlyEnvNamesBinaryReads 只保证**键名**对得上，值对不上它看不见。
+//
+// 判据刻意写成派生式（拿 Go 函数的返回值去比脚本里解析出的数字），不在这里重复钉死 20/30；
+// 20/30 这两个字面量由 fileproc_remote_test.go 的 TestDispatchTierDefaultsMatchMeasuredBreakEven 钉。
+// 反证：把脚本里的 `:-20` 改成 `:-8` ⇒ 本用例判红。
+func TestApplyTierDefaultsMatchBinaryDefaults(t *testing.T) {
+	root := findDispatchRepoRoot(t)
+	applySh := readRepoText(t, root, "scripts/dispatch_apply.sh")
+
+	// 解析 `FPD_MIN_MB="${FPD_MIN_MB:-20}"` 这种兜底写法；解析不到说明脚本改了形态，闸门必须跟着改。
+	pick := func(name string) int {
+		re := regexp.MustCompile(name + `="\$\{` + name + `:-([0-9]+)\}"`)
+		m := re.FindStringSubmatch(applySh)
+		if m == nil {
+			t.Fatalf("没解析到 %s 的默认档（写法变了，本闸门需同步；不许放宽成跳过）", name)
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("%s 默认档不是数字: %v", name, err)
+		}
+		return n
+	}
+	shellMB := pick("FPD_MIN_MB")
+	shellPages := pick("FPD_MIN_PAGES")
+
+	// Go 侧默认值：把两个 env 显式清空，确保读到的就是代码里的兜底档。
+	t.Setenv(envDispatchMinMB, "")
+	t.Setenv(envDispatchMinPage, "")
+	goMB := dispatchMinBytes() >> 20
+	goPages := int64(dispatchMinPages())
+
+	if int64(shellMB) != goMB {
+		t.Errorf("体积腿两档分叉：apply 脚本默认 %dMiB，二进制默认 %dMiB ⇒ 实际生效的是哪一档没人知道", shellMB, goMB)
+	}
+	if int64(shellPages) != goPages {
+		t.Errorf("页数腿两档分叉：apply 脚本默认 %d 页，二进制默认 %d 页", shellPages, goPages)
+	}
+	// 正向对照：分叉判据本身不能恒真——清空 env 后必须读得到一个非零默认档。
+	if goMB <= 0 || goPages <= 0 {
+		t.Fatalf("二进制默认档读出来是 %dMiB/%d 页 ⇒ 本用例的靶子没了", goMB, goPages)
+	}
+}
+
+// TestPreflightAndApplyShareCredentialPaths ★ 2026-09-30 开闸当天立的凭据面同源锁。
+//
+// 为什么要钉"两份脚本的默认凭据路径逐字相等"：开闸是 apply 做的，而 apply 的第一步是**调 preflight**。
+//
+//	首开那批里 apply 已把私钥默认落点挪到 /etc/translator-dispatch（因为 /etc/translator 是 750 root:root，
+//	服务账号 translator 连目录都进不去，钥匙放那儿等于派发永远拨不通），preflight 却还写着旧路径。
+//	于是"钥匙被 apply 挪走 ⇒ preflight 报私钥不存在 ⇒ 有人加 SKIP_PREFLIGHT=1 绕过去"这条链是必然发生的，
+//	而 SKIP_PREFLIGHT 绕掉的正是唯一能证明传输腿可用的那道闸。分叉本身不报错，它只是把开闸推成人去跳闸。
+//
+// 判据三段：
+//
+//	① 两份脚本的 FPD_KEY / FPD_KNOWN_HOSTS / FPD_PORT 默认值必须逐字相等（值从各自 `:-` 兜底里解析，不写死）；
+//	② preflight 必须有"问服务账号读不读得到"这条腿（as_svc test -r），且主机指纹必须真进 ssh 参数
+//	   （UserKnownHostsFile=$FPD_KNOWN_HOSTS）——只看文件在不在＝当年那次 degraded 的形态；
+//	③ apply 调 preflight 时必须把 FPD_KNOWN_HOSTS 与 FPD_SAMPLE 透传过去
+//	   （G5 无样张刻意判红，不透传就是让开闸卡在一个"没人知道为什么"的红上，最后被 SKIP 掉）。
+//
+// 反证（本轮在临时副本上实跑）：把 preflight 的 FPD_KEY 默认档改回 /etc/translator/dispatch_ed25519 ⇒ ① 判红；
+//
+//	删掉 as_svc 那条可读性判据 ⇒ ② 判红。
+func TestPreflightAndApplyShareCredentialPaths(t *testing.T) {
+	root := findDispatchRepoRoot(t)
+	applySh := readRepoText(t, root, "scripts/dispatch_apply.sh")
+	pre := readRepoText(t, root, "scripts/dispatch_preflight.sh")
+
+	// ① 默认值解析：只认 `NAME="${NAME:-<默认>}"` 这一种写法；解析不到说明形态变了，闸门要跟着改而不是跳过。
+	pickDefault := func(text, name, rel string) string {
+		re := regexp.MustCompile(`(?m)^` + name + `="\$\{` + name + `:-([^}]+)\}"`)
+		m := re.FindStringSubmatch(text)
+		if m == nil {
+			t.Fatalf("%s 里没解析到 %s 的默认档（写法变了，本闸门需同步；不许放宽成跳过）", rel, name)
+		}
+		return strings.TrimSpace(m[1])
+	}
+	for _, name := range []string{"FPD_KEY", "FPD_KNOWN_HOSTS", "FPD_PORT"} {
+		a := pickDefault(applySh, name, "scripts/dispatch_apply.sh")
+		p := pickDefault(pre, name, "scripts/dispatch_preflight.sh")
+		if a != p {
+			t.Errorf("%s 默认档两脚本分叉：apply=%q preflight=%q ⇒ 挪完钥匙预检必报「私钥不存在」，于人只有跳闸", name, a, p)
+		}
+		// 正向对照：默认值不许是空串或被注释吃掉（空串会让上面那条"相等"恒真）。
+		if a == "" || strings.HasPrefix(a, "#") {
+			t.Fatalf("%s 的默认档解析出来是空/非法（%q）⇒ 本用例的靶子没了", name, a)
+		}
+	}
+
+	// ② preflight 的凭据腿必须真问"服务账号读得到吗"，并且主机键要真进 ssh 参数。
+	if !strings.Contains(pre, "as_svc test -r \"$FPD_KEY\"") {
+		t.Error("preflight 里没有「服务账号实读私钥」这条判据 ⇒ 回到 09-30 那次「预检全绿、健康面永远 degraded」的形态")
+	}
+	if !strings.Contains(pre, "UserKnownHostsFile=$FPD_KNOWN_HOSTS") {
+		t.Error("preflight 没把主机指纹文件喂给 ssh ⇒ 它验的通路和生产拨的那条不是同一条")
+	}
+	// 判不到服务账号时必须判红而不是跳过（"跳过还能 exit 0"是 §★★ 段那条事故的形状）。
+	if !strings.Contains(pre, "凭据面无法判读") {
+		t.Error("preflight 取不到服务运行账号时没有判红文案 ⇒ 这条腿可能在非 systemd 宿主上静默变绿灯")
+	}
+
+	// ③ apply 透传：主机指纹文件与 G5 样张都得递给 preflight。
+	//   注意写法是「env 赋值行 + 续行符 + bash 行」，所以判据要问**整条语句**而不是单行——
+	//   只扫 bash 那一行会把上一行的赋值漏掉（首跑就是这么误判过一次，别把这条锁改成单行判据）。
+	applyLines := strings.Split(applySh, "\n")
+	callIdx := -1
+	for i, l := range applyLines {
+		if strings.Contains(l, "bash ") && strings.Contains(l, "dispatch_preflight.sh") {
+			callIdx = i
+			break
+		}
+	}
+	if callIdx < 0 {
+		t.Fatal("apply 脚本里找不到调用 preflight 的那一行（调用形态变了，本闸门需同步）")
+	}
+	callStmt := applyLines[callIdx]
+	for j := callIdx - 1; j >= 0 && strings.HasSuffix(strings.TrimSpace(applyLines[j]), "\\"); j-- {
+		callStmt = applyLines[j] + "\n" + callStmt
+	}
+	callLine := callStmt
+	for _, must := range []string{"FPD_KNOWN_HOSTS=", "FPD_SAMPLE="} {
+		if !strings.Contains(callLine, must) {
+			t.Errorf("apply 调 preflight 没透传 %s ⇒ 预检量的是另一套凭据/永远拿不到样张（当前行：%s）", must, strings.TrimSpace(callLine))
+		}
+	}
 }

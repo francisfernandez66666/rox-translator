@@ -22,10 +22,58 @@ func (s *Store) SetOrgTokenLimit(id int64, limit int64) error {
 	return err
 }
 
-// monthStart 当前自然月起点（RFC3339，与 usage_ledger.created_at 同格式比较）。
+// monthStart 当前自然月起点（★ 2026-10-01 〇-AF 修：日历语义不变，**渲染口径**必须与写入口径同区）。
+//
+// 为什么这是一条真缺陷而不是"测试 unlucky"：
+//
+//	usage_ledger.created_at 这一列在本仓**一律写 UTC**（billing.go:396/462/531…
+//	`time.Now().UTC().Format(time.RFC3339)`，列型是 TEXT），而下面的谓词是
+//
+//	created_at>=? 的**字符串比较**——TEXT 列在 SQLite/PG 两侧都按字典序比，不比时刻。
+//	旧实现用 `time.Now()` 的**本地时区**渲染边界，+08 主机上得到 "2026-10-01T00:00:00+08:00"，
+//	于是每月 1 号本地 00:00–08:00 这**八个小时**里，前一日 "…T16:xx:xxZ" 起的所有行
+//	按字典序都排在边界"后面"（其实全在前面）⇒ 本月已用恒读 0。
+//	读 0 不是显示问题：CheckBudgetWalls 拿这个数判部门墙/组织墙，命中才拦翻译请求，
+//	⇒ 每月开头八小时**预算墙形同虚设**，客户可以在墙上继续烧（与 〇-AD 那条
+//	"防超支不能换防误扣"是同一条底线，只是这次的洞是日历给的）。
+//
+// 修法刻意只动渲染、不动日历：起点仍然取**本地历法的月初零点**（业务口径「自然月」不变、
+// 客户看到的月度数不迁移），再把这个零点表示成 UTC——两侧同为 "…Z"，字典序＝时刻序，
+// 于是任何时区偏移下都自洽。0 点整这一秒内的行会因 RFC3339 的小数秒尾巴（'.'<'Z'）
+// 被字典序判在边界之前，属于 TEXT 时间戳的既有粒度缝，不在本条射程内。
 func monthStart() string {
 	n := time.Now()
-	return time.Date(n.Year(), n.Month(), 1, 0, 0, 0, 0, n.Location()).Format(time.RFC3339)
+	return time.Date(n.Year(), n.Month(), 1, 0, 0, 0, 0, time.Local).UTC().Format(time.RFC3339)
+}
+
+// MonthStartBound 月首边界的**唯一对外出口**（★ 2026-10-01 〇-AF 补丁三）。
+//
+// 存在的理由只有一条：这条边界在 2026-09 之前被抄成了**两份**——store 里的 monthStart
+// 与 `internal/api/plans_api.go` 里内联的 `time.Date(...time.Local).Format(RFC3339)`，
+// 两处都带同一个「本地时区渲染去比 UTC 写入的 TEXT 列」的洞，但只有内联那份在给客户
+// 出数（收银台/订阅页的「本月已用」），于是每月开头八小时客户看到的是 0，
+// 而 UAT A7s 的「今日已耗」同一条腿直接判红。抄一份＝修一处漏一处，与 §一·11
+// 「谓词只许引用 store 里那一份常量」是同一条纪律，只是这次的对象是日历边界而不是谓词。
+//
+// ⚠️ 用法约束：需要「本月起点」的读腿一律调这里，**禁止**在 api/engine 层再
+// `time.Date(...)` 现算（闸门见 internal/api/month_boundary_gate_test.go）。
+func MonthStartBound() string { return monthStart() }
+
+// DayStartBound 今日（UTC 日历日）零点边界，RFC3339 口径（★ 2026-10-01 〇-AF 补丁三）。
+//
+// 为什么是 UTC 日而不是本地日：本仓的**日计数器与日额度墙**就是这个口径
+// （`billing.go` 的 DailyUsage / incrementDailyUsage* 一律 `time.Now().UTC().Format("2006-01-02")`
+// 作 usage_daily 的 day 主键）。显示侧若换成本地日，等于给同一个「今日已用」长出第二把尺子
+// ——客户看到的今日数与真拿去拦请求的那个数不一致，正是 §一·11 与 F-12 反复钉的形态。
+// 所以本函数刻意与写侧同区：宁可与客户的"自然日"相差偏移量，也不许两把尺子各数各的账。
+// 等值锁见 DayStartBoundAgreesWithDailyUsageKey（把"显示尺子＝拦截尺子"钉成一条断言）。
+//
+// ⚠️ 不用 `time.Now().UTC().Truncate(24*time.Hour)`：Truncate 按"自零时刻的绝对时长"取整，
+// 而 Go 的内部时间轴含闰秒累计（1972 年以来 37 秒），24h 的整数倍会偏离真 UTC 零点；
+// 显式走历法构造（年月日 + 零时分秒 + UTC）没有这一层缝，也和 monthStart 同形好读。
+func DayStartBound() string {
+	n := time.Now().UTC()
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
 }
 
 // OrgTokensUsedThisMonth 统计某组织（含全部子树）本月 token 消耗。
