@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	ledong "github.com/ledongthuc/pdf"
+	"translator/internal/fileproc"
 )
 
 // 翻译文件支持的类型白名单（与 fileproc.ExtractTexts 提取逻辑一致）
@@ -79,29 +79,23 @@ func checkPdfLimits(path, filename string) error {
 	return nil
 }
 
-// pdfPageCount 读取 PDF 页数（纯 Go，无需外部依赖）。解析失败返回 error 由调用方放行。
+// pdfPageCount 读取 PDF 页数（解析失败返回 error 由调用方放行）。
+//
+// ★ 2026-10-01 〇-AF 补丁四：实现整体下沉到 `fileproc.PdfPageCount`，本文件只剩薄委托。
+//
+//	原因不是"复用代码"，而是**派发分流与上传闸门必须共用同一把尺子**：
+//	派发侧的页数腿（≥MIN_PAGES 才派）和这里的页数墙（>120 页即拒）读的是同一个数字，
+//	两份各写各的就会长出现网已经栽过两次的形态——一边判"该派"、另一边判"该拒"，
+//	或者更坏的：派发侧启发式读 0（真解析器读得出 32 页），于是这单永远不派且零日志。
 //
 // ★ 2026-09-28 P0（改造方案 §11-P0）：`os.ReadFile` 整读改成**流式**（os.Open + ReaderAt）。
 //
 //	旧实现在**上传请求的同步路径**上把整个文件读进 Go 堆再来数页——40MB 的 PDF 就是白烧 40MB
 //	堆，而这道校验跑在资源闸之外（`internal/fileproc` 的闸限额不着它），等于主站自己送上门的
 //	一次额外尖峰；更别扭的是它只是为判阈值，**还没开始转换就先付了那份内存**。
-//	改为把 `*os.File` 交给解析器后，进程内只保留解析用的缓冲与 xref 表。
+//	改为把 `*os.File` 交给解析器后，进程内只保留解析用的缓冲与 xref 表（下沉后这条性质不变）。
 func pdfPageCount(path string) (int, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0, err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return 0, err
-	}
-	r, err := ledong.NewReader(f, fi.Size())
-	if err != nil {
-		return 0, err
-	}
-	return r.NumPage(), nil
+	return fileproc.PdfPageCount(path)
 }
 
 // validateUploadExt 校验文件扩展名是否在允许列表内（小写归一化）。

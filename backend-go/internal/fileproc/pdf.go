@@ -60,7 +60,20 @@ func extractPdfTextCLI(path string, e *Extractor) error {
 }
 
 // extractPdfTextLib ledongthuc/pdf 回退方案（CLI 不可用时使用）。
-func extractPdfTextLib(path string, e *Extractor) error {
+//
+// ★ 2026-10-01 〇-AF 补丁四：整个函数套 recover。
+//
+//	第三方解析器 `NewReaderEncrypted` 在"尾部 100 字节全是换行"这类畸形件上会
+//	`index out of range [-1]` **panic**（剥空白的循环少了一对括号），
+//	而这里是提取链的**回退腿**——客户上传一件畸形 PDF 就把提取协程打穿是不接受的，
+//	崩溃一律收敛成 error，由上层按"这份件解析失败"处理（与加密件同一条路）。
+//	同一份防护在页数读数 `PdfPageCount` 里也加了（那条更危险：它跑在上传请求的同步路径上）。
+func extractPdfTextLib(path string, e *Extractor) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("PDF 解析崩溃（畸形件，第三方解析器会 panic）：%v", r)
+		}
+	}()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return err

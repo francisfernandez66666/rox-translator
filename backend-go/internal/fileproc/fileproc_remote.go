@@ -483,6 +483,29 @@ func DispatchEligible(inputs []string, pages int, payloadLen int64) bool {
 	return pages >= dispatchMinPages()
 }
 
+// pdfSizeLegPasses 只回答一个问题：这一单的**体积腿**够不够档（不看页数）。
+//
+// 它存在的唯一理由是 TryDispatch 里那条 WARN 要能把两种"不合格"分开：
+//
+//	体积不够 ⇒ 正常的小件分流，静默是对的（现网绝大多数单都是这一档，打日志只会刷噪音）；
+//	体积够了却卡在页数上 ⇒ 十有八九是**页数读数没取到**，必须吭声，
+//	              否则就是 09-30 那个形态：闸门全绿、派发却从没真跑过一次，没人知道为什么。
+//
+// 扩展名判据与 DispatchEligible 同口径（只有 PDF 链在射程内）：非 PDF 的大件是**本该走本地**，
+// 不是读数坏了，别给它发警报。
+func pdfSizeLegPasses(inputs []string) bool {
+	var maxSize int64
+	for _, p := range inputs {
+		if strings.ToLower(filepath.Ext(p)) != ".pdf" {
+			return false
+		}
+		if fi, err := os.Stat(p); err == nil && fi.Size() > maxSize {
+			maxSize = fi.Size()
+		}
+	}
+	return maxSize >= dispatchMinBytes()
+}
+
 // DispatchArtifactGuard 产物落点守卫（§9-A2：库里/argv 里**绝不允许**出现远端路径）。
 //
 // 它拦的是本方案最怕的那个形态：**到期后没法用**——
@@ -643,8 +666,27 @@ func DispatchRun(ctx context.Context, sessionID, script string, args []string, s
 	}
 
 	// ③ 映射 + 搬运输入：远端只认会话目录下的相对名（§4.2 映射表由 Go 单侧生成）
-	remoteArgs := make([]string, 0, len(args))
-	remoteArgs = append(remoteArgs, script)
+	//
+	// ★★ header.argv 的第一格**必须且只能出现一次脚本名**（〇-AF 补丁五，2026-10-01 真机复问抓到）。
+	//
+	//	远端 fpdexec 的 cmd_run 是 `cmd = [timeout…, PYBIN, str(script)] + argv[1:]`：
+	//	它按**位置**砍掉 argv[0]，不看内容。而产品侧的调用形态本来就自带脚本名
+	//	（pdf_overlay.go 的 `append([]string{"pdf_overlay.py"}, args...)`、pdfwrite.go 同理），
+	//	旧代码在这里又无条件 prepend 一次 script ⇒ argv 头部双写
+	//	⇒ 远端把第二个 "pdf_overlay.py" 当子命令交给脚本 ⇒ `未知子命令: pdf_overlay.py`、退 2
+	//	⇒ TryDispatch=false 被降级链静默兜回本地。这就是「闸开了、/api/health 回 dispatch=online、
+	//	预检 G5 全绿，**Go 这一腿却从来没通过一次**」的第四种形态：
+	//	  · G5 绿是因为 bash 侧自己拼的 header 送的是**单份**脚本名（照 fpdexec 文件头的协议示例）；
+	//	  · 单测绿是因为假 ssh 桩的 run 分支当时**压根不看 argv**；
+	//	  · probe 绿是因为 probe 腿没有 argv 这一说。
+	//	⇒ 三处读数同时绿却一条真路都没通，只有真机跑一份真件才暴露——本文件头那条
+	//	  「有自动降级的链路，产物能打开不算验收」的同族，且更隐蔽（连产物都没有）。
+	//	桩已同期改成按同一口径砍 argv[0] 并认子命令，等值锁见 TestDispatchRunArgvHasScriptNameOnce。
+	remoteArgs := make([]string, 0, len(args)+1)
+	if len(args) == 0 || args[0] != script {
+		// 调用方漏写脚本名时才补，保证远端砍掉的第一格一定是它；已带就不重复插。
+		remoteArgs = append(remoteArgs, script)
+	}
 	for _, a := range args {
 		if r, ok := outRemote[a]; ok {
 			remoteArgs = append(remoteArgs, r) // 声明过的产物：换成远端会话目录内的名字
@@ -1037,6 +1079,16 @@ func TryDispatch(ctx context.Context, sessionID, script string, args []string, p
 		pages = pdfPageCountFast(inputs[0])
 	}
 	if !DispatchEligible(inputs, pages, int64(len(payload))) {
+		// ★ 2026-10-01 〇-AF 补丁四：把"为什么没派"里**唯一一种不该静默**的形态单独打出来。
+		//   体积腿已经过了（这件确实大、确实该派），却卡在页数腿上，且页数是 0 ——
+		//   0 页不是"这份 PDF 真的没有页"，而是**页数读数没取到**（解析器失败＋启发式也数不出）。
+		//   旧代码在这种资格判 false 时一条日志都不打，于是现网长出"开关全绿、派发从没真跑过"
+		//   这个形态：09-30 的开闸当天 fpdprobe 首跑就是死在这里，靠人工数 /Type/Page 才定位。
+		//   其余不合格（小件、非 PDF、payload 不够）是**正常分流**，不打日志，别把现网刷满噪音。
+		if pages == 0 && pdfSizeLegPasses(inputs) {
+			observability.Warn(ctx, "[fpdispatch] 页数读数取不到 ⇒ 这一单不派（宁窄勿宽）",
+				"script", script, "input", filepath.Base(inputs[0]))
+		}
 		return nil, false // 小件：本地那条路今天就是好的，派出去只多付一次公网往返
 	}
 	stdout, err := DispatchRun(ctx, sessionID, script, args, payload, outputs)
@@ -1059,88 +1111,15 @@ func SessionIDFor(inputs ...string) string {
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
-// pdfPageCountFast 派发阈值用的页数估计（★ 只用于判阈值，不用于计费/展示）。
-// 为什么自己实现一遍：`internal/api` 的 pdfPageCount 在另一个包（fileproc 不能反向依赖 api），
-// 而且这里只要一个"够准就行"的数，不值得再引入一次整文件解析。
-// 取数顺序：① 尾部 64KB 里找 "/Count N"（绝大多数 PDF 的页树根在这）；② 退化成流式数 "/Type /Page"。
-// 全程流式（内存有界），不会像早期实现那样把 40MB 文件整读进堆。
-func pdfPageCountFast(path string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return 0
-	}
-	if n := countFromTrailer(f, fi.Size()); n > 0 {
-		return n
-	}
-	return countTypePage(f)
-}
-
-// countFromTrailer 从文件尾部 64KB 里解析 "/Count N"（页树根节点通常写在文件尾）。
-func countFromTrailer(f *os.File, size int64) int {
-	tail := int64(64 << 10)
-	if size < tail {
-		tail = size
-	}
-	if tail <= 0 {
-		return 0
-	}
-	if _, err := f.Seek(size-tail, io.SeekStart); err != nil {
-		return 0
-	}
-	buf := make([]byte, tail)
-	n, _ := io.ReadFull(f, buf)
-	buf = buf[:n]
-	idx := bytes.LastIndex(buf, []byte("/Count"))
-	if idx < 0 {
-		return 0
-	}
-	i := idx + len("/Count")
-	for i < len(buf) && (buf[i] == ' ' || buf[i] == '\n' || buf[i] == '\r' || buf[i] == '\t') {
-		i++
-	}
-	j := i
-	for j < len(buf) && buf[j] >= '0' && buf[j] <= '9' {
-		j++
-	}
-	if j == i {
-		return 0
-	}
-	v, err := strconv.Atoi(string(buf[i:j]))
-	if err != nil || v <= 0 {
-		return 0
-	}
-	return v
-}
-
-// countTypePage 流式统计 "/Type /Page" 的出现次数（跨块边界用重叠窗口兜住）。
-func countTypePage(f *os.File) int {
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return 0
-	}
-	const chunk = 1 << 20
-	const overlap = 32
-	buf := make([]byte, chunk)
-	total := 0
-	var carry []byte
-	for {
-		n, rerr := f.Read(buf)
-		if n > 0 {
-			window := append(append([]byte{}, carry...), buf[:n]...)
-			total += bytes.Count(window, []byte("/Type /Page"))
-			if len(window) > overlap {
-				carry = window[len(window)-overlap:]
-			} else {
-				carry = window
-			}
-		}
-		if rerr != nil {
-			break
-		}
-	}
-	return total
-}
+// ---------------- 页数读数 ----------------
+//
+// ★ 2026-10-01 〇-AF 补丁四：这一族的实现（真解析 ＞ 尾部 /Count ＞ 流式数页面对象标记）
+//
+//	已整体挪到 fileproc_pagecount.go，本文件不再留任何一份手写启发式。
+//	挪走的直接起因是开闸当天 fpdprobe 首跑判红：旧 pdfPageCountFast 只认带空格的
+//	"/Type /Page"，而 mupdf 系（含本仓自己产出的 PDF）写的是 "/Type/Page"，
+//	加上页树 /Count 不在尾部 64KB ⇒ 现网 40 份真件里 8 份读成 0 页。
+//	页数读 0 不是显示问题：DispatchEligible 要「体积与页数两条腿同时成立」才派，
+//	于是那 8 份**永远不派**，而且旧代码在资格判 false 时一条日志都不打——
+//	"闸开了、健康面 online、一单都没派出去"这个形态会第三次长出来，只是这次藏在页数腿里。
+//	口径与反证都写在那一份文件的段头注释里。
