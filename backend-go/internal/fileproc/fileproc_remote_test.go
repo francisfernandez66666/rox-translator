@@ -1049,3 +1049,84 @@ func TestDispatchRunWithoutInputUsesMarkerPut(t *testing.T) {
 		t.Fatal("marker put 会话的产物回拉字节不等值")
 	}
 }
+
+// TestDispatchTierDefaultsMatchMeasuredBreakEven ★ 2026-09-30 定档等值锁（派发开闸那一批）。
+//
+// 射程只有一件事：**不配 env 时**的两个默认阈值必须等于实测算出来的档位（20MiB / 30 页）。
+// 为什么值得单独立一条锁：定档的原始动作是"往 systemd drop-in 里写两个数"，代码里的默认值
+//
+//	平时不参与生产判定，于是它可以被任何人顺手改回 8/15 而**全仓一行测试都不会红**——
+//	而 8MiB 正是量出"回传 55s、白付公网往返"的那个错档。默认值一旦漂回错档，
+//	没装 drop-in 的环境（本地快跑、临时起的实例、将来第二台执行机）就会立刻开始派小件。
+//
+// 两侧都要有（负向锁配正向对照，否则恒真是空转）：
+//
+//	· 正向：12MiB/20 页（旧档之下、新档之上）判**不派**；30MiB/40 页判**派**；
+//	· 反向：显式把 env 压回旧档（8MiB/15 页）时，同一件 12MiB/20 页必须翻成**派**——
+//	  证明这条锁测的是"默认值"本身，不是把判据写成了恒不派。
+func TestDispatchTierDefaultsMatchMeasuredBreakEven(t *testing.T) {
+	enableDispatchForTest(t)
+	dir := t.TempDir()
+	midMany := makeFakePDF(t, dir, "mid.pdf", 12, 20) // 12MiB/20 页：新档之下、旧档之上
+	bigMany := makeFakePDF(t, dir, "big.pdf", 21, 40) // 21MiB/40 页：新档之上
+	if got := dispatchMinBytes(); got != 20<<20 {
+		t.Fatalf("体积腿默认值不是定档值：%d 字节（应为 20MiB=%d）", got, int64(20)<<20)
+	}
+	if got := dispatchMinPages(); got != 30 {
+		t.Fatalf("页数腿默认值不是定档值：%d（应为 30 页）", got)
+	}
+	if DispatchEligible([]string{midMany}, 20, 0) {
+		t.Fatal("12MiB/20 页在定档之下却判了派——默认体积腿被放宽")
+	}
+	if DispatchEligible([]string{midMany}, 40, 0) {
+		t.Fatal("12MiB 仍低于 20MiB 体积腿，无论页数都不该派")
+	}
+	if !DispatchEligible([]string{bigMany}, 40, 0) {
+		t.Fatal("21MiB/40 页必须判派（正向对照失效：判据被写成了恒不派）")
+	}
+	t.Setenv(envDispatchMinMB, "8")
+	t.Setenv(envDispatchMinPage, "15")
+	if !DispatchEligible([]string{midMany}, 20, 0) {
+		t.Fatal("把 env 压回旧档后同一件仍判不派 ⇒ 本用例测不到默认值，属空转锁")
+	}
+}
+
+// TestSSHArgsPinKnownHosts ★ 2026-09-30 开闸当天立的锁：远端主机指纹必须能钉住。
+//
+// 背景（现网实测，不是推测）：主站服务账号 translator 在 passwd 里的家目录是 /home/translator，
+//
+//	而这个目录**根本不存在**，unit 又开着 ProtectHome=yes ⇒ ~/.ssh/known_hosts 永远建不出来 ⇒
+//	`StrictHostKeyChecking=accept-new` 退化成"每一次都接受任何主机键"：连接照成功、健康面照 online，
+//	没有任何一层会红。客户文件要在公路上走，这一腿只能靠参数形状锁住。
+//
+// 两侧都要判（负向锁配正向对照）：
+//
+//	· 配了 env ⇒ args 里必须有 `-o UserKnownHostsFile=<该路径>`，且 BatchMode/accept-new 仍在（没被顶掉）；
+//	· 没配 env（显式空串）⇒ 必须**没有**这一条 -o，否则"默认加个不存在的路径"会把本地快跑和单测打红。
+//
+// 反证：把 sshBaseArgs 里那三行 `-o UserKnownHostsFile` 删掉 ⇒ 本用例第一半判红。
+func TestSSHArgsPinKnownHosts(t *testing.T) {
+	enableDispatchForTest(t)
+
+	kh := filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(kh, []byte("127.0.0.1 ssh-ed25519 AAAA\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envDispatchKnownHosts, kh)
+	got := strings.Join(sshBaseArgs(), " ")
+	if !strings.Contains(got, "-o UserKnownHostsFile="+kh) {
+		t.Fatalf("配了 %s 但 ssh 参数里没有主机指纹文件：%s ⇒ 远端主机键无人钉，等于每次接受任何键", envDispatchKnownHosts, got)
+	}
+	for _, must := range []string{"BatchMode=yes", "StrictHostKeyChecking=accept-new", "ConnectTimeout=15"} {
+		if !strings.Contains(got, must) {
+			t.Errorf("新加的 -o 顶掉了原有参数 %s（当前参数：%s）", must, got)
+		}
+	}
+
+	// 反向：不配 ⇒ 不加这一条（默认行为不许变，否则所有没铺 known_hosts 的环境都会被自己绊倒）
+	t.Setenv(envDispatchKnownHosts, "")
+	got2 := strings.Join(sshBaseArgs(), " ")
+	if strings.Contains(got2, "UserKnownHostsFile") {
+		t.Errorf("没配 %s 却带了 UserKnownHostsFile：%s ⇒ 默认形态被改，本地快跑会凭空打红", envDispatchKnownHosts, got2)
+	}
+}

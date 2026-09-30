@@ -22,7 +22,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
+	// ★ 2026-10-01 〇-AF 补丁三：这里的 "time" 已删除——本文件不再自算日历边界，
+	//   月度/日度起点一律取 store 里那一份出口（MonthStartBound / DayStartBound）。
+	//   闸门见 month_boundary_gate_test.go：api 层再出现 time.Date(...) 现算边界即判红。
 	"translator/internal/db"
 
 	apierrors "translator/internal/errors"
@@ -134,16 +136,23 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 	//   （知识库 Embedding、后台任务、Judge 抽样）留在里面，就等于告诉客户
 	//   「你花了这么多」，而客户一分没掉；更糟的是同一条腿的读数会被预算墙拿去拦请求。
 	//   谓词只许引用 store 里那一份常量，禁止在这儿再抄一遍字面量（双尺子就是 F-12 的成因）。
+	// ★ 2026-10-01 〇-AF 补丁三：上面那条纪律这次轮到**日历边界**——这里曾自己内联算了一遍
+	//   「本月从哪天起」，用的是机器本地时区渲染，而账上 created_at 一律按 UTC 写入（TEXT 列，
+	//   created_at>=? 是字典序比较）。后果是每月 1 号本地 00:00–08:00 这八小时，收银台/订阅页
+	//   的「今日已用／本月已用」恒读 0（前端 E2E TF1+TF2+TF3 与主矩阵 A7s 就是这么判红的）。
+	//   修法：两个边界一律走 store 里那一份出口（MonthStartBound / DayStartBound），api 层不再自算；
+	//   「今日」这条腿同时从**误用月初**改为按日界（与日额度墙 DailyUsage 同一个 UTC 日历日口径，
+	//   否则「看到的今日」和「拿去拦请求的今日」又是两把尺子）。
 	usedToday, usedMonth := int64(0), int64(0)
 	if tid > 0 {
-		ms := time.Date(time.Now().Year(), time.Now().Month(), 1, 0, 0, 0, 0, time.Local).Format(time.RFC3339)
-		// 统计本月租户级用量
+		// 统计本月租户级用量（自然月，起点由 store 统一渲染）
 		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
-			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND "+store.PlatformTaskTypeExclPred, tid, ms).Scan(&usedMonth)
-		// 统计今日当前用户用量
+			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND created_at>=? AND "+store.PlatformTaskTypeExclPred,
+			tid, store.MonthStartBound()).Scan(&usedMonth)
+		// 统计今日当前用户用量（★ 与日额度墙同区：UTC 日历日，不是月初）
 		_ = db.QueryRow(s.Store.DB(), db.CurrentDialect(),
 			"SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=? AND user_id=? AND created_at>=? AND "+store.PlatformTaskTypeExclPred,
-			tid, u.ID, ms).Scan(&usedToday)
+			tid, u.ID, store.DayStartBound()).Scan(&usedToday)
 	}
 	// ★ #75：本币报价口径（收银台展示换算用；倍率本身这里不用，前端按 snapshot 自算）
 	quoteCode, _, fxRates := s.quoteSnapshot()

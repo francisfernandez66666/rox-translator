@@ -70,6 +70,7 @@ package engine
 import (
 	"context"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"translator/internal/assist/llm"
@@ -396,12 +397,28 @@ func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, u
 	if len(leaks) == 0 {
 		return "", false, rejectNoLeaks
 	}
+	// ★ 095x（2026-10-01）：行数契约从"定性一句"改成**定量报数**。
+	//
+	//	现网 09-30 复问抓到两次 reason=line_count，形态完全一样（before=3 after=1）：模型重写时
+	//	把三段并成了一段。旧文案写了"行数与上一版完全一致，一行对应一行"——契约在，**数字不在**，
+	//	模型手上没有一个可对齐的目标行数，改到兴起就顺手重排了段落。
+	//	⚠️ 这一改**只动提示词文本**：三条硬判据（尤其 lineCountOf 等值那一条）一字不放宽，
+	//	报数只是把成功率抬上去，做不到仍然丢弃新稿保留原稿（守卫不迁就模型）。
+	draftLines := lineCountOf(draft)
+	lineSpec := "★ 格式硬要求（这条做不到就等于这次修补作废）：上一版有 " + strconv.Itoa(draftLines) +
+		" 行，你的回吐必须也恰好是 " + strconv.Itoa(draftLines) + " 行，第 k 行只改第 k 行；" +
+		"不许把相邻两行并成一行，也不许把一行拆成两行，行与行之间不要插空行。\n"
+	if draftLines <= 1 {
+		// 单行稿是现网最常见的形态（一句回答），这时候的错形不是"并段"而是"拆成要点列表"
+		lineSpec = "★ 格式硬要求（这条做不到就等于这次修补作废）：上一版只有 1 行，" +
+			"你的回吐必须也是**单独 1 行**，中间不许出现换行、不许拆成要点列表。\n"
+	}
 	prompt := "上一版" + label + "译文里有这些片段没写成" + label + "（照抄了中文词形／简体字形，" +
 		"或一个词被劈成假名＋英文）：" + strings.Join(leaks, "、") +
 		"。请把下面这段译文**整段重写一遍**：上面点名的**每一处**都必须换成 " + label +
 		" 里的自然写法，一处都没改掉就等于没修；除此之外其余措辞照抄上一版，" +
-		"不许增删句子、不许加任何括号备注，行数与上一版完全一致，一行对应一行，" +
-		"不要加解释、不要加引号、不要输出思考过程，也不许改任何数字。\n" +
+		"不许增删句子、不许加任何括号备注，不要加解释、不要加引号、不要输出思考过程，也不许改任何数字。\n" +
+		lineSpec +
 		translateContract(uiLang) +
 		srcBlock + "\n【上一版" + label + "译文】\n" + draft + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,

@@ -211,3 +211,67 @@ func TestRepairPromptForbidsCopyingLeaksBack(t *testing.T) {
 		}
 	}
 }
+
+// TestRepairPromptStatesExactLineCount ★ 095x（2026-10-01）：补翻的行数契约必须**把数字报出来**。
+//
+// 现网 09-30 复问抓到两次 reason=line_count，形态完全一样（日志 before=3 after=1）：模型重写时把
+//
+//	三段并成一段。旧文案只写"行数与上一版完全一致，一行对应一行"——契约在，可对齐的**数字**不在，
+//	于是模型手上根本没有"要交回三行"这个目标，改到兴起就顺手重排段落（拒绝率就是这么来的）。
+//
+// 三段判据（每条都要有反向对照，否则就是恒真空转）：
+//
+//	① 三行稿 ⇒ 提示词里必须出现"上一版有 3 行"与"恰好是 3 行"；
+//	② 两行稿 ⇒ 数字必须跟着稿子变（"2 行"在、"3 行"不在）：这一条是钉"不许把数字写死成常量"；
+//	③ 单行稿 ⇒ 走"只有 1 行／不许拆成要点列表"那一支（单行的错形是拆列表，不是并段）。
+//
+// 反证（本轮在内存副本上做过，见批次记录）：把 lineSpec 里的 strconv.Itoa(draftLines) 换成字面量 "3" ⇒ ② 判红；
+//
+//	删掉单行分支 ⇒ ③ 判红。
+func TestRepairPromptStatesExactLineCount(t *testing.T) {
+	ctx := context.Background()
+
+	twoLine := "第一行 文件翻訳です\n第二行 系数 で計算します"
+	threeLine := twoLine + "\n第三行 充费 できます"
+	oneLine := "ファイルではなく文件翻訳のご案内です"
+
+	cases := []struct {
+		name    string
+		draft   string
+		must    []string
+		mustNot []string
+	}{
+		{"三行稿报 3 行", threeLine,
+			[]string{"上一版有 3 行", "恰好是 3 行", "第 k 行只改第 k 行"},
+			[]string{"上一版只有 1 行"}},
+		{"两行稿数字跟着变（防写死常量）", twoLine,
+			[]string{"上一版有 2 行", "恰好是 2 行"},
+			[]string{"上一版有 3 行", "上一版有 1 行"}},
+		{"单行稿走单独一支契约", oneLine,
+			[]string{"上一版只有 1 行", "不许拆成要点列表"},
+			[]string{"上一版有 1 行"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := newSeqStub(t, "プロフェッショナルモードで400ポイントです。")
+			e := st.engine(t)
+			rep := &Reply{Content: c.draft, Source: "llm"}
+			// 结果本身不参与本用例判据（补翻成不成都由三条硬判据定），这里只看**送出去的那一枪问了什么**
+			_ = e.repairReplyHanResidue(ctx, "ja", rep)
+			if st.count() != 1 {
+				t.Fatalf("夹具没触发补翻（打了 %d 次上游）⇒ 本用例的靶子没了", st.count())
+			}
+			p := st.body(0)
+			for _, want := range c.must {
+				if !strings.Contains(p, want) {
+					t.Errorf("补翻提示词缺 %q：\n%s", want, p)
+				}
+			}
+			for _, no := range c.mustNot {
+				if strings.Contains(p, no) {
+					t.Errorf("补翻提示词出现 %q（行数没跟着稿子变，或走错分支）：\n%s", no, p)
+				}
+			}
+		})
+	}
+}

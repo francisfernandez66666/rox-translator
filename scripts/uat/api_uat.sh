@@ -318,15 +318,24 @@ ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
 # 断言口径：done 帧之后**不 sleep**、立刻读 /api/me/package 的 points_used_today 必须已增加
 #   —— 一旦把 Flush 挪回 handler 末尾（done 帧之后），这里就会重新变红。
 #   用「今日已耗」而非「余额」判定：发起翻译会同步发放每周任务积分，余额可能被补成正增量。
+# ★ 2026-10-01 〇-AF 补丁三：同一条腿把 points_used_month 一起钉住（两处读数同源同一次请求，
+#   不再多打一趟）。加这一腿的理由是**当天真踩**：这两个数在收银台/订阅页同屏出现，
+#   而它们的边界曾在 api 层内联自算了一份「本地时区渲染的本月起点」——账上 created_at 是 UTC 文本，
+#   `created_at>=?` 按字典序比，于是每月 1 号本地 00:00–08:00 那八个小时**两个数同时读 0**
+#   （旧形态下「今日」这条腿更是直接吃月边界，等于把本月累计报成"今天用的"）。
+#   只钉「今日」的话，月那条腿退化回本地渲染就扫不到；两腿一起钉才等于「显示尺子＝拦截尺子」。
 sleep 2
 USED1=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
+MON1=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_month", -1)')
 SS=$(curl -s -N $B/api/chat/stream -H "$H1" -H "$J" --max-time 90 \
   -d "{\"message\":\"A7s 流式计量落库回归断言 $$-${RANDOM}-${RANDOM}，设备需在傍晚前送达。\",\"skill\":\"translation\",\"options\":{\"target_langs\":[\"en\"]}}")
 ck A7s-stream-done '"type":"done"' "$SS"
 USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
+MON2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_month", -1)')
 [ -n "$USED1" ] && [ -n "$USED2" ] && [ "$USED2" -gt "$USED1" ] \
-  && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2)"; } \
-  || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 ${USED1}->${USED2}，done 帧后计量未即时可见)"; }
+  && [ -n "$MON1" ] && [ -n "$MON2" ] && [ "$MON2" -gt "$MON1" ] \
+  && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2｜本月已耗 $MON1->$MON2)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 ${USED1}->${USED2}｜本月已耗 ${MON1}->${MON2}，done 帧后计量未即时可见或月度读数被日历边界判空)"; }
 
 # ---------- A7t ★ F-29 后端半（2026-09-25 批D）超长对话文本必须在 SSE 头前拒 ----------
 # 缺陷形态：上万字符的文本直接喂对话管线，LLM 上下游 90s+ 不返回，前端挂着流干等、

@@ -853,8 +853,16 @@ func quoteIdentPG(ident string) string {
 }
 
 // backfillDailyUsage 部署当日日计数器兜底回填（性能优化 B6）。
+// ★ 2026-10-01 〇-AF 补丁三：这里的 day 键改为 **UTC 日历日**。
+//
+//	usage_daily 的 day 列由 incrementDailyUsage* 以 `time.Now().UTC().Format("2006-01-02")`
+//	写入，DailyUsage（日额度墙的读数源）也按同一个键读；本函数旧形态用**本地日**，
+//	于是两处同时错：① 「已有当日行即跳过」的存在性判定查的是一个几乎不存在的键（本地日），
+//	该回填的 UTC 日行没被回填；② 真插进去时用的也是本地日键，写进一条墙永远读不到的行。
+//	而 `substr(created_at,1,10)=?` 这一腿更是直接把本地日拿去比 UTC 戳记的日期前缀
+//	——与 monthStart 那条同一个病灶（TEXT 戳记与边界必须同区），这里一并收。
 func (s *Store) backfillDailyUsage() {
-	today := time.Now().Format("2006-01-02")
+	today := time.Now().UTC().Format("2006-01-02")
 	var cnt int64
 	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(1) FROM usage_daily WHERE day=?", today).Scan(&cnt); err != nil || cnt > 0 {
 		return // 已有当日行：跳过
