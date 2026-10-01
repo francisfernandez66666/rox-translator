@@ -81,7 +81,10 @@ func TestCannedCacheInvalidatedByTranslationContract(t *testing.T) {
 	st := newSeqStub(t, "Hello, this is LangCross")
 	e := st.engine(t)
 	ctx := context.Background()
-	src := "你好，我是能言 AI 助手"
+	// ★ 096x-1：源文必须**同时提到品牌名与积分**，下面 ④⑤ 两条腿才各自成立——
+	// 口径现在按源文投（见 translateContract），源文没提「积分」时术语表根本进不了这一枪的口径段，
+	// 拿一个不含积分的源文去断言"改术语表要重翻"会恒真地红（那是用例的口径过期，不是代码退化）。
+	src := "你好，我是能言 AI 助手，积分充值随时开通"
 
 	if got := e.LocalizeGreeting(ctx, src, "en"); !strings.Contains(got, "Hello") {
 		t.Fatalf("英文界面没拿到译文：%q", got)
@@ -94,7 +97,7 @@ func TestCannedCacheInvalidatedByTranslationContract(t *testing.T) {
 		t.Fatalf("缓存没命中（上游被打到 %d 次）：%q", st.count(), got)
 	}
 	// ③ 指纹等值锁：库里那行头**就是**「原文＋口径」的指纹，不是别的什么串
-	wantFp := srcFingerprint(src + "\x00" + localizeContract("en"))
+	wantFp := srcFingerprint(src + "\x00" + localizeContract("en", srcTopicsOf(src)))
 	if cached := e.db.GetConfig("i18n:welcome:en", ""); !strings.HasPrefix(cached, wantFp+"\n") {
 		t.Fatalf("缓存指纹没带上翻译口径（期望前缀 %s，实际 %q）——只算原文就是今天线上那个形态", wantFp, firstLine(cached))
 	}
@@ -260,28 +263,43 @@ func TestRepairHanResidueAdoptsOnlyImprovement(t *testing.T) {
 		// 采用的那一稿必须进缓存，键头指纹仍是「原文＋口径」
 		cached := e.db.GetConfig("i18n:welcome:en", "")
 		if !strings.Contains(cached, "credits recharge anytime") ||
-			!strings.HasPrefix(cached, srcFingerprint(src+"\x00"+localizeContract("en"))+"\n") {
+			!strings.HasPrefix(cached, srcFingerprint(src+"\x00"+localizeContract("en", srcTopicsOf(src)))+"\n") {
 			t.Fatalf("补翻后的译文没进缓存或指纹不对：%q", cached)
 		}
 	})
 
-	t.Run("无改善保留上一稿", func(t *testing.T) {
+	t.Run("无改善保留上一稿：出栈闸把那份带残片的稿子整条挡下", func(t *testing.T) {
 		st := newSeqStub(t,
 			"Hello, this is LangCross\ncredits充值 anytime",
 			"Hello, this is LangCross\n积分 recharge anytime")
 		e := st.engine(t)
-		if got := e.LocalizeGreeting(ctx, src, "en"); !strings.Contains(got, "credits充值") {
-			t.Fatalf("残片数量没减少时应保留上一稿，实际：%q", got)
+		// 补翻层"保留上一稿"的语义在 canned_guard_test.go 的 TestCannedRepairKeepsPreviousDraft 里
+		// 直接钉（那两层各锁各的：这一层管"拿哪一稿"，出栈层管"那一稿能不能发给客户"）。
+		// 端到端看到的必须是**中文原文**——096x 之前这里会原样把 `credits充值` 发给访客并落库，
+		// 现网英文首屏那条读数就是这么常驻下来的。
+		if got := e.LocalizeGreeting(ctx, src, "en"); got != src {
+			t.Fatalf("补翻没救回来的残片稿被发给访客了：%q", got)
+		}
+		if st.count() != 2 {
+			t.Fatalf("应当打过补翻那一枪（次数 %d）", st.count())
+		}
+		if cached := e.db.GetConfig("i18n:welcome:en", ""); cached != "" {
+			t.Fatalf("被挡下的译文落了库（下次 greet 直接命中）：%q", firstLine(cached))
 		}
 	})
 
-	t.Run("行数变了保留上一稿", func(t *testing.T) {
+	t.Run("行数变了保留上一稿：同样不许发给客户也不许落库", func(t *testing.T) {
 		st := newSeqStub(t,
 			"Hello, this is LangCross\ncredits充值 anytime",
 			"Hello, this is LangCross and credits recharge anytime")
 		e := st.engine(t)
-		if got := e.LocalizeGreeting(ctx, src, "en"); !strings.Contains(got, "credits充值") {
-			t.Fatalf("新稿少了行数时必须保留上一稿（chips 靠行数拆回）：%q", got)
+		// 新稿少了行数 ⇒ 补翻层不采用、保留上一稿（那份仍带残片），出栈层再把它挡下。
+		// ⚠️ 这一档在 096x 之前是"两层都放行"：行数判据挡住了新稿，旧稿却照样出栈并缓存。
+		if got := e.LocalizeGreeting(ctx, src, "en"); got != src {
+			t.Fatalf("行数判据挡下补翻后，那份带残片的旧稿被直接送出去了：%q", got)
+		}
+		if cached := e.db.GetConfig("i18n:welcome:en", ""); cached != "" {
+			t.Fatalf("同上，旧稿落了库：%q", firstLine(cached))
 		}
 	})
 

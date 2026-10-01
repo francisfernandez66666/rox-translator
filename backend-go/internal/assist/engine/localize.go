@@ -37,6 +37,13 @@
 // 中文原文难看，但它是真话；机翻失败时返回半句假译文是事故。
 // ★ 同一条规矩现在也管「半句没翻」：译文里留着没翻的中文词时先补翻一次，补不动就整条判失败出原文
 // （判残与补翻见 han_residue.go——082x 现网抓到英文首屏 "credits充值"、日文首屏「翻訳什么？」）。
+//
+// ★ 096x-1（2026-10-01）再加两条，都因为「这条路会落库」而必须存在（机制见 canned_guard.go）：
+//   - 口径按源文投：原文没提品牌名时，品牌名那句从"写作 X"翻转成"不许出现 X"（现网实证：
+//     chips 原文四条全无品牌名，日文档四条各尾粘「能言」、俄文档四条各前挂 "LangCross: "）；
+//   - **落库前**过一道出栈闸：补翻被拒后留下的那份带残片稿子、以及凭空多出品牌名的那一稿，
+//     一律不发给访客、一行都不写进缓存（此前它们是"成功译文"，日志静默、缓存常驻）。
+//
 // =============================================
 package engine
 
@@ -100,7 +107,16 @@ const manualMark = "!manual"
 // 见 han_residue.go 的 repairHanResidueBase）——这也算改出栈最终形态：
 // canned 那一路的补翻共用同一个底座，不抬这一档，库里那些"三行被并成一行后保留的原稿"
 // 会带着旧指纹继续被原样命中，换件等于没修（本批正是这条口径第三次踩）。
-const cannedPromptRev = "095x-1"
+// ★ 096x-1（2026-10-01 现网 12 语种逐个复问）**这一批同样必须抬**，而且它属于最隐蔽的那一档：
+// 改的是**送进模型的口径段本身**（品牌名那句从"无条件给写法"改成"按源文给写法或明确禁止"，
+// 见 translateContract 与 canned_guard.go）。库里那几条坏缓存（ja 四条 chips 各尾粘「能言」、
+// ru 四条各前挂 "LangCross: "、en 欢迎词带 `credits充值`）**指纹全部匹配**，会被原样命中——
+// 只加出栈闸而不抬这一档，坏缓存照样绕过闸门（闸门在写侧，读侧那道指纹才是唯一入口）。
+//
+// ⚠️ 这一档还立了一条新的**同步义务**：口径段现在随源文内容而变（提没提品牌名／计费单位），
+// 所以缓存指纹必须跟着"真给出去的那段口径"算（见 localize 里 `srcTopicsOf(text)` 那一行）。
+// 将来谁把口径改成第三个话题维度，忘了把它进指纹，就是 082x 那条"换件没修"的第四次复发。
+const cannedPromptRev = "096x-1"
 
 // translationEchoMarkers 翻译模型复述**指令本身**时的说法（★ 082x 第八条，现网日文首屏实证）。
 //
@@ -117,11 +133,41 @@ var translationEchoMarkers = []string{
 
 // translateContract 翻译路上那两条**对外口径**（品牌名 + 计费单位），拼提示词和算缓存指纹都用它。
 // 单一事实源仍是 brandNameFor／pointsTranslationLine 那两张表，这里只负责"把它们合成一段文本"。
-func translateContract(uiLang string) string {
-	return "品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
-		"本轮界面语言为 " + langLabel(uiLang) + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
-		"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n" +
-		pointsTranslationLine(uiLang)
+//
+// ★ 096x-1（2026-10-01 现网实证）：**按源文里真有没有这两个话题**来投，不再无条件两条都拼。
+//
+//	chips 的中文原文四条里没有一条提到品牌名，可日文档四条**每条尾部**各粘一个「能言」、
+//	俄文档四条**每条开头**各挂一个 "LangCross: "。根因不在模型，在这段口径自己：
+//	旧版对任何源文都写「品牌名一律写作『X』」——那对翻译模型是一句"本轮要用这个词"的邀请，
+//	四条短问句里没有落点，就粘到句首／句尾（提示词只是概率性请求那条老账，这次请求的内容是
+//	**多加一个原文根本没有的词**，比少写一个更糟：那是对外凭空自称）。
+//
+// 两档的取舍：
+//   - 原文提了品牌名 → 照旧给写法口径（那是"别翻坏"，092x 红腿三修的就是它）；
+//   - 原文没提 → **明确禁止**出现品牌名。为什么不是"干脆不提这件事"：
+//     小模型会把产品文案默认补上产品名（现网 ru 那一档就是四条全挂前缀），
+//     沉默不等于许可被撤回；写一句"不许出现"才是把许可收回来。
+//     ⚠️ 这句禁止话术**不许**升级成"不许提到任何专有名词"之类的宽口径——
+//     品牌名之外的专有名词（文件名、套餐名）在译文里是正常内容，收紧一刀会把答案吃掉。
+//   - 计费单位那一句只在原文真提到「积分」时才拼（没提就不提这件事；它没有"翻坏"的风险，
+//     只有"多出来"的风险，所以不需要反向禁令，少一句就够）。
+//
+// ⚠️ 这两档的**文本差异会进缓存指纹**（见 localizeContract 的调用点）：指纹必须跟着真给出去的那段口径走，
+// 否则口径换了而指纹不变，现网那几条坏缓存又是一次"换件没修"。
+func translateContract(uiLang string, t srcTopics) string {
+	var b strings.Builder
+	if t.brand {
+		b.WriteString("品牌名口径（与对话回复同一张表，见 brandNameFor）：" +
+			"本轮界面语言为 " + langLabel(uiLang) + "，品牌名一律写作「" + brandNameFor(uiLang) + "」，" +
+			"任何情况下都不许写成 Nengyan、NengYan 之类拼音。\n")
+	} else {
+		b.WriteString("品牌名口径：原文里没有提到品牌名，译文也**不许出现**任何品牌名" +
+			"（不许补 LangCross、能言 之类的名字，更不许把它们粘在句子开头或结尾当标签）。\n")
+	}
+	if t.points {
+		b.WriteString(pointsTranslationLine(uiLang))
+	}
+	return b.String()
 }
 
 // localizeContract canned 译文缓存的口径指纹成分。
@@ -138,8 +184,12 @@ func translateContract(uiLang string) string {
 //	cannedPromptRev 管固定句式，translateContract 管品牌名与计费单位两张表——
 //	改这两处任一，旧译文自动作废、下一次 greet 现翻（运营手工改过的 !manual 档不受影响，
 //	那条放行在指纹比对之前）。
-func localizeContract(uiLang string) string {
-	return cannedPromptRev + "\x00" + translateContract(uiLang)
+//
+// ★ 096x-1 起多了一个入参 t（源文里有没有那两个话题）：口径段现在随源文内容而变，
+// 指纹**必须**跟着真给出去的那段口径算。同一句原文，"提品牌名"与"不提品牌名"两档口径
+// 是两个不同的指纹——这不是冗余，是"缓存命中的那条译文真是按这句提示词翻出来的"这条保证本身。
+func localizeContract(uiLang string, t srcTopics) string {
+	return cannedPromptRev + "\x00" + translateContract(uiLang, t)
 }
 
 // srcFingerprint 源文本指纹（sha1 前 12 位）。
@@ -164,7 +214,11 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 		return text // 未知语言代码：不猜，原样出中文（同 reply_lang.go 的空档口径）
 	}
 	key := "i18n:" + kind + ":" + canonicalLang(uiLang)
-	fp := srcFingerprint(text + "\x00" + localizeContract(uiLang))
+	// ★ 096x-1：口径与指纹都按**这句源文真提没提那两个话题**来算（见 translateContract 的注释）。
+	// 两件事必须同源：给模型的口径段、进指纹的口径段，是同一个 t 喂出来的同一串文本。
+	// 分成两次判断（一处按源文筛、一处无条件算）就是下一次"换件没修"的产地。
+	topics := srcTopicsOf(text)
+	fp := srcFingerprint(text + "\x00" + localizeContract(uiLang, topics))
 	if cached := e.db.GetConfig(key, ""); cached != "" {
 		if head, body, ok := splitCachedTranslation(cached); ok {
 			if strings.HasSuffix(head, manualMark) {
@@ -186,6 +240,17 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 		// greet 界面看不出「没翻成」，没有它就只能等访客截图来报。
 		observability.Warn(ctx, "assist.engine canned 文案翻译失败，原样出中文",
 			"kind", kind, "lang", uiLang, "err", err)
+		return text
+	}
+	// ★ 096x-1 出栈闸：**调用成功不等于产物可用**（机制与三条判据见 canned_guard.go）。
+	// 位置是刻意的——必须在 SetConfig 之前：这条路的产物会常驻，一次没拦住就是访客长期看到的那一屏
+	// （现网 en 的 `credits充值`、ja 四条 chips 各尾粘「能言」都是这么在首屏住下来的）。
+	// 不合格时按失败同一口径处理：出中文原文、一行缓存都不写（负缓存的取舍与代价见文件头）。
+	if reason, detail, bad := cannedOutboundReject(uiLang, text, out, topics); bad {
+		observability.Warn(ctx, "assist.engine canned 译文未过出栈闸，按原文出且不落缓存",
+			"kind", kind, "lang", uiLang, "reason", reason, "detail", detail,
+			"topics_brand", topics.brand, "topics_points", topics.points,
+			"before", firstRunes(out, 160))
 		return text
 	}
 	_ = e.db.SetConfig(key, fp+"\n"+out)
@@ -223,6 +288,11 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 	// ★ 092x 红腿三：品牌名不在翻译途中过桥，出栈就没有保证（现网实证：日文轮把「能言」写成「能与」）。
 	// 送翻前换成不可译占位符，出栈再按语种档还原（机制与判据见 brand_guard.go）。
 	src, srcHasBrand := protectBrandForTranslation(text)
+	// ★ 096x-1：口径段按源文投（品牌名那句在原文没提品牌名时**翻转成禁止**，计费单位那句没提就不拼）。
+	// 这里重新调一次 srcTopicsOf 而不是复用调用方的值，是为了让"提示词里到底给了哪句口径"
+	// 只由**源文**决定，不由某个调用方的记忆决定；与 localize 里那一行同函数同入参，必然同值
+	// （等值锁＝canned_guard_test.go 的「指纹里的口径段＝真发出去的口径段」那一条）。
+	topics := srcTopicsOf(text)
 	prompt := "把下面这段" + purpose + "翻译成 " + label +
 		"，用途：" + scene + "。要求：保持原意、行数与语气，一行输入对应一行输出，" +
 		"不要加解释、不要加引号、不要输出思考过程，也不许补原文没有的信息。\n" +
@@ -230,7 +300,7 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 		// 而官网各界面写的是 credits／ポイント／кредитов——客户拿这个词跟账单核对，
 		// 一个叫法对不上就是对外错报（判据表与交叉锁见 reply_lang.go 的 pointsTermByLang）。
 		// 这段与品牌名口径一起收进 translateContract：提示词与 canned 缓存指纹共用同一份，不分叉。
-		translateContract(uiLang) +
+		translateContract(uiLang, topics) +
 		brandTokenRuleLine(srcHasBrand) +
 		"\n---\n" + src + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
@@ -289,7 +359,9 @@ func (e *Engine) translateOnce(ctx context.Context, client *llm.Client, text, ui
 			observability.Warn(ctx, "assist.engine 译文里没有品牌名（占位符被模型吃掉），按译文发出并留证据",
 				"kind", purpose, "lang", uiLang, "before", firstRunes(out, 120))
 		}
-		out = stripBrandTokenResidue(restored)
+		// ★ 096x-1：还原之后还要摘一次**紧贴品牌名的装饰括号**（现网韩文首屏实证 `⟨LangCross⟩`）。
+		// 顺序不能反过来：占位符先还原成品牌名，才知道该摘哪一对括号。
+		out = stripBrandDecorBrackets(stripBrandTokenResidue(restored))
 	}
 	return out, nil
 }

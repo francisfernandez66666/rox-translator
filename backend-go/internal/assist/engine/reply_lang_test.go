@@ -389,7 +389,7 @@ func captureLocalizePrompt(t *testing.T, lang string) string {
 	t.Cleanup(srv.Close)
 	e := newTestEngine(t)
 	e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
-	e.LocalizeGreeting(context.Background(), "你好，我是能言 AI 助手", lang)
+	e.LocalizeGreeting(context.Background(), "你好，我是能言 AI 助手，积分充值随时开通", lang)
 	mu.Lock()
 	defer mu.Unlock()
 	if last == "" {
