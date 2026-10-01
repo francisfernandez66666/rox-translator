@@ -394,6 +394,12 @@
   `repairReplyHanResidue`（判残补翻）→ `rehardenReplyRewrite`（**补翻产物再过一遍卫生**：旁白括号／裸方括号／回声）
   → `guardReplyQuote`（报价：剥乘法算式、复算不出的总额一律不出口）→ `guardReplyBrand`（品牌名走不可译占位符）。
   新增守卫一律挂这条链，**不许**挂进四道回复分支或 `fallbackReply` 里各写一份。
+- **`sanitizeVisitorText` 末道卫生里有一条「剥指令复述引导行」（★ 2026-10-02 〇-AN）**：
+  `stripInstructionEchoLead` 专治模型把提示词方法论原样念成正文首句（现网「先肯定对比合理性，再分角度补充新细节：」）。
+  判据刻意窄（首行＋冒号结尾＋≤48 字＋含「先」＋含 `instructionEchoLeadWords` 之一＋**必须有第二行正文**才剥），
+  误剥的代价是吃掉客户要看的正常步骤句（「先注册，再上传…：」这类一律不剥，见反证单测 `TestSanitizeStripsInstructionEchoLead`）。
+  这条与 persona/tone_rules 的提示词加固（方案 A/C：把「先肯定…再讲差异」从**流程指令**改成**心里的盘算**、并加【定界·最重要】）配对——
+  ⚠️ 光靠提示词治不住 9B 模型的复述概率，清洗腿才是兜底；两者都要在。
 - 守卫判据只问**作答语言**（`effectiveReplyLang`，见 §三 那条 〇-AC 口径），**不许**再直接读挂件送来的 `uiLang`。
 - **确定性正字表（`applyJaResidueFixups`）的四道前置一个都不许放宽**：只动被判残点名的片段／`digitSeqOf` 数字序列逐字不变／
   `lineCountOf` 行数不变／残片数严格变少——任一不过就**保留原稿**并记 WARN。
