@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "Formato de archivo no admitido: {name} (el modo de texto simple admite {fmts})",
   "tr.fileFmtLegacy": "Formato de archivo no admitido: {name} (el formato heredado {ext} solo se admite en el modo de texto simple de tickets; conviértelo al nuevo formato)",
   "tr.fileFmtOnly": "Formato de archivo no admitido: {name} (solo se admiten {fmts})",
-  "tr.fileTooBig": "Archivo demasiado grande ({mb}MB), supera el límite de traducción de {maxMB}MB; divídelo o comprímelo y reintenta"
+  "tr.fileTooBig": "Archivo demasiado grande ({mb}MB), supera el límite de traducción de {maxMB}MB; divídelo o comprímelo y reintenta",
+  "chat.historyTitle": "Historial de chat",
+  "chat.empty": "Sin registros de chat",
+  "chat.selectHint": "Selecciona una conversación a la izquierda",
+  "chat.noMsgs": "No hay mensajes en esta conversación",
+  "chat.now": "Ahora mismo",
+  "chat.unknown": "Sin título",
+  "chat.minAgo": "min",
+  "chat.hrAgo": "h",
+  "chat.dayAgo": "d",
 }

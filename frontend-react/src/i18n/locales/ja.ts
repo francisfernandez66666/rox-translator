@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "対応していないファイル形式です：{name}（プレーンテキストモードは {fmts} に対応）",
   "tr.fileFmtLegacy": "対応していないファイル形式です：{name}（{ext} 旧形式はチケットのプレーンテキストモードでのみ対応。新形式に変換してください）",
   "tr.fileFmtOnly": "対応していないファイル形式です：{name}（{fmts} のみ対応）",
-  "tr.fileTooBig": "ファイルが大きすぎます（{mb}MB）。翻訳上限 {maxMB}MB を超過。分割または圧縮後に再試行してください"
+  "tr.fileTooBig": "ファイルが大きすぎます（{mb}MB）。翻訳上限 {maxMB}MB を超過。分割または圧縮後に再試行してください",
+  "chat.historyTitle": "チャット履歴",
+  "chat.empty": "チャット記録がありません",
+  "chat.selectHint": "左側から会話を選択",
+  "chat.noMsgs": "この会話にメッセージはありません",
+  "chat.now": "たった今",
+  "chat.unknown": "無題",
+  "chat.minAgo": "分前",
+  "chat.hrAgo": "時間前",
+  "chat.dayAgo": "日前",
 }

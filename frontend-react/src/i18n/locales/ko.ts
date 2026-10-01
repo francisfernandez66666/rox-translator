@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "지원하지 않는 파일 형식: {name}(플레인 텍스트 모드는 {fmts} 지원)",
   "tr.fileFmtLegacy": "지원하지 않는 파일 형식: {name}({ext} 구버전 형식은 티켓 플레인 텍스트 모드에서만 지원. 새 형식으로 변환하세요)",
   "tr.fileFmtOnly": "지원하지 않는 파일 형식: {name}({fmts}만 지원)",
-  "tr.fileTooBig": "파일이 너무 큽니다({mb}MB). 번역 상한 {maxMB}MB 초과. 분할 또는 압축 후 다시 시도하세요"
+  "tr.fileTooBig": "파일이 너무 큽니다({mb}MB). 번역 상한 {maxMB}MB 초과. 분할 또는 압축 후 다시 시도하세요",
+  "chat.historyTitle": "채팅 기록",
+  "chat.empty": "채팅 기록이 없습니다",
+  "chat.selectHint": "왼쪽에서 대화 선택",
+  "chat.noMsgs": "이 대화에 메시지가 없습니다",
+  "chat.now": "방금",
+  "chat.unknown": "제목 없음",
+  "chat.minAgo": "분 전",
+  "chat.hrAgo": "시간 전",
+  "chat.dayAgo": "일 전",
 }
