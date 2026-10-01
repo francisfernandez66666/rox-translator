@@ -53,7 +53,7 @@ if [ -x /opt/translator/bin/translator-server ]; then
   exit 3
 fi
 for f in fpdexec.py fpd-bridge fpd.slice fpd-sweep.service fpd-sweep.timer \
-         fpd-expiry.service fpd-expiry.timer sshd-fpd.conf requirements.lock.txt; do
+         fpd-expiry.service fpd-expiry.timer fpd-expiry.sh sshd-fpd.conf requirements.lock.txt; do
   [ -f "$SRC_DIR/$f" ] || { bad "缺少随包文件 $f（应把 deploy/dispatch/ 整个目录一起传上来）"; exit 4; }
 done
 
@@ -138,6 +138,11 @@ mkdir -p "$FPD_ROOT/bin/assets/fonts" "$FPD_ROOT/w" "$FPD_ROOT/home/.ssh" "$FPD_
 #   因此这里与 fpd-bridge 同口径：root:root 0755，fpd 只读可执行。
 for f in fpdexec.py; do install -m 0755 -o root -g root "$SRC_DIR/$f" "$FPD_ROOT/bin/$f"; done
 install -m 0755 -o root -g root "$SRC_DIR/fpd-bridge" "$FPD_ROOT/bin/fpd-bridge"
+# ★ 到期自毁的正腿（2026-10-01）：判定→清理→坐实→退役**全在这个脚本里**，unit 里一条 ExecStartPost 都不留。
+#   理由是旧 unit 的两处结构性缺陷：`User=fpd` 跑 `systemctl disable` 必然鉴权失败（实测两次落 failed），
+#   而 ExecStartPost 在 ServiceExit 后无条件执行＝把「跑过一次」当成「到期已处理」
+#   （与主站 translator-dispatch-expiry.timer 10-01 修掉的是同一族缺陷）。射程与口径见脚本头注释。
+install -m 0755 -o root -g root "$SRC_DIR/fpd-expiry.sh" "$FPD_ROOT/bin/fpd-expiry.sh"
 
 # ----------------------------- 4. Python venv（钉版） -----------------------------
 log "[4/8] 建 venv 并按锁文件安装 Python 依赖"
@@ -218,6 +223,7 @@ need_cmd rsync rsync
 need_cmd pdfinfo poppler-utils
 need_cmd timeout coreutils
 [ -x "$FPD_ROOT/bin/fpdexec.py" ] || { bad "缺 fpdexec.py"; MISS=$((MISS+1)); }
+[ -x "$FPD_ROOT/bin/fpd-expiry.sh" ] || { bad "缺 fpd-expiry.sh（到期自毁的正腿，缺它 expiry 只剩旧 unit 那两处死法）"; MISS=$((MISS+1)); }
 # 中文族数量：主站实测 15 族（Noto CJK 14 ＋ 普惠体 1）。这里只验"装了 Noto 那一包"的下限，
 # 不写死 15（★ 写死就是"一装一卸立刻假红"的锁）；普惠体由 sync 脚本补，preflight 里再做两侧等值比对。
 ZFAM="$(fc-list :lang=zh family 2>/dev/null | tr ',' '\n' | sed 's/^ *//' | sort -u | grep -c 'Noto.*CJK' || true)"
@@ -232,6 +238,76 @@ if [ -n "$FPD_EXPIRE_DATE" ] && systemctl is-enabled --quiet fpd-expiry.timer; t
 else
   warn "fpd-expiry.timer 未生效 ⇒ 到期自清这一重保险目前没有"
 fi
+# ★ 到期自毁的**三段分支自证**（2026-10-01 加，动这块前必读）：
+#   为什么必须有它：旧 unit 那两处缺陷（`User=fpd` 做 `systemctl disable` 必鉴权失败、
+#   退役写在 ExecStartPost 无条件执行）的共同表现是「读数全绿、到期那天其实不会自灭」，
+#   而这类判据**静态 grep 锁不住**——`disable` 那一行本来就该存在，该问的是**位置与条件**。
+#   所以这里拿假 systemctl＋临时目录把三条分支**真跑一遍**，每条都配一条反证：
+#     L1 未到期        ⇒ 退 0 且假 systemctl **一次都没被调用**（反证：把退役挪到判定之前 ⇒ 调用数>0 ⇒ 红）
+#     L2 已到期且坐实  ⇒ 退 0 且假 systemctl 恰好被调一次 disable --now
+#     L3 没坐实        ⇒ 退 5 且假 systemctl **一次都没被调用**（闹钟必须还在；反证：把 disable 挪到
+#                        坐实之前 ⇒ 调用数>0 ⇒ 红，而 L3 的退出码在旧形态下与 L2 根本无法区分）
+#   ⚠️ 三条都在 $FPD_ROOT 之外的临时目录里跑，只喂 WORK_DIR/MARKER/EXP_DATE 覆盖口，
+#      绝不碰生产 w/ 与生产标记文件（一次自检不许把机器留在"已到期"态——同上面那条 env 还原的理由）。
+EXPIRY_PROOF_DIR="$(mktemp -d /tmp/fpd-expiry-proof.XXXXXX)"
+FAKE_SYSTEMCTL="$EXPIRY_PROOF_DIR/systemctl"
+SC_CALLS="$EXPIRY_PROOF_DIR/calls.txt"
+cat > "$FAKE_SYSTEMCTL" <<'FAKE'
+#!/bin/sh
+# 假 systemctl：只记录"被谁调用过"，永远退 0。L1/L3 判的就是它的**调用数**，不是它的退出码。
+echo "$*" >> "${SC_CALLS:?SC_CALLS 未设置}"
+FAKE
+chmod 0755 "$FAKE_SYSTEMCTL"
+run_expiry_leg() { # $1=leg 目录名 $2=人读名 $3=期望退码 $4=期望调用数(0|1) $5=EXP_DATE $6=SWEEP_CMD
+  local id leg want_rc want_calls exp sweep rc calls marker workdir
+  id="$1"; leg="$2"; want_rc="$3"; want_calls="$4"; exp="$5"; sweep="$6"
+  marker="$EXPIRY_PROOF_DIR/$id.MARKER"
+  workdir="$EXPIRY_PROOF_DIR/$id.w"
+  rm -f "$SC_CALLS"; : > "$SC_CALLS"
+  rc="$(EXP_DATE="$exp" SWEEP_CMD="$sweep" MARKER="$marker" WORK_DIR="$workdir" \
+        SYSTEMCTL_BIN="$FAKE_SYSTEMCTL" ENV_FILE="$EXPIRY_PROOF_DIR/nonexistent.env" \
+        /bin/bash "$FPD_ROOT/bin/fpd-expiry.sh" >/dev/null 2>&1; echo "$?")"
+  calls="$(grep -c . "$SC_CALLS" 2>/dev/null || true)"; calls="${calls:-0}"
+  if [ "$rc" != "$want_rc" ] || [ "$calls" != "$want_calls" ]; then
+    bad "到期自毁「$leg」分支不符（exit=$rc 期望 $want_rc；systemctl 被调 $calls 次 期望 $want_calls 次）"
+    MISS=$((MISS+1))
+  else
+    log "  到期自毁「$leg」分支生效（exit=$rc，systemctl 被调 $calls 次）"
+  fi
+}
+FUTURE="$(date -u -d '+30 days' +%Y-%m-%d 2>/dev/null || true)"
+PAST="2020-01-01"
+mkdir -p "$EXPIRY_PROOF_DIR/L2.w/_session"   # 造一个"在途会话目录"，看它是否被真清掉
+if [ -z "$FUTURE" ]; then
+  bad "date -d 不可用 ⇒ 到期自毁三段自证没做（跳过≠通过）"; MISS=$((MISS+1))
+else
+  run_expiry_leg L1 "未到期" 0 0 "$FUTURE" 'true'
+  run_expiry_leg L2 "已到期且坐实" 0 1 "$PAST" \
+    "sh -c 'date -u > \"$EXPIRY_PROOF_DIR/L2.MARKER\"; rm -rf $EXPIRY_PROOF_DIR/L2.w/*'"
+  # 只信退出码不够：L2 必须**真的**落了标记、真的清空了目录，否则"退役"是拿假象换来的
+  if [ ! -f "$EXPIRY_PROOF_DIR/L2.MARKER" ]; then
+    bad "L2 之后标记没落 ⇒ sweep 那条腿没真写到 MARKER（坐实判据是空的）"; MISS=$((MISS+1))
+  fi
+  if [ -n "$(find "$EXPIRY_PROOF_DIR/L2.w" -mindepth 1 2>/dev/null | head -1)" ]; then
+    bad "L2 之后工作目录没真空 ⇒ 自毁只清了一半就退役了闹钟"; MISS=$((MISS+1))
+  fi
+  run_expiry_leg L3 "清理没坐实" 5 0 "$PAST" 'true'
+  # L4 反证（2026-10-01 真踩出来的那条）：**形似而实非**的日期（13 月 45 日）必须判已到期。
+  #   只上 `^[0-9]{4}-[0-9]{2}-[0-9]{2}$` 这类正则的写法会把它当合法日期，接着字典序比较
+  #   "今天 ＜ 2026-13-45" ⇒ 判未到期 ⇒ 到期那天不复现、配置坏了却永远不关闸。
+  #   期望：判已到期 ⇒ 走清理支 ⇒ 这条腿故意不给 marker（SWEEP_CMD=true）⇒ 退 5 且一次 systemctl 都不碰。
+  run_expiry_leg L4 "日期非法按已到期" 5 0 "2026-13-45" 'true'
+fi
+# unit 本体两条读数：退役腿不许再留在 unit 里；unit 不许挂在 failed 态（那正是旧形态唯一的露面机会）
+if grep -Eq '^[[:space:]]*ExecStartPost' /etc/systemd/system/fpd-expiry.service 2>/dev/null; then
+  bad "/etc/systemd/system/fpd-expiry.service 里仍有 ExecStartPost ⇒ 无条件退役那条死腿被装回来了"; MISS=$((MISS+1))
+else
+  log "  expiry unit 内零 ExecStartPost（退役只在脚本坐实之后）"
+fi
+if systemctl is-failed --quiet fpd-expiry.service 2>/dev/null; then
+  bad "fpd-expiry.service 处于 failed 态 ⇒ 到期自毁从没成功过（读 journal -u fpd-expiry 定位）"; MISS=$((MISS+1))
+fi
+rm -rf "$EXPIRY_PROOF_DIR"
 # ★ 登录面自检：sshd 对 fpd 这一档到底生效了什么。
 #   只看 sshd-fpd.conf 装没装上是不够的——ForceCommand 生效与否要问 `sshd -T`（它才是展开后的真值），
 #   而账号 shell 必须是可执行的 shell（见 [1/8] 那条 nologin 教训），两项分开点红。
@@ -404,23 +480,43 @@ else
   ENV_BAK="$(mktemp /tmp/fpd-env.bak.XXXXXX)"
   ENV_SHA_BEFORE="$(sha256sum "$ENVF" 2>/dev/null | awk '{print $1}' || true)"
   if cp -p "$ENVF" "$ENV_BAK" 2>/dev/null && [ -s "$ENV_BAK" ]; then
-    sed -i -E 's/^FPD_EXPIRE_DATE=.*/FPD_EXPIRE_DATE=2020-01-01/' "$ENVF"
+    # ★ EXPIRY_ERR 必须在**循环外**建一次：两条腿各自 `: > ` 清空后复用它（旧写法在腿内部 mktemp，
+    #   第二腿会把第一腿的文案盖掉，排障时读不到"到底是哪条拒的"）。
     EXPIRY_ERR="$(mktemp /tmp/fpd-expiry-check.XXXXXX.err)"
-    printf '%s\n' "$(printf '%s' '{"mode":"probe"}' | base64)" \
-      | sudo -u "$FPD_USER" "$FPD_ROOT/bin/fpd-bridge" >/dev/null 2>"$EXPIRY_ERR"
-    EXPIRY_RC=$?
-    cp -p "$ENV_BAK" "$ENVF"           # 先还原，再判定：判红也不许把机器留在到期态
-    ENV_SHA_AFTER="$(sha256sum "$ENVF" 2>/dev/null | awk '{print $1}' || true)"
-    if [ "$EXPIRY_RC" -eq 0 ]; then
+    probe_bridge_expired() { # $1=临时到期日串  设值 → 从 bridge 拨一次 probe → **无条件还原** → 把退出码交给调用方
+      sed -i -E "s|^FPD_EXPIRE_DATE=.*|FPD_EXPIRE_DATE=$1|" "$ENVF"
+      : > "$EXPIRY_ERR"
+      printf '%s\n' "$(printf '%s' '{"mode":"probe"}' | base64)" \
+        | sudo -u "$FPD_USER" "$FPD_ROOT/bin/fpd-bridge" >/dev/null 2>"$EXPIRY_ERR"
+      BRIDGE_RC=$?
+      cp -p "$ENV_BAK" "$ENVF"          # 先还原，再判定：判红也不许把机器留在到期态
+    }
+    # 腿一：过去日期 ⇒ bridge 必须拒（这道拒绝早于 fpdexec，所以连 EXPIRED 标记都不该落）
+    probe_bridge_expired 2020-01-01
+    if [ "$BRIDGE_RC" -eq 0 ]; then
       bad "到期自拒失效：fpd.env 写 2020-01-01 时 bridge 仍放行 ⇒ 机器到期后还会接客户文件"
       MISS=$((MISS+1))
     else
-      log "  到期自拒生效（临时把到期日设成 2020-01-01 ⇒ bridge exit=$EXPIRY_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
+      log "  到期自拒生效（临时把到期日设成 2020-01-01 ⇒ bridge exit=$BRIDGE_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
+    fi
+    # 腿二（★ 2026-10-01 加）：**形似而实非**的日期（13 月 45 日）也必须拒。
+    #   旧 bridge 只校验"剥掉连字符是 8 位数字"，2026-13-45 能过那道，再进数值比较时
+    #   `20261001 -ge 20261345` 为假 ⇒ **放行**；而 fpdexec 用 fromisoformat，同一串判已到期。
+    #   两侧对"配置写坏了"给出相反结论，正是红线③不该有的形态（坏了就该宁可关闸）。
+    #   只测腿一不够：它能绿着放过这条洞（本仓定性过的"探针结构性盲区"）。
+    probe_bridge_expired 2026-13-45
+    if [ "$BRIDGE_RC" -eq 0 ]; then
+      bad "非法日期自拒失效：fpd.env 写 2026-13-45（不存在的日期）时 bridge 仍放行 ⇒ 与 fpdexec 口径打架，坏配置下机器还会接客户文件"
+      MISS=$((MISS+1))
+    else
+      log "  非法日期按已到期生效（2026-13-45 ⇒ bridge exit=$BRIDGE_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
     fi
     if [ -f "$FPD_ROOT/EXPIRED" ]; then
       bad "到期自证过程中落出了 EXPIRED 标记 ⇒ 拒绝路径写到了标记文件（红线③的实现不该在探测时落盘），请人工确认后删除"
       MISS=$((MISS+1))
     fi
+    # 两条腿各自还原一次，这里取**最后一次还原之后**的指纹（早取就是把"第二腿没还原"漏出射程）
+    ENV_SHA_AFTER="$(sha256sum "$ENVF" 2>/dev/null | awk '{print $1}' || true)"
     if [ -n "${ENV_SHA_BEFORE:-}" ] && [ "${ENV_SHA_BEFORE:-}" != "${ENV_SHA_AFTER:-}" ]; then
       bad "fpd.env 未逐字节还原（before=${ENV_SHA_BEFORE:0:12} after=${ENV_SHA_AFTER:0:12}）⇒ 立即人工核对 $ENVF"
       MISS=$((MISS+1))

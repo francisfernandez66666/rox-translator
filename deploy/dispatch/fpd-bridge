@@ -61,9 +61,22 @@ if [ -n "${FPD_EXPIRE_DATE:-}" ]; then
       echo "[fpd-bridge] FPD_EXPIRE_DATE 非法（$FPD_EXPIRE_DATE）⇒ 按已到期拒绝（宁可关闸）" >&2
       exit 78 ;;
   esac
+  # ★★ 2026-10-01 补的日历腿（原来只有上面那道"8 位数字"，那**不是**日期合法性检查）：
+  #   形似而实非的日期（`2026-13-45` 这种 13 月 45 日）能过数字校验，接着进下面的数值比较时
+  #   `20261001 -ge 20261345` 为假 ⇒ bridge **放行**；而同一个串在 fpdexec 里
+  #   `date.fromisoformat()` 直接抛 ⇒ 判**已到期**（fileproc 侧拒绝）。
+  #   于是"配置写坏"这一档在两侧得出相反结论：主站看着机器可派、机器自己说不派（或反过来）。
+  #   红线③的口径是**宁可关闸**，所以这里统一成：归一失败＝非法＝按已到期拒绝。
+  #   注：这里吃的是 GNU date（Ubuntu 默认可用）；真拿不到归一结果时同样走"按已到期"这一支，
+  #   绝不因为"解析器不可用"而放行——那正是 fpdexec._env_int() 那条"空值不许当 0 用"的同族教训。
+  EXP_DAY="$(date -u -d "$FPD_EXPIRE_DATE" +%Y%m%d 2>/dev/null || true)"
+  if [ -z "$EXP_DAY" ]; then
+    echo "[fpd-bridge] FPD_EXPIRE_DATE 不是真实存在的日期（$FPD_EXPIRE_DATE）⇒ 按已到期拒绝（宁可关闸）" >&2
+    exit 78
+  fi
   TODAY_NUM="$(date -u +%Y%m%d)"
-  if [ "$TODAY_NUM" -ge "$EXP_NUM" ]; then
-    echo "[fpd-bridge] 今日 $TODAY_NUM 已到/过到期日 $EXP_NUM（UTC 口径）⇒ 拒绝派发" >&2
+  if [ "$TODAY_NUM" -ge "$EXP_DAY" ]; then
+    echo "[fpd-bridge] 今日 $TODAY_NUM 已到/过到期日 $EXP_DAY（UTC 口径）⇒ 拒绝派发" >&2
     exit 78
   fi
 else

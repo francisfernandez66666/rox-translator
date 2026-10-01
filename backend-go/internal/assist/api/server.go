@@ -269,7 +269,13 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if text == "" {
 		text = s.eng.Greeting()
 	}
-	text = s.eng.LocalizeGreeting(r.Context(), text, uiLang)
+	// ★ 0AF（2026-10-01 现网 greet 502）：欢迎词与 chips 是**两次串行**翻译，各有各的有界预算的话
+	// 最坏是 2×预算（8+8=16 秒）——离反代那 30 秒是不远了，但访客白等的那 8 秒没有任何收益。
+	// 这里让整段 greet 共用**一个**截止：第二枪只花剩余预算，拿不到就照常出中文并在后台补
+	// （见 engine/localize_async.go）。engine 侧那条有界 ctx 取两者里更早的 deadline，所以不会放宽。
+	greetCtx, cancelGreet := context.WithTimeout(r.Context(), s.eng.CannedSyncBudget())
+	defer cancelGreet()
+	text = s.eng.LocalizeGreeting(greetCtx, text, uiLang)
 	// ★ 〇-LK（2026-09-22）欢迎语去重：旧实现每次 greeting 都无条件 AddMessage，
 	// 而挂件在同一 sid 上重复 greet 是常态（令牌失效自愈、跨页复用会话），
 	// 于是台账里堆出一串重复欢迎语：既让管理台「消息总数」虚高，也让
@@ -281,7 +287,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 		"session":  sid,
 		"tok":      s.sessTok(sid),
 		"greeting": text,
-		"chips":    chipsOf(s.eng.LocalizeChips(r.Context(), s.db.GetConfig("quick_chips", ""), uiLang)),
+		"chips":    chipsOf(s.eng.LocalizeChips(greetCtx, s.db.GetConfig("quick_chips", ""), uiLang)),
 	})
 }
 

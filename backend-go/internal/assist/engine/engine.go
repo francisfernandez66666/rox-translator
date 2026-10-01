@@ -79,6 +79,16 @@ type Engine struct {
 	sysValBlock string
 	sysValDoc   *pricingMetaDoc
 	sysValAt    time.Time
+
+	// ★ 0AF（2026-10-01 现网 greet 502 实证）：canned 首屏翻译「同步有界 + 后台补翻」的在途簿记。
+	// cannedFlights 记「哪个 (kind,语种,指纹) 此刻已有一条腿在打上游」，同键后来者直接出中文原文，
+	// 绝不让 N 个并发访客各拨一枪（机制、TTL 兜底与取舍见 localize_async.go）。
+	// 与 vec/syn/sysVal 同一范式：缓存本体由自己的锁保护，只有 localize_async.go 读写它。
+	cannedFlightsMu sync.Mutex
+	cannedFlights   map[string]time.Time
+	// cannedBgWg 只给测试当**显式同步点**用（生产代码不等它）。
+	// ⚠️ 本仓把「靠 time.Sleep 赌 goroutine 刚好来得及」定性为假绿形态，凡要等后台腿的用例都等这个。
+	cannedBgWg sync.WaitGroup
 }
 
 // New 构建引擎
