@@ -635,7 +635,7 @@ func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
 	return int(msgCnt), nil
 }
 
-// AddMessage 追加消息（匿名态，tenant_id=user_id=NULL，anonym_hash=''）。
+// AddMessage 追加消息（匿名态，tenant_id、user_id 为 NULL，anonym_hash 为空串）。
 func (d *DB) AddMessage(sessionID, role, content string, actions []map[string]string) error {
 	aj := "[]"
 	if len(actions) > 0 {

@@ -17,7 +17,10 @@ import (
 // 说明：必须登录态，匿名返回 401；limit 上限 100 防大查询。
 func (s *Server) handleChatList(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]string{"error": "未登录"})
+		// ★ 〇-AM 收口（2026-10-02）：原为内联 writeJSON(w,401,{error})，违反 AGENTS §一·8
+		//   「错误一律走 s.writeError + apierrors」；改走统一错误码后 401 结构体由 apierrors.WriteError 出，
+		//   前端 core.ts 的 bizResp 对 4xx 一律还原成 {success:false} 并在 401 触发重登录，行为不变。
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 
@@ -66,7 +69,8 @@ func convsToResp(convs []store.ChatConversation) []map[string]interface{} {
 // 说明：必须登录态；只取自己租户下的会话，跨租户一律 404。
 func (s *Server) handleChatMessages(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]string{"error": "未登录"})
+		// ★ 〇-AM 收口（2026-10-02）：同上，401 改走 writeError + apierrors（AGENTS §一·8）
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 

@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（429 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（430 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -326,6 +326,7 @@ var exactEN = map[string]string{
 	"组织名称不能为空":                 "Organization name must not be empty",
 	"组织类型仅支持 org(组织)/dept(部门)": "Organization type supports org/dept only",
 	"缺少 file 参数":               "Missing file parameter",
+	"缺少 id 参数":                 "Missing id parameter",
 	"缺少 order_id":              "order_id missing",
 	"缺少 package_id":            "package_id missing",
 	"缺少 state cookie，请重新发起登录":  "Missing state cookie; restart the login flow",

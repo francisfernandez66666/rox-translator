@@ -60,7 +60,7 @@ func NewServer(db *store.DB, eng *engine.Engine, adminToken, cors string) *Serve
 	s.sessKey = loadOrGenSessKey(db)
 	s.tok = s.readAdminToken()
 	s.anonymCleanupInterval = time.Hour // ★ 〇-AM：每小时清理一次过期匿名会话
-	go s.startAnonymCleanup()            // 启动后台清理 goroutine
+	go s.startAnonymCleanup()           // 启动后台清理 goroutine
 	return s
 }
 

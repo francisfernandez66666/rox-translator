@@ -528,6 +528,15 @@ T.update({
 "今日免费注册名额已用完，请明天再试": "Today's free registration quota is used up; please try again tomorrow",
 })
 
+# —— 〇-AM 收口批盘点（2026-10-02）：工作台对话历史接口 chat_api.go 的两处写死中文。
+#   ① 「缺少 id 参数」：handleChatMessages 参数校验，〇-AM 原样写成 apierrors.New(ErrValidation, "中文")，
+#      当时未随批补词条，闸门 TestAPICnMessageLiteralsCovered 当场报缺（本条即其补录）。
+#   ② 同文件两处「未登录」401 原写成内联 writeJSON(w,401,{error})（AGENTS §一·8 违规），
+#      已迁到 apierrors.New(ErrUnauthorized, "未登录")；「未登录」词条早在本表（见既有行），无需重复登记。
+T.update({
+"缺少 id 参数": "Missing id parameter",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 
