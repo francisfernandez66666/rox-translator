@@ -1,0 +1,63 @@
+# ============================================================================
+# translator-dispatch-probe.service · 主站侧派发链路**日探针**（★ 2026-10-01 本批建立）
+#
+# 这只 unit 的射程（一句话）：**只读地把两条排障链路各拨一遍，红就告警，别的什么都不做。**
+#   ① scripts/dispatch_preflight.sh 的 G1~G5（含 G5 真机全往返＝唯一的开闸判据）；
+#   ② cmd/fpdprobe（主站 Go 派发腿 fileproc.TryDispatch 的真机往返探针）。
+#   两条此前都**只靠人记得拨**，于是"闸开着但从没真跑过一次"这类零症状缺陷只在人工排障时偶发暴露
+#   （AGENTS §一·12：有自动降级的链路，"产物能打开"不算验收）。
+#
+# ★ 与 translator-dispatch-expiry.timer 的**射程区别**（不许合并，也不许在那只 unit 里加腿）：
+#   expiry 那只管"到期那天把闸关掉"——它**会**删 drop-in、daemon-reload、restart translator；
+#   本只管"每天把传输腿量一遍"——**绝不关闸、绝不改配置、绝不重启任何服务**。
+#   合并的后果不是理论问题：一只会关闸的 unit 一旦和日检绑在一起，运维就会因为怕它乱动而整只关掉，
+#   本批要堵的那个洞（无人记得跑）立刻开回去。所以两文件、两 timer、各自 enable。
+#
+# 为什么 User=root 而探针仍以 translator 身份跑：
+#   dispatch.env 是 0600 属主 translator（读它才拿得到主机与私钥路径），到期日文件与 journald 写入
+#   也都在 root 侧；而**探针那一腿必须由脚本自己 runuser -u translator 降级**——
+#   要复现的是服务账号那条腿（私钥可读性、known_hosts 可读性都长在这个 uid 上），
+#   root 跑通了不代表服务跑得通（09-30 开闸首跑"预检全绿、一单不派"就是这么藏的）。
+#
+# 告警通道（不新造凭据）：
+#   ALERT_INTAKE_URL 指本机 /api/alerts/alertmanager（仅回环可达），
+#   ALERT_TOKEN/ADMIN_TOKEN 由 EnvironmentFile=-/etc/translator/secrets.env 提供，
+#   与备份恢复演练（translator-restore-drill.service）用的是**同一条收口**。
+#   通道缺失时 wrapper 不改判据，只在日志留 `DISPATCH_PROBE_RED` 的 ERROR 行。
+#
+# 安装（主站 root；命令与 scripts/dispatch_probe_daily.sh 文件头一致）：
+#   install -m 0755 scripts/dispatch_probe_daily.sh /opt/translator/bin/
+#   install -m 0755 scripts/dispatch_preflight.sh   /opt/translator/bin/
+#   cp deploy/systemd/translator-dispatch-probe.{service,timer} /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now translator-dispatch-probe.timer
+#   手工试跑：systemctl start translator-dispatch-probe.service && journalctl -u translator-dispatch-probe -n 50
+#
+# ⚠️ 本文件里**禁止**出现的东西（静态锁＝internal/fileproc/dispatch_probe_timer_test.go）：
+#   ExecStartPost 的任何退役/停用腿（10-01 到期闹钟事故的同形死法：ServiceExit 之后无条件执行，
+#     wrapper 的三条提前退出一概不看，等于"跑过一次就算处理完"）；
+#   systemctl stop/restart/disable、dispatch_revert.sh、写 /etc 的任何动作——本 unit 只许读。
+#   同理禁止写死远端主机/IP：主机只从 dispatch.env 现读（wrapper 里连值都不打印，只出 yes/no）。
+# ============================================================================
+[Unit]
+Description=Daily read-only probe of the remote dispatch transport legs (alert only, never touches config)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/bin/bash /opt/translator/bin/dispatch_probe_daily.sh
+# secrets.env 提供 ALERT_TOKEN/ADMIN_TOKEN（前缀 `-` ＝ 文件不存在也不拒启：
+# 排障闹钟不能因为一个可选的凭证文件缺失而变成 unit failed，红与否由 wrapper 判）。
+EnvironmentFile=-/etc/translator/secrets.env
+Environment=ALERT_INTAKE_URL=http://127.0.0.1:8787/api/alerts/alertmanager
+# 超时给到 40 分钟：两条腿各含一次真机往返（20MB 级样张上传＋远端转换＋回拉），
+# 10-01 实测 apply 一腿 55s、上传 2s，但预检 G4/G5 是**两次**转换，留足余量才不会把
+# "慢"误判成"卡死"——真卡死的那一档仍然要退，所以宁可宽一档。
+TimeoutStartSec=2400
+# 探针要拨公网、跑重转换，别让它在凌晨挤主站业务（同 restore-drill 的口径）。
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

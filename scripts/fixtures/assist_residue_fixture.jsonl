@@ -1,0 +1,25 @@
+{"time":"2026-10-01T04:00:01.100000000+08:00","level":"INFO","msg":"assist 服务启动（夹具合成行，非现网数据）","addr":"127.0.0.1:8790"}
+{"time":"2026-10-01T04:00:02.100000000+08:00","level":"WARN","msg":"assist.engine 对话正文汉字残留补翻未采用，保留原稿","lang":"ja","reason":"no_upstream","count":1,"leaks":"文件"}
+{"time":"2026-10-01T04:00:03.100000000+08:00","level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿","lang":"en","reason":"no_leaks","count":0,"leaks":""}
+{"time":"2026-10-01T04:00:04.100000000+08:00","level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿","lang":"en","reason":"upstream_error","count":1,"leaks":"充值"}
+{"time":"2026-10-01T04:00:05.100000000+08:00","level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿","lang":"th","reason":"truncated","count":2,"leaks":"可以直接,积分"}
+{"time":"2026-10-01T04:00:06.100000000+08:00","level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿","lang":"ar","reason":"empty_output","count":1,"leaks":"助手"}
+{"time":"2026-10-01T04:00:07.100000000+08:00","level":"WARN","msg":"assist.engine 对话正文补翻未采用，已按确定性正字表就地改写","lang":"ja","source":"llm","reason":"line_count","before":5,"after":4,"fixed":"文件","leaks":"料金额,文件,术语库,定价页面,プロfessional"}
+{"time":"2026-10-01T04:00:08.100000000+08:00","level":"WARN","msg":"assist.engine 对话正文汉字残留补翻未采用，保留原稿","lang":"ja","source":"llm","reason":"not_improved","count":2,"leaks":"术语库,定价页面"}
+{"time":"2026-10-01T04:00:09.100000000+08:00","level":"WARN","msg":"assist.engine canned 译文未过出栈闸，按原文出且不落缓存","kind":"welcome","lang":"ko","reason":"canned_empty","detail":"","before":""}
+{"time":"2026-10-01T04:00:10.100000000+08:00","level":"WARN","msg":"assist.engine canned 译文未过出栈闸，按原文出且不落缓存","kind":"welcome","lang":"ja","reason":"canned_han_residue","detail":"文件,术语库","before":"合成的日文欢迎词片段，不含任何真实客户正文"}
+{"time":"2026-10-01T04:00:11.100000000+08:00","level":"WARN","msg":"assist.engine canned 译文未过出栈闸，按原文出且不落缓存","kind":"chips","lang":"ru","reason":"canned_brand_injected","detail":"LangCross","before":"合成的俄文片段"}
+{"time":"2026-10-01T04:00:12.100000000+08:00","level":"WARN","msg":"assist.engine canned 文案翻译失败，原样出中文","kind":"welcome","lang":"vi","reason":"canned_sync_timeout","err":"context deadline exceeded","budget_ms":8000}
+{"time":"2026-10-01T04:00:13.100000000+08:00","level":"WARN","msg":"assist.engine canned 文案翻译失败，原样出中文","kind":"chips","lang":"vi","reason":"canned_sync_canceled","err":"context canceled","budget_ms":8000}
+{"time":"2026-10-14T04:00:14.100000000+08:00","level":"WARN","msg":"assist.engine canned 文案翻译失败，原样出中文","kind":"welcome","lang":"de","reason":"canned_sync_upstream","err":"上游 5xx","budget_ms":8000}
+{"time":"2026-10-01T04:00:15.100000000+08:00","level":"WARN","msg":"assist.engine canned 后台补翻未成功，缓存保持不写","kind":"welcome","lang":"vi","reason":"canned_bg_timeout","sync_reason":"canned_sync_timeout","err":"context deadline exceeded"}
+{"time":"2026-10-01T04:00:16.100000000+08:00","level":"WARN","msg":"assist.engine canned 后台补翻未成功，缓存保持不写","kind":"chips","lang":"de","reason":"canned_bg_upstream","sync_reason":"canned_sync_canceled","err":"上游 5xx"}
+{"time":"2026-10-01T04:00:17.100000000+08:00","level":"WARN","msg":"assist.engine canned 后台补翻的译文未过出栈闸，按不写处理","kind":"welcome","lang":"th","reason":"canned_bg_gated","gate_reason":"canned_han_residue","detail":"可以直接","sync_reason":"canned_sync_timeout","before":"合成的泰文片段"}
+{"time":"2026-10-01T04:00:18.100000000+08:00","level":"WARN","msg":"assist.engine canned 后台补翻的译文已过期，不覆盖库里现值","kind":"welcome","lang":"de","reason":"canned_bg_stale","sync_reason":"canned_sync_upstream"}
+{"time":"2026-10-01T04:00:19.100000000+08:00","level":"WARN","msg":"assist.engine canned 后台补翻腿 panic，已收住（进程无碍，缓存未写）","kind":"chips","lang":"ja","reason":"canned_bg_panic","panic":"合成 panic","sync_reason":"canned_sync_timeout"}
+{"time":"2026-10-01T04:00:20.100000000+08:00","level":"INFO","msg":"assist.engine 对话正文汉字残留已出站补翻","lang":"en","before":1,"after":0,"leaks":"充值"}
+{"time":"2026-10-01T04:00:21.100000000+08:00","level":"INFO","msg":"assist.engine 分级召回命中","lang":"th","score":0.72}
+assist.log 里混进来的非 JSON 行（日志轮转残段），解析必须跳过而不是崩
+{"time":"2026-10-01T04:00:23.100000000+08:00","level":"WARN","msg":"截断的半个
+{"time":"2026-10-01T05:30:00.100000000+08:00","level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿","lang":"th","reason":"upstream_error","count":1,"leaks":"可以直接"}
+{"level":"WARN","msg":"assist.engine 译文汉字残留补翻未改善，保留上一稿（这一行刻意没有 time 字段）","lang":"en","reason":"not_improved","count":1,"leaks":"充值"}

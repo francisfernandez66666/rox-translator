@@ -3,17 +3,30 @@
 # ★ 这是「产物必须回主站」那条硬口径的第二重保险（第一重在主站：Go 侧同步回拉＋远端只允许写 w/）。
 #   即便主站的回归 timer 没跑成功、或厂商到期后没立刻回收机器，这台机器上也已经主动清干净并拒绝服务了。
 #   方向是 fail-safe：它只删远端 w/ 下的会话目录，**不碰**依赖、脚本、配置（那些不是客户数据）。
+#
+# ★★ 2026-10-01 改造（动这个文件前必读）：判定与退役的顺序**全部搬进 fpd-expiry.sh**，本 unit 里
+#   一条 ExecStartPost 都不留。旧写法有两处结构性缺陷：
+#     ① `User=fpd` ＋ `ExecStartPost=/bin/systemctl disable …` ⇒ 非特权账号做退役，
+#        实测两次（09-29 07:44:56 / 09-30 09:44:13）journal 里都是
+#        `Failed to disable unit: Interactive authentication required.`、unit 落 **failed** 态
+#        ⇒ 「到期那天会不会真的自灭」这件事从没被证明过一次。
+#     ② 退役写在 ExecStartPost ⇒ 在 ServiceExit 之后**无条件**执行，脚本的提前退出一概不看，
+#        等于把「今天跑过一次」当成「到期已处理」。这与主站那只 translator-dispatch-expiry.timer
+#        在 10-01 被抓到并修掉的是**同一个缺陷家族**（那只在未到期那天正常退 0、什么都没关，
+#        却把自己 disable 掉了 ⇒ 到期日反而不会再有自动回滚）。
+#   ⇒ 现在的口径：未到期 ⇒ 一次 systemctl 都不碰；已到期 ⇒ 先清、再坐实（EXPIRED 标记在＋w/ 真空）、
+#     才退役两只 timer；没坐实 ⇒ 退 5 且**闹钟必须还在**（失败语义是「还会再来」）。
+#   ⚠️ 别把 `disable` 那行写回本文件：静态锁会当场判红
+#      （backend-go/internal/fileproc/ 里对 fpd-expiry.service 的「unit 内零 ExecStartPost」判据）。
 Description=One-shot self-destruct of the dispatch worker at expiry
 After=local-fs.target
 
 [Service]
 Type=oneshot
-User=fpd
-Group=fpd
+# ★ root：退役 timer 是特权操作，而清理这一半由脚本内部以 `runuser -u fpd` 降回 fpd 身份跑
+#   （会话目录属 fpd，产物与标记的属主口径不能因为换 unit 用户而被改坏）。
+User=root
 EnvironmentFile=-/opt/fpdispatch/etc/fpd.env
-# 到期日由 timer 的 OnCalendar 保证；这里再强制把 TTL 压成 1 秒 ⇒ sweep 会把所有会话目录一次清空，
-# 并且 fpdexec 内部还会检查 FPD_EXPIRE_DATE 落 EXPIRED 标记（两侧都认日期，不依赖单点）。
-ExecStart=/bin/sh -c 'FPD_TTL_SEC=1 /opt/fpdispatch/.venv/bin/python3 /opt/fpdispatch/bin/fpdexec.py --mode sweep'
-ExecStartPost=/bin/sh -c 'rm -rf /opt/fpdispatch/w/* ; :'
-# 清完顺手停掉两个 timer，避免到期后每天报红（报红三次以上就会被当成"故障"误排障）
-ExecStartPost=/bin/systemctl disable --now fpd-sweep.timer fpd-expiry.timer
+# 到期日由 timer 的 OnCalendar 保证；脚本里还会拿 fpd.env 的 FPD_EXPIRE_DATE 自己判一次
+# （两侧都认日期，不依赖单点），并把 TTL 压成 1 秒让 sweep 一次清空所有会话目录。
+ExecStart=/bin/bash /opt/fpdispatch/bin/fpd-expiry.sh

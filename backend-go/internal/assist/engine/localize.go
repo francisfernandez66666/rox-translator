@@ -44,6 +44,14 @@
 //   - **落库前**过一道出栈闸：补翻被拒后留下的那份带残片稿子、以及凭空多出品牌名的那一稿，
 //     一律不发给访客、一行都不写进缓存（此前它们是"成功译文"，日志静默、缓存常驻）。
 //
+// ★ 0AF（2026-10-01 现网实证）把**等待**这一件事从这条路上摘掉：冷缓存语种（泰文实测 >30 秒）的
+// 第一次翻译原本**同步**打在 handler 里，被主站 `/assist-api` 的 30 秒反代砍成 HTTP 502，
+// 而缓存行随请求一起被丢弃 ⇒ 下一个访客还是 502，一个冷语种能把自己永久钉在坏状态上。
+// 现在：同步腿只等自有预算（默认 8 秒、硬夹 ≤25 秒），到点出中文原文，同一句在请求链之外补翻一次，
+// 并照样过出栈闸后落库（机制、分档与四条纪律见 localize_async.go）。
+// ⚠️ 这一批**只改等待形态**：cannedPromptRev、口径段、指纹、出栈闸三条判据一字未动，
+// 所以库里已缓存的译文继续有效，不引发全站重翻。
+//
 // =============================================
 package engine
 
@@ -203,8 +211,14 @@ func srcFingerprint(s string) string {
 }
 
 // localize 把中文 canned 文本翻成访客界面语言；下列任一情况**原样返回中文**：
-// uiLang 是中文系 / 文本为空 / LLM 未接入 / 上游失败 / 译文空。
+// uiLang 是中文系 / 文本为空 / LLM 未接入 / 上游失败 / 译文空 / **同步预算到点（★ 0AF）**。
 // 命中缓存（同指纹且非人工档）直接回缓存；指纹不符（运营改过原文）重翻并覆盖。
+//
+// ★ 0AF（2026-10-01 现网 greet 502 实证）：未命中时这一次上游调用**不再无限等下去**——
+// 只等 CannedSyncBudget（默认 8 秒，硬夹 ≤25 秒），到点立刻出中文原文，同时在请求链之外
+// 补一枪把译文写进缓存（机制、分档与四条纪律见 localize_async.go）。
+// ⚠️ 预算内成功的那一腿**行为与今天完全一致**：同一套出栈闸、同一个写缓存动作、同步返回译文。
+// 假上游在测试里是瞬间返回的，所以下面那批「同步拿到译文」的既有断言一条都不该改语义。
 func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string {
 	if strings.TrimSpace(text) == "" || visitorWantsChinese(uiLang) {
 		return text
@@ -233,13 +247,43 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	if !client.Enabled() {
 		return text
 	}
-	out, err := e.translateOnce(ctx, client, text, uiLang, localizeMaxTokens,
+	// ★ 0AF 单飞声明（同键只允许一条腿打上游；为什么连同步腿也要占格，见 localize_async.go 文件头）。
+	// 拿不到就**直接出中文**：不排队、不等待——访客那侧多等一秒都不会让译文更早出现，
+	// 而赢家那一枪打完（或后台腿收尾）后，下一次 greet 自然命中缓存。
+	flightKey := cannedFlightKey(kind, uiLang, fp)
+	if !e.claimCannedFlight(flightKey) {
+		observability.Info(ctx, "assist.engine canned 文案同键已有在途翻译，本次直接出中文",
+			"kind", kind, "lang", uiLang, "in_flight", true)
+		return text
+	}
+	// handedOff 真＝声明移交给后台腿了（由后台腿收尾时释放）；假＝本函数返回前自己释放。
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			e.releaseCannedFlight(flightKey)
+		}
+	}()
+
+	// ★ 有界同步腿：这一枪只等 CannedSyncBudget，到点就撤（反代那 30 秒从此砍不到访客的第一口气）。
+	callCtx, cancelCall := context.WithTimeout(ctx, e.CannedSyncBudget())
+	defer cancelCall()
+	out, err := e.translateOnce(callCtx, client, text, uiLang, localizeMaxTokens,
 		"产品欢迎语/短问句", "网站右下角的 AI 客服挂件的首屏")
 	if err != nil {
 		// 失败原样出中文（见文件头「绝不编一份译文」）。这一行日志是这条软路径唯一的露面机会：
 		// greet 界面看不出「没翻成」，没有它就只能等访客截图来报。
+		// ★ 0AF 补 reason 分档：「上游挂了」与「我们只等了 8 秒」在现网长得一模一样
+		// （都是一行 WARN + 一屏中文），分不清就只能猜该调预算还是该查上游。
+		reason := cannedFailureReason(err, callCtx, cannedSyncTimeout, cannedSyncCanceled, cannedSyncUpstream)
 		observability.Warn(ctx, "assist.engine canned 文案翻译失败，原样出中文",
-			"kind", kind, "lang", uiLang, "err", err)
+			"kind", kind, "lang", uiLang, "reason", reason, "err", err,
+			"budget_ms", e.CannedSyncBudget().Milliseconds())
+		// 超时／被取消／上游报错 ⇒ 请求链之外再补一次，成功后照样过闸再落库。
+		// ⚠️ 出栈闸拒掉的那一稿**不走这里**（那一枪上游是好的，重拨只会把重拨风暴送给上游，
+		// 取舍理由写在 localize_async.go 文件头）。
+		if e.launchCannedBackground(ctx, client, kind, text, uiLang, fp, flightKey, reason) {
+			handedOff = true
+		}
 		return text
 	}
 	// ★ 096x-1 出栈闸：**调用成功不等于产物可用**（机制与三条判据见 canned_guard.go）。

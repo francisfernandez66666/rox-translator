@@ -1,0 +1,33 @@
+# ============================================================================
+# translator-dispatch-probe.timer · 派发链路日探针的触发器（每天一次）
+#
+# 错峰口径（照本仓既有两只 timer 的排法，别撞上同一分钟）：
+#   03:30  translator-restore-drill.timer（每周日，备份恢复演练）
+#   04:10  translator-dispatch-expiry.timer（每日到期检查，**只在那天**才动配置）
+#   整点   体验机侧 fpd-sweep 清扫（预检注释里点名的"避开整点"）
+#   ⇒ 本只取 **05:20**：在业务早高峰之前、在两只既有闹钟之后，且不在整点。
+#   AccuracySec=1min ＋ RandomizedDelaySec=300 与 restore-drill 同档：
+#   探针含真机往返，不需要秒级准点；抖动反而避免与到期闹钟同日抢远端（远端并发=1）。
+#
+# Persistent=true 的必要性（不是为了"补跑一次好看"）：
+#   这条链路的失败形态是**静默降级**，读数只有拨一次才有；宿主机重启/停机错过的那天
+#   若不补跑，"这个月有没有真往返过" again 变成一个人记住的事——本批要消掉的正是这个。
+#
+# ⚠️ 本文件不设 ExecStartPost／不 disable 自己：排障闹钟的退役只能由人显式下令
+#   （10-01 到期闹钟事故的同形死法，见 translator-dispatch-expiry.service 里那段 ★ 注释）。
+#   闸关着时 wrapper 自己记 probe_result=closed 并退 0，不需要闹钟自灭。
+#
+# 安装：见 translator-dispatch-probe.service 头注（systemctl enable --now 这一只）。
+# ============================================================================
+[Unit]
+Description=Daily read-only probe of the remote dispatch transport legs
+
+[Timer]
+OnCalendar=*-*-* 05:20:00
+RandomizedDelaySec=300
+Persistent=true
+AccuracySec=1min
+Unit=translator-dispatch-probe.service
+
+[Install]
+WantedBy=timers.target

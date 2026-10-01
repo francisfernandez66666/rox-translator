@@ -10,6 +10,15 @@
 // ⚠️ 这个文件里的"表值必须过判残"那条是**正向对照**，不是走过场：
 // 表值自己要是还会被判残（比如误把 数据 写成 数値），替换完等于原地打转，
 // 而判据④（残片严格变少）会把它整段作废——那时这条腿静默失效，界面上什么都看不出来。
+//
+// ★ 10-01（〇-AF 收尾）本文件多两件事，都是"把一句话结论变成代码"：
+//
+//	① 现网实证必须在表里那份清单补上「文件」——它是 10-01 那条 ja 正文五个残片里唯一被表兜住的；
+//	② 新增 TestJaResidueFixupsTenOfOneFormsStayOutOfTable：把另外四个形态（料金额／术语库／
+//	   定价页面／プロfessional）**按收录门槛判为表外**这件事钉成负向锁，
+//	   并当场演示"为什么连子形态（金额→金額、页面→ページ）都不许塞"——
+//	   那会把可见残留换成不可见残留，四道前置一道都挡不住，只能靠这一条锁。
+//	   逐条判词的正文在 han_residue.go 的 jaResidueFixups 表头。
 package engine
 
 import (
@@ -74,11 +83,15 @@ func TestJaResidueFixupTableIsSelfConsistent(t *testing.T) {
 			}
 		}
 	}
-	// 现网 2026-09-30 实证的三个形态必须在表里（这条是"删除清单只收现网逐字实证形态"口径的反面：
-	// 已经实证漏出的三个词，任何一批把它们从表里抹掉都要当场红）
-	for _, k := range []string{"费用", "什么", "系数"} {
+	// 现网实证的残片必须在表里（这条是"删除清单只收现网逐字实证形态"口径的反面：
+	// 已经实证漏出的词，任何一批把它们从表里抹掉都要当场红）。
+	//   费用／什么／系数 ← 093x/094x（2026-09-30）那三条红；
+	//   文件 ← ★ 10-01 新增：现网那条 ja 正文的五个残片里**唯一被表兜住的一个**
+	//          （日志实读 fixed=文件、before=5 after=4；覆盖率读数见
+	//           scripts/assist_residue_report.py 与本文件下方 TestJaResidueFixupsTenOfOneFormsStayOutOfTable）。
+	for _, k := range []string{"费用", "什么", "系数", "文件"} {
 		if _, ok := seen[k]; !ok {
-			t.Fatalf("现网实证的残片 %q 不在正字表里——094x 那三条红会原样复发", k)
+			t.Fatalf("现网实证的残片 %q 不在正字表里——那几条红会原样复发", k)
 		}
 	}
 	// 「积分」的正字档必须与作答语种那张术语表同值（两处口径分叉＝一个客户屏幕上两种说法）
@@ -329,6 +342,136 @@ func TestRepairReplyHanResidueRejectReasonAndFixup(t *testing.T) {
 		if got, ok, reason := e.repairHanResidueBase(ctx, stubClient(stub3), "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); !ok ||
 			reason != "" || !strings.Contains(got, "費用") {
 			t.Fatalf("采用档应回空原因，实际 ok=%v reason=%q out=%q", ok, reason, got)
+		}
+	})
+}
+
+// jaTenOfOneForms 现网 2026-10-01 那条被拒的 ja 正文里的五个残片，
+// **顺序与日志 leaks 字段逐字一致**（实读那行：reason=line_count、before=5、after=4、fixed=文件）：
+//
+//	"leaks":"料金额,文件,术语库,定价页面,プロfessional"
+var jaTenOfOneForms = []string{"料金额", "文件", "术语库", "定价页面", "プロfessional"}
+
+// jaTenOfOneOutOfTable 其中判词为**表外**的四个（文件 已在表内，由上面那条正向锁守住）。
+// 四个的逐条判词见 han_residue.go 的 jaResidueFixups 表头（★ 10-01 批），一句话版：
+//
+//	料金额   ＝ 料金／金額 二选一的半截形态，本地猜不了；
+//	术语库   ＝ 用語集／用語ベース／用語データベース 三种说法在自家语料里并存；
+//	定价页面 ＝ 価格ページ／料金ページ 两种说法也在自家 ja 文案里并存；
+//	プロfessional ＝ 假名嵌拉丁那一族按 093x 口径一律只送补翻。
+var jaTenOfOneOutOfTable = []string{"料金额", "术语库", "定价页面", "プロfessional"}
+
+// jaTableKeysHitting 返回表内**哪几条键**会是 frag 的子串。
+//
+// 为什么"子串"就是判据：applyJaResidueFixups 的落刀方式是 strings.ReplaceAll(out, fp.from, fp.to)，
+// 只要某个表内键出现在被点名的片段里，那一段就会被就地改写（前置①问的正是 strings.Contains(leak, from)）。
+// 所以"这四个形态表外"真正要锁的东西是：**表里没有任何一条键命中它们**——
+// 只锁"当前替换结果"是不够的，将来有人往表里加一条恰好是它们子串的新键（例如 金额→金額），
+// 替换结果才会变质，而那种变质是**减一行日志**、不是加一行错误，界面上什么都不会发生。
+func jaTableKeysHitting(frag string) []string {
+	var hits []string
+	for _, fp := range jaResidueFixups {
+		if strings.Contains(frag, fp.from) {
+			hits = append(hits, fp.from+"→"+fp.to)
+		}
+	}
+	return hits
+}
+
+// TestJaResidueFixupsTenOfOneFormsStayOutOfTable ★ 10-01 那五个残片里"表外四个"的负向锁。
+//
+// 这一条存在的理由不是"它们今天没被改"（那是 applyJaResidueFixups 现行为的副产品），
+// 而是**"不许有人把它们改上去"**：这批的判词全部落在"要挑说法"这一档，
+// 而挑说法的形态一旦被塞进表（哪怕是以子形态的名义），症状是"日志变干净、屏幕上还是半中半日"，
+// 那比原样留残片难发现一个量级（同 AGENTS §一·12 那句"产物能打开不算验收"）。
+// 因此本用例的四条断言按"改上去会发生什么"倒着排：先证明现象（判残失明），再锁死入口（键不许命中）。
+func TestJaResidueFixupsTenOfOneFormsStayOutOfTable(t *testing.T) {
+	// 夹具：五个形态用读点隔开，保证汉字段切分与现网那一行**逐字对齐**（不多不少五个残片）。
+	text := "料金额、文件、术语库、定价页面、プロfessionalモードについて"
+
+	leaks := replyHanResidueRuns("ja", text)
+	if strings.Join(leaks, ",") != strings.Join(jaTenOfOneForms, ",") {
+		t.Fatalf("夹具没能复现现网那一行的五个残片：want=%v got=%v", jaTenOfOneForms, leaks)
+	}
+
+	t.Run("只有已在表内的那一个被改掉", func(t *testing.T) {
+		got, applied := applyJaResidueFixups("ja", text, leaks)
+		if len(applied) != 1 || applied[0] != "文件" {
+			t.Fatalf("正字表改动清单应与现网那行 fixed=文件 逐字一致，实际 applied=%v（text=%q）", applied, got)
+		}
+		if !strings.Contains(got, "ファイル") {
+			t.Fatalf("表内的「文件」这一条没生效：%q", got)
+		}
+	})
+
+	t.Run("四个表外形态原样留着且仍被补翻点名", func(t *testing.T) {
+		got, _ := applyJaResidueFixups("ja", text, leaks)
+		for _, f := range jaTenOfOneOutOfTable {
+			// ③' 原样留着＝这一处只能靠补翻，服务端不替客户写作文
+			if !strings.Contains(got, f) {
+				t.Fatalf("表外形态 %q 被就地改写了（应原样留给补翻）：%q", f, got)
+			}
+		}
+		// ④' 而且替换后必须**仍然被判残点名**——"表外"不等于"判残漏"：
+		// 一旦某处改动让形态离开判残尺子，下一轮补翻就不会再点它的名，坏形态从此静默常驻。
+		after := replyHanResidueRuns("ja", got)
+		if len(after) != len(jaTenOfOneOutOfTable) {
+			t.Fatalf("替换后残片清单长度不对（应恰好剩四个表外形态）：%v", after)
+		}
+		for _, f := range jaTenOfOneOutOfTable {
+			found := false
+			for _, a := range after {
+				if a == f {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatalf("表外形态 %q 不在替换后的判残清单里 %v——它已经逃出补翻射程", f, after)
+			}
+		}
+	})
+
+	t.Run("负向锁主体：表内任何键都不许是这四个形态的子串", func(t *testing.T) {
+		for _, f := range jaTenOfOneOutOfTable {
+			if hits := jaTableKeysHitting(f); len(hits) > 0 {
+				t.Fatalf("正字表里出现了 %q 的子串键 %v——这条会把需要挑说法的形态做半截替换，"+
+					"产物是「第三种谁也没写过的形态」，且判残尺子会因此看不见它（本批 10-01 判词：表外）", f, hits)
+			}
+		}
+	})
+
+	t.Run("反证甲：假想子形态 金额→金額 会把可见残留换成不可见残留", func(t *testing.T) {
+		// 这一支就是上面那条负向锁的**反证**（在内存里演一遍，绝不改源、也不往表里塞东西）：
+		// 假设有人觉得「额→額 是纯字形之别，收进去总没错」，往表里加了 {金额, 金額}——
+		// 手工做同一次替换，看判残尺子还剩什么。
+		partial := strings.ReplaceAll(text, "金额", "金額")
+		if strings.Contains(partial, "料金额") {
+			t.Fatalf("假想替换本身没生效，反证无效：%q", partial)
+		}
+		still := replyHanResidueRuns("ja", partial)
+		for _, a := range still {
+			if strings.Contains(a, "料金額") {
+				t.Fatalf("夹具假设不成立：「料金額」本该逃过判残，实际仍被点名 %v", still)
+			}
+		}
+		if len(still) >= len(leaks) {
+			t.Fatalf("假想子形态理应让残片数下降（否则前置④会拦住，本反证就不必存在），实际 %v vs %v", still, leaks)
+		}
+		// ⇒ 结论：**四道前置一道都挡不住这条子形态**（残片数确实严格变少了），
+		//   挡住它的只能是上面那条"键不许命中"的收录门槛锁。这就是本用例存在的理由。
+	})
+
+	t.Run("反证乙：命中判据不是恒假（表内形态必须命中）", func(t *testing.T) {
+		// 少了这一支，上面那条负向锁可能是"helper 永远返回空"的空转判据。
+		// 「文件」是表内键，jaTableKeysHitting 必须报出它；「费用」同理。
+		for _, in := range []string{"文件翻訳", "実際の费用"} {
+			if len(jaTableKeysHitting(in)) == 0 {
+				t.Fatalf("命中判据对表内形态 %q 报空——那条负向锁是恒真的空锁", in)
+			}
+		}
+		if len(jaTableKeysHitting("定价页面")) != 0 {
+			t.Fatalf("表外形态被命中，主判据与逐条判词不一致")
 		}
 	})
 }
