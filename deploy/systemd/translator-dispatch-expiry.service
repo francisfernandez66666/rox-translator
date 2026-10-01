@@ -26,9 +26,15 @@ Type=oneshot
 # 脚本本身做幂等判断（未到期即退 0），所以这里不需要再包一层 date 比较——
 # 包一层就等于把"到期日从哪读"这件事复制两份，改日期时要改两处，属于典型的漂移源。
 ExecStart=/bin/bash /opt/translator/bin/dispatch_revert.sh --if-expired
-# 关完闸顺手把自己停掉：到期后每天触发一个必然无事可做的 oneshot，
-# 只会让 journalctl 里多出一堆噪声，把真正的故障信号淹掉。
-ExecStartPost=/bin/systemctl disable --now translator-dispatch-expiry.timer
+# ★ 这里**曾经**有一行无条件的 ExecStartPost=systemctl disable --now <本 timer>，10-01 已删（〇-AF 待决策 ①）。
+#   它想解决的事是真的（到期之后每天触发一个必然无事可做的 oneshot，会把 journalctl 淹成噪声），
+#   但它把"跑过一次"当成了"到期已处理"：未到期那天脚本正常退 0、什么都没关，闹钟却退役了。
+#   现网实证（10-01 04:10:05）：journal 实读 Removed ".../timers.target.wants/translator-dispatch-expiry.timer"
+#   ⇒ is-enabled=disabled、is-active=inactive，而到期日还差 25 天 ⇒ 10-26 那天不会再有自动回滚。
+#   退役这一步现在归**脚本**管，且只在"实测 dispatch=off 已坐实"之后执行
+#   （见 scripts/dispatch_revert.sh 里那段带 ★ 10-01 的注释；双向行为锁＝internal/fileproc/dispatch_expiry_timer_test.go）。
+#   ⚠️ 别把它写回来：unit 里任何 ExecStartPost 都在 ServiceExit 之后无条件跑，脚本的三条提前退出
+#      （非 root／重启没起来／health 不是 off）它一概不看，等于把"失败也退役"重新装进环境层。
 
 [Install]
 WantedBy=multi-user.target

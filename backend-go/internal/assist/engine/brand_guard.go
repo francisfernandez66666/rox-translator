@@ -162,7 +162,31 @@ func stripBrandTokenResidue(text string) string {
 
 // brandTokenResiduePat 方括号/书名号包住 BRAND（大小写不限）的残渣形态。
 // 只删「括号里就是这个词」的段，不碰其它括号内容（那是客户要看的补充说明）。
-var brandTokenResiduePat = regexp.MustCompile(`[⟦［\[【〔]{1,2}\s*BRAND\s*[⟧］\]】〕]{1,2}`)
+//
+// ★ 096x-1：括号档补上 ⟨⟩〈〉《》——模型会把它认为"不认识的一种括号"换成自己熟悉的括号，
+// 现网韩文首屏实证的就是 `⟨LangCross⟩`（占位符被连名带括号改写，于是还原步命不中、
+// 而旧版这一条只认 ⟦［[【〔 五种，尖括号形态一路漏到客户屏幕上）。
+var brandTokenResiduePat = regexp.MustCompile(`[⟦⟨〈《［\[【〔]{1,2}\s*BRAND\s*[⟧⟩〉》］\]】〕]{1,2}`)
+
+// brandDecorPat 紧贴品牌名的一对装饰括号（`⟨LangCross⟩`／`【能言】`／`(LangCross)` 这类）。
+// 与上面那条的分工：那条认"括号里是内部记号 BRAND"，这一条认"括号里是**还原之后的品牌名**"——
+// 模型把占位符连名带括号改写时，BRAND 那个词已经不存在了，只有这一条抓得到。
+var brandDecorPat = regexp.MustCompile(`[⟦⟨〈《［\[【〔(（]\s*((?i:LangCross|能言))\s*[⟧⟩〉》］\]】〕)）]`)
+
+// stripBrandDecorBrackets 摘掉**整对包住品牌名**的装饰括号，只留品牌名本身。
+//
+// 为什么敢删这一对括号而不敢删别的括号：源文里的品牌写法在送翻前已被换成占位符
+// （protectBrandForTranslation），所以出栈时"紧贴品牌名的那一对括号"不可能是原文带来的，
+// 只可能是模型加的——删它零风险，而留着它就是 092x 那条「机制外露」的另一形态
+// （客户不会认为尖括号是排版，会认为这是产品名的一部分）。
+// ⚠️ 只在**还原之后**调用（见 localize.go 的 translateOnce 末尾）：品牌名还没落回正文时无从判断"包住了谁"。
+// ⚠️ 只删"括号里除了品牌名没有别的字"的形态；`(见 LangCross 官网)` 那种带补充说明的一律不动。
+func stripBrandDecorBrackets(text string) string {
+	if text == "" {
+		return text
+	}
+	return brandDecorPat.ReplaceAllString(text, "$1")
+}
 
 // guardReplyBrand 出站咽喉上的品牌归一（每一条回复都过，与是否经过翻译无关）。
 // 改动计数>0 才记 WARN：这条链的发生率必须看得见——如果哪天错形从「能与」换成别的字形，

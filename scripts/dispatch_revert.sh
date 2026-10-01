@@ -16,13 +16,20 @@
 #   bash scripts/dispatch_revert.sh --purge      # 关闸 + 一并清掉 env/私钥路径记录与到期日
 #
 # 退出码：0=已关闭或本就关闭；非 0=关闭动作失败（**此时派发可能仍在生效，必须人工介入**）。
+#   ⚠️ 非 0 的另一层含义：到期回归 timer **不会被停用**（停用只在"实测 dispatch=off"之后那一步），
+#      所以失败第二天还会自动再试——这是刻意的，别把它改成"跑过一次就退役"。
 # =============================================================================
 set -u
 
 MODE="${1:-}"
-ENV_FILE=/etc/translator/dispatch.env
-DROPIN=/etc/systemd/system/translator.service.d/dispatch.conf
-EXPIRY_FILE=/etc/translator/dispatch_expiry
+# 三个路径都留 env 覆盖口（默认值＝现网真值，一字未改）。
+# 为什么留这个口：本脚本的"未到期不许自灭／关闸坐实才自灭"是**行为**判据，静态 grep 锁不住
+# （unit 里那行无条件 ExecStartPost 就是"看着没问题但每天把自己关掉"的形态，10-01 现网实证）。
+# 留了口，Go 侧就能用假 systemctl／假 curl 在临时目录里**真跑一遍**三条分支（见
+# internal/fileproc/dispatch_expiry_timer_test.go）。生产 timer 的环境里没有这三个变量，走的仍是默认值。
+ENV_FILE="${ENV_FILE:-/etc/translator/dispatch.env}"
+DROPIN="${DROPIN:-/etc/systemd/system/translator.service.d/dispatch.conf}"
+EXPIRY_FILE="${EXPIRY_FILE:-/etc/translator/dispatch_expiry}"
 LOCAL_BASE="${LOCAL_BASE:-http://127.0.0.1:8787}"
 
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -76,10 +83,25 @@ else
   exit 4
 fi
 
+# ★ 10-01（〇-AF 待决策 ①，现网实证）：**摘自己这只闹钟的位置必须在上面那道"实测 = off"之后**。
+# 旧形态是单元文件里一行无条件 `ExecStartPost=systemctl disable --now <本 timer>`，
+# 它把"今天跑过一次"当成"到期已处理"——而 --if-expired 在未到期那天是**正常退 0**、什么都没关。
+# 现网读数（10-01 04:10:05）：journal 实读 Removed "/etc/systemd/system/timers.target.wants/…"，
+# 随后 is-enabled=disabled、is-active=inactive，而到期日还差 25 天 ⇒ 10-26 那天不会有自动回滚。
+# 现在的语义：只有"闸确实关上了"这条事实成立，闹钟才退役；上面任何一条 exit 2/3/4 都留在
+# **闹钟还在**的状态，明天 04:10 会再试一次（这一档的失败必须是"还会再来"，不是"今天试过一次就再也不试"）。
+if systemctl disable --now translator-dispatch-expiry.timer >/dev/null 2>&1; then
+  ok "到期回归 timer 已停用（闸已实测关闭，不再需要每天自探）"
+else
+  warn "  timer 停用失败 ⇒ 闹钟还在，明天会再跑一次本脚本（幂等，无害）；"
+  warn "  想彻底停：systemctl disable --now translator-dispatch-expiry.timer"
+fi
+
 if [ "$MODE" = "--purge" ]; then
+  # timer 已在上一步"关闸坐实"后停用，这里不再重复 disable（重复一次＝多一条无意义日志，
+  # 而且会让人以为"只有 --purge 才停闹钟"，回到本段开头那条错误语义）。
   rm -f "$ENV_FILE" "$EXPIRY_FILE"
-  systemctl disable --now translator-dispatch-expiry.timer >/dev/null 2>&1 || true
-  ok "已清 env / 到期日 / 到期 timer（私钥文件本身保留，按 §8-3 手工 rm）"
+  ok "已清 env / 到期日（私钥文件本身保留，按 §8-3 手工 rm；timer 已随关闸停用）"
   warn "  密钥处置：到期后顺手 rm 掉私钥并删 known_hosts 那行（见 §8-3）。"
 fi
 

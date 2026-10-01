@@ -310,7 +310,7 @@ func lineCountOf(s string) int {
 // 对话正文走 repairReplyHanResidue，判据换成 replyHanResidueRuns（没有源文，见那里）。
 func (e *Engine) repairHanResidue(ctx context.Context, client *llm.Client, uiLang, src, draft string,
 	leaks []string, maxTokens int) (string, bool, string) {
-	return e.repairHanResidueBase(ctx, client, uiLang,
+	return e.repairHanResidueBase(ctx, client, uiLang, srcTopicsOf(src),
 		"\n【中文原文】\n"+src, draft, leaks, maxTokens,
 		func(out string) []string { return hanResidueRuns(uiLang, src, out) })
 }
@@ -347,7 +347,7 @@ func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, r
 		return rep
 	}
 	client := e.ensureLLM(ctx)
-	fixed, ok, reason := e.repairHanResidueBase(ctx, client, answerLang, "", rep.Content, leaks,
+	fixed, ok, reason := e.repairHanResidueBase(ctx, client, answerLang, replyRepairTopics(), "", rep.Content, leaks,
 		replyLocalizeMaxTokens, func(out string) []string { return replyHanResidueRuns(answerLang, out) })
 	if !ok {
 		// ★ 094x：补翻失败分两半处理。**先按确定性正字表兜一刀**（只动被判残点名的那几个词形，
@@ -388,8 +388,13 @@ func (e *Engine) repairReplyHanResidue(ctx context.Context, answerLang string, r
 //	「补翻未采用，保留原稿 + count + leaks」，而现网同一时间窗里躺着 10 条 provider 调用失败——
 //	于是"上游抖了一下"和"模型改不动那几处、新稿残片没变少"这两种完全不同的病在日志里长得一模一样，
 //	前者该等重试、后者该加本地兜底，判错方向就把整条修治带偏。这一腿**只加观测、不改任何判定**。
-func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, uiLang, srcBlock, draft string,
-	leaks []string, maxTokens int, afterLeaks func(string) []string) (string, bool, string) {
+//
+// ★ 096x-1 多了参数 t（这一枪给模型哪句口径）：补翻重写时同样会被"品牌名一律写作 X"那句邀请
+// 骗出品牌名（现网俄文 chips 四条前挂 "LangCross: " 就是翻译与补翻共用一个底座时的同一形态），
+// 所以口径必须与**第一次送翻**完全一致——canned 那一路按中文源文筛（srcTopicsOf(src)），
+// 对话正文那一路没有源文可问，保持两条都拼（理由见 canned_guard.go 的 replyRepairTopics）。
+func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, uiLang string, t srcTopics,
+	srcBlock, draft string, leaks []string, maxTokens int, afterLeaks func(string) []string) (string, bool, string) {
 	label := langLabel(uiLang)
 	if label == "" || client == nil || !client.Enabled() {
 		return "", false, rejectNoUpstream
@@ -419,7 +424,7 @@ func (e *Engine) repairHanResidueBase(ctx context.Context, client *llm.Client, u
 		" 里的自然写法，一处都没改掉就等于没修；除此之外其余措辞照抄上一版，" +
 		"不许增删句子、不许加任何括号备注，不要加解释、不要加引号、不要输出思考过程，也不许改任何数字。\n" +
 		lineSpec +
-		translateContract(uiLang) +
+		translateContract(uiLang, t) +
 		srcBlock + "\n【上一版" + label + "译文】\n" + draft + "\n---"
 	out, _, usage, err := client.Chat(ctx, localizeTemperature, maxTokens,
 		[]llm.Message{{Role: "user", Content: prompt}})

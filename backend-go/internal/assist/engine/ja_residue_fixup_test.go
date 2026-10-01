@@ -240,7 +240,7 @@ func TestRepairReplyHanResidueRejectReasonAndFixup(t *testing.T) {
 		c := llm.New([]llm.Provider{{Name: "main", BaseURL: srv.URL, APIKey: "k", Model: "m"}}, 5)
 		e := newTestEngine(t)
 		dirty := "実際の费用を確認ください。"
-		if _, ok, reason := e.repairHanResidueBase(context.Background(), c, "ja", "", dirty,
+		if _, ok, reason := e.repairHanResidueBase(context.Background(), c, "ja", replyRepairTopics(), "", dirty,
 			replyHanResidueRuns("ja", dirty), 1200,
 			func(out string) []string { return replyHanResidueRuns("ja", out) }); ok || reason != rejectTruncated {
 			t.Fatalf("截断那档应回 %q，实际 ok=%v reason=%q", rejectTruncated, ok, reason)
@@ -287,7 +287,7 @@ func TestRepairReplyHanResidueRejectReasonAndFixup(t *testing.T) {
 
 		// ① 没有可用上游（env 未接、configs 空 ⇒ ensureLLM 回 nil）
 		e.llm = nil
-		if _, ok, reason := e.repairHanResidueBase(ctx, nil, "ja", "", dirty, leaks, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, nil, "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); ok ||
 			reason != rejectNoUpstream {
 			t.Fatalf("上游缺失那档应回 %q，实际 ok=%v reason=%q", rejectNoUpstream, ok, reason)
 		}
@@ -295,23 +295,23 @@ func TestRepairReplyHanResidueRejectReasonAndFixup(t *testing.T) {
 		e.llm = llm.New([]llm.Provider{{Name: "main", BaseURL: stub.url, APIKey: "k", Model: "m"}}, 5)
 
 		// ② 残片清单为空（调用方判据与本函数分叉才会走到这里，出现即点名）
-		if _, ok, reason := e.repairHanResidueBase(ctx, e.llm, "ja", "", dirty, nil, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, e.llm, "ja", replyRepairTopics(), "", dirty, nil, 1200, after); ok ||
 			reason != rejectNoLeaks {
 			t.Fatalf("残片为空那档应回 %q，实际 ok=%v reason=%q", rejectNoLeaks, ok, reason)
 		}
 		// ③ 残片没减少（桩原样吐回＝现网那条红的形态）
-		if _, ok, reason := e.repairHanResidueBase(ctx, e.llm, "ja", "", dirty, leaks, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, e.llm, "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); ok ||
 			reason != rejectNotImproved {
 			t.Fatalf("未改善那档应回 %q，实际 ok=%v reason=%q", rejectNotImproved, ok, reason)
 		}
 		// ④ 行数变了（桩回两行；残片确实变少也照样不许采用——行数这条管的是"内容被增删没"）
 		stub2 := newSeqStub(t, "費用です\n追加行了")
-		if _, ok, reason := e.repairHanResidueBase(ctx, stubClient(stub2), "ja", "", dirty, leaks, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, stubClient(stub2), "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); ok ||
 			reason != rejectLineCount {
 			t.Fatalf("行数那档应回 %q，实际 ok=%v reason=%q", rejectLineCount, ok, reason)
 		}
 		// ④b 回空正文
-		if _, ok, reason := e.repairHanResidueBase(ctx, stubClient(newSeqStub(t, "   ")), "ja", "", dirty, leaks, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, stubClient(newSeqStub(t, "   ")), "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); ok ||
 			reason != rejectEmptyOutput {
 			t.Fatalf("空正文那档应回 %q，实际 ok=%v reason=%q", rejectEmptyOutput, ok, reason)
 		}
@@ -320,13 +320,13 @@ func TestRepairReplyHanResidueRejectReasonAndFixup(t *testing.T) {
 		deadURL := dead.URL
 		dead.Close()
 		deadClient := llm.New([]llm.Provider{{Name: "main", BaseURL: deadURL, APIKey: "k", Model: "m"}}, 5)
-		if _, ok, reason := e.repairHanResidueBase(ctx, deadClient, "ja", "", dirty, leaks, 1200, after); ok ||
+		if _, ok, reason := e.repairHanResidueBase(ctx, deadClient, "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); ok ||
 			reason != rejectUpstreamError {
 			t.Fatalf("上游报错那档应回 %q，实际 ok=%v reason=%q", rejectUpstreamError, ok, reason)
 		}
 		// ⑥ 采用成功时原因必须回空串（别把"没拒绝"也写成一个档名）
 		stub3 := newSeqStub(t, "費用のご案内をいたします。")
-		if got, ok, reason := e.repairHanResidueBase(ctx, stubClient(stub3), "ja", "", dirty, leaks, 1200, after); !ok ||
+		if got, ok, reason := e.repairHanResidueBase(ctx, stubClient(stub3), "ja", replyRepairTopics(), "", dirty, leaks, 1200, after); !ok ||
 			reason != "" || !strings.Contains(got, "費用") {
 			t.Fatalf("采用档应回空原因，实际 ok=%v reason=%q out=%q", ok, reason, got)
 		}

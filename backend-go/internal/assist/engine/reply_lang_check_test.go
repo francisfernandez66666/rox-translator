@@ -543,9 +543,18 @@ func TestTranslationBudgetsDifferByTextShape(t *testing.T) {
 	if got := bodies.at(1); !strings.Contains(got, `"max_tokens":1200`) {
 		t.Fatalf("补翻整条回答仍用 canned 的小额度（会稳定翻出半句）：\n%s", got)
 	}
-	// 品牌名口径在两条路上同源：英文界面一律 LangCross，且禁拼音
-	if got := bodies.at(1); !strings.Contains(got, "品牌名一律写作「LangCross」") || !strings.Contains(got, "Nengyan") {
-		t.Fatalf("补翻提示词丢了品牌名口径（会和挂件标题打架）：\n%s", got)
+	// ★ 096x-1：品牌名口径现在**按源文投**（见 translateContract），所以这条"两条路同源"的锁拆成两条腿钉：
+	//   - 源文提了品牌名 → 两条路都给同一张表里的写法（092x 红腿三那条不许退化）；
+	//   - 源文没提品牌名 → 两条路都给同一句反向禁令（现网俄文 chips 四条前挂 "LangCross: " 缺的就是它）。
+	// 原来那条单腿断言锁的正是本批改掉的旧形态（拿一句不含品牌名的正文去要求"一律写作 X"），故改写而非删掉。
+	if got := bodies.at(1); !strings.Contains(got, "不许出现") {
+		t.Fatalf("原文没提品牌名的那条回答，补翻提示词里却没有反向禁令：\n%s", got)
+	}
+	if _, err := e.LocalizeReply(ctx, "能言（LangCross）支持长文档按页折算。", "en"); err != nil {
+		t.Fatalf("LocalizeReply（带品牌名的源文）失败：%v", err)
+	}
+	if got := bodies.at(2); !strings.Contains(got, "品牌名一律写作「LangCross」") || !strings.Contains(got, "Nengyan") {
+		t.Fatalf("带品牌名的源文丢了写法口径（会和挂件标题打架）：\n%s", got)
 	}
 }
 
