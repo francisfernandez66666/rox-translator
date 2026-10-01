@@ -12,12 +12,12 @@ import (
 
 // ChatConversation 一条用户与 AI 的对话会话（工作台 SSE 通道）。
 type ChatConversation struct {
-	ID           string    // 全局唯一 UUID v4
-	UserID       int64     // 创建者用户 ID（登录态必填）
-	TenantID     int64     // 所属租户
-	CreatedAt    string    // ISO 8601 时间戳
-	UpdatedAt    string    // 最后活跃时间
-	Title        string    // 自动生成的标题（取第一条用户消息的前 40 字）
+	ID        string // 全局唯一 UUID v4
+	UserID    int64  // 创建者用户 ID（登录态必填）
+	TenantID  int64  // 所属租户
+	CreatedAt string // ISO 8601 时间戳
+	UpdatedAt string // 最后活跃时间
+	Title     string // 自动生成的标题（取第一条用户消息的前 40 字）
 }
 
 // ChatMessage 会话中的一条消息（用户提问 / AI 回复）。

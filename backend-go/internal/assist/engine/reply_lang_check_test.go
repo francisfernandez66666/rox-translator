@@ -49,6 +49,7 @@ type bodyLog struct {
 	bodies []string
 }
 
+// add 追加记录一次请求体（假上游 handler 在独立 goroutine 里回调，故加锁）。
 func (b *bodyLog) add(s string) {
 	b.mu.Lock()
 	b.bodies = append(b.bodies, s)
@@ -449,6 +450,53 @@ func TestSanitizeStripsQuoteMechanicsAside(t *testing.T) {
 			t.Fatalf("该留的括号被吃或该剥的没剥干净：%q", g)
 		}
 	})
+}
+
+// TestSanitizeStripsInstructionEchoLead ★ D-LLM-20261001-001（2026-10-01 用户带截图报）：
+// 模型把提示词的回答策略当正文复述成开头的「先…再…：」引子，且它**不带括号**，
+// 上面那套按括号段办事的清洗与观测全都没接住。本条钉三件事：
+// ① 现网原形真被剥、冒号后的正文一个字不丢；② 合法的分步引导／口语开场不许被误伤；
+// ③ 判据真的在同时看「先 + 策略词 + 冒号收尾 + 后面还有正文」，缺任一即不剥（反证）。
+func TestSanitizeStripsInstructionEchoLead(t *testing.T) {
+	// ① 现网原形：中文轮问「你和deepl」，第一句是策略引子，冒号后才是正文
+	prod := "先肯定对比合理性，再分角度补充新细节：\n\n对比很正常，咱们跟通用工具真正不一样的是原版式保留和术语库锁定。"
+	got := sanitizeVisitorText(prod)
+	if strings.Contains(got, "先肯定") || strings.Contains(got, "再分角度") || strings.Contains(got, "补充新细节") {
+		t.Fatalf("方法论引子没剥净：%q", got)
+	}
+	if !strings.Contains(got, "对比很正常，咱们跟通用工具真正不一样的是原版式保留和术语库锁定。") {
+		t.Fatalf("剥引子把正文一起吃掉了：%q", got)
+	}
+	// 半角冒号 + 无空行的近邻形态也要剥
+	if g := sanitizeVisitorText("先认可你的考虑, 再讲我们的差异:\n价格按源字符算。"); strings.Contains(g, "先认可") {
+		t.Fatalf("半角冒号形态没剥：%q", g)
+	}
+
+	// ② 误伤对照：这些**合法正文**一个字都不许动（没有策略词 / 不以冒号收尾 / 只有一行）
+	for _, keep := range []string{
+		"先注册，再上传，最后下载：\n文件翻译三步走。",    // 分步引导：有"先…再…"但无策略名词
+		"我再讲清楚一点：\n你传什么格式，出来还是什么格式。", // 口语开场：有"再讲"但开头不是"先"
+		"第一步先确认余额：\n顶部徽标就能看到。",       // 操作指引：含"先"但整行不是"先"起头的策略盘算
+		"先看看这个。", // 只有一行、无后续正文，病态形态不剥
+	} {
+		if g := sanitizeVisitorText(keep); g != strings.TrimSpace(keep) {
+			t.Errorf("合法正文被误伤：%q → %q", keep, g)
+		}
+	}
+
+	// ③ 反证：判据必须同时看四腿。把"先肯定…："单独放第一行、后面接正文 → 剥；
+	//    把策略引子挪到**第二行**（不是开头）→ 不剥（本判据只管开头引子，不越权删正文中段）。
+	if g := sanitizeVisitorText("先肯定他的考虑，再讲差异：\n真正不一样的是原版式。"); strings.Contains(g, "先肯定") {
+		t.Fatalf("反证：开头引子应被剥却没剥：%q", g)
+	}
+	midLine := "好的。\n先肯定他的考虑，再讲差异：\n正文内容。"
+	if g := sanitizeVisitorText(midLine); !strings.Contains(g, "先肯定") {
+		t.Fatalf("反证：非开头的策略句不该被这条链删（只管第一行）：%q → %q", midLine, g)
+	}
+	// 反证：引子后面没正文时绝不剥（否则把整条回复清空）
+	if g := stripInstructionEchoLead("先肯定对比合理性，再分角度补充新细节："); strings.Contains(g, "先肯定") == false {
+		t.Fatalf("反证：无后续正文却把整段剥空了：%q", g)
+	}
 }
 
 // TestUnstrippedAsidesOnlyLogsNeverEdits ★ 第十条的第二条腿：词表追不上模型措辞时，

@@ -253,7 +253,7 @@ func (s *Server) routes() {
 // routesTranslate 注册翻译核心路由：聊天（文本/SSE）、文件（翻译/SSE/下载）、语言与 KB 统计。
 func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
-	s.mux.HandleFunc("/api/chat/list", s.handleChatList)        // ★ 〇-AM：列出用户最近对话历史
+	s.mux.HandleFunc("/api/chat/list", s.handleChatList)         // ★ 〇-AM：列出用户最近对话历史
 	s.mux.HandleFunc("/api/chat/messages", s.handleChatMessages) // ★ 〇-AM：获取单条会话消息列表
 	s.mux.HandleFunc("/api/translate/stream", s.handleTranslateFileStream)
 	s.mux.HandleFunc("/api/chat", s.handleChat)

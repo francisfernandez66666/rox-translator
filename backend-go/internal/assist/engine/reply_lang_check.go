@@ -204,11 +204,80 @@ var selfNarrationMarkers = []string{
 // 两张源表各自保留，是为了让「这段为什么被删」能按形态查回上面两段判据说明。
 var visitorDropMarkers = append(append([]string{}, internalEchoMarkers...), selfNarrationMarkers...)
 
-// sanitizeVisitorText 出站正文的末道卫生：剥内部规则回声、剥模型旁白、剥空括号、拆裸方括号链接文字、
+// ============ 开头「方法论引子」剥离（★ D-LLM-20261001-001，2026-10-01 用户带截图报）============
+//
+// 现场：中文轮问「你和deepl」，回复第一句是「先肯定对比合理性，再分角度补充新细节：」，
+// 冒号后面才是真正的正文。这一句是模型把 tone_rules 第 9 条「先肯定他的考虑，再讲我们的差异」
+// 这条**回答策略**当成正文复述出来了——思维链残渣的又一种形态。
+//
+// 为什么上面两张表都拦不住它：dropParentheticals 只处理**括号里**的内容，
+// 而这一句是**独立成句、不带括号、还带个冒号当引子**的，整条清洗链对它完全无感，
+// 连观测腿 unstrippedAsides（同样按括号段遍历）都一次都没报出来。
+//
+// 判据取向与全文件一致：**宁可窄，只砍模型多出来的策略引子，绝不砍正常正文**。
+// 三条同时成立才剥（缺一即留），把误伤半径压到最小：
+//
+//	① 位置：只认**第一行**（去掉前导空白后到第一个换行为止），剥完必须还剩非空正文；
+//	② 形态：该行以冒号结尾（：或:），且长度 ≤ instructionEchoLeadMaxRunes——
+//	   正常回答的第一句通常更长、且不以「策略描述＋冒号」收口；
+//	③ 用词：该行同时含「先」与至少一个**策略名词**（肯定／认可／角度／细节…），
+//	   这些词是提示词自己的方法论用词，面向客户的正常话术不会这么开头。
+//
+// ⚠️ 为什么不收裸「先…再…」结构（不加策略名词腿）：客户真会看到的操作引导里
+// 「先注册，再上传，最后下载：」这种分步引子是**合法正文**，只按结构判会把它吃掉。
+// 加上策略名词这条 lexical 腿，才能把「交代自己怎么回答」和「交代用户怎么做」分开。
+// ⚠️ 与 selfNarrationMarkers 同样的追不上模型措辞的风险：新形态先靠方案 A 的提示词定界挡，
+// 挡不住再往 instructionEchoLeadWords 补词（补词即改正文，须配误伤对照单测）。
+const instructionEchoLeadMaxRunes = 48
+
+// instructionEchoLeadWords 见上③：策略引子的词汇指纹（全部来自提示词自身的方法论用词）。
+var instructionEchoLeadWords = []string{
+	"肯定", "认可", "认同", "理解", "接住", "合理性",
+	"角度", "细节", "差异", "盘算", "复述", "然后讲", "再讲",
+}
+
+// stripInstructionEchoLead 剥掉开头那句「先…再…：」式的方法论引子（见上面整段说明）。
+// 不命中就原样返回（含"整段只有引子、剥完会空"的病态形态——那种宁可不剥，留给观测）。
+func stripInstructionEchoLead(text string) string {
+	// 前导空白不算进"第一行"，但要能定位真正的第一行
+	body := strings.TrimLeft(text, " \t\r\n")
+	if body == "" {
+		return text
+	}
+	nl := strings.IndexByte(body, '\n')
+	firstLine := body
+	if nl >= 0 {
+		firstLine = body[:nl]
+	} else {
+		// 没有换行＝整段就一行，剥完必空，属病态形态，不动
+		return text
+	}
+	rest := strings.TrimLeft(body[nl+1:], " \t\r\n")
+	if rest == "" {
+		return text // 引子后面没正文，不剥（避免把整条回复清空）
+	}
+	line := strings.TrimRight(firstLine, " \t")
+	if !strings.HasSuffix(line, "：") && !strings.HasSuffix(line, ":") {
+		return text
+	}
+	runeCount := utf8.RuneCountInString(line)
+	if runeCount == 0 || runeCount > instructionEchoLeadMaxRunes {
+		return text
+	}
+	if !strings.Contains(line, "先") || !containsAny(line, instructionEchoLeadWords) {
+		return text
+	}
+	return rest
+}
+
+// sanitizeVisitorText 出站正文的末道卫生：剥开头方法论引子、剥内部规则回声、剥模型旁白、剥空括号、拆裸方括号链接文字、
 // 去 U+FFFD、收多余空行。在 postProcess 里、摘完【go:…】控制序列之后调用；
 // ★ 093x 起补翻产物也走这一道（engine.go 的 rehardenReplyRewrite），卫生只有一份。
 func sanitizeVisitorText(text string) string {
 	s := strings.ReplaceAll(text, "\uFFFD", "")
+	// ★ D-LLM-20261001-001：先剥开头的「先…再…：」方法论引子（不带括号，dropParentheticals 管不着它）。
+	// 放在最前面：引子剥掉后剩下的正文再走括号回声与旁白那几道，顺序不影响各自判据。
+	s = stripInstructionEchoLead(s)
 	s = dropParentheticals(s, visitorDropMarkers)
 	s = strings.NewReplacer("（）", "", "()", "").Replace(s)
 	s = unwrapBrokenLinkBrackets(s)
