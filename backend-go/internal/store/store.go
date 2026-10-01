@@ -613,6 +613,10 @@ func (s *Store) migrate() error {
 	if _, err := db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tid_username ON users(tenant_id, username)`); err != nil {
 		log.Printf("[migrate] 同租户用户名唯一索引创建失败（存在重名数据，请清理后重启）: %v", err)
 	}
+	// ★ 〇-AM：主后台工作台 SSE 翻译对话持久化表（chat_conversations + chat_messages）
+	if err := s.initChatTables(); err != nil {
+		return fmt.Errorf("建聊天对话表失败: %w", err)
+	}
 	return nil
 }
 

@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "Nicht unterstütztes Dateiformat: {name} (Nur-Text-Modus unterstützt {fmts})",
   "tr.fileFmtLegacy": "Nicht unterstütztes Dateiformat: {name} (das Altformat {ext} wird nur im Nur-Text-Modus von Tickets unterstützt; bitte in das neue Format konvertieren)",
   "tr.fileFmtOnly": "Nicht unterstütztes Dateiformat: {name} (nur {fmts} unterstützt)",
-  "tr.fileTooBig": "Datei zu groß ({mb} MB), überschreitet das Übersetzungslimit von {maxMB} MB; bitte teilen oder komprimieren"
+  "tr.fileTooBig": "Datei zu groß ({mb} MB), überschreitet das Übersetzungslimit von {maxMB} MB; bitte teilen oder komprimieren",
+  "chat.historyTitle": "Chat-Verlauf",
+  "chat.empty": "Kein Chatspeicherung",
+  "chat.selectHint": "Wählen Sie links eine Konversation aus",
+  "chat.noMsgs": "Keine Nachrichten in dieser Konversation",
+  "chat.now": "Gerade eben",
+  "chat.unknown": "Unbenannt",
+  "chat.minAgo": "Minuten her",
+  "chat.hrAgo": "Stunden her",
+  "chat.dayAgo": "Tage her",
 }

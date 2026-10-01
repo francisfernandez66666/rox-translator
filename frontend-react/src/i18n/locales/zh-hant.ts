@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "不支持的文件格式：{name}（純文案模式支持 {fmts}）",
   "tr.fileFmtLegacy": "不支持的文件格式：{name}（{ext} 老格式僅在工單「純文案模式」下支持；或請先轉換為對應新版格式）",
   "tr.fileFmtOnly": "不支持的文件格式：{name}（僅支持 {fmts}）",
-  "tr.fileTooBig": "文件過大（{mb}MB），超出翻譯上限 {maxMB}MB，請拆分或壓縮後重試"
+  "tr.fileTooBig": "文件過大（{mb}MB），超出翻譯上限 {maxMB}MB，請拆分或壓縮後重試",
+  "chat.historyTitle": "對話歷史",
+  "chat.empty": "暫無對話記錄",
+  "chat.selectHint": "選擇左側對話查看詳情",
+  "chat.noMsgs": "該對話暫無消息",
+  "chat.now": "剛剛",
+  "chat.unknown": "未命名",
+  "chat.minAgo": "分鐘前",
+  "chat.hrAgo": "小時前",
+  "chat.dayAgo": "天前",
 }

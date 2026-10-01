@@ -110,6 +110,8 @@ import { EmailBindModal } from './components/modals'
 import WordSwap, { useWordSwapGate } from './components/WordSwap'
 // ★ #23：12 语种界面语言下拉（顶栏/登录卡/后台共用）
 import { LangSelect } from './components/LangSelect'
+// ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看）
+const ChatHistory = lazy(() => import('./components/ChatHistory'))
 // LangCross 纯黑组件库：前台骨架只依赖这三个件（Button/Badge/Icon），
 // 替代原 tdesign-react 的 Button/Tag/Drawer —— 换肤期不再引 TDesign 组件。
 // ★ 2026-09-24 〇-S（#7）：Drawer 随汉堡抽屉退役，本文件不再 import。
@@ -374,6 +376,8 @@ function FrontShell() {
               <Route path="/pricing" element={<PricingPage />} />
               {/* ★ 〇-X #55：公开比价与算价页（访客在 Root 的未登录分支直出，这里覆盖已登录入口） */}
               <Route path="/compare" element={<PriceComparePage />} />
+              {/* ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看） */}
+              <Route path="/chat-history" element={<ChatHistory />} />
               {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

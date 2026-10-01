@@ -44,7 +44,8 @@ func (d *DB) Close() error { return d.sql.Close() }
 
 // migrate 建表（CREATE IF NOT EXISTS，幂等可重复执行）
 func (d *DB) migrate() error {
-	stmts := []string{
+	// 原始建表语句：仅对新实例有效，存量实例靠后续 ALTER TABLE 补列。
+	baseStmts := []string{
 		`CREATE TABLE IF NOT EXISTS kb_entries(
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			key TEXT UNIQUE,
@@ -90,35 +91,144 @@ func (d *DB) migrate() error {
 			sort INTEGER DEFAULT 50,
 			enabled INTEGER DEFAULT 1
 		)`,
-		`CREATE TABLE IF NOT EXISTS sessions(
+		// ★ 〇-AM：sessions 和 messages 的 base 结构（不含 auth/anon/expiry，那些通过 ALTER TABLE 追加），
+		// 防止 INSERT 时多列报错导致旧行被误删。
+		`CREATE TABLE IF NOT EXISTS sessions_base(
 			id TEXT PRIMARY KEY,
 			page_url TEXT DEFAULT '',
 			in_flow TEXT DEFAULT '',
 			flow_step INTEGER DEFAULT 0,
 			msg_count INTEGER DEFAULT 0,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			last_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			last_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			tenant_id INTEGER DEFAULT NULL,
+			user_id INTEGER DEFAULT NULL,
+			anonym_hash TEXT DEFAULT ''
 		)`,
-		`CREATE TABLE IF NOT EXISTS messages(
+		`CREATE TABLE IF NOT EXISTS messages_base(
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id TEXT NOT NULL,
 			role TEXT NOT NULL,
 			content TEXT NOT NULL,
 			actions TEXT DEFAULT '[]',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			tenant_id INTEGER DEFAULT NULL,
+			user_id INTEGER DEFAULT NULL,
+			expires_at DATETIME DEFAULT NULL
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages_base(session_id, id)`,
 		`CREATE TABLE IF NOT EXISTS configs(
 			key TEXT PRIMARY KEY,
 			value TEXT DEFAULT ''
 		)`,
 	}
-	for _, s := range stmts {
+	for _, s := range baseStmts {
 		if _, err := d.sql.Exec(s); err != nil {
-			return fmt.Errorf("migrate: %w", err)
+			return fmt.Errorf("migrate base: %w", err)
 		}
 	}
+
+	// ── 存量补齐：sessions → sessions_base（迁移旧数据并重命名）───────────
+	hasSessionTable, _ := d.tableExists("sessions")
+	hasBaseTable, _ := d.tableExists("sessions_base")
+	if hasSessionTable && !hasBaseTable {
+		// 旧 sessions 存在但 sessions_base 不存在 → 从旧表复制到新表
+		d.migrateSessionsToBase()
+		d.dropTable("sessions") // 旧表不再需要
+	}
+
+	// ── 存量补齐：messages → messages_base ────────────
+	hasMsgTable, _ := d.tableExists("messages")
+	hasMsgBase, _ := d.tableExists("messages_base")
+	if hasMsgTable && !hasMsgBase {
+		d.migrateMessagesToBase()
+		d.dropTable("messages")
+	}
+
+	// ── 向新表追加可选列（幂等：ON CONFLICT DO NOTHING 不行，用 try ALTER）───
+	d.ensureColumn("sessions_base", "expires_at", "DATETIME DEFAULT NULL")
+	d.ensureColumn("messages_base", "expires_at", "DATETIME DEFAULT NULL")
+	d.ensureColumn("sessions_base", "anonym_hash", "TEXT DEFAULT ''")
+	d.ensureColumn("messages_base", "anonym_hash", "TEXT DEFAULT ''")
+
+	// ── 索引 ────────────
+	d.ensureIndex("idx_sessions_anon_expires ON sessions_base(anonym_hash, expires_at)")
+	d.ensureIndex("idx_msgs_auth_expire ON messages_base(tenant_id, user_id, expires_at)")
+
+	// ── colWhitelist 扩展 ────────────
+	colWhitelist["sessions_base"] = []string{
+		"id", "page_url", "in_flow", "flow_step", "msg_count",
+		"tenant_id", "user_id", "anonym_hash",
+	}
+	colWhitelist["messages_base"] = []string{
+		"session_id", "role", "content", "actions",
+		"tenant_id", "user_id", "anonym_hash", "expires_at",
+	}
+
 	return nil
+}
+
+// tableExists 检查指定表是否存在（兼容 SQLite 方式）。
+func (d *DB) tableExists(name string) (bool, error) {
+	var cnt int
+	err := d.sql.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", name).Scan(&cnt)
+	return cnt > 0, err
+}
+
+// dropTable 删除指定表（仅用于 migrate 内部的旧表清理）。
+func (d *DB) dropTable(name string) {
+	_, _ = d.sql.Exec("DROP TABLE IF EXISTS " + name)
+}
+
+// ensureColumn 尝试给表追加一列；列已存在时静默跳过（SQLite 报 "duplicate column" 错但不影响）。
+func (d *DB) ensureColumn(table, col, defSpec string) {
+	_, _ = d.sql.Exec("ALTER TABLE " + table + " ADD COLUMN " + col + " " + defSpec)
+}
+
+// ensureIndex 尝试创建索引；索引已存在时静默跳过。
+func (d *DB) ensureIndex(idxDef string) {
+	_, _ = d.sql.Exec("CREATE INDEX IF NOT EXISTS " + idxDef)
+}
+
+// migrateSessionsToBase 将旧 sessions 数据迁移到 sessions_base。
+func (d *DB) migrateSessionsToBase() {
+	rows, err := d.sql.Query("SELECT id, page_url, in_flow, flow_step, msg_count, created_at, last_at FROM sessions")
+	if err != nil {
+		return // 失败则保持原状
+	}
+	defer rows.Close()
+	tx, _ := d.sql.Begin()
+	defer func() { tx.Commit() }()
+	stmt, _ := tx.Prepare("INSERT OR IGNORE INTO sessions_base(id,page_url,in_flow,flow_step,msg_count,created_at,last_at) VALUES(?,?,?,?,?,?,?)")
+	defer stmt.Close()
+	for rows.Next() {
+		var id, pageURL, inFlow, created, last string
+		var flowStep, msgCount int
+		rows.Scan(&id, &pageURL, &inFlow, &flowStep, &msgCount, &created, &last)
+		stmt.Exec(id, pageURL, inFlow, flowStep, msgCount, created, last)
+	}
+	tx.Commit()
+}
+
+// migrateMessagesToBase 将旧 messages 数据迁移到 messages_base。
+func (d *DB) migrateMessagesToBase() {
+	rows, err := d.sql.Query("SELECT id, session_id, role, content, actions, created_at FROM messages")
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	tx, _ := d.sql.Begin()
+	defer func() { tx.Commit() }()
+	stmt, _ := tx.Prepare("INSERT INTO messages_base(id,session_id,role,content,actions,created_at) VALUES(?,?,?,?,?,?)")
+	defer stmt.Close()
+	for rows.Next() {
+		var id int
+		var sessionID, role, content, actions, created string
+		rows.Scan(&id, &sessionID, &role, &content, &actions, &created)
+		stmt.Exec(id, sessionID, role, content, actions, created)
+	}
+	tx.Commit()
 }
 
 // ============================================================
@@ -251,7 +361,7 @@ func (d *DB) Update(table string, id int64, data map[string]any) error {
 		}
 		q += c + "=?"
 	}
-	if table != "sessions" && table != "messages" && table != "configs" {
+	if table != "sessions" && table != "messages" && table != "configs" && table != "sessions_base" && table != "messages_base" {
 		q += ",updated_at=CURRENT_TIMESTAMP"
 	}
 	q += " WHERE id=?"
@@ -355,9 +465,9 @@ func ReadMainDBConfig(path, key string) string {
 // 会话与消息
 // ============================================================
 
-// SessionRow 按 id 查会话
+// SessionRow 按 id 查会话（返回所有列含 auth/anon）。
 func (d *DB) SessionRow(id string) (Row, error) {
-	rows, err := d.sql.Query("SELECT id,page_url,in_flow,flow_step,msg_count,created_at,last_at FROM sessions WHERE id=?", id)
+	rows, err := d.sql.Query("SELECT id,page_url,in_flow,flow_step,msg_count,created_at,last_at,tenant_id,user_id,anonym_hash FROM sessions_base WHERE id=?", id)
 	if err != nil {
 		return nil, err
 	}
@@ -368,39 +478,109 @@ func (d *DB) SessionRow(id string) (Row, error) {
 	var sid, pageURL, inFlow string
 	var flowStep, msgCount int
 	var created, last time.Time
-	if err := rows.Scan(&sid, &pageURL, &inFlow, &flowStep, &msgCount, &created, &last); err != nil {
+	var tenantID, userID sql.NullInt64
+	var anonymHash string
+	if err := rows.Scan(&sid, &pageURL, &inFlow, &flowStep, &msgCount, &created, &last, &tenantID, &userID, &anonymHash); err != nil {
 		return nil, err
 	}
-	return Row{"id": sid, "page_url": pageURL, "in_flow": inFlow, "flow_step": flowStep, "msg_count": msgCount, "created_at": created, "last_at": last}, nil
+	return Row{
+		"id": sid, "page_url": pageURL, "in_flow": inFlow, "flow_step": flowStep,
+		"msg_count": msgCount, "created_at": created, "last_at": last,
+		"tenant_id": tenantID.Int64, "user_id": userID.Int64, "anonym_hash": anonymHash,
+	}, nil
 }
 
-// TouchSession 更新会话活跃时间与消息数
+// TouchSession 更新会话活跃时间与消息数。
 func (d *DB) TouchSession(id string) error {
-	_, err := d.sql.Exec("UPDATE sessions SET last_at=CURRENT_TIMESTAMP, msg_count=msg_count+1 WHERE id=?", id)
+	_, err := d.sql.Exec("UPDATE sessions_base SET last_at=CURRENT_TIMESTAMP, msg_count=msg_count+1 WHERE id=?", id)
 	return err
 }
 
-// SetFlow 设置会话流程状态（key 为空表示退出流程）
+// SetFlow 设置会话流程状态（key 为空表示退出流程）。
 func (d *DB) SetFlow(id, flowKey string, step int) error {
-	_, err := d.sql.Exec("UPDATE sessions SET in_flow=?, flow_step=? WHERE id=?", flowKey, step, id)
+	_, err := d.sql.Exec("UPDATE sessions_base SET in_flow=?, flow_step=? WHERE id=?", flowKey, step, id)
 	return err
 }
 
-// EnsureSession 幂等插入会话（INSERT OR IGNORE）
+// CreateSession 幂等插入会话；已登录态时填写 tenant_id/user_id，匿名态填 anonym_hash。
+// ★ 〇-AM：替代旧 EnsureSession，支持三种创建模式。
+func (d *DB) CreateSession(id, pageURL string, tenantID, userID int64, anonymHash string) error {
+	_, err := d.sql.Exec(
+		"INSERT OR IGNORE INTO sessions_base(id,page_url,tenant_id,user_id,anonym_hash) VALUES(?,?,?, ?,?)",
+		id, pageURL, tenantID, userID, anonymHash,
+	)
+	return err
+}
+
+// EnsureSession 别名：等价于 CreateSession（0, 0, ""）——向后兼容旧调用方。
 func (d *DB) EnsureSession(id, pageURL string) error {
-	_, err := d.sql.Exec("INSERT OR IGNORE INTO sessions(id,page_url) VALUES(?,?)", id, pageURL)
+	return d.CreateSession(id, pageURL, 0, 0, "")
+}
+
+// ResolveSessionByAuth 按认证信息解析已有会话；无则返回 nil。
+// 优先级：① tenant+user 命中 → 返回行 ② anon_hash + 未过期 → 返回行。
+func (d *DB) ResolveSessionByAuth(tenantID, userID int64, anonymHash string) (Row, error) {
+	// ① 登录态匹配
+	if rows, err := d.sql.Query(
+		"SELECT id,page_url,in_flow,flow_step,msg_count,created_at,last_at,tenant_id,user_id,anonym_hash FROM sessions_base WHERE tenant_id=? AND user_id=? LIMIT 1",
+		tenantID, userID); err == nil && rows != nil {
+		defer rows.Close()
+		if rows.Next() {
+			return d.scanSessionRow(rows)
+		}
+	}
+	// ② 匿名态匹配
+	if anonymHash != "" {
+		if rows, err := d.sql.Query(
+			"SELECT id,page_url,in_flow,flow_step,msg_count,created_at,last_at,tenant_id,user_id,anonym_hash FROM sessions_base WHERE anonym_hash=? AND expires_at IS NOT NULL AND expires_at > CURRENT_TIMESTAMP LIMIT 1",
+			anonymHash); err == nil && rows != nil {
+			defer rows.Close()
+			if rows.Next() {
+				return d.scanSessionRow(rows)
+			}
+		}
+	}
+	return nil, nil
+}
+
+// scanSessionRow 从多行 Scan 结果转为 Row。
+func (d *DB) scanSessionRow(rows *sql.Rows) (Row, error) {
+	var sid, pageURL, inFlow string
+	var flowStep, msgCount int
+	var created, last time.Time
+	var tenantID, userID sql.NullInt64
+	var anonymHash string
+	if err := rows.Scan(&sid, &pageURL, &inFlow, &flowStep, &msgCount, &created, &last, &tenantID, &userID, &anonymHash); err != nil {
+		return nil, err
+	}
+	return Row{
+		"id": sid, "page_url": pageURL, "in_flow": inFlow, "flow_step": flowStep,
+		"msg_count": msgCount, "created_at": created, "last_at": last,
+		"tenant_id": tenantID.Int64, "user_id": userID.Int64, "anonym_hash": anonymHash,
+	}, nil
+}
+
+// UpdateSessionAuth 将匿名用户升级/绑定为登录用户（合并会话）。
+func (d *DB) UpdateSessionAuth(id string, tenantID, userID int64) error {
+	_, err := d.sql.Exec("UPDATE sessions_base SET tenant_id=?, user_id=? WHERE id=? AND tenant_id IS NULL", tenantID, userID, id)
 	return err
 }
 
-// ListSessions 会话列表（管理端）
+// ExpireSessionAnon 标记会话过期（软删除）。
+func (d *DB) ExpireSessionAnon(id string) error {
+	_, err := d.sql.Exec("UPDATE sessions_base SET expires_at=CURRENT_TIMESTAMP WHERE id=? AND anonym_hash!=''", id)
+	return err
+}
+
+// ListSessions 会话列表（管理端，含 auth/anon 信息）。
 func (d *DB) ListSessions(limit int) ([]Row, error) {
-	rows, err := d.sql.Query("SELECT id,page_url,in_flow,msg_count,created_at,last_at FROM sessions ORDER BY last_at DESC LIMIT ?", limit)
+	rows, err := d.sql.Query("SELECT id,page_url,in_flow,msg_count,created_at,last_at,tenant_id,user_id,anonym_hash FROM sessions_base ORDER BY last_at DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Row{}
-	cols := []string{"id", "page_url", "in_flow", "msg_count", "created_at", "last_at"}
+	cols := []string{"id", "page_url", "in_flow", "msg_count", "created_at", "last_at", "tenant_id", "user_id", "anonym_hash"}
+	out := make([]Row, 0, limit)
 	for rows.Next() {
 		vals := make([]any, len(cols))
 		ptrs := make([]any, len(cols))
@@ -423,7 +603,39 @@ func (d *DB) ListSessions(limit int) ([]Row, error) {
 	return out, nil
 }
 
-// AddMessage 追加消息
+// MergeSessions 将旧会话的数据合并到新会话（用于登录态合并匿名会话）。
+// ★ 〇-AM：被 resolveOldSessionToNew 调用。
+func (d *DB) MergeSessions(oldID, newID string) error {
+	// 1. 创建新会话行（继承老行的关键数据）
+	_, err := d.sql.Exec(`INSERT OR IGNORE INTO sessions_base(id, page_url, tenant_id, user_id, anonym_hash, msg_count, last_at)
+		SELECT ?, page_url, tenant_id, user_id, '', msg_count, last_at FROM sessions_base WHERE id=?`, newID, oldID)
+	if err != nil {
+		return err
+	}
+	// 2. 消息关联到新会话
+	_, _ = d.sql.Exec("UPDATE messages_base SET session_id=? WHERE session_id=?", newID, oldID)
+	// 3. 删除旧会话
+	_, _ = d.sql.Exec("DELETE FROM sessions_base WHERE id=?", oldID)
+	return nil
+}
+
+// CleanupExpiredAnonymous 清除过期的匿名会话及其孤儿消息。
+func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	// 删除过期消息
+	res, err := d.sql.Exec("DELETE FROM messages_base WHERE session_id IN (SELECT id FROM sessions_base WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)) LIMIT ?", batchSize)
+	if err != nil {
+		return 0, err
+	}
+	msgCnt, _ := res.RowsAffected()
+	// 删除空会话
+	_, _ = d.sql.Exec("DELETE FROM sessions_base WHERE anonym_hash!='' AND msg_count=0 AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)")
+	return int(msgCnt), nil
+}
+
+// AddMessage 追加消息（匿名态，tenant_id=user_id=NULL，anonym_hash=''）。
 func (d *DB) AddMessage(sessionID, role, content string, actions []map[string]string) error {
 	aj := "[]"
 	if len(actions) > 0 {
@@ -431,18 +643,35 @@ func (d *DB) AddMessage(sessionID, role, content string, actions []map[string]st
 			aj = string(b)
 		}
 	}
-	_, err := d.sql.Exec("INSERT INTO messages(session_id,role,content,actions) VALUES(?,?,?,?)", sessionID, role, content, aj)
+	_, err := d.sql.Exec(
+		"INSERT INTO messages_base(session_id,role,content,actions,anonym_hash) VALUES(?,?,?,?,?)",
+		sessionID, role, content, aj, "")
 	return err
 }
 
-// History 取会话最近消息（正序），limit 为条数
+// AddMessageWithAuth 追加消息并携带认证上下文（登录态填 tenant_id/user_id，匿名态填 anonym_hash + expires_at）。
+// ★ 〇-AM：用于已登录用户的会话挂钩。
+func (d *DB) AddMessageWithAuth(sessionID, msgRole, text string, actions []map[string]string, tenantID, userID int64, anonymHash, expiresAt string) error {
+	aj := "[]"
+	if len(actions) > 0 {
+		if b, err := json.Marshal(actions); err == nil {
+			aj = string(b)
+		}
+	}
+	_, err := d.sql.Exec(
+		"INSERT INTO messages_base(session_id,role,content,actions,tenant_id,user_id,anonym_hash,expires_at) VALUES(?,?,?, ?, ?, ?,?, ?)",
+		sessionID, msgRole, text, aj, tenantID, userID, anonymHash, expiresAt)
+	return err
+}
+
+// History 取会话最近消息（正序），limit 为条数。
 func (d *DB) History(sessionID string, limit int) ([]Row, error) {
-	rows, err := d.sql.Query("SELECT id,role,content,actions,created_at FROM (SELECT id,role,content,actions,created_at FROM messages WHERE session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id ASC", sessionID, limit)
+	rows, err := d.sql.Query("SELECT id,role,content,actions,created_at FROM (SELECT id,role,content,actions,created_at FROM messages_base WHERE session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id ASC", sessionID, limit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []Row{}
+	out := make([]Row, 0, limit)
 	for rows.Next() {
 		var id int
 		var role, content, actions string
@@ -455,16 +684,16 @@ func (d *DB) History(sessionID string, limit int) ([]Row, error) {
 	return out, nil
 }
 
-// SessionCount 统计
+// SessionCount 统计。
 func (d *DB) SessionCount() int {
 	var n int
-	_ = d.sql.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&n)
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM sessions_base").Scan(&n)
 	return n
 }
 
-// MessageCount 统计
+// MessageCount 统计。
 func (d *DB) MessageCount() int {
 	var n int
-	_ = d.sql.QueryRow("SELECT COUNT(*) FROM messages").Scan(&n)
+	_ = d.sql.QueryRow("SELECT COUNT(*) FROM messages_base").Scan(&n)
 	return n
 }

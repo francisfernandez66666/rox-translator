@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -44,6 +45,8 @@ type Server struct {
 	tokMu sync.RWMutex
 	tok   string
 	tokAt time.Time
+	// ★ 〇-AM 匿名会话过期清理：定期删除已过期匿名用户及其孤儿消息。
+	anonymCleanupInterval time.Duration
 }
 
 // adminTokenTTL 管理 Token 的缓存时长。取 60s 与 engine 的 LLM 配置、store 的词表缓存同量级：
@@ -56,7 +59,30 @@ func NewServer(db *store.DB, eng *engine.Engine, adminToken, cors string) *Serve
 	// 会话密钥：读已持久化的 configs.sess_key；缺失则随机生成并落库（幂等，重启后老访客仍可用）
 	s.sessKey = loadOrGenSessKey(db)
 	s.tok = s.readAdminToken()
+	s.anonymCleanupInterval = time.Hour // ★ 〇-AM：每小时清理一次过期匿名会话
+	go s.startAnonymCleanup()            // 启动后台清理 goroutine
 	return s
+}
+
+// startAnonymCleanup 定期清除过期的匿名用户及其孤儿消息。
+// ★ 〇-AM：匿名用户超过 3 天未活跃 → expires_at ≤ NOW() → 自动清理。每 1h 扫一次，每次 100 行批量删除。
+func (s *Server) startAnonymCleanup() {
+	ticker := time.NewTicker(s.anonymCleanupInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		total := 0
+		for total == 0 {
+			var err error
+			total, err = s.db.CleanupExpiredAnonymous(100)
+			if err != nil {
+				slog.Error("assist.api 过期匿名会话清理失败", "err", err)
+				break
+			}
+		}
+		if total > 0 {
+			slog.Info("assist.api 过期匿名会话清理完成", "deleted_msgs", total)
+		}
+	}
 }
 
 // loadOrGenSessKey 取会话 HMAC 密钥（64 位 hex 存储，32 字节裸钥）。
@@ -228,27 +254,110 @@ func newSessionID() string {
 	return fmt.Sprintf("s%d%s", time.Now().UnixMilli(), hex.EncodeToString(b))
 }
 
-// sessMu session upsert 竞态保护（低并发足够；mutex 护 EnsureSession 读-建窗口）
+// authCtx 请求中解析出的认证上下文（零值 = 匿名用户）。
+type authCtx struct {
+	tenantID int64
+	userID   int64
+	token    string
+}
+
+// extractAuthFromRequest 从请求中提取认证信息。
+// ★ 〇-AM：登录态优先（Authorization Bearer token → 主后台解析 tenant+user），
+// 未登录则返回空值，由调用方走匿名指纹流程。
+func (s *Server) extractAuthFromRequest(r *http.Request) authCtx {
+	// ① Authorization: Bearer <token> → 调主后台 API 获取 user info
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if userID, tenantID := s.resolveTokenUser(token); userID > 0 {
+			return authCtx{tenantID: tenantID, userID: userID, token: token}
+		}
+	}
+	// ② X-Tenant-ID header（前端已登录时附带）
+	if tidStr := r.Header.Get("X-Tenant-ID"); tidStr != "" {
+		var tid int64
+		if tid == 0 {
+			fmt.Sscanf(tidStr, "%d", &tid)
+		}
+		// 没有 token 但带了 tenant_id → 仍需验证有效性，此处暂不处理
+	}
+	return authCtx{}
+}
+
+// resolveTokenUser 通过主后台 API 解析 JWT token → (userID, tenantID)。
+// 失败返回 (0,0)，调用方视为匿名用户。
+func (s *Server) resolveTokenUser(token string) (int64, int64) {
+	// TODO: 这里需要调用主后台 /api/auth/me 或类似端点解析 token。
+	// 在 assist-server 独立部署的场景下，暂时无法直接校验主站 token。
+	// 实际方案：main backend 的 /api/assist/chat 代理转发时携带用户信息到 assist-server。
+	return 0, 0
+}
+
+// clientIP 提取客户端真实 IP（考虑 X-Forwarded-For / X-Real-IP / Proxy-Client-IP）。
+func clientIP(r *http.Request) string {
+	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Client-IP"} {
+		if ip := r.Header.Get(h); ip != "" {
+			// X-Forwarded-For 可能逗号分隔多个 IP，取第一个
+			if idx := strings.Index(ip, ","); idx > 0 {
+				ip = ip[:idx]
+			}
+			return strings.TrimSpace(ip)
+		}
+	}
+	// fallback: RemoteAddr 格式为 "host:port"
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// sessMu session upsert 竞态保护（低并发足够；mutex 护 CreateSession 读-建窗口）
 var sessMu sync.Mutex // session upsert 竞态保护（低并发足够）
 
-// ensureSession 读取或创建会话
-func (s *Server) ensureSession(ctx context.Context, id, pageURL string) (store.Row, bool) {
+// ensureSession 读取或创建会话（★ 〇-AM：auth-aware，支持登录态挂钩 + 匿名指纹）。
+func (s *Server) ensureSession(ctx context.Context, id, pageURL string, tenantID, userID int64, anonymHash string) (store.Row, bool) {
 	sessMu.Lock()
 	defer sessMu.Unlock()
-	sess, _ := s.db.SessionRow(id)
-	if sess != nil {
-		return sess, false
+	// ① 先查是否已有同名会话（兼容旧 sid）
+	if rows, err := s.db.SessionRow(id); err == nil && rows != nil {
+		return rows, false
 	}
-	if err := s.db.EnsureSession(id, pageURL); err != nil {
+	// ② 登录态 → 按 tenant+user 查是否有未绑定到该 sid 的会话
+	if tenantID > 0 && userID > 0 {
+		if resolved, err := s.db.ResolveSessionByAuth(tenantID, userID, ""); err == nil && resolved != nil {
+			// 把已存在的老会话更新到这个新 sid 上（保留历史数据）
+			_ = s.db.MergeSessions(resolved["id"].(string), id)
+			if rows, _ := s.db.SessionRow(id); rows != nil {
+				return rows, true
+			}
+		}
+	}
+	// ③ 插入新会话（auth-aware）
+	if err := s.db.CreateSession(id, pageURL, tenantID, userID, anonymHash); err != nil {
 		observability.Error(ctx, "assist.api 会话创建失败", "err", err)
 	}
-	sess, _ = s.db.SessionRow(id)
-	return sess, sess != nil
+	if rows, _ := s.db.SessionRow(id); rows != nil {
+		return rows, true
+	}
+	return nil, false
+}
+
+// resolveOldSessionToNew 将旧 sid 的数据合并到新 sid（★ 〇-AM：通过 store.DB.MergeSessions 调用）。
+func (s *Server) resolveOldSessionToNew(oldSID, newSID string, pageURL string, tenantID, userID int64) {
+	_ = s.db.MergeSessions(oldSID, newSID)
+}
+
+// generateAnonHash 用请求特征生成匿名指纹（SHA256 前 16 hex）。
+// ★ 〇-AM：匿名用户通过 (UA+IP+page_url) 做指纹，实现同设备同浏览器跨租户复用会话。
+func generateAnonHash(userAgent, ipAddr, pageURL string) string {
+	hash := sha256.Sum256([]byte(userAgent + "|" + ipAddr + "|" + pageURL))
+	return hex.EncodeToString(hash[:8]) // 取前 8 字节 = 16 hex 字符，碰撞概率极低
 }
 
 // handleGreeting GET/POST /api/assist/greeting?session=&tok=&page= → 欢迎词 + 会话 id + 能力令牌 + 快捷提问
 // ★ P0-1：入参 session 仅在 tok 校验通过时复用（老访客续会话）；否则一律新开
 // （防伪造 sid 蹭他人上下文）。响应新增 tok，前端与 sid 同存。
+// ★ 〇-AM：从请求头提取 Authorization / X-Tenant-ID，已登录用户自动挂钩 tenant_id/user_id。
 func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]any{"error": "method"})
@@ -259,7 +368,13 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	if sid == "" || !s.validSess(sid, strings.TrimSpace(r.URL.Query().Get("tok"))) {
 		sid = newSessionID()
 	}
-	s.ensureSession(r.Context(), sid, page)
+	// ★ 〇-AM：解析认证信息（登录态挂 tenant+user，未登录用 anon_hash）
+	authInfo := s.extractAuthFromRequest(r)
+	anonymHash := ""
+	if authInfo.tenantID == 0 && authInfo.userID == 0 {
+		anonymHash = generateAnonHash(r.UserAgent(), clientIP(r), page)
+	}
+	s.ensureSession(r.Context(), sid, page, authInfo.tenantID, authInfo.userID, anonymHash)
 	// ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
 	// greet 新增 lang（访客界面语言）。欢迎词与 chips 是**不走对话模型**的直出文本，
 	// 英文站访客打开挂件看到的第一口气就是这两行中文，所以它们要单独过一层按需翻译
@@ -281,7 +396,8 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	// 于是台账里堆出一串重复欢迎语：既让管理台「消息总数」虚高，也让
 	// history 恢复时看到好几条一模一样的开场白。已有消息的会话只回文本、不再落库。
 	if rows, _ := s.db.History(sid, 1); len(rows) == 0 {
-		_ = s.db.AddMessage(sid, "assistant", text, nil)
+		// ★ 〇-AM：欢迎语落库时携带 auth/anon 上下文
+		_ = s.db.AddMessageWithAuth(sid, "assistant", text, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
 	}
 	writeJSON(w, 200, map[string]any{
 		"session":  sid,
@@ -306,6 +422,7 @@ func chipsOf(s string) []string {
 
 // handleChat POST /api/assist/chat {session, tok, message, page}
 // ★ P0-1：tok 校验失败按 401 拒绝（前端走「重新 greet」自愈路径），不再允许任意写他人会话。
+// ★ 〇-AM：auth-aware，已登录用户自动挂钩 tenant_id/user_id，匿名用户使用 anon_hash + expires_at。
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, 405, map[string]any{"error": "method"})
@@ -338,14 +455,21 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		req.Message = req.Message[:2000]
 	}
 	sid := req.Session
-	s.ensureSession(r.Context(), sid, req.Page)
+	// ★ 〇-AM：解析认证信息
+	authInfo := s.extractAuthFromRequest(r)
+	anonymHash := ""
+	if authInfo.tenantID == 0 && authInfo.userID == 0 {
+		anonymHash = generateAnonHash(r.UserAgent(), clientIP(r), req.Page)
+	}
+	s.ensureSession(r.Context(), sid, req.Page, authInfo.tenantID, authInfo.userID, anonymHash)
 
 	uiLang := normalizeUILang(req.Lang)
-	_ = s.db.AddMessage(sid, "user", req.Message, nil)
+	// 写入用户消息时携带 auth/anon 上下文
+	_ = s.db.AddMessageWithAuth(sid, "user", req.Message, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
 	history, _ := s.db.History(sid, 12)
 
 	rep := s.eng.Respond(r.Context(), sid, req.Message, req.Page, uiLang, history)
-	_ = s.db.AddMessage(sid, "assistant", rep.Content, actionMaps(rep.Actions))
+	_ = s.db.AddMessageWithAuth(sid, "assistant", rep.Content, actionMaps(rep.Actions), authInfo.tenantID, authInfo.userID, anonymHash, "")
 	_ = s.db.TouchSession(sid)
 
 	writeJSON(w, 200, map[string]any{

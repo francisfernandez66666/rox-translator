@@ -3023,5 +3023,14 @@ export const dict: Record<string, string> = {
   "tr.fileFmtText": "รูปแบบไฟล์ไม่รองรับ: {name} (โหมดข้อความรองรับ {fmts})",
   "tr.fileFmtLegacy": "รูปแบบไฟล์ไม่รองรับ: {name} (รูปแบบเก่า {ext} รองรับเฉพาะในโหมดข้อความของตั๋ว กรุณาแปลงเป็นรูปแบบใหม่)",
   "tr.fileFmtOnly": "รูปแบบไฟล์ไม่รองรับ: {name} (รองรับเฉพาะ {fmts})",
-  "tr.fileTooBig": "ไฟล์ใหญ่เกินไป ({mb}MB) เกินขีดจำกัดการแปล {maxMB}MB กรุณาแยกหรือบีบอัดแล้วลองใหม่"
+  "tr.fileTooBig": "ไฟล์ใหญ่เกินไป ({mb}MB) เกินขีดจำกัดการแปล {maxMB}MB กรุณาแยกหรือบีบอัดแล้วลองใหม่",
+  "chat.historyTitle": "ประวัติแชท",
+  "chat.empty": "ไม่มีบันทึกแชท",
+  "chat.selectHint": "เลือกการสนทนาจากด้านซ้าย",
+  "chat.noMsgs": "ไม่มีการสนทนนี้ไม่มีข้อความ",
+  "chat.now": "เมื่อสักครู่",
+  "chat.unknown": "ไม่มีชื่อ",
+  "chat.minAgo": "นาก่อน",
+  "chat.hrAgo": "ชมก่อน",
+  "chat.dayAgo": "วันก่อน",
 }

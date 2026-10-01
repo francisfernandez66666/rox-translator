@@ -19,6 +19,7 @@ package api
 //   - 上传文件保存到 UploadDir（uniqueName 保证文件名唯一），处理完成后删除
 
 import (
+	"crypto/rand"
 	"sync"
 
 	"context"
@@ -203,6 +204,17 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ★ 〇-AM：生成会话 ID（UUID v4），用于持久化对话记录到 chat_conversations 表。
+	var convID string
+	user := s.authUser(r) // ★ 提前取用户引用（goroutine 内可能过期）
+	if convID == "" && s.Store != nil && user != nil {
+		b := make([]byte, 16)
+		_, _ = io.ReadFull(rand.Reader, b)
+		b[6] = (b[6] & 0x0f) | 0x40 // version 4
+		b[8] = (b[8] & 0x3f) | 0x80 // variant 1
+		convID = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[2:4], b[4:6], b[6:8], b[8:16])
+	}
+
 	// ★ D20：SSE 写序列化锁（progress/delta 均来自引擎并发管线）
 	var sseMu sync.Mutex
 	// ★ 心跳：每 20s 一帧注释，防代理/客户端把长间隔误判断连（见 sseHeartbeat）
@@ -286,6 +298,34 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		sseMu.Unlock()
 		// Webhook：翻译完成事件回调租户配置的 URL（异步投递，不阻塞 SSE 返回）
 		s.dispatchTranslateWebhook(tid, "text", req.Message, res)
+		// ★ 〇-AM：SSE 完成后异步写入数据库（不阻塞流式返回）。
+		// 仅在 Store 已初始化且有登录用户时持久化对话记录。
+		if convID != "" && s.Store != nil && user != nil {
+			userID := user.ID
+			go func() {
+				// 创建新会话（标题取第一条用户消息前 40 字；空内容用"翻译请求"兜底）
+				title := strings.TrimSpace(req.Message)
+				if len(title) > 40 {
+					title = title[:40]
+				}
+				if title == "" {
+					title = "翻译请求"
+				}
+				_, err := s.Store.CreateChatConversation(userID, tid, title)
+				if err != nil {
+					log.Printf("[chat] 创建会话失败: %v", err)
+					return
+				}
+				// 追加用户消息 + AI 回复到数据库
+				if err := s.Store.AppendChatMessage(convID, "user", req.Message, ""); err != nil {
+					log.Printf("[chat] 写入用户消息失败: %v", err)
+				}
+				replyContent := res.Reply
+				if err := s.Store.AppendChatMessage(convID, "assistant", replyContent, ""); err != nil {
+					log.Printf("[chat] 写入 AI 回复失败: %v", err)
+				}
+			}()
+		}
 	}
 }
 

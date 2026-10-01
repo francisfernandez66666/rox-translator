@@ -166,6 +166,17 @@ export const zh: Record<string, string> = {
   'chat.assistClose': '收起',
   'chat.assistPlaceholder': '想了解什么？比如：怎么让译文更贴合行业术语',
   'chat.offlineBadge': '离线',
+
+  // ---- 对话历史记录页（ChatHistory） ----
+  'chat.historyTitle': '对话历史',
+  'chat.empty': '暂无对话记录',
+  'chat.selectHint': '选择左侧对话查看详情',
+  'chat.noMsgs': '该对话暂无消息',
+  'chat.now': '刚刚',
+  'chat.unknown': '未命名',
+  'chat.minAgo': '分钟前',
+  'chat.hrAgo': '小时前',
+  'chat.dayAgo': '天前',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -326,4 +337,15 @@ export const en: Record<string, string> = {
   'chat.assistClose': 'Collapse',
   'chat.assistPlaceholder': 'What would you like to know? e.g. how to match industry terminology',
   'chat.offlineBadge': 'Offline',
+
+  // ---- Chat History Page (ChatHistory) ----
+  'chat.historyTitle': 'Chat History',
+  'chat.empty': 'No chat history',
+  'chat.selectHint': 'Select a conversation on the left',
+  'chat.noMsgs': 'No messages in this conversation',
+  'chat.now': 'Just now',
+  'chat.unknown': 'Untitled',
+  'chat.minAgo': 'min ago',
+  'chat.hrAgo': 'hr ago',
+  'chat.dayAgo': 'day ago',
 }
