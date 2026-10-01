@@ -370,6 +370,23 @@
   **回传产物 24,101,170 B ⇒ inflation_x=1.00**（恒等映射写回几乎不涨；3.4× 那份是"小件＋嵌入字体"的另一形态）。
   ⇒ 别拿单一读数定档，探针每次都会出 `inflation_x=`，调档前先看当天那一行。
   凭据口径见《deploy/dispatch/README.md》「凭据面」：运维走 `fpdbox` 别名的 `ubuntu`，派发私钥不进本机 config。
+- **"到期自动关闸"这只闹钟只能由脚本在"实测 `dispatch=off` 已坐实"之后退役（★ 2026-10-01 〇-AF 修法二）**：
+  `translator-dispatch-expiry.timer` 每天 04:10 调 `scripts/dispatch_revert.sh --if-expired`。
+  它的旧形态在 **unit** 里带一行无条件 `ExecStartPost=systemctl disable --now <本 timer>`，
+  把"今天跑过一次"当成"到期已处理"——而 `--if-expired` 在**未到期**那天是正常退 0、什么都没关。
+  现网实证（10-01 04:10:05）：journal 实读 `Removed ".../timers.target.wants/…"` ⇒ `is-enabled=disabled`、
+  `is-active=inactive`，而到期日还差 **25 天** ⇒ 到期那天不会再有自动回滚，主站会持续朝一台已不存在的机器派发
+  （每一单多付一次"上传→超时→回落本地"的双份时间，日志里只有回落计数在涨）。
+  现在退役那一步在**脚本内部**、位置在 health 判定之后：未到期 ⇒ 一次 `systemctl` 都不碰；
+  已到期且 `dispatch=off` ⇒ 先关闸再退役；**health≠off（含 `dispatch` 字段缺失）⇒ 退 4 且闹钟必须还在**，
+  明天再试——**这一档的失败语义是"还会再来"，不是"今天试过一次就再也不试"**。
+  ⚠️ 别把那行 `ExecStartPost` 写回 unit：它在 ServiceExit 之后无条件执行，脚本的三条提前退出（非 root 退 2／
+  重启没起来退 3／health 不是 off 退 4）一概不看，等于把"失败也退役"重新装进环境层
+  （静态锁＝`dispatch_expiry_timer_test.go` 的 `TestDispatchExpiryUnitHasNoUnconditionalExecStartPost`）。
+  ⚠️ 这类判据**静态 grep 锁不住**（`disable` 那一行本来就该存在，该问的是**位置与条件**），
+  所以 `dispatch_revert.sh` 的三个路径留了 env 覆盖口（`ENV_FILE`/`DROPIN`/`EXPIRY_FILE`），
+  Go 侧用假 `systemctl`／假 `curl`／假 `id` 在临时目录里**真跑三条分支**，并各配一条反证
+  （M1 装回无条件退役、M2 挪到 health 之前——两者都能在**退出码与正常态无法区分**的情况下被抓到）。
 
 ### 13. 挂件出栈守卫链：四道守卫只在 `Engine.Respond` 这一条咽喉上（★ 2026-09-30 〇-AE）
 
@@ -386,13 +403,24 @@
   （094x 就是靠 `reason=line_count` 才把"补翻没生效"和"上游本来就不通"分开）。
 - 改「canned 译文的最终形态」（提示词措辞／出栈卫生／判残与补翻口径）必须同步抬 `cannedPromptRev`，
   否则换件后老缓存继续投旧形态＝**换件没修**（本批真踩两次，见 §三 那条）。
-- ⚠️ **上面那四道守卫的射程只有对话正文，canned 那条路是已知盲区（★ 2026-10-01 现网实测登记）**：
-  `localize()`（欢迎词／chips）在**翻译成功时直接把产物写进 `configs` 的 `i18n:<kind>:<lang>`**，中间不过判残、不过品牌闸，
-  所以小模型那些坏形态会**被缓存成长期投给客户的那一屏**（实测读数：ja 欢迎词品牌名写作「能言」而非 LangCross、
-  四条 ja chips 每条尾部各粘一个「能言」、en 欢迎词夹 `credits充值`）。
-  排障口径反着走：换件后若界面仍是坏形态，**先读缓存行首的指纹**（`srcFingerprint(text+localizeContract(lang))`），
-  别先怀疑模型；要收这条口，得把品牌／判残抽成可复用函数在**写缓存之前**过一次，且改完必须再抬一次 `cannedPromptRev`
-  才能作废现网这几条坏缓存（见《PROGRESS.md》〇-AF 待决策 ⑥，动守卫链扩容需用户批准）。
+- ✅ **canned 那一路的出栈闸已闭合（★ 2026-10-01 〇-AF 修法一落地；此条由「已知盲区」翻成硬约定）**：
+  `localize()`（欢迎词／chips）的产物现在在 **`SetConfig` 之前**过一道 `cannedOutboundReject`
+  （`internal/assist/engine/canned_guard.go`）：清洗后为空／还带着没翻的中文词（与补翻**同一把尺子** `hanResidueRuns`，
+  不另立第二把）／原文没提品牌名而译文凭空多出品牌名——任一命中即**按中文原文出、一行缓存都不写**，
+  并打 `reason=canned_empty`／`canned_han_residue`／`canned_brand_injected` 的 WARN（这三个分档名与那七个 reject*
+  同为对外排障契约，逐字钉在 `canned_guard_test.go`）。**「翻译调用成功」不等于「产物可用」**：
+  旧形态这三类在代码眼里全是成功译文，日志静默、坏形态常驻首屏（现网实证 en 的 `credits充值`、ja chips 各尾粘「能言」）。
+  根因那一半收在**口径**上：`translateContract(lang, srcTopics)` 现在按源文投——原文提了品牌名才给「一律写作 X」，
+  没提就**明确禁止**出现任何品牌名（沉默不等于许可被撤回，现网 ru 四条 chips 各前挂 `"LangCross: "` 就是模型自己补的）；
+  计费单位那句没提就不拼。对话正文那一路**口径不变**（`replyRepairTopics()` 两条都拼：它的输入已是目标语言正文，
+  没有中文原文可判"本来提没提"，拿"没提"去约束＝给模型一张删掉品牌名的许可证，会把 092x 红腿三修出来的还原反向拆掉）。
+  ⚠️ 由此新增一条**同步义务**：口径段现在随源文内容而变 ⇒ 缓存指纹必须跟着"真发出去的那段口径"算
+  （`localize` 与 `translateOnce` 各自 `srcTopicsOf(text)`，同函数同入参必然同值，等值锁在 `canned_guard_test.go`）。
+  将来加第三个话题维度却忘了进指纹＝082x 那条「换件没修」第四次复发。
+  ⚠️ **旧登记里「ja 欢迎词品牌名写作『能言』而非 LangCross」这一条判成缺陷是错的**（本轮复核翻案）：
+  `brandKanjiLocales` 里 zh／zh_hant／ja 三个语种的品牌名**本来就该是汉字「能言」**（与该语种挂件标题同源），
+  ja 那一档的真缺陷只有「四条 chips 每条尾部各粘一个能言」这种**注入**形态。别照旧文再"改"一遍。
+  排障口径不变：换件后界面仍是坏形态，先读缓存行首指纹（`cannedPromptRev` 现为 **`096x-1`**）再怀疑模型。
 
 ---
 
