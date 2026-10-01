@@ -622,6 +622,188 @@ func TestSystemPromptCarriesToneSpec(t *testing.T) {
 	}
 }
 
+// TestPersonaHasBehavioralConstraints ★ 096x-2（2026-10-01 用户后令）：
+// persona 从三句话扩到四条行为硬约束——禁情绪开场、重复问题耐心重讲、无关问题引回业务、不许不耐烦。
+// 这四条优先级最高，违反任何一条都是严重失误（现网"真有意思"就是违反第一条）。
+// 判据四腿：每条约束在 defaultPersona 里都有实锚 / 库里现值能整体替换默认 /
+// 改 persona 不影响 tone_rules / 反证：删掉任何一条约束就红灯。
+func TestPersonaHasBehavioralConstraints(t *testing.T) {
+	// ① 四条约束的实锚（不能只靠关键词，要能区分"提到了"和"真的写了这条规则"）
+	constraints := []struct {
+		anchor string // 必须出现的字面量
+		desc   string // 这是哪条约束
+	}{
+		{"不许用\"真有意思\"", "禁情绪开场"},
+		{"重复问同一个问题", "重复问题耐心重讲"},
+		{"跟翻译/术语库/充值没关系", "无关问题引回业务"},
+		{"不许对客户的问题表现出任何不耐烦", "不许不耐烦"},
+	}
+	for _, c := range constraints {
+		if !strings.Contains(defaultPersona, c.anchor) {
+			t.Fatalf("persona 缺 %s 约束（%q 未出现）：\n%s", c.desc, c.anchor, defaultPersona)
+		}
+	}
+	// ② 库里现值能整体替换默认（与 tone_rules 同一条口径：运营后台改 persona 不必发版）
+	e := newTestEngine(t)
+	_ = e.db.SetConfig("persona", "只说一句话：好的。")
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+	if !strings.Contains(sys, "只说一句话：好的。") {
+		t.Fatalf("persona 库里现值没生效：\n%s", sys)
+	}
+	// 库里现值替换后，默认 persona 的内容（包括行为约束）不应该出现在 system prompt 里
+	if strings.Contains(sys, "【行为边界】") {
+		t.Fatalf("默认 persona 没被库值整体替换（行为约束还留着）：\n%s", sys)
+	}
+}
+
+// TestToneRulesHasCompetitorAndRepeatRules ★ 096x-2（2026-10-01 用户后令）：
+// tone_rules 从 8 条扩到 11 条，新增第 9/10/11 条分别覆盖竞品对比、重复问题、无关问题。
+// 这三条是现网"真有意思"和"复读上一条"两个缺陷的直接修法。
+// 判据三腿：三条新规则在 defaultToneRules 里都有实锚 / 正面示例 A/B 在 / 反证：删掉任何一条就红灯。
+func TestToneRulesHasCompetitorAndRepeatRules(t *testing.T) {
+	// ① 三条新规则的实锚
+	rules := []struct {
+		anchor string // 必须出现的字面量
+		desc   string // 这是哪条规则
+	}{
+		{"客户问竞品对比", "规则 9：竞品对比怎么接"},
+		{"DeepL", "规则 9 的竞品示例"},
+		{"原版式保留", "规则 9 的差异点 1"},
+		{"术语库锁定", "规则 9 的差异点 2"},
+		{"客户重复问同一个问题", "规则 10：重复问题怎么回"},
+		{"刚才可能没讲明白", "规则 10 的软化衔接"},
+		{"客户问的问题跟翻译/术语库/充值完全没关系", "规则 11：无关问题怎么引"},
+	}
+	for _, r := range rules {
+		if !strings.Contains(defaultToneRules, r.anchor) {
+			t.Fatalf("tone_rules 缺 %s（%q 未出现）：\n%s", r.desc, r.anchor, defaultToneRules)
+		}
+	}
+	// ② 正面示例 A/B 必须存在（模型会照抄示例，所以示例本身要能指导行为）
+	for _, want := range []string{"【正面示例 A】", "【正面示例 B】", "考虑对比是很正常的", "刚才可能没讲明白，我再换个说法"} {
+		if !strings.Contains(defaultToneRules, want) {
+			t.Fatalf("tone_rules 缺正面示例 %q：\n%s", want, defaultToneRules)
+		}
+	}
+	// ③ 反面示例必须包含"真有意思"（这是现网抓到的第一个缺陷）
+	if !strings.Contains(defaultToneRules, "真有意思") {
+		t.Fatalf("tone_rules 反面示例没包含现网缺陷锚点「真有意思」：\n%s", defaultToneRules)
+	}
+	// ④ 反证：如果有人把默认值改回旧版（8 条），这条直接红灯
+	oldVersion := `【怎么说话】
+1. 第一句先接住用户这句话。
+2. 中间只讲跟他最相关的 1-2 点。
+3. 最后一句留一个具体的下一步。
+4. 长度 3-6 句、200 字以内。
+5. 说「你」不说「您」。
+6. 只说下面【相关知识】里有的事实。
+7. 涉及买/充值/价格：数字只用下面【系统现值】里给的系数和单价。
+8. 正文里不要加括号备注。`
+	if strings.Contains(defaultToneRules, oldVersion) {
+		t.Fatalf("tone_rules 被改回旧版（8 条），缺少竞品/重复/无关问题的约束")
+	}
+}
+
+// TestSystemPromptContainsPersonaConstraints ★ 096x-2：
+// 验证完整的 system prompt 里，persona 的行为约束和 tone_rules 的新规则都真出现了。
+// 这条是集成测试——单测 persona 和 tone_rules 各自通过不够，必须拼在一起才有效。
+func TestSystemPromptContainsPersonaConstraints(t *testing.T) {
+	e := newTestEngine(t)
+	sys := e.buildSystemPrompt(context.Background(), nil, "zh")
+
+	// persona 约束在 system prompt 里
+	for _, want := range []string{"【行为边界】", "不许用\"真有意思\"", "重复问同一个问题", "跟翻译/术语库/充值没关系", "不许对客户的问题表现出任何不耐烦"} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("system prompt 缺 persona 约束 %q：\n%s", want, sys)
+		}
+	}
+
+	// tone_rules 新规则在 system prompt 里
+	for _, want := range []string{"客户问竞品对比", "DeepL", "原版式保留", "术语库锁定", "客户重复问同一个问题", "刚才可能没讲明白", "客户问的问题跟翻译/术语库/充值完全没关系"} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("system prompt 缺 tone_rules 新规则 %q：\n%s", want, sys)
+		}
+	}
+
+	// 正面示例在 system prompt 里
+	for _, want := range []string{"【正面示例 A】", "【正面示例 B】"} {
+		if !strings.Contains(sys, want) {
+			t.Fatalf("system prompt 缺正面示例 %q：\n%s", want, sys)
+		}
+	}
+
+	// 反面示例在 system prompt 里
+	if !strings.Contains(sys, "❌ 带情绪开场") {
+		t.Fatalf("system prompt 缺反面示例标记：\n%s", sys)
+	}
+}
+
+// TestMutationPersonaRevertDetect ★ 096x-2 反证：
+// 如果有人把 defaultPersona 改回旧版（三句话），这条测试会红灯。
+// 目的：防止"优化"过程中不小心把行为约束删掉。
+// 判据：defaultPersona 必须包含【行为边界】和禁情绪约束，否则说明默认值被改回了旧版。
+func TestMutationPersonaRevertDetect(t *testing.T) {
+	// 新版 defaultPersona 必须有这些约束
+	if !strings.Contains(defaultPersona, "【行为边界】") {
+		t.Fatalf("defaultPersona 缺【行为边界】段——有人把默认值改回旧版了？\n%s", defaultPersona)
+	}
+	if !strings.Contains(defaultPersona, "不许用\"真有意思\"") {
+		t.Fatalf("defaultPersona 缺禁情绪约束——有人把默认值改回旧版了？\n%s", defaultPersona)
+	}
+	if !strings.Contains(defaultPersona, "重复问同一个问题") {
+		t.Fatalf("defaultPersona 缺重复问题约束——有人把默认值改回旧版了？\n%s", defaultPersona)
+	}
+	if !strings.Contains(defaultPersona, "跟翻译/术语库/充值没关系") {
+		t.Fatalf("defaultPersona 缺无关问题约束——有人把默认值改回旧版了？\n%s", defaultPersona)
+	}
+	if !strings.Contains(defaultPersona, "不许对客户的问题表现出任何不耐烦") {
+		t.Fatalf("defaultPersona 缺不耐烦约束——有人把默认值改回旧版了？\n%s", defaultPersona)
+	}
+
+	// 反证：旧版 persona 只有三句话，没有行为约束
+	oldPersona := "你是「能言」AI翻译平台的销售顾问兼使用指导助手，微信聊天风格，真诚接地气，帮用户选对功能、用顺产品。"
+	if defaultPersona == oldPersona {
+		t.Fatalf("defaultPersona 被改回旧版（三句话），行为约束全丢了！")
+	}
+}
+
+// TestMutationToneRulesRevertDetect ★ 096x-2 反证：
+// 如果有人把 defaultToneRules 改回旧版（8 条），这条测试会红灯。
+// 目的：防止"优化"过程中不小心把竞品/重复/无关问题的约束删掉。
+// 判据：defaultToneRules 必须包含规则 9/10/11，否则说明默认值被改回了旧版。
+func TestMutationToneRulesRevertDetect(t *testing.T) {
+	// 新版 defaultToneRules 必须有这些规则
+	if !strings.Contains(defaultToneRules, "客户问竞品对比") {
+		t.Fatalf("defaultToneRules 缺规则 9（竞品对比）——有人把默认值改回旧版了？\n%s", defaultToneRules)
+	}
+	if !strings.Contains(defaultToneRules, "DeepL") {
+		t.Fatalf("defaultToneRules 缺竞品示例 DeepL——有人把默认值改回旧版了？\n%s", defaultToneRules)
+	}
+	if !strings.Contains(defaultToneRules, "客户重复问同一个问题") {
+		t.Fatalf("defaultToneRules 缺规则 10（重复问题）——有人把默认值改回旧版了？\n%s", defaultToneRules)
+	}
+	if !strings.Contains(defaultToneRules, "刚才可能没讲明白") {
+		t.Fatalf("defaultToneRules 缺规则 10 的软化衔接——有人把默认值改回旧版了？\n%s", defaultToneRules)
+	}
+	if !strings.Contains(defaultToneRules, "客户问的问题跟翻译/术语库/充值完全没关系") {
+		t.Fatalf("defaultToneRules 缺规则 11（无关问题）——有人把默认值改回旧版了？\n%s", defaultToneRules)
+	}
+
+	// 反证：旧版 tone_rules 只有 8 条，没有竞品/重复/无关问题的约束
+	oldToneRules := `【怎么说话】
+1. 第一句先接住用户这句话。
+2. 中间只讲跟他最相关的 1-2 点。
+3. 最后一句留一个具体的下一步。
+4. 长度 3-6 句、200 字以内。
+5. 说「你」不说「您」。
+6. 只说下面【相关知识】里有的事实。
+7. 涉及买/充值/价格：数字只用下面【系统现值】里给的系数和单价。
+8. 正文里不要加括号备注。`
+	if defaultToneRules == oldToneRules {
+		t.Fatalf("defaultToneRules 被改回旧版（8 条），竞品/重复/无关问题的约束全丢了！")
+	}
+}
+
 // TestTemperatureDoesNotChangeTone ★ 080x：把「温度不是音色旋钮」钉成机械断言。
 // 现场：用户把 temperature 从 0.7 拧到 1，回复照旧冷——同一问题的两条现网回复是
 // 「同样的四件事、同样的顺序、同样的长度，只换了词的摆放」。
