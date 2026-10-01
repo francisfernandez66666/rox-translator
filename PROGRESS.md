@@ -1671,3 +1671,22 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
   - 已确认进程环境变量 `MAIL_ENABLED=1`、SMTP 参数正确
   - ★ 2026-08-31：「我已付费」等关键告警邮件链路补齐——`notifyAlert` 支持 `alert_email_cc` 抄送 + `enqueueMail` 异步队列；`alert_email=noreply@lexicorn.cn`、`alert_email_cc=575160894@qq.com` 已落库，端到端验证邮件入队含抄送
 - **备注**：若个别收件域仍不进信，检查发件域 `lexicorn.cn` 的 SPF/DKIM/DMARC 与垃圾箱。
+
+### 9.6 AI助手语气修复（096x-2 / 〇-AL，2026-10-01）
+- **缺陷现象**：客户问"跟 DeepL 对比怎么样"时，AI 回复"真有意思"开头——带情绪调侃、不正面回答问题。重复问同一问题时机械复读上一条。
+- **根因**：`defaultPersona` 只有三句话（角色定位 + 语言风格），没有行为边界约束；`defaultToneRules` 只有 8 条规则，缺少竞品对比应答策略、重复问题处理方式、无关问题引导规则。
+- **修法**：
+  - `defaultPersona` 从 77 字符扩到 ~385 字符，新增【行为边界】4 条硬约束：① 禁情绪开场（不许用"真有意思"等）② 重复问题耐心重讲 ③ 无关问题引回业务 ④ 不许不耐烦
+  - `defaultToneRules` 从 8 条扩到 11 条，新增规则 9/10/11：竞品对比怎么接（肯定考虑 → 讲差异 → 「通用工具做不到…我们能做到…」句式）、重复问题怎么回（换个角度 + 补细节 + 更耐心）、无关问题怎么引（简短承认 → 立刻引回翻译体验）
+  - 新增【正面示例】A（竞品对比）和 B（重复问题），与原有反面示例配对
+  - `seed.json` 的 `configs.persona`（385 字符）和 `configs.tone_rules`（1564 字符）同步更新
+- **测试**：5 个自动化测试全部通过
+  - `TestPersonaHasBehavioralConstraints`：验证 4 条约束在 defaultPersona 里有实锚 + 库值能整体替换默认
+  - `TestToneRulesHasCompetitorAndRepeatRules`：验证 3 条新规则 + 2 个正面示例
+  - `TestSystemPromptContainsPersonaConstraints`：集成测试，full system prompt 包含所有新约束
+  - `TestMutationPersonaRevertDetect`：反证——把 persona 降级回旧 3 行版本必红灯
+  - `TestMutationToneRulesRevertDetect`：反证——把 tone_rules 降级回旧 8 条版本必红灯
+- **文件**：`backend-go/internal/assist/engine/engine.go`、`backend-go/internal/assist/engine/engine_test.go`、`backend-go/internal/assist/seed/seed.json`
+- **推送**：纯代码提交 `4b302ed` → 推送 `68aeaca`（origin/autosales）
+- **⚠️ 部署口径**：此改动只改了 Go 代码常量（`defaultPersona` / `defaultToneRules`），不影响 assist-server（Python）二进制。assist-server 冷缓存会读 seed.json 里的新值；热缓存需要客户侧会话刷新或等缓存过期后自动生效。无需换 binary。
+
