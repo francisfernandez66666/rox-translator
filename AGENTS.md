@@ -392,6 +392,7 @@
 
 - 顺序钉死（`internal/assist/engine/engine.go` 的 `Respond` 尾部）：
   `repairReplyHanResidue`（判残补翻）→ `rehardenReplyRewrite`（**补翻产物再过一遍卫生**：旁白括号／裸方括号／回声）
+  → `guardReplyInstructionEcho`（★ 〇-AP 引用重合度：正文逐句比对提示词指令语料，抄出来的指令句整句丢）
   → `guardReplyQuote`（报价：剥乘法算式、复算不出的总额一律不出口）→ `guardReplyBrand`（品牌名走不可译占位符）。
   新增守卫一律挂这条链，**不许**挂进四道回复分支或 `fallbackReply` 里各写一份。
 - **`sanitizeVisitorText` 末道卫生里有一条「剥指令复述引导行」（★ 2026-10-02 〇-AN）**：
@@ -400,6 +401,23 @@
   误剥的代价是吃掉客户要看的正常步骤句（「先注册，再上传…：」这类一律不剥，见反证单测 `TestSanitizeStripsInstructionEchoLead`）。
   这条与 persona/tone_rules 的提示词加固（方案 A/C：把「先肯定…再讲差异」从**流程指令**改成**心里的盘算**、并加【定界·最重要】）配对——
   ⚠️ 光靠提示词治不住 9B 模型的复述概率，清洗腿才是兜底；两者都要在。
+- **★ 提示词泄漏的根治腿＝引用重合度过滤器（★ 2026-10-02 〇-AP，用户令「按p2做」）**：
+  词表打地鼠（`selfNarrationMarkers`／`internalEchoMarkers`）天然追不上模型措辞，每轮都等用户截图再补几条。
+  本腿把判据换成**比对提示词自身**：`reply_instr_echo.go` 的 `instructionCorpus` 把 `persona＋tone_rules＋promise_rules＋replyLangBlock`
+  收成语料 I，出站时逐句与 I 比字符 4-gram 重合度——**连续 ≥14 字命中**（`instrEchoRunGrams=11`）或**整句包含度 ≥0.6**（`instrContainMin`）
+  即判"抄出来的指令句"→ 整句丢弃＋WARN。命中即无需枚举新词，这才是「彻底」的落点。
+  ⚠️ **语料 I 三条口径别踩**：① **不收【系统现值】/【报价纪律】**——合法报价本就该逐字引用那串价格系数与现算示例数字，
+     收进 I＝把正确引用误杀成新缺陷（数字纪律另有 `guardReplyQuote` 专闸，见缺陷记录 §十二）；
+  ② **只在 `Source=="llm"` 上跑**（话术直配／流程／兜底是人写文案，不经模型、不可能复述提示词）；
+  ③ 需要每轮语料 ⇒ **挂 `Respond` 咽喉**（`guardReplyInstructionEcho`），**不许**塞进纯函数 `sanitizeVisitorText`
+     （那个还服务历史回放与补翻，语料口径不同，塞进去会让那两条路误判）。
+  与词面腿分工：`sanitizeVisitorText` 里新增的 `stripRuleSelfReference`（「第 N 条」×合规词自指）＋
+  `stripTrailingNarrationTail`（专治**开头「（」被吃在半空、只剩收尾「）」**的尾部旁白，从尾部往回走、按 `coreNarrationMarkers`
+  数到 ≥2 个不同内核词才判旁白，见第一个带字且标记 <2 的句即认正文边界停手、绝不清空）收的是**改写式**旁白（换词缩句、够不到重合阈值）；
+  重合度腿收**逐字/近逐字复述**。两条互补，缺一不可。观测腿 `trailingNarrationCandidates`（`unstrippedAsides` 追加）
+  对尾部单标记候选**只记 WARN 不改正文**，让下一族新形态先出现在日志里。
+  ⚠️ 本腿改的是**对话正文出栈**、不碰 `localize()` 缓存 ⇒ **不需要抬 `cannedPromptRev`**（与那条「换件没修」的坑不同，换二进制即生效）。
+  断言见 `reply_instr_echo_test.go`（逐字复述被丢＋合法改写保留＋规则源不动＋剥空回退不 Air＋尾部「）」旁白剥净且同屏正常报价一字不动＋≥2 误剥反证）。
 - 守卫判据只问**作答语言**（`effectiveReplyLang`，见 §三 那条 〇-AC 口径），**不许**再直接读挂件送来的 `uiLang`。
 - **确定性正字表（`applyJaResidueFixups`）的四道前置一个都不许放宽**：只动被判残点名的片段／`digitSeqOf` 数字序列逐字不变／
   `lineCountOf` 行数不变／残片数严格变少——任一不过就**保留原稿**并记 WARN。
