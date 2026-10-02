@@ -66,21 +66,44 @@ func NewServer(db *store.DB, eng *engine.Engine, adminToken, cors string) *Serve
 
 // startAnonymCleanup 定期清除过期的匿名用户及其孤儿消息。
 // ★ 〇-AM：匿名用户超过 3 天未活跃 → expires_at ≤ NOW() → 自动清理。每 1h 扫一次，每次 100 行批量删除。
+// ★ 〇-AP：删空即停手（见 drainExpiredAnonymous）——旧写法 `for total == 0` 只在"删到东西"时才退，
+//
+//	配合 SQL 缺陷恰好每小时首轮 err≠nil 被 break 掩盖；SQL 修好后"无可删"返回 (0,nil) 会**空转打满 CPU**，
+//	故这一版把批删循环抽成 drainExpiredAnonymous，按"某次批量删 0 行即结束"正确收敛。
 func (s *Server) startAnonymCleanup() {
 	ticker := time.NewTicker(s.anonymCleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		total := 0
-		for total == 0 {
-			var err error
-			total, err = s.db.CleanupExpiredAnonymous(100)
-			if err != nil {
-				slog.Error("assist.api 过期匿名会话清理失败", "err", err)
-				break
-			}
+		total, err := s.drainExpiredAnonymous()
+		if err != nil {
+			slog.Error("assist.api 过期匿名会话清理失败", "err", err)
+			continue
 		}
 		if total > 0 {
 			slog.Info("assist.api 过期匿名会话清理完成", "deleted_msgs", total)
+		}
+	}
+}
+
+// drainExpiredAnonymous 逐批（每批 100 行）清空过期匿名会话及其孤儿消息，返回累计删除条数。
+// ★ 收敛口径：某一批删除 0 行即视为已排空、停手返回——绝不"删 0 还继续转"（那是本次修 SQL 后才暴露的
+//
+//	空转隐患：旧循环 `for total == 0` 会把"这一轮没有过期数据"误判成"还没删过"，永远退不出内层循环）。
+//	上游清理报错误直接上抛（由调用方记 ERROR），不在这里吞。
+func (s *Server) drainExpiredAnonymous() (int, error) {
+	const batch = 100
+	total := 0
+	for {
+		n, err := s.db.CleanupExpiredAnonymous(batch)
+		if err != nil {
+			return total, err
+		}
+		if n == 0 {
+			return total, nil // 这一批没删到任何行＝已排空，正常收敛退出
+		}
+		total += n
+		if n < batch {
+			return total, nil // 不足一整批，后面已无更多，省一次往返
 		}
 	}
 }
