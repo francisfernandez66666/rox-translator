@@ -12,8 +12,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"translator/internal/auth"
 	"translator/internal/config"
@@ -356,5 +358,36 @@ func TestChatListAndMessagesDifferentUsers(t *testing.T) {
 	}
 	if len(msgsB) != 1 && msgsB[0].Content != "B 的消息" {
 		t.Fatalf("B 消息不符: %v", msgsB)
+	}
+}
+
+// TestChatTitleTruncatesByRuneNotByte 锁〇-AP 收口第三条：会话标题必须按**字**截、不得截出非法 UTF-8。
+// 反证（旧形态）：把 `chatTitle` 换成 `title[:40]` 字节切片，本用例第 40 字恰落在多字节汉字中间 ⇒
+// utf8.ValidString 判假、rune 数也非 40，当场红——正是 PG run_uat 里 `pq: invalid byte sequence for encoding "UTF8"` 的复现。
+func TestChatTitleTruncatesByRuneNotByte(t *testing.T) {
+	// 45 个 CJK 字符：每个 3 字节，字节截 40 会在第 14 个字里劈断；rune 截应干净得到前 40 个字。
+	long := strings.Repeat("翻", 45)
+	got := chatTitle(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("标题截断后必须是合法 UTF-8（PG 严格校验，非法字节＝会话写不进）：got=%q", got)
+	}
+	if n := len([]rune(got)); n != 40 {
+		t.Fatalf("应按字截到 40：rune 数 got=%d", n)
+	}
+	if got != strings.Repeat("翻", 40) {
+		t.Fatalf("应恰为前 40 个『翻』：got=%q", got)
+	}
+	// emoji（4 字节）同界：混排也不许截出半个字符。
+	mixed := strings.Repeat("🚀", 20) // 20 个 4 字节 emoji
+	gm := chatTitle(mixed)
+	if !utf8.ValidString(gm) {
+		t.Fatalf("emoji 标题截断后应合法：got=%q", gm)
+	}
+	// 兜底：纯空白 → "翻译请求"；短于 40 原样（去空白后）。
+	if chatTitle("   ") != "翻译请求" {
+		t.Fatalf("空白标题应兜底为『翻译请求』")
+	}
+	if chatTitle("  你好  ") != "你好" {
+		t.Fatalf("短标题应去首尾空白后原样：got=%q", chatTitle("  你好  "))
 	}
 }

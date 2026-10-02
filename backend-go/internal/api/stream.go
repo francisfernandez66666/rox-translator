@@ -305,13 +305,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			userID := user.ID
 			go func() {
 				// 创建新会话（标题取第一条用户消息前 40 字；空内容用"翻译请求"兜底）
-				title := strings.TrimSpace(req.Message)
-				if len(title) > 40 {
-					title = title[:40]
-				}
-				if title == "" {
-					title = "翻译请求"
-				}
+				title := chatTitle(req.Message)
 				// ★ 〇-AP：会话 id 传上面已生成的 convID（同一 UUID 随后写入 chat_messages.conversation_id）
 				//   ⇒ 创建会话与追加消息共用同一个 id，外键/关联必然对齐（〇-AM 初版从不赋值 id＝PG 语法错＋消息孤儿）。
 				_, err := s.Store.CreateChatConversation(convID, userID, tid, title)
@@ -330,6 +324,23 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 	}
+}
+
+// chatTitle 由首条用户消息生成会话标题：去首尾空白、按**字（rune，非字节）**截前 40，空内容兜底"翻译请求"。
+// 刻意按 rune 截（★ 〇-AP 收口第三条）：旧形态 `title[:40]` 是字节切片，遇中日韩／emoji 这类多字节字符
+// 会把一个字符从中间劈断成**非法 UTF-8**；SQLite 容忍任意字节、PG 严格校验 UTF8，
+// PG run_uat 实测因此冒 `pq: invalid byte sequence for encoding "UTF8": 0xe5/0xef`＝带中文标题的会话整条写不进去
+// （且因是异步兜底、不碰断言，矩阵照绿而数据没落库＝静默丢账）。按 rune 截保证任意切片都是合法 UTF-8。
+// 参数：msg=首条用户消息原文；返回：合法且 ≤40 字的标题串。
+func chatTitle(msg string) string {
+	t := strings.TrimSpace(msg)
+	if r := []rune(t); len(r) > 40 {
+		t = string(r[:40])
+	}
+	if t == "" {
+		return "翻译请求"
+	}
+	return t
 }
 
 // dispatchTranslateWebhook 投递翻译完成 webhook 事件（text/file 通用）。
