@@ -50,6 +50,12 @@
 - 所有 SQL 必须同时支持 SQLite（本地/CI 快跑）与 PostgreSQL（生产）。
   用 `db.CurrentDialect()` 分支或 `db.Exec(s.db, db.CurrentDialect(), ...)`，禁止硬编码方言语法。
 - 列迁移、`COALESCE` 取值、时间函数是历史高频踩坑点。
+- **`DELETE`／`UPDATE` 一律不许带尾随 `LIMIT`（★ 2026-10-03 〇-AP 补腿立）**：挂件与本地用的
+  `modernc.org/sqlite` 驱动**没开 `SQLITE_ENABLE_UPDATE_DELETE_LIMIT` 编译选项**，`DELETE … WHERE … LIMIT ?`
+  在解析期就退 `SQL logic error: near "LIMIT": syntax error (1)`（PG 同样不认这种写法）。
+  分批删除的唯一可移植形态＝**把 LIMIT 放进子查询**：
+  `DELETE FROM t WHERE id IN (SELECT id FROM t WHERE … LIMIT ?)`（现网实证：匿名会话清理自上线起每小时恒失败一次，
+  见《部署指南》〇-AP 那条）。判"某句 SQL 在两种方言都能跑"必须靠**真驱动的单测跑一次**，不靠语法直觉。
 - **新增/改动后端单测必须自钉方言**：`config.Default()` 读 `DB_DRIVER` env 且**副作用写全局 `config.C`**，
   run_uat PG 模式下会泄漏方言给同包后续内存 SQLite 测试（`no such table: information_schema.tables` 假红，
   2026-09-19/20 两连败）。模板：`old := config.C; cfg := config.Default(); cfg.DatabaseDriver = "sqlite"; config.C = cfg; t.Cleanup(restore)`，
@@ -489,7 +495,18 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
   ⚠️ 这类 bug **真上游打不出来**（模型调用几百毫秒到几秒，range 早跑完），只在本地假上游"瞬间返回"时命中，
   所以配套断言必须带 `-race` 跑；不加 race 属于"运气好没被调度到"的假绿。
 - 修复缺陷时同步补一条能复现的自动化断言（单测或 UAT 断言），否则视为未完成。
+- **★ 修一条"恒失败的循环"前，必须先回答"它为什么一直没现形"（★ 2026-10-03 〇-AP 真踩）**：
+  语法错把清理循环挡在第一次 `err != nil` 就 break，于是循环里那条**只在"没删到行"时才转不完**的判据
+  （`for total == 0` 而不是"这一批删了 0 行即收敛"）在现网从没跑过一次——**只修 SQL＝把一条日志噪音换成把进程 CPU 钉死**。
+  正确顺序：读整条循环体 → 把"收敛条件"按**本轮新增读数**（删了 0 行）判 → 给"无事可做的空库"写一条带**超时**的终止断言
+  （见 `internal/assist/api/anonym_cleanup_test.go` 的 goroutine＋3s `select`，反证＝装回旧判据 3.01s 判红）。
+  通用形态：**被前一道错误掩盖的分支，修掉那道错误时它就是新事故**；测试必须专门喂一次"什么都不必做"的输入。
 - 涉及 DB schema 的改动必须写成幂等迁移，保证老库启动自动升级。
+  ⚠️ **幂等迁移的守卫判据不许被同批建表语句先满足（★ 2026-10-03 现网抓到、待决）**：
+  `CREATE TABLE IF NOT EXISTS <新表>` 若排在 `if 旧表存在 && !新表存在 { 迁数据; DROP 旧表 }` 之前，
+  该判据**恒假** ⇒ 迁移在有历史的库上永远不跑，旧表变孤儿（现役代码不读写、清理也扫不到，现网实例：
+  挂件库 `sessions`／`messages` 16／65 行 09-16~10-01 无人认领）。判据要问**数据层面**的事实
+  （"新表里有没有对应行"），不是"表在不在"；写完必须造一个**存量库**（旧表有行）跑一遍迁移并断言行真的搬过去了。
 - **改了 assist 的 `seed/seed.json` 不等于线上改了。** seed 只在**首启空表**时灌库，存量库不跟进，
   所以关键词/文案修订必须随批跑一次 `python3 scripts/assist_kb_sync.py --host <服务器>`（默认只读打差异，
   确认后 `--apply`，写前自动备份）——这一步此前长期挂「待人工执行」，2026-09-23 已由脚本收口，
