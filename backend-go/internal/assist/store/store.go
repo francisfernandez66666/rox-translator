@@ -624,8 +624,12 @@ func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
-	// 删除过期消息
-	res, err := d.sql.Exec("DELETE FROM messages_base WHERE session_id IN (SELECT id FROM sessions_base WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)) LIMIT ?", batchSize)
+	// 删除过期消息。★ 〇-AP：LIMIT 只能挂在**子查询的 SELECT** 上，不能直接挂 DELETE——
+	// SQLite 默认发行没开 SQLITE_ENABLE_UPDATE_DELETE_LIMIT，`DELETE … LIMIT ?` 会报
+	// `near "LIMIT": syntax error`（现网实读：每小时整点一条 ERROR「过期匿名会话清理失败」，
+	// 自 10-02 起匿名会话与孤儿消息从未真正清过、只堆库）。
+	// 改走 `id IN (SELECT id … LIMIT ?)`：两方言都支持（AGENTS §一·4），批量语义不变。
+	res, err := d.sql.Exec("DELETE FROM messages_base WHERE id IN (SELECT id FROM messages_base WHERE session_id IN (SELECT id FROM sessions_base WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)) LIMIT ?)", batchSize)
 	if err != nil {
 		return 0, err
 	}

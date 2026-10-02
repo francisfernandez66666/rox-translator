@@ -125,3 +125,48 @@ func toI64(v any) int64 {
 	}
 	return 0
 }
+
+// TestCleanupExpiredAnonymousRemovesExpiredMessages 锁 〇-AP 现网缺陷（过期匿名会话清理每小时报错）。
+//
+// 旧形态 `CleanupExpiredAnonymous` 写了 `DELETE FROM messages_base WHERE session_id IN (…) LIMIT ?`，
+// 而本包用的驱动是 modernc.org/sqlite（**与生产二进制同发行**），默认没编 SQLITE_ENABLE_UPDATE_DELETE_LIMIT
+// ⇒ `DELETE … LIMIT` 在 SQLite 里根本非法 ⇒ 每小时整点一条 ERROR「过期匿名会话清理失败：near "LIMIT": syntax error」，
+// 自 10-02 起过期匿名会话与孤儿消息一条都没清过、只在库里堆。修法＝把 LIMIT 收进**子查询的 SELECT**。
+//
+// ★ 反证：把 store.go 那句写回 `DELETE … ) LIMIT ?`（LIMIT 挂回 DELETE），本用例即在
+//
+//	`CleanupExpiredAnonymous` 的 err 上红——正是复现现网那条语法错；改回子查询形态即绿。
+func TestCleanupExpiredAnonymousRemovesExpiredMessages(t *testing.T) {
+	db := newTestDB(t)
+
+	// ① 已过期的匿名会话（expires_at 为 NULL 即按已过期处理，见清理谓词）＋两条待清消息。
+	if err := db.CreateSession("s-exp", "/x", 0, 0, "hash-expired"); err != nil {
+		t.Fatalf("建过期匿名会话失败: %v", err)
+	}
+	_ = db.AddMessage("s-exp", "user", "旧问题", nil)
+	_ = db.AddMessage("s-exp", "assistant", "旧回答", nil)
+
+	// ② 仍在效期的匿名会话（expires_at 置到未来）＋一条消息，必须原样保留（防把在效客户会话一起清了）。
+	if err := db.CreateSession("s-live", "/y", 0, 0, "hash-live"); err != nil {
+		t.Fatalf("建在效匿名会话失败: %v", err)
+	}
+	if _, err := db.sql.Exec("UPDATE sessions_base SET expires_at=datetime(CURRENT_TIMESTAMP,'+1 day') WHERE id='s-live'"); err != nil {
+		t.Fatalf("置未来到期时间失败: %v", err)
+	}
+	_ = db.AddMessage("s-live", "user", "在效问题", nil)
+
+	// 清理：旧形态此处直接 err≠nil（near "LIMIT" 语法错），修法落地后应正常返回、无错。
+	n, err := db.CleanupExpiredAnonymous(100)
+	if err != nil {
+		t.Fatalf("清理不应报语法错（旧 `DELETE … LIMIT` 形态此处必红）: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("应清掉过期会话的 2 条消息，实际清 %d 条", n)
+	}
+	if hs, _ := db.History("s-exp", 10); len(hs) != 0 {
+		t.Fatalf("过期会话的消息应被清空: %+v", hs)
+	}
+	if hs, _ := db.History("s-live", 10); len(hs) != 1 {
+		t.Fatalf("在效会话的消息不许被误删: %+v", hs)
+	}
+}
