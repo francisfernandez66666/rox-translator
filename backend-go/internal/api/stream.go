@@ -40,6 +40,7 @@ import (
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/tenant"
 )
 
@@ -311,18 +312,20 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				if title == "" {
 					title = "翻译请求"
 				}
-				_, err := s.Store.CreateChatConversation(userID, tid, title)
+				// ★ 〇-AP：会话 id 传上面已生成的 convID（同一 UUID 随后写入 chat_messages.conversation_id）
+				//   ⇒ 创建会话与追加消息共用同一个 id，外键/关联必然对齐（〇-AM 初版从不赋值 id＝PG 语法错＋消息孤儿）。
+				_, err := s.Store.CreateChatConversation(convID, userID, tid, title)
 				if err != nil {
-					log.Printf("[chat] 创建会话失败: %v", err)
+					observability.Warn(ctx, "chat 创建会话失败（异步持久化，不影响已返回的 SSE）", "err", err.Error())
 					return
 				}
 				// 追加用户消息 + AI 回复到数据库
 				if err := s.Store.AppendChatMessage(convID, "user", req.Message, ""); err != nil {
-					log.Printf("[chat] 写入用户消息失败: %v", err)
+					observability.Warn(ctx, "chat 写入用户消息失败", "err", err.Error())
 				}
 				replyContent := res.Reply
 				if err := s.Store.AppendChatMessage(convID, "assistant", replyContent, ""); err != nil {
-					log.Printf("[chat] 写入 AI 回复失败: %v", err)
+					observability.Warn(ctx, "chat 写入 AI 回复失败", "err", err.Error())
 				}
 			}()
 		}

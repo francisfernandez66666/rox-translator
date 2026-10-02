@@ -49,7 +49,9 @@ package engine
 
 import (
 	"context"
+	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"translator/internal/observability"
@@ -196,6 +198,43 @@ var selfNarrationMarkers = []string{
 	// ⚠️ 刻意不收「翻訳」单词：「（翻訳は人間がチェックします）」是正常对外说明，收了就是吃掉内容；
 	// 也不收「するため」：「（ご確認するため）」这类目的状语在正常客服话术里高频。
 	"で回答するため", "翻訳を実施",
+	// ↓ ★ P3（2026-10-02 现网真机复问：正文**尾部**的作答自述旁白）：只往这张「见词即剥成对括号」的删除表里
+	// 收**客户永远不会这么说**的自述动作词。「引回业务」「简短承认」是模型在交代自己怎么答题，对外文案零命中。
+	// ⚠️ **刻意不收**「自然衔接」「符合规则」这类单看能凑进正常说明的词——「（中英排版自然衔接）」「（文件名需符合规则）」
+	// 都是客户真会看到的补充说明，进删除表＝连成对括号的正常正文一起吃掉。这两个词只进下面 `strongNarrationMarkers`
+	// （尾部剥要**≥2 个共现**才动手，误伤半径压到最低）与观测腿，不进这张单字即剥的表。
+	"引回业务", "简短承认",
+}
+
+// strongNarrationMarkers ★ P3 尾部旁白专用的**更紧**词表（见 stripTrailingNarrationTail）。
+// 与 selfNarrationMarkers 的分工：那张表服务「成对括号内见词即剥」，误伤必须零，所以只敢放最露骨的自述词；
+// 这一张服务「正文**尾部**非括号自述段的定位剥离」，判据要 **≥2 个共现**（或以「，」半途续写起头 + ≥1），
+// 因此可以把单看略宽泛的「自然衔接／符合规则／提问引导」放进来当**弱信号**凑数——它们单独出现绝不动手。
+// 现网 2026-10-02 抓到那条尾巴同时命中「简短承认／引回业务／自然衔接／提问引导／符合规则」五个，正是这把尺子要够到的形态。
+var strongNarrationMarkers = []string{
+	"引回业务", "简短承认", "自然衔接", "符合规则", "提问引导", "引导上传", "这里用",
+}
+
+// coreNarrationMarkers ★ P2 尾部剥（stripTrailingNarrationTail）真正动手用的**内核集**：
+// 只收「助手在交代自己怎么答题」的动作词——客户-facing 的正常文案永远不会成对出现其中两个。
+// 为什么单开一张内核集，而不是直接拿上面 strongNarrationMarkers 去数共现：
+// 「这里用」「符合规则」这两个弱词能凑进合法补充说明（「文件名需符合规则」「这里用批量翻译更快」），
+// 一旦让它们参与共现计数，误剥半径就失控。内核集里的每一个词单独看都已经是「模型在自述作答策略」，
+// 要求**尾部同一句里出现 ≥2 个不同的内核词**才剥，是给最坏情况再上一道锁。
+var coreNarrationMarkers = []string{
+	"引回业务", "简短承认", "自然衔接", "提问引导", "引导上传",
+}
+
+// ruleSelfRefOrdinalPat 规则自指的「第 N 条」形态（阿拉伯数字与中文数字都算）。
+var ruleSelfRefOrdinalPat = regexp.MustCompile(`第\s*[0-9０-９一二三四五六七八九十百]+\s*条`)
+
+// ruleSelfRefCompliance 与「第 N 条」必须**同句共现**才判旁白的合规措辞——
+// 光有「第 N 条」不算：那是合法的分条说明（「第一条：先上传」）。只有当它同时在对
+// 「自己有没有照着规则答」这件事表态（符合规则／根据规则／规则要求…）时，才是把提示词的编号念给客户。
+// ⚠️ 刻意不收「上面」「按规则」这类单看会落进正常文案的词（「上面那个按钮」「按套餐规则计费」）：
+// 本腿靠「第 N 条 × 合规措辞」两词共现定性，弱词混进来只会放大误伤半径。
+var ruleSelfRefCompliance = []string{
+	"符合规则", "根据规则", "规则要求", "这条规则", "规则里", "提示词", "系统提示",
 }
 
 // visitorDropMarkers 出站正文「整段括号删掉」的总清单＝提示词段名＋模型旁白形态。
@@ -270,15 +309,145 @@ func stripInstructionEchoLead(text string) string {
 	return rest
 }
 
+// splitNarrationSentences 按句末标点切句并**把标点留在前一段尾部**（与 quote_guard 的分句口径一致），
+// 这样丢整句时把它的标点一起带走、拼回剩余句子不会缺标点。分隔符含换行：旁白常独占一行。
+func splitNarrationSentences(s string) []string {
+	var out []string
+	var cur strings.Builder
+	for _, r := range s {
+		cur.WriteRune(r)
+		if strings.ContainsRune("。！？!?；;\n", r) {
+			out = append(out, cur.String())
+			cur.Reset()
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// distinctCoreMarkers 数一段里出现了多少个**不同**的内核自述词（coreNarrationMarkers）。
+func distinctCoreMarkers(s string) int {
+	n := 0
+	for _, mk := range coreNarrationMarkers {
+		if strings.Contains(s, mk) {
+			n++
+		}
+	}
+	return n
+}
+
+// hasLetterRune 串里是否含字母／汉字／假名／谚文等「实义字符」（unicode.IsLetter 覆盖 CJK 与假名谚文）。
+// 用来区分「有内容的句子」与「纯标点／空白／括号」的尾碎片。
+func hasLetterRune(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// stripRuleSelfReference ★ P2 规则自指腿：剥掉「把提示词的编号念给客户」那类自述句
+// （D-LLM-20261001-001 根治方案第二条腿，与下面的尾部旁白腿互补）。
+//
+// 现网 082x 第十条抓到过「（注：根据规则，此处需在最后单独输出标记…）」——那是**成对括号**里的旁白，
+// 早被 dropParentheticals 收了。本腿收的是**不带括号、独立成句**的同一族：
+// 模型交代自己「第 3 条…符合规则要求」这类执行情况。单有「第 N 条」不算（合法分条说明），
+// 必须与合规措辞**同句共现**才判旁白、整句丢弃。
+//
+// 三条 fail-soft：没「第 N 条」快路径原样返回；一句都没命中不动；
+// 全被判旁白＝异常，宁可原样留给观测腿，绝不把整条回复删空。
+func stripRuleSelfReference(text string) string {
+	if !ruleSelfRefOrdinalPat.MatchString(text) {
+		return text // 连「第 N 条」都没有，快路径
+	}
+	parts := splitNarrationSentences(text)
+	kept := make([]string, 0, len(parts))
+	dropped := 0
+	for _, s := range parts {
+		if strings.TrimSpace(s) != "" &&
+			ruleSelfRefOrdinalPat.MatchString(s) && containsAny(s, ruleSelfRefCompliance) {
+			dropped++
+			continue
+		}
+		kept = append(kept, s)
+	}
+	if dropped == 0 {
+		return text
+	}
+	joined := strings.TrimSpace(strings.Join(kept, ""))
+	if joined == "" {
+		return text // 全被判旁白＝异常，不删空
+	}
+	return joined
+}
+
+// stripTrailingNarrationTail ★ P2 尾部旁白腿：剥掉正文**尾部**那段「交代自己怎么答题」的自述旁白
+// （D-LLM-20261001-001 根治方案，2026-10-02 现网真机复问抓到的残留形态）。
+//
+// 现网原形：正文本已完整（结尾「…需要我教你怎么操作吗？」），其后空一行又追加一段——
+//
+//	，需简短承认后引回业务，这里用「建议分片上传或用批量翻译」自然衔接，同时提问引导上传文件，符合规则要求。）
+//
+// 前面四道闸**逐个够不到它**：
+//   - stripInstructionEchoLead 只管第一行，它在尾部；
+//   - dropParentheticals 要求成对括号，而这段开头的「（」被吃在半空、只剩个收尾「）」；
+//   - 词表按单词即剥不敢收「自然衔接／符合规则」（能凑进正常文案）。
+//
+// 判据取向与全文件一致：**宁可窄**。从尾部往前数，一段一段判：
+//   - 纯标点／空白的尾碎片（悬空的「）」、空行）并进候选、继续往前；
+//   - 含 **≥2 个不同内核自述词**（coreNarrationMarkers）的句子判旁白、并进候选、继续往前；
+//   - 一旦遇到「有实义字符却内核词 <2」的句子即判为正文边界、停手（正文中段绝不越权删）。
+//     停手后：候选必须真含过旁白（hasNarr）才动，且去掉候选后正文非空，否则原样返回。
+//
+// 为什么「≥2 共现」而不是「见词即剥」：正常客服文案里「自然衔接」这类弱词单出现完全可能
+// （「上下文自然衔接」），两个**不同**内核词同段共现才是模型在交代答题策略的组合特征。
+func stripTrailingNarrationTail(text string) string {
+	parts := splitNarrationSentences(text)
+	i := len(parts)
+	hasNarr := false
+	for i > 0 {
+		cur := strings.TrimSpace(parts[i-1])
+		if cur == "" || !hasLetterRune(cur) {
+			i-- // 尾碎片：先吸收，本身不计内核词，也不定性为正文
+			continue
+		}
+		if distinctCoreMarkers(parts[i-1]) >= 2 {
+			hasNarr = true
+			i--
+			continue
+		}
+		break // 第一个「有内容、内核词不足 2」的句子＝正文边界
+	}
+	if !hasNarr {
+		return text
+	}
+	body := strings.TrimSpace(strings.Join(parts[:i], ""))
+	if body == "" {
+		return text // 整条都是旁白＝异常，交给观测腿，不删空
+	}
+	return body
+}
+
 // sanitizeVisitorText 出站正文的末道卫生：剥开头方法论引子、剥内部规则回声、剥模型旁白、剥空括号、拆裸方括号链接文字、
 // 去 U+FFFD、收多余空行。在 postProcess 里、摘完【go:…】控制序列之后调用；
 // ★ 093x 起补翻产物也走这一道（engine.go 的 rehardenReplyRewrite），卫生只有一份。
+//
+// ★ D-LLM-20261001-001 P2/P3 补的两道**词面**旁白腿（stripRuleSelfReference／stripTrailingNarrationTail）
+// 排在 dropParentheticals 之后：成对括号旁白先被老闸收掉，剩下**不带括号／括号不配对**的自述才轮到这两道。
+// 引用**重合度**过滤（比对提示词自身的那条根治腿）需要语料、不在此纯函数里，见 engine.go 的
+// guardReplyInstructionEcho（挂在 Respond 咽喉、只在 Source=="llm" 上跑）。
 func sanitizeVisitorText(text string) string {
 	s := strings.ReplaceAll(text, "\uFFFD", "")
 	// ★ D-LLM-20261001-001：先剥开头的「先…再…：」方法论引子（不带括号，dropParentheticals 管不着它）。
 	// 放在最前面：引子剥掉后剩下的正文再走括号回声与旁白那几道，顺序不影响各自判据。
 	s = stripInstructionEchoLead(s)
 	s = dropParentheticals(s, visitorDropMarkers)
+	// ★ P2 两条词面旁白腿：规则自指（第 N 条×合规措辞）先收，再收尾部自述（≥2 内核词共现）。
+	s = stripRuleSelfReference(s)
+	s = stripTrailingNarrationTail(s)
 	s = strings.NewReplacer("（）", "", "()", "").Replace(s)
 	s = unwrapBrokenLinkBrackets(s)
 	// 连续 3 个及以上换行压成 2 个（模型爱在结尾甩一串空行，气泡里就是一段空白）
@@ -489,6 +658,33 @@ func unstrippedAsides(answerLang, text string) []string {
 			out = append(out, inner)
 		}
 		rest = rest[innerStart+rel:]
+	}
+	// ★ 第四条腿（P3，2026-10-02）：**不带括号**的尾部自述旁白候选。
+	// 前三条腿全按括号段办事，而现网残留形态（D-LLM-20261001-001 §十一）恰恰是**括号不成对**、
+	// 开头「（」被吃在半空的那一类——括号遍历够不到它，于是连一条 WARN 都没留、只能等用户截图。
+	// 词面删除腿（stripTrailingNarrationTail）已把**已实证的内核词**堵上，这条观测腿负责把
+	// **词表外的近邻形态**（单个 strongNarrationMarkers 命中）打进日志攒词条证据，同样一个字都不改正文。
+	out = append(out, trailingNarrationCandidates(text)...)
+	return out
+}
+
+// trailingNarrationCandidates 扫**成对括号之外**、含 strongNarrationMarkers 之一的句段当日志候选（不改正文）。
+// 与删除腿的分工：删除要 ≥2 个**内核词**共现才敢动正文（误伤半径压到最低），
+// 这里只报候选、允许过量，所以降到**单个强标记**即报——词表追不上模型措辞时，先让它出现在日志里。
+func trailingNarrationCandidates(text string) []string {
+	var out []string
+	for _, s := range splitNarrationSentences(text) {
+		t := strings.TrimSpace(s)
+		if t == "" {
+			continue
+		}
+		// 成对括号段交给前三条腿判，这里只管括号**之外**的裸句，避免同一形态报两遍。
+		if strings.ContainsAny(t, "（）()") {
+			continue
+		}
+		if containsAny(t, strongNarrationMarkers) && !containsAny(t, visitorDropMarkers) {
+			out = append(out, t)
+		}
 	}
 	return out
 }

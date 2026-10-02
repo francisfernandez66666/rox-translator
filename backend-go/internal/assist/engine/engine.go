@@ -618,6 +618,10 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	// 位置是刻意的：必须排在报价守卫与品牌归一**之前**——那两条吃的是最终出栈文本，
 	// 让它们对着没收口的稿子做判据，等于把"算式核验"和"控制序列残留"绑成谁先跑谁背锅。
 	rep = e.rehardenReplyRewrite(ctx, answer, rep)
+	// ★ D-LLM-20261001-001 P2（引用重合度过滤，2026-10-02）：正文里与提示词指令段高重合的句子整句丢弃。
+	// 位置刻意排在 reharden 之后、报价与品牌之前——这条删的是「抄提示词的旁白」，
+	// 先删干净再让报价／品牌对**留下的真正文**做判据，避免一条旁白里的假数字顶掉报价核验。
+	rep = e.guardReplyInstructionEcho(ctx, answer, rep)
 	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
 	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
 	// ★ 082x 第十条：旁白观测（只记 WARN 不改正文）。词表追不上模型措辞是这条链的常态，
