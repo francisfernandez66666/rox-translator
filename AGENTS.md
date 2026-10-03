@@ -531,4 +531,13 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
   不许是"把法语提问硬拖成英文"（补翻只在汉字占主体时触发）。简／繁当一个**书写体系**处理（繁体界面继续出繁体，不因简体提问换档）。
   ⚠️ 历史形态：整套机制只看界面语言 ⇒ 中文界面里的英文提问既撞上中文 canned 话术直配（不经模型，会改口那一分支轮空），
   出站又判"中文界面不用翻" ⇒ 混排气泡原样送出（用户带截图报的缺陷本体）。
-
+- **前端换源只走 tar，禁止 `scp -r dist`（★ 2026-10-03 〇-AP 收尾账：同一条现网泄漏第二次现形）**：
+  macOS 的 `.DS_Store` 会跟着 `scp -r` 落进 web 根，而 Caddy／`spa.go` **对磁盘上真实存在的 dotfile 不拦**
+  ⇒ 公网 `https://<站点>/.DS_Store` 直接 **200 可下载**（09-28 清过一次，10-01 那批用 scp 又把它带了回来）。
+  硬口径三条：① 打包前 `rm -f dist/.DS_Store`（`tar` 前后各数一次 dirty 文件必须为 0）；
+  ② 换源一律「scp tar → 服务器侧校验 tar 的 sha256 与本机一致 → 解到 `web.new` → 校验 `index.html` 入口与该入口引用的每个 asset 真落盘
+  → 两步 `mv`（`web`→`web_old.<TS>`、`web.new`→`web`）→ `chown -R root:caddy`＋`chmod -R o+rX`」，
+  ⚠️ 换完**按文件名时间戳**把 `web_old.*` 裁到 4 份（`ls -t` 会被 `cp -a` 继承的 mtime 骗到，见《部署指南》治理段）；
+  ③ 换源后复验两件事：`find <两站 web 根> -name '.DS_Store' | wc -l` **回 0**，且公网打 `/.DS_Store` 只回 **SPA 兜底 HTML**
+  （判据＝`content_type` 是 `text/html` 且字节数**等于该站首页大小**——回 `application/octet-stream` 或尺寸对不上就是磁盘上还有真文件）。
+  ⚠️ 同一条判据**别只测主站**：演示站 `/opt/translator-demo/web` 与主站是两条独立换源链（本批实测演示站入口落后主站**两代**还在 09-30 那份）。
