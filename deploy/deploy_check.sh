@@ -36,6 +36,17 @@ if [ "${1:-}" = "--systemd" ]; then
   echo "==> [S4] 旧 drop-in 清理（concurrency/hardening/mail/mem/pdffont/secrets 不得残留）"
   LEFTOVER=$(ls /etc/systemd/system/translator.service.d/ 2>/dev/null | grep -E '^(concurrency|hardening|mail|mem|pdffont|secrets)\.conf$')
   if [ -z "$LEFTOVER" ]; then ok "旧 drop-in 已清理"; else bad "残留 drop-in: $LEFTOVER"; fi
+  # ★ A9（R-1 修法 B 的现网负向锁，2026-10-04）：本次启动后「api key 无效 (401)」必须 0 条。
+  #   判据全文与"为什么只能放在这里"写在 deploy/check_upstream_401.sh 文件头，本处只做接线与计数归并。
+  echo "==> [S5] 本次启动后的上游 401（A9 负向锁）"
+  HERE401=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  if [ ! -f "$HERE401/check_upstream_401.sh" ]; then
+    bad "缺少 $HERE401/check_upstream_401.sh ⇒ 本条没跑，不许当成通过"
+  else
+    OUT401=$(bash "$HERE401/check_upstream_401.sh" 2>&1); RC401=$?
+    echo "$OUT401" | sed 's/^/     /'
+    [ "$RC401" = "0" ] && ok "上游 401 计数=0" || bad "上游 401 判据未成立（见上面那行 FAIL 的原因）"
+  fi
   echo ""
   [ "$FAIL" = "0" ] && echo "✅ systemd 沙箱验收全部通过（$PASS 项）" || { echo "❌ 通过 $PASS 项 / 失败 $FAIL 项"; exit 1; }
   exit 0

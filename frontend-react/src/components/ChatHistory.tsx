@@ -77,6 +77,10 @@ export default function ChatHistory() {
 
 type tplFn = ReturnType<typeof useT>[2]
 
+// ChatListPanelProps 左侧对话列表的入参。
+// convos/loading 由父层统一拉取后下传（列表与消息面板共用同一份刷新时机，
+// 各自再发一次请求会出现「刚删完一边还在显示另一边」的错位）；
+// selectedId 用字符串比较而非对象引用，父层每次刷新都会重建数组，引用不稳定。
 interface ChatListPanelProps {
   convos: ChatConv[]
   loading: boolean
@@ -86,6 +90,8 @@ interface ChatListPanelProps {
   tpl: tplFn
 }
 
+// ChatListPanel 左侧对话列表面板：空态、加载中、单条删除入口都在这里出。
+// 刻意不做本地过滤——列表的排序与筛选口径以服务端返回为准（两处各排一次必然漂移）。
 function ChatListPanel({ convos, loading, selectedId, onSelect, refresh, tpl }: ChatListPanelProps) {
 
   return (
@@ -158,6 +164,9 @@ interface MessagePanelProps {
   tpl: tplFn
 }
 
+// MessagePanel 右侧消息面板：未选中对话时给一句引导，选中后按时间序平铺气泡。
+// msgLoading 与 conv 是两件事——conv 有值但消息还在路上时必须显示加载态而不是空态，
+// 否则「历史一条都没有」和「还没取到」在界面上长得一样，用户会以为对话被删了。
 function MessagePanel({ conv, messages, msgLoading, tpl }: MessagePanelProps) {
 
   return (
@@ -205,6 +214,8 @@ interface MessageBubbleProps {
   isLast: boolean
 }
 
+// MessageBubble 单条气泡：用户右、助手左，isLast 只用于末尾那条给一点呼吸空间。
+// 内容一律按纯文本渲染（模型回的是 Markdown 原文，这里不引渲染器＝少一个 XSS 面）。
 function MessageBubble({ msg, isLast }: MessageBubbleProps) {
   const isUser = msg.role === 'user'
 

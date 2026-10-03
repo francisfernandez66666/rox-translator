@@ -860,6 +860,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"version": probeVersion,
 		"skills":  []string{"translation"},
+		// ★ R-1 修法 B（2026-10-04）：全局 LLM 密钥的可用性也要在这一面上看得见。
+		//   病灶的形态不是"配置错了"，而是"配错了没人知道"——占位 Key 只在启动日志里
+		//   打一条 INFO，之后三周每次调用都 401，而 /api/health 一直回 status:ok。
+		//   口径与 dispatch 那一组完全一致：**只出状态词**（ok / placeholder），
+		//   绝不出 Key 片段、供应商域名或任何可定位坐标（本端点匿名可达）。
+		"llm_global_key": s.llmGlobalKeyState(),
 		// ★ 2026-09-03 云端诊断：暴露核心模块初始化状态——
 		//   任一项 false 即对应模块未就绪（登录/翻译/租户接口会 500「平台存储未初始化」）。
 		"store_ready":  s.Store != nil,

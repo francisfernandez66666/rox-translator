@@ -48,7 +48,31 @@ const (
 	StageKBEmbed      = "kb_embed"      // 知识库 Embed 向量模型
 	StageInitialEvals = "initial_evals" // 初翻 Evals 评估模型
 	StageReviewEvals  = "review_evals"  // 校对 Evals 评估模型
+
+	// ★ 2026-10-04（R-1 修法 D 收尾）：kb_screen 此前只在 engine/kb_screen.go 里以
+	//   字面量出现，既没登记、管理台也就配不了这一档（引擎确实在读它）。
+	//   登记进名单后它与其他阶段同源；此前那种「代码里有、名单里没有」的键正是
+	//   「引擎会用、运营看不见」的配置黑洞形态。
+	StageKBScreen = "kb_screen" // 知识库候选筛查（批量判"这条术语值不值得入库"）
 )
+
+// ★ R-1 修法 D（2026-10-04）：阶段键的**单一事实源**。
+//
+// 为什么要这一份函数而不是各处写死清单：管理台读面白名单（api/admin_models.go
+// 的 handleStageModels）此前是手抄的五项，漏了 kb_match ⇒ 运营**看不见也配不了**
+// 这一档；而保存面又是覆盖式全量提交，「看不见」直接等于「被删掉」。
+// 引擎侧确实在用 kb_match（orchestrator/workflow.go、engine/file.go、engine/text.go
+// 都以 StageKBMatch 取模），所以这是「引擎会用、管理台看不见」的配置黑洞。
+// 规则：**新增任何取模点必须先登记到这里**，读面与写面都从这一份派生。
+//
+// 含 StageEvals（旧键）：它仍被 evals.New 当作 initial/review 之外的历史回落读，
+// 不进管理台卡片也无妨——写面现在对「本次未提交的键」做保留合并，不会再被抹掉。
+func AllStages() []string {
+	return []string{
+		StageKBMatch, StageAIInitial, StageKBEmbed,
+		StageInitialEvals, StageReview, StageReviewEvals, StageKBScreen, StageEvals,
+	}
+}
 
 // StageModel 单个流程阶段的模型配置（stage_models 中的一项）
 type StageModel struct {

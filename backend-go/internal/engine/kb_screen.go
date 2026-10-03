@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"translator/internal/config"
 )
 
 // ScreenCandidate 待行业化筛选的上传条目。
@@ -71,7 +73,11 @@ func (e *Engine) screenEntryBatch(ctx context.Context, industryName, seedHint st
 	}
 	messages := []map[string]string{{"role": "user", "content": sb.String()}}
 	base, key, model := e.resolveModel(ctx)
-	if b2, k2, m2, ok := e.resolveStageModel(ctx, "kb_screen"); ok {
+	// ★ 2026-10-04（R-1 修法 D）：阶段键改从 config 常量取——此前这里是裸字面量 "kb_screen"，
+	//   名单里没登记 ⇒ 管理台既看不见也存不进这一档，引擎那一档永远只能吃全局默认模型
+	//   （「代码里有、名单里没有」的配置黑洞）。筛查不是翻译腿，所以它直读阶段配置、
+	//   不走 resolveModelForStage 那条「退回初翻」的咽喉（见该函数的射程说明）。
+	if b2, k2, m2, ok := e.resolveStageModel(ctx, config.StageKBScreen); ok {
 		base, key, model = b2, k2, m2
 	}
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 600, false, 0.0)

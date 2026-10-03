@@ -147,4 +147,19 @@ describe('TrialPanel · 首屏装配与分支', () => {
     const sel = await screen.findByLabelText(t('land.trial.to'))
     expect((sel as HTMLSelectElement).value).toBe('zh')
   })
+
+  // ★ ㊵ 的等值锁补齐（2026-10-04 R-1 批）：默认档必须是**这一个事实**，不许成为可调项。
+  // 为什么 A＋F＋本条要一起站着：R-1 现网抓到「中文界面点开首页试用＝默认 en＝100% 500」之后，
+  // 最省事的"修复"是把默认档改成 zh（那条腿当时恰好活着）。那不是修缺陷，是把 P0 藏起来
+  // ——访客再也看不到 500，但 Pro 翻译腿照旧死着，而且再没有人的屏幕上会出现它。
+  // 所以这里把两档都钉成**等值**（zh 界面→en、非 zh 界面→zh），本条再补简/繁同一档：
+  // 判据是 `lang.startsWith('zh')`，繁体若被单拎出来改成 zh，下面这条会红。
+  // 反证（本轮真跑过，见 closeout 账）：把 defaultTarget 写成恒 'zh' ⇒ A 与本条红；
+  //                          写成恒 'en' ⇒ F 红；写成 'zh_hant' 特判 ⇒ 本条红。
+  it('F2 繁体中文界面与简体同档：默认仍是 en（简繁是一个书写体系）', async () => {
+    setLang('zh_hant')
+    open()
+    const sel = await screen.findByLabelText(t('land.trial.to'))
+    expect((sel as HTMLSelectElement).value).toBe('en')
+  })
 })
