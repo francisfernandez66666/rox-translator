@@ -109,9 +109,13 @@ func TestEngineErrorPayloadFrameLock(t *testing.T) {
 }
 
 // TestCodeSensitiveBlockedWireValueLocked 对外契约锁：敏感词码的**线上传输值**不许改。
-// T36/T37（OpenAPI 断言）与 SDK 消费方按该字符串分支，engine.CodeSensitiveBlocked 常量
-// 可以移动位置、可以改引用方式，但值一改即破坏兼容（F-53 的改法是补 error_code 这条腿，
-// 不是重命名码值）。
+// 消费这一值的是**对话面**（SSE error 帧的 error_code，前端 useChat 按它取本语种词条，
+// 同步锁见 upstream_failure_face_test.go 的 TestEngineStableCodesMatchExternalContractList）。
+// ★ 口径校准（2026-10-04 〇-AR 第 2 波）：OpenAPI 面（/openapi/v1/translate，UAT T36/T37）
+// **不再**透出这一内部码——修法 F 把它归到对外既有档 rejected/403（与异步面 gateErrorCode 同档），
+// 所以 T36/T37 现在断的是 error_code=rejected＋人话，本锁的射程只剩对话面与前端。
+// 值本身依旧不许改：可以移动常量位置、可以改引用方式，但值一改即破坏前端兼容
+// （F-53 的改法是补 error_code 这条腿，不是重命名码值）。
 func TestCodeSensitiveBlockedWireValueLocked(t *testing.T) {
 	if engine.CodeSensitiveBlocked != "sensitive_blocked" {
 		t.Fatalf("敏感词稳定码的线上值被改动：%q —— 这是对外契约，T36/T37 与 SDK 会同时失联", engine.CodeSensitiveBlocked)

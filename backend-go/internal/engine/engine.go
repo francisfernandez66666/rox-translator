@@ -903,6 +903,13 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 	}
 
 	pending := need
+	// ★ 修法 E（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭/#13）：认证类失败（401/403）的止损开关。
+	//   这一环是「轮次化重试队列」，为 429/超时/网络抖动设计——退避一轮确实可能过去。
+	//   但同一张废键重试三次只是把它打三遍：现网 R-1 期间三个目标语种 × 三轮 = 9 次恒 401 的
+	//   出站调用，P95 被拖长约 6.6s，还多烧两次配额，而客户看到的仍然是「没译文」。
+	//   所以命中认证类失败时：本轮照常收尾（在途的并发不收，避免半途写脏），
+	//   但**不再排下一轮**，并把日志抬到 ERROR（重试没意义＝键要人来换，这是运维动作不是抖动）。
+	authBail := false
 	for attempt := 0; attempt < maxAttempts && len(pending) > 0; attempt++ {
 		if ctx.Err() != nil {
 			return // 上下文取消：不再重试
@@ -925,9 +932,18 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 
 				tr, err := e.callSingleLang(ctx, zhText, lang, examples, sourceLang, stage)
 				if err != nil {
-					log.Printf("[translate] %s 翻译失败（第%d次尝试）: %v", lang, attempt+1, err)
+					auth := llm.IsAuthError(err)
+					if auth {
+						observability.Error(ctx, "翻译上游鉴权失败（本批次不再重试，请检查 api key）",
+							"lang", lang, "attempt", attempt+1, "error", err.Error())
+					} else {
+						log.Printf("[translate] %s 翻译失败（第%d次尝试）: %v", lang, attempt+1, err)
+					}
 					mu.Lock()
 					failed = append(failed, lang) // 失败排到队尾，下一轮继续
+					if auth {
+						authBail = true
+					}
 					mu.Unlock()
 					tr = ""
 				}
@@ -939,6 +955,10 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 		}
 		wg.Wait()
 		pending = failed // 队尾重排：失败语言等其余语言完成后再试
+		if authBail {
+			observability.Error(ctx, "上游鉴权失败短路重试队列", "remaining_langs", len(pending), "rounds_used", attempt+1)
+			return
+		}
 		if len(pending) > 0 {
 			if !sleepCtx(ctx, retrySleep) { // ★ D9：上游已取消则不再排下一轮
 				return

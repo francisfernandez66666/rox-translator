@@ -944,12 +944,21 @@ SSAVE '{"free_trial_points":1000}' >/dev/null   # 还原默认体验积分（100
 # ② S8 敏感词闸（词包见 run_uat 注入：紫火核弹T36；输入命中不进模型）
 AK36=$(post "$H1" '{"name":"t36-key"}' /api/apikeys/create | pv '.get("api_key","")')
 S36(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK36" -H "$J" -d "$1"; }
-ck T36-sensitive-block 'sensitive_blocked' "$(S36 '{"text":"请翻译：紫火核弹T36 常规句子","target_lang":"en","source_lang":"zh"}')"
+# ★ 修法 F（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭）改写本段判据：
+#   同步 /openapi/v1/translate 的敏感词拒译出参，旧形态是「409＋message 里塞内部码
+#   sensitive_blocked」（F-53 在对话面修过的那个裸键名，这一面当时漏了），本批改成
+#   「403＋error_code=rejected＋人话」——与异步面 gateErrorCode 的内容类拒绝同一档。
+#   于是旧断言 grep 的正是那句被判定为泄漏的键名，必须随批换掉（换掉不等于放宽：
+#   这里同时补了「人话到位」与「报文里不再出现裸内部码」两条腿，一正一负配齐）。
+SENS36_BLOCK=$(S36 '{"text":"请翻译：紫火核弹T36 常规句子","target_lang":"en","source_lang":"zh"}')
+ck T36-sensitive-block '"error_code":"rejected"' "${SENS36_BLOCK}"
+ck T36-sensitive-copy '内容合规审核|不予受理' "${SENS36_BLOCK}"
+if echo "${SENS36_BLOCK}" | grep -qE 'sensitive_blocked'; then FAIL=$((FAIL+1)); echo "FAIL|T36-sensitive-no-raw-internal-code"; else PASS=$((PASS+1)); echo "PASS|T36-sensitive-no-raw-internal-code"; fi
 ck T36-sensitive-passthrough '"success": *true' "$(S36 '{"text":"纯净文本仅用于闸外验证","target_lang":"en","source_lang":"zh"}')"
 SSAVE '{"sensitive_gate_enabled":"0"}' >/dev/null
 ck T36-sensitive-off-passthrough '"success": *true' "$(S36 '{"text":"关闸后含词也不拦：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
 SSAVE '{"sensitive_gate_enabled":"1"}' >/dev/null
-ck T36-sensitive-on-again 'sensitive_blocked' "$(S36 '{"text":"再开闸恢复拦截：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
+ck T36-sensitive-on-again '"error_code":"rejected"' "$(S36 '{"text":"再开闸恢复拦截：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
 ck T36-settings-gate-bad-reject '"success": *false' "$(SSAVE '{"sensitive_gate_enabled":"2"}')"
 
 # ③ S3 一次性邮箱黑名单
@@ -1037,9 +1046,12 @@ dbcfg base_domain ''
 # ④ T37-4（P0-5）：敏感词 Unicode 归一化——全角/零宽/字间空格混淆全部拦截（OpenAPI 同步通道 e2e）
 AK37=$(post "$H1" '{"name":"t37-key"}' /api/apikeys/create | pv '.get("api_key","")')
 S37(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK37" -H "$J" -d "$1"; }
-ck T37-sens-fullwidth 'sensitive_blocked' "$(S37 '{"text":"请翻译：紫火核弹Ｔ３６ 常规句子","target_lang":"en","source_lang":"zh"}')"
-ck T37-sens-zerowidth 'sensitive_blocked' "$(S37 '{"text":"紫\u200b火\u200b核\u200b弹T36 隐藏词","target_lang":"en","source_lang":"zh"}')"
-ck T37-sens-spaced 'sensitive_blocked' "$(S37 '{"text":"紫 火 核 弹 T36 空格混淆","target_lang":"en","source_lang":"zh"}')"
+# ★ 同 T36：本批起 OpenAPI 面把内容类拒绝归到 rejected/403（不再往外发内部码
+#   sensitive_blocked），三条混淆形态的判据随之换成码位断言——三条仍必须全红才说明漏拦，
+#   只要有一条回 success:true 就是归一化腿被绕过（闸外正对照见 T36-sensitive-passthrough）。
+ck T37-sens-fullwidth '"error_code":"rejected"' "$(S37 '{"text":"请翻译：紫火核弹Ｔ３６ 常规句子","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-zerowidth '"error_code":"rejected"' "$(S37 '{"text":"紫\u200b火\u200b核\u200b弹T36 隐藏词","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-spaced '"error_code":"rejected"' "$(S37 '{"text":"紫 火 核 弹 T36 空格混淆","target_lang":"en","source_lang":"zh"}')"
 
 # ⑤ T37-5（P1-15）：充值 points 非法大值必须 400 拒绝（防 int64 溢出负订单），合法值仍可下单
 ck T37-points-overflow-reject '超出允许范围' "$(curl -s $B/api/pay/create -H "$AH" -H "$J" -d '{"points":2199023255552}')"

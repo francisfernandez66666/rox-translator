@@ -90,6 +90,33 @@ func writeOpenAPIError(w http.ResponseWriter, ctx context.Context, code, message
 	writeJSON(w, errors.StatusForCode(code), body)
 }
 
+// openAPIEngineFailure 把引擎业务失败翻成 OpenAPI 出参的（对外错误码, 人类文案）二元组
+// （★ 修法 F，2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭）。
+// 参数 res: HandleText 的结果（其 Error 非空时才有意义）。
+// 返回: code＝**沿用 OpenAPI v1 既有的对外码表，一个都不新造**，三档各归其位——
+// 余额中止→insufficient_balance/402（异步面 gateErrorCode 早就这么报，同步面此前一律 409 是两套账）；
+// 内容合规拒译→rejected/403（＝异步闸门未命中余额/频率关键词时的同一档，"载荷本身被拒"不是"这次没做成"）；
+// 其余含「零可用译文」→task_failed/409（与异步面 F-42-d 的同一形态同源）。
+// message＝引擎放在 Reply 里的那句人话，意外为空时回按码分档的默认句，绝不回裸码
+// （F-53 的教训：客户报文里出现 sensitive_blocked 这种键名，接入方会当文案展示）。
+func openAPIEngineFailure(res *engine.TextTranslateResult) (string, string) {
+	code := string(errors.OpenAPITaskFailed)
+	defaultMsg := "本次翻译未产出可用译文（上游暂时不可用），请稍后重试。"
+	switch strings.TrimSpace(res.Error) {
+	case engine.CodeInsufficientBalance:
+		code = string(errors.OpenAPIInsufficient)
+		defaultMsg = "积分余额不足，本次翻译已中止，请充值或升级套餐后重试。"
+	case engine.CodeSensitiveBlocked:
+		code = string(errors.OpenAPIRejected)
+		defaultMsg = "内容不符合平台受理范围，本次请求已被拒绝翻译。"
+	}
+	msg := strings.TrimSpace(res.Reply)
+	if msg == "" {
+		msg = defaultMsg
+	}
+	return code, msg
+}
+
 // balanceOut 组装余额出参字段（★ 双桶口径，评审整改 A1 + 2026-09-19 积分口径）：
 // balance_points=可用总额（台账+永久，积分）；points_grants/points_permanent 为明细；
 // balance_sentences_approx 按总额折算句数。token 裸值不再对 API 客户透出
@@ -783,7 +810,18 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)
-		writeOpenAPIError(w, r.Context(), string(errors.OpenAPITaskFailed), res.Error)
+		// ★ 修法 F（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭）：失败出参的**码位**与**文案**各归其位。
+		//   旧写法 `writeOpenAPIError(..., task_failed, res.Error)` 有两个问题：
+		//   ① message 里塞的是稳定码（客户报文里就是 `sensitive_blocked`／`upstream_failed`
+		//      这种裸键名，F-53 在对话面修过，这一面漏了）；
+		//   ② 余额类失败在异步面早就报 insufficient_balance/402、内容类拒绝在异步面走泛化 rejected/403
+		//      （见 :475 那段 F-42 系映射与 gateErrorCode），同步面却一律 task_failed/409
+		//      ——同一件事两套账，SDK 按码分支必然只命中一半。
+		//   现在：码按引擎码分流到**既有**对外码（不新造码 ⇒ 零契约扩张：余额→402、内容→403、
+		//   "零可用译文"→与异步面 F-42-d 同源的 task_failed/409），文案取 Reply 里那句人话，
+		//   Reply 意外为空时回默认句（空 message 会让 SDK 客户以为服务端坏了）。
+		failCode, failMsg := openAPIEngineFailure(res)
+		writeOpenAPIError(w, r.Context(), failCode, failMsg)
 		return
 	}
 	// ⑥ 实时计费已在每次 LLM 调用时由 eng.LLM.OnUsage 完成（边工作边计费，防白嫖），

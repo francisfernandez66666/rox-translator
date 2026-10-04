@@ -184,6 +184,14 @@ func (e *Engine) HandleText(ctx context.Context, text string, options map[string
 		return &TextTranslateResult{Skill: "translation", Reply: msg, Error: CodeSensitiveBlocked}
 	}
 	res := e.handleTextCore(ctx, text, options, prog)
+	// ★ 修法 F（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭）：出口先收敛「空壳成功」——
+	//   模型/知识库全腿没产出一条可用译文时，core 只会「跳过空译文不拼接」，Error 恒为空，
+	//   于是对话发 done 空壳、OpenAPI 回 success:true。判据与错误码见 upstream_failure.go。
+	//   与下面那道输出侧敏感词闸**互斥**（那道闸的进入条件写着 len(Translations)>0，
+	//   而本收敛的前提是「一条非空译文都没有」），所以两条的先后不改变行为；
+	//   写在这里只为了读代码的人一眼看到「失败诚实性」这一层在合规闸之前就已经完成。
+	//   反证＝把这一行摘掉：A7 与 api 侧的 ⑭ 回归锁一起红（回到空壳报成功）。
+	e.convergeEmptyResult(ctx, res)
 	// 输出侧兑底：模型自产敏感内容整单拒付（文本通道为单块交付，不做段级替换）
 	if res != nil && res.Error == "" && len(res.Data.Translations) > 0 {
 		if msg := e.sensitiveTextGuardOutput(ctx, res.Data.Translations); msg != "" {

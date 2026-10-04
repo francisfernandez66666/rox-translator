@@ -621,8 +621,17 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 	if resp.StatusCode == 429 {
 		return "", "", &StatusError{Code: 429}
 	}
-	if resp.StatusCode == 401 {
-		return "", "", fmt.Errorf("api key 无效 (401)")
+	// ★ 修法 E（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭/#13）：401/403 也改抛**类型化** StatusError。
+	//   旧形态这里退裸 fmt.Errorf("api key 无效 (401)")，于是两条判定同时失灵：
+	//   ① engine.isServerError 只认 errors.As 的 *StatusError ⇒ P1-6 那条「5xx/401 一并降级到
+	//      备用供应商」的既定行为从没为 401 发生过（主键错了就死在主供应商上，备用腿一次都不拨）；
+	//   ② 引擎重试环拿不到「这是认证类失败」的信号 ⇒ 同一张废键在「多语种 × 三轮」里被打满
+	//      （现网读数：P95 因此多拖约 6.6s，还白烧两次出站调用）。
+	//   文案仍保留 `api key 无效 (401)` 这句字面量（A9 的发版验收脚本 grep 的就是它，
+	//   见 deploy/check_upstream_401.sh 与其保鲜锁），响应体摘要非空时追加在后面。
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return "", "", &StatusError{Code: resp.StatusCode, Body: string(b), Auth: true}
 	}
 	if resp.StatusCode != 200 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
@@ -708,8 +717,11 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 	switch {
 	case resp.StatusCode == 429:
 		return "", "", &StatusError{Code: 429}
-	case resp.StatusCode == 401:
-		return "", "", errors.New("api key 无效 (401)")
+	// ★ 修法 E：流式腿与同步腿同一口径（401/403 类型化，判定不靠文案子串），
+	//   否则「非流式已经短路重试了、流式还在三试」——对话面正是走这条腿。
+	case resp.StatusCode == 401, resp.StatusCode == 403:
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return "", "", &StatusError{Code: resp.StatusCode, Body: string(b), Auth: true}
 	case resp.StatusCode != 200:
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
 		return "", "", &StatusError{Code: resp.StatusCode, Body: string(b)}
@@ -817,14 +829,45 @@ func isRateLimit(err error) bool {
 type StatusError struct {
 	Code int
 	Body string // 非 200 响应体摘要（≤500B）
+	// Auth ★ 修法 E（2026-10-04）：401/403 这类「换键/换权限才有救」的失败标记。
+	// 判定一律走这个字段或 Code，不许再看文案子串（供应商改措辞即失灵）。
+	Auth bool
 }
 
 // Error 实现 error 接口：429 统一归一化为 rate_limited 标记，便于上游限流识别。
+// ★ 修法 E：认证类失败保留历史字面量 `api key 无效 (401)`——A9 发版验收脚本
+// （deploy/check_upstream_401.sh）与它的保鲜锁 grep 的就是这句，改文案等于把门禁扫瞎；
+// 供应商原文只在非空时追加在后面，绝不替换前缀。
 func (e *StatusError) Error() string {
 	if e.Code == 429 {
 		return "rate_limited: HTTP 429"
 	}
+	if e.Auth || e.Code == 401 || e.Code == 403 {
+		lead := "api key 无效 (401)"
+		if e.Code == 403 {
+			lead = "api key 无访问权限 (403)"
+		}
+		if b := strings.TrimSpace(e.Body); b != "" {
+			return lead + ": " + b
+		}
+		return lead
+	}
 	return fmt.Sprintf("LLM API HTTP %d: %s", e.Code, e.Body)
+}
+
+// IsAuthError ★ 修法 E：判定「这是密钥/权限类失败」——重试与降级口径据此短路。
+// 参数 err: 任意 error（含被 %w 包装过的）。
+// 返回: true 表示重试没有意义（键不会自己变对），调用方应尽快收手并把日志抬到 WARN/ERROR。
+// 注意：429 不属于这一族（限流是时间窗问题，退避后重试正是它的解法）。
+func IsAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var se *StatusError
+	if errors.As(err, &se) {
+		return se.Auth || se.Code == 401 || se.Code == 403
+	}
+	return false
 }
 
 // EmbedResponse 嵌入响应（OpenAI 兼容 embeddings 格式，兼容 SiliconFlow 智谱等）

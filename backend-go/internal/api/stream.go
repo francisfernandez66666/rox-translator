@@ -73,13 +73,19 @@ func sseEvent(eventType string, payload map[string]interface{}) string {
 // 现在 ② 走「error_code 下发稳定码 + error 下发那句人话」，与日限额分支
 // （上面 gateErr 走 billing.QuotaErrCode 的同一族写法）对齐；前端有码就按码取本语种词条，
 // 没命中词条时至少是一句人话，不会再露键名。① 保持只发 error，**不硬造假码**。
+//
+// ★ 修法 F（2026-10-04 〇-AR 第 2 波）：这一支从「只认 sensitive_blocked」改成**问登记表**
+// （engine.IsStableErrorCode）。原因不是形式洁癖：出口收敛新增了 upstream_failed／
+// insufficient_balance 两个码，硬编码单值的写法会让新码掉进 ① 那支、把裸码当文案发给客户，
+// 正是 F-53 同一形态的复发。登记表在 engine 侧只有一份，加一个码就自动进射程。
 func engineErrorPayload(errStr, reply string) map[string]interface{} {
-	if strings.TrimSpace(errStr) == engine.CodeSensitiveBlocked {
+	code := strings.TrimSpace(errStr)
+	if engine.IsStableErrorCode(code) {
 		msg := strings.TrimSpace(reply)
 		if msg == "" {
 			msg = errStr // Reply 意外为空时至少与旧行为一致，绝不发空串（空 error 会让前端显示空白气泡）
 		}
-		return map[string]interface{}{"error": msg, "error_code": engine.CodeSensitiveBlocked}
+		return map[string]interface{}{"error": msg, "error_code": code}
 	}
 	return map[string]interface{}{"error": errStr}
 }
@@ -596,7 +602,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
-		res.Reply = "❌ 处理出错: " + res.Error
+		// ★ 修法 F（2026-10-04 〇-AR 第 2 波）：稳定码不能再拼进 Reply——
+		//   旧写法把 `❌ 处理出错: sensitive_blocked` 这类**裸键名**当人话回给客户
+		//   （F-53 在同一族的 SSE 面上修过，非流式这一面漏了）。码类失败引擎已经把
+		//   人类话术放在 Reply 里，这里原样保留；只有「Error 本来就是中文句子」的旧形态才加前缀。
+		//   出参结构不变（仍是 HTTP 200 + res.error 字段），只改文案，不构成对外契约破坏。
+		if !engine.IsStableErrorCode(res.Error) {
+			res.Reply = "❌ 处理出错: " + res.Error
+		}
 		s.metrics.countTranslate("text", false)
 	} else {
 		s.metrics.countTranslate("text", true)
