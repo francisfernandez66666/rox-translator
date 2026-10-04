@@ -234,6 +234,10 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	if req.APIKey != "" && !hasMask(req.APIKey) {
 		s.Cfg.OnlineAPIKey = req.APIKey
 		s.Cfg.OnlineAPIKeyIsPlaceholder = false
+		// ★ 来源锚点跟着值一起改（〇-AR 第 5 波现网补腿）：这一把是**刚写进库的**，不是 env 给的。
+		//   留着旧档位（env 配置过的部署上就是 "env"）会让本进程后面每一次解析都短路库读，
+		//   于是"这台只认这次保存的值、以后库里再怎么改都不跟"——正是本波要消灭的机群分叉。
+		s.Cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyDB
 	}
 	if req.Model != "" {
 		s.Cfg.OnlineModel = req.Model
@@ -246,6 +250,8 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		if sc == "translation" {
 			s.Cfg.OnlineAPIKey = ""
 			s.Cfg.OnlineAPIKeyIsPlaceholder = true
+			// 清除＝这把 Key 的来源没了；档位不一起改的话，下一轮解析仍按旧档位短路（同上条补腿）
+			s.Cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyNone
 		}
 		if sc == "embedding" {
 			s.Cfg.EmbedAPIKey = ""

@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"log/slog"
@@ -31,6 +32,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"translator/internal/config"
+	"translator/internal/llmsource"
 	"translator/internal/store"
 )
 
@@ -176,6 +178,9 @@ func TestStartupHydratesEmbedKeyWithZeroRoutes(t *testing.T) {
 	// 翻译腿先给一条可用 Key，确保 embed 腿不是"跟着翻译腿顺带跑"的假绿
 	cfg.OnlineAPIKey = "sk-trans-ok"
 	cfg.OnlineAPIKeyIsPlaceholder = false
+	// ★ 这一档必须连"来源"一起声明：模拟的是**环境变量真给了 Key** 的部署形态。
+	//   〇-AR 第 5 波补腿之后，env 短路只认 OnlineAPIKeyOrigin，不认"值非空＋非占位"这两个派生状态。
+	cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyEnv
 
 	hydrateLLMKeys(cfg, st)
 	// 注：翻译腿非占位时 hydrateLLMKeys 直接走 env 分支返回，embed 不覆盖——
@@ -349,6 +354,8 @@ func TestEnvProvidedKeyIsNeverOverridden(t *testing.T) {
 	cfg := placeholderCfg(t)
 	cfg.OnlineAPIKey = "sk-from-env"
 	cfg.OnlineAPIKeyIsPlaceholder = false
+	// 这一条测的是"环境变量真给了 Key"，档位必须照说（第 5 波补腿：短路判据改认来源锚点）
+	cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyEnv
 	if err := st.SetConfig("online_api_key", store.EncryptSecret("sk-from-db")); err != nil {
 		t.Fatalf("写入失败: %v", err)
 	}
@@ -357,5 +364,76 @@ func TestEnvProvidedKeyIsNeverOverridden(t *testing.T) {
 	}
 	if cfg.OnlineAPIKey != "sk-from-env" {
 		t.Fatalf("env 凭据被库值覆盖：got=%q", cfg.OnlineAPIKey)
+	}
+}
+
+// TestHydratedKeyIsNotRecordedAsEnv ★ 第 5 波补腿（现网演示单元抓到的一条，见《修改文档》§十二）。
+//
+// 现象（都有日志实证）：一台**没配** SILICONFLOW_API_KEY 的实例，启动时从库里的模型路由水合到可用 Key，
+// 随后的热加载日志却出 `from":"env"`。根因是水合把 cfg 的**派生状态**（值非空＋占位标记翻假）
+// 留在了那儿，下一轮解析按"env 已给可用 Key ⇒ 库值一条都不覆盖"的短路把这台钉死在水合那一刻的旧值上——
+// 运营之后在管理台改 Key，这台永远不跟，而日志的档位还会把排查方向整个带偏。
+//
+// 三条判据按因果链排：
+//
+//	① 水合之后 cfg 的来源档位必须写清楚是 route（不许是 env，也不许留空）；
+//	② 库里随后出现新的 online_api_key ⇒ 同一台**不重启**必须跟上（这才是"每台热加载"）；
+//	③ 反向对照：env 真给了 Key 的部署上，库值照旧不许覆盖（AGENTS §一·3 的优先序不能被这条改动削掉）。
+//
+// 反证（两条各摘一条分别实跑，别只看一条就以为两条都锁住了）：
+//
+//	删掉 Snapshot.ApplyTo 里回写 OnlineAPIKeyOrigin 那一行 ⇒ **①**红（档位停在 none，与快照不同源），
+//	    ②照旧绿——"值写对了但来源没写"不会让这台停摆，只会让读档的人被骗，所以这一句只能由①管；
+//	把 Resolve 的档位判据摘掉（回到只看派生状态 `!placeholder && key != ""`）⇒ **②**红（这台停在旧路由 Key 上），
+//	    ①照旧绿。两条合起来才盖住「现网演示单元」那一台的完整因果链。
+func TestHydratedKeyIsNotRecordedAsEnv(t *testing.T) {
+	t.Setenv("SILICONFLOW_API_KEY", "")
+	t.Setenv("ONLINE_API_KEY", "")
+	t.Setenv("LLM_CONFIG_RELOAD_TTL_SEC", "0") // 每个读点都真探一次库，TTL 节流不许替这条判据打掩护
+	llmsource.ResetForTest()
+	t.Cleanup(llmsource.ResetForTest)
+
+	st := newHydrateStore(t)
+	cfg := config.Default()
+	routesRaw, err := json.Marshal([]config.ProviderConfig{
+		{Provider: "global", APIBase: "https://route.example/v1", APIKey: store.EncryptSecret("sk-from-route"), Model: "route/Model", Weight: 100},
+	})
+	if err != nil {
+		t.Fatalf("序列化路由失败: %v", err)
+	}
+	if err := st.SetConfig("model_routes", string(routesRaw)); err != nil {
+		t.Fatalf("写入 model_routes 失败: %v", err)
+	}
+
+	if got := hydrateLLMKeys(cfg, st); got != llmKeyFromRoute {
+		t.Fatalf("前置不成立：库里只有路由带 Key，水合来源应为 route，实际 %q", got)
+	}
+	if cfg.OnlineAPIKeyOrigin != llmsource.FromRoute {
+		t.Fatalf("①水合后 cfg 来源档位=%q，期望 route（值与来源必须同时回写，否则 env 短路会被派生状态骗住）", cfg.OnlineAPIKeyOrigin)
+	}
+
+	// ② 运营在管理台保存了一把新的在线 Key（库里 online_api_key 现值 ＝ 运营显式意图，优先级高于路由）
+	if err := st.SetConfig("online_api_key", store.EncryptSecret("sk-ops-new")); err != nil {
+		t.Fatalf("写入 online_api_key 失败: %v", err)
+	}
+	if ok := llmsource.Refresh(context.Background(), st, cfg); !ok {
+		t.Fatalf("②库里换了 Key 而这台没换快照（Refresh 判没变）⇒ 档位短路仍在生效")
+	}
+	if live := llmsource.Live(); live.OnlineAPIKey != "sk-ops-new" {
+		t.Fatalf("②热加载后仍用水合那一刻的旧值：got=%q from=%q", live.OnlineAPIKey, live.From)
+	}
+	if live := llmsource.Live(); live.From != llmsource.FromDB {
+		t.Fatalf("②来源档位应翻成 db，实得 %q（档位是排障抓手，不是装饰）", live.From)
+	}
+
+	// ③ 反向对照：env 那档真给了 Key ⇒ 库里的新值一条都不覆盖
+	t.Setenv("SILICONFLOW_API_KEY", "sk-real-env-key")
+	envCfg := config.Default()
+	if envCfg.OnlineAPIKeyOrigin != llmsource.FromEnv {
+		t.Fatalf("③前置不成立：env 给了 Key 却没钉上 env 档位，origin=%q", envCfg.OnlineAPIKeyOrigin)
+	}
+	snap := llmsource.Resolve(envCfg, st)
+	if snap.OnlineAPIKey != "sk-real-env-key" || snap.From != llmsource.FromEnv {
+		t.Fatalf("③env 优先序被这条补腿改坏：key=%q from=%q", snap.OnlineAPIKey, snap.From)
 	}
 }
