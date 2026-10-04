@@ -944,12 +944,21 @@ SSAVE '{"free_trial_points":1000}' >/dev/null   # 还原默认体验积分（100
 # ② S8 敏感词闸（词包见 run_uat 注入：紫火核弹T36；输入命中不进模型）
 AK36=$(post "$H1" '{"name":"t36-key"}' /api/apikeys/create | pv '.get("api_key","")')
 S36(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK36" -H "$J" -d "$1"; }
-ck T36-sensitive-block 'sensitive_blocked' "$(S36 '{"text":"请翻译：紫火核弹T36 常规句子","target_lang":"en","source_lang":"zh"}')"
+# ★ 修法 F（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭）改写本段判据：
+#   同步 /openapi/v1/translate 的敏感词拒译出参，旧形态是「409＋message 里塞内部码
+#   sensitive_blocked」（F-53 在对话面修过的那个裸键名，这一面当时漏了），本批改成
+#   「403＋error_code=rejected＋人话」——与异步面 gateErrorCode 的内容类拒绝同一档。
+#   于是旧断言 grep 的正是那句被判定为泄漏的键名，必须随批换掉（换掉不等于放宽：
+#   这里同时补了「人话到位」与「报文里不再出现裸内部码」两条腿，一正一负配齐）。
+SENS36_BLOCK=$(S36 '{"text":"请翻译：紫火核弹T36 常规句子","target_lang":"en","source_lang":"zh"}')
+ck T36-sensitive-block '"error_code":"rejected"' "${SENS36_BLOCK}"
+ck T36-sensitive-copy '内容合规审核|不予受理' "${SENS36_BLOCK}"
+if echo "${SENS36_BLOCK}" | grep -qE 'sensitive_blocked'; then FAIL=$((FAIL+1)); echo "FAIL|T36-sensitive-no-raw-internal-code"; else PASS=$((PASS+1)); echo "PASS|T36-sensitive-no-raw-internal-code"; fi
 ck T36-sensitive-passthrough '"success": *true' "$(S36 '{"text":"纯净文本仅用于闸外验证","target_lang":"en","source_lang":"zh"}')"
 SSAVE '{"sensitive_gate_enabled":"0"}' >/dev/null
 ck T36-sensitive-off-passthrough '"success": *true' "$(S36 '{"text":"关闸后含词也不拦：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
 SSAVE '{"sensitive_gate_enabled":"1"}' >/dev/null
-ck T36-sensitive-on-again 'sensitive_blocked' "$(S36 '{"text":"再开闸恢复拦截：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
+ck T36-sensitive-on-again '"error_code":"rejected"' "$(S36 '{"text":"再开闸恢复拦截：紫火核弹T36","target_lang":"en","source_lang":"zh"}')"
 ck T36-settings-gate-bad-reject '"success": *false' "$(SSAVE '{"sensitive_gate_enabled":"2"}')"
 
 # ③ S3 一次性邮箱黑名单
@@ -1037,9 +1046,12 @@ dbcfg base_domain ''
 # ④ T37-4（P0-5）：敏感词 Unicode 归一化——全角/零宽/字间空格混淆全部拦截（OpenAPI 同步通道 e2e）
 AK37=$(post "$H1" '{"name":"t37-key"}' /api/apikeys/create | pv '.get("api_key","")')
 S37(){ curl -s $B/openapi/v1/translate -H "Authorization: Bearer $AK37" -H "$J" -d "$1"; }
-ck T37-sens-fullwidth 'sensitive_blocked' "$(S37 '{"text":"请翻译：紫火核弹Ｔ３６ 常规句子","target_lang":"en","source_lang":"zh"}')"
-ck T37-sens-zerowidth 'sensitive_blocked' "$(S37 '{"text":"紫\u200b火\u200b核\u200b弹T36 隐藏词","target_lang":"en","source_lang":"zh"}')"
-ck T37-sens-spaced 'sensitive_blocked' "$(S37 '{"text":"紫 火 核 弹 T36 空格混淆","target_lang":"en","source_lang":"zh"}')"
+# ★ 同 T36：本批起 OpenAPI 面把内容类拒绝归到 rejected/403（不再往外发内部码
+#   sensitive_blocked），三条混淆形态的判据随之换成码位断言——三条仍必须全红才说明漏拦，
+#   只要有一条回 success:true 就是归一化腿被绕过（闸外正对照见 T36-sensitive-passthrough）。
+ck T37-sens-fullwidth '"error_code":"rejected"' "$(S37 '{"text":"请翻译：紫火核弹Ｔ３６ 常规句子","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-zerowidth '"error_code":"rejected"' "$(S37 '{"text":"紫\u200b火\u200b核\u200b弹T36 隐藏词","target_lang":"en","source_lang":"zh"}')"
+ck T37-sens-spaced '"error_code":"rejected"' "$(S37 '{"text":"紫 火 核 弹 T36 空格混淆","target_lang":"en","source_lang":"zh"}')"
 
 # ⑤ T37-5（P1-15）：充值 points 非法大值必须 400 拒绝（防 int64 溢出负订单），合法值仍可下单
 ck T37-points-overflow-reject '超出允许范围' "$(curl -s $B/api/pay/create -H "$AH" -H "$J" -d '{"points":2199023255552}')"
@@ -2980,6 +2992,32 @@ ck T66-a1-left4 '"left":4' "$R3BODY"
 ck T66-a1-mode-pro '"mode":"pro"' "$R3BODY"
 ck T66-a1-has-translation '"translation":"[^"]' "$R3BODY"
 ckn T66-a1-not-exhausted '"exhausted":true' "$R3BODY"
+# ★ A8（㊵ 判据补齐，2026-10-04 R-1 批）：**en 与 ja 两条腿必须同判据**。
+#   本段的对端故障形态正是"en/ja 双 500、zh 独活"（现网三次实跑，见修改文档 §二），
+#   只锁 en 一次的话，"换条腿就活"这种半成品修法不会被发现；zh 那条腿本来就 200，
+#   它绿着也不能证明任何事——所以正例取的是**当时全红的两条**。
+#   判据三条同 en：200 ＋ translation 非空 ＋ 出栈里不许出现兜底文案与失败码
+#   （「试用暂时不可用」＝ trial.go 的 TRANSLATION_FAILED 支，㊵ 的对外形态就是它）。
+#   设备号另起一个：间隔闸（3s/设备）与倒计时账都属于 DEV66A 那一档，混用会先把本条打成 429。
+DEV66E="uat66devEEEE01"; DEV66F="uat66devFFFF01"
+B66JA=$(t66body "$TXT66" ja "$DEV66E" "")
+req3 POST "" /api/trial/translate "$B66JA"; cks T66-ja-ok 200
+ck T66-ja-has-translation '"translation":"[^"]' "$R3BODY"
+ckn T66-ja-no-fallback-copy '试用暂时不可用' "$R3BODY"
+ckn T66-ja-no-failure-code 'TRANSLATION_FAILED' "$R3BODY"
+# en 腿把同一条负向补齐（另起设备号 DEV66F：DEV66A 此刻正卡在 3s 间隔闸上，
+#   拿它打第二条只会得到 RATE_LIMITED，本条的"200＋出栈无兜底文案"就永远断不到）
+B66EN=$(t66body "$TXT66" en "$DEV66F" "")
+req3 POST "" /api/trial/translate "$B66EN"; cks T66-en-ok 200
+ck T66-en-has-translation '"translation":"[^"]' "$R3BODY"
+ckn T66-en-no-fallback-copy '试用暂时不可用' "$R3BODY"
+ckn T66-en-no-failure-code 'TRANSLATION_FAILED' "$R3BODY"
+# ⚠️ 本条断言的**反证边界**要如实登记，否则后人会以为它锁住了凭据正确性：
+#   修改文档 §一给 A8 写的反证是「清空 stage_models.ai_initial ⇒ 本判据必须红」，但在矩阵内它**结构上不可能红**——
+#   本矩阵的上游是 scripts/uat/mock_llm.py，它对任何 Key/任何 model 一律回 200（不看凭据）。
+#   凭据那一层的等价锁在 Go 侧：A4（解析返回哪一档）＋ A4b（internal/engine/stage_http_route_test.go，
+#   真 httptest 上游逐次记 model 与 Authorization）。本段在矩阵里的真实射程＝
+#   「路由已注册＋匿名可达＋这条腿真能走到出译文」，不含"用的是哪份密钥"。
 # ② 最小间隔闸（同设备连点）：**必须与「额度用完」分码**——前端按 code 决定是「等 3 秒再来」还是
 #    「去注册」，混成一个码就等于把只是手快的访客送去注册页。
 req3 POST "" /api/trial/translate "$B66"; ck3 T66-a-interval-429 429 RATE_LIMITED '太快'
@@ -3050,11 +3088,11 @@ ALERT66=$(dbq "SELECT COUNT(*) FROM alerts WHERE tenant_id=0 AND kind='trial_bud
 [ "${ALERT66:-0}" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|T66-global-budget-alert($ALERT66 条)"; } \
   || { FAIL=$((FAIL+1)); echo "FAIL|T66-global-budget-alert(预算打满却没告警＝运维只能月底对账才发现刷量)"; }
 
-# ⑧ ★ 成本归属（本段最值钱的一条）：成功的 4 句（设备 A 三句 ＋ 设备 D 一句）全部落在**租户 0 的
+# ⑧ ★ 成本归属（本段最值钱的一条）：成功的 6 句（设备 A 三句 ＋ 设备 D 一句 ＋ A8 的 ja/en 两句）全部落在**租户 0 的
 #    留痕行**上；客户余额一分不动；也不许出现「租户>0 且 user_id=0」的实扣行——后者就是
 #    「把市场推广费用记到客户账上」的形态（客户来问账时无法解释，见 trial.go 文件头★段）。
 LED1=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0" | tr -d '[:space:]')
-ckq T66-ledger-platform-rows-delta 4 "$(( ${LED1:-0} - ${LED0:-0} ))"
+ckq T66-ledger-platform-rows-delta 6 "$(( ${LED1:-0} - ${LED0:-0} ))"
 BAL1=$(mny_norm "$(dbq "SELECT COALESCE(SUM(balance),0) FROM balance_accounts")")
 ckq T66-balance-untouched "$BAL0" "$BAL1"
 FK66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id>0 AND user_id=0 AND id>$MAXID66" | tr -d '[:space:]')
@@ -3064,10 +3102,10 @@ ckq T66-tenant0-all-log-kind 0 "${ND66:-0}"
 # 留痕行的业务口径：task_type=translate / biz_kind=text / biz_mode=pro（管理台按这三档核试用成本，
 #   写成别的档位就对不上账；⚠ 这些行**不会**出现在「按租户用量」里——它们不属于任何客户）
 OK66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND task_type='translate' AND biz_kind='text' AND biz_mode='pro' AND id>$MAXID66" | tr -d '[:space:]')
-ckq T66-ledger-biz-shape 4 "${OK66:-0}"
+ckq T66-ledger-biz-shape 6 "${OK66:-0}"
 # 数量取引擎回吐的 token 用量，纯知识库命中时按「一句一个单位」兜底，避免试用在成本视图里全 0
 POS66=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND quantity>0 AND id>$MAXID66" | tr -d '[:space:]')
-ckq T66-ledger-quantity-positive 4 "${POS66:-0}"
+ckq T66-ledger-quantity-positive 6 "${POS66:-0}"
 
 # 收尾清账（★ 不清就是给下一轮下毒）：rate_limits 的滚动 24h 窗留在库里，下一轮同 IP/同设备
 #   会直接被判「额度用完」——那是一条查不出根因的假红。留痕行、告警、三档配置键一并归零。

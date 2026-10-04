@@ -417,6 +417,11 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 以及 “message”（可读文案，随 Accept-Language 语种翻译）与 “trace_id”（报障时给出即可定位日志）。
 通用重试器/网关告警/APM 因此能直接按状态码统计与退避；429 另给 “Retry-After” 头与同值的
 “retry_after” 字段（还需等待的秒数），按它退避即可，不必自己猜冷却窗口。
+★ 同步 “POST /translate” 自 **2026-10-04** 起同样遵循本规则：上游没有产出任何可用译文时，
+该请求回 **409 task_failed**（而不是此前的「HTTP 200 ＋ translations 为空」），余额不足回 **402**。
+**只判 “HTTP 状态码为 200” 就当成功的接入方无需改代码**（这一改只会让真失败更早被你看见）；
+若你的代码里曾专门绕过「200 但译文为空」这种形态（例如空结果重试 / 转人工），请把那段兜底删掉或降级为日志，
+否则会和新形态叠加成「409 再自己重试一遍」。
 
 | code | HTTP | 含义 |
 |------|------|------|
@@ -425,10 +430,10 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 | invalid_api_key | 401 | API Key 无效或已轮换 |
 | insufficient_balance | 402 | **积分余额不足——请充值积分或升级套餐** |
 | forbidden | 403 | Key 无该接口权限 / 越权访问 |
-| rejected | 403 | 请求被内容或风控规则拒绝 |
+| rejected | 403 | 请求被内容或风控规则拒绝（敏感词拒译也归这一档，命中词与规则细节不外露） |
 | not_found | 404 | 任务或资源不存在（含跨租户访问，不泄露存在性） |
 | no_result | 404 | 无可用结果（如工单被判定无需翻译） |
-| task_failed | 409 | 任务终态为失败（与请求时机冲突，重试同一请求无意义） |
+| task_failed | 409 | 本次处理失败（载荷没错）：异步任务=终态失败，重试同一请求无意义；同步 “/translate”=上游未返回任何可用译文，可稍后重试或改提工单 |
 | not_ready | 409 | 产物尚未就绪（请继续按 15s/60s 轮询后重试） |
 | key_quota_exceeded | 429 | 该 Key 今日调用次数已达上限 |
 | rate_limited | 429 | 请求过于频繁，按 Retry-After 秒数稍后重试 |
@@ -550,6 +555,13 @@ guaranteed on every failure** — branch on "code". Also present: a "message" (t
 and a "trace_id" (quote it when reporting an issue). Retriers, gateways and APM error rates can
 now branch on status alone; 429 responses additionally send a "Retry-After" header and the same
 value as a "retry_after" field (seconds to wait) — honour it instead of guessing a backoff.
+★ The synchronous "POST /translate" follows the same rule as of **2026-10-04**: when the upstream
+produced no usable translation at all, the request returns **409 task_failed** instead of the old
+"HTTP 200 with empty translations", and an exhausted balance returns **402**.
+**Clients that treat "status 200" as success need no code change** — this only makes real failures
+visible earlier. If your code special-cased the old "200 but empty translations" shape (retry on
+empty result, fall back to manual review), remove that branch or turn it into a log line, otherwise
+it will stack with the new 409 and retry the same request once more on its own.
 
 | code | HTTP | Meaning |
 |------|------|---------|
@@ -558,10 +570,10 @@ value as a "retry_after" field (seconds to wait) — honour it instead of guessi
 | invalid_api_key | 401 | API key invalid or rotated away |
 | insufficient_balance | 402 | **Balance exhausted — top up or upgrade your plan** |
 | forbidden | 403 | Key lacks this scope / cross-tenant access |
-| rejected | 403 | Refused by content or risk controls |
+| rejected | 403 | Refused by content or risk controls (sensitive-word refusals land here; the matched words/rules are never exposed) |
 | not_found | 404 | Task or resource not found (also used for cross-tenant, to avoid leaking existence) |
 | no_result | 404 | No result available (e.g. ticket judged nothing to translate) |
-| task_failed | 409 | Task reached the failed terminal state (retrying the same request won't help) |
+| task_failed | 409 | This run failed (payload was fine): async task = terminal failure, retrying won't help; sync “/translate” = upstream returned no usable translation, retry later or submit a ticket |
 | not_ready | 409 | Artifact not ready yet — keep polling (15s text / 60s files) and retry |
 | key_quota_exceeded | 429 | This key hit its daily call-count cap |
 | rate_limited | 429 | Too many requests — back off by Retry-After seconds |

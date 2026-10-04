@@ -112,6 +112,23 @@ func (s *Server) probeStore() (state string, ok bool) {
 	return "ok", true
 }
 
+// llmGlobalKeyState 全局 LLM 密钥可用性状态词（★ R-1 修法 B，2026-10-04）。
+//
+// 只回两个词：
+//   - "ok"          ：三档来源（环境变量 / 后台库配置 / 主路由）至少有一档给出了可用 Key；
+//   - "placeholder" ：仍是 config.Default() 生成的随机占位 Key，任何真调用都必 401。
+//
+// 判据取 `Cfg.OnlineAPIKeyIsPlaceholder` 这一**构造期就定死的来源标记**，不取派生值：
+// 派生标记（如"最近一次调用成没成功"）会把"配了但坏了"和"根本没配"混成同一个读数，
+// 而运维要区分的恰好是这两件事（前者去看告警与熔断，后者去管理台补 Key）。
+// 本端点匿名可达，返回值里绝不拼 Key、长度、供应商域名等任何坐标（与 dispatch 同口径）。
+func (s *Server) llmGlobalKeyState() string {
+	if s.Cfg == nil || s.Cfg.OnlineAPIKey == "" || s.Cfg.OnlineAPIKeyIsPlaceholder {
+		return "placeholder"
+	}
+	return "ok"
+}
+
 // probeDistributed 分布式能力（Redis）就绪性：返回状态词与是否就绪，口径详见文件头第 2 条。
 // 未配置 Redis（含单测里未走启动闸门的 unknown）判为就绪；配了但 PING 失败判为不就绪。
 func probeDistributed() (state string, ok bool) {

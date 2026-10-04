@@ -142,8 +142,13 @@ const sensitiveReplyBlocked = "⚠️ 内容合规审核：本次请求包含平
 	"如属误判，请通过工单/客服提交原文复核（Reference: sensitive_review）。"
 
 // CodeSensitiveBlocked 敏感词拒译的**稳定错误码**（★ 2026-09-26 〇-U 批 I-8 · F-53）。
-// 值沿用历史字面量 "sensitive_blocked" 一个字符都没改——OpenAPI 同步通道的 T36/T37 断言、
-// 以及 SDK 侧按 error 串分支的消费方都吃这个值，改值即契约破坏。
+// 值沿用历史字面量 "sensitive_blocked" 一个字符都没改：对话面（SSE error 帧的 error_code）
+// 与前端 useChat 的分支按它走，改名即失联。
+// ★ 口径校准（2026-10-04 〇-AR 第 2 波）：**OpenAPI 同步面不再往外发这一内部码**——
+// 旧形态把码当 message 发（T36/T37 当时 grep 的就是这个泄漏点），现在按修法 F 归到
+// 对外既有档 rejected/403（与异步面 gateErrorCode 的内容类拒绝同档），见
+// internal/api/api_openapi_tasks.go 的 openAPIEngineFailure。
+// 内部各面（引擎结果、试用面 trial.go 的分支）仍按这一常量比较，**不许改成别的字面量**。
 // ★ 为什么要从「text.go 里两处裸字面量」升格成具名导出：消费方（api/stream.go 的 SSE error 帧）
 // 需要**按码分支**，而不是把码当文案发给用户。旧形态下文本通道命中敏感词时，
 // res.Error="sensitive_blocked"（机器码）被直接写进 error 字段，而真正给人看的

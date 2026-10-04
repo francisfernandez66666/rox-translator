@@ -349,8 +349,18 @@
               }
             }
           },
+          "402": {
+            "description": "积分余额不足，本次翻译被中止（error_code: insufficient_balance；与 /tasks 的 402 同码同义）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "409": {
-            "description": "翻译执行失败（error_code: task_failed；载荷没错，是这一次处理失败了）",
+            "description": "翻译执行失败（error_code: task_failed；载荷没错，是这一次处理失败了——含「上游未返回任何可用译文」这一形态，可稍后重试或改提工单）",
             "content": {
               "application/json": {
                 "schema": {

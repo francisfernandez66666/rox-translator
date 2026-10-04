@@ -903,6 +903,13 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 	}
 
 	pending := need
+	// ★ 修法 E（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭/#13）：认证类失败（401/403）的止损开关。
+	//   这一环是「轮次化重试队列」，为 429/超时/网络抖动设计——退避一轮确实可能过去。
+	//   但同一张废键重试三次只是把它打三遍：现网 R-1 期间三个目标语种 × 三轮 = 9 次恒 401 的
+	//   出站调用，P95 被拖长约 6.6s，还多烧两次配额，而客户看到的仍然是「没译文」。
+	//   所以命中认证类失败时：本轮照常收尾（在途的并发不收，避免半途写脏），
+	//   但**不再排下一轮**，并把日志抬到 ERROR（重试没意义＝键要人来换，这是运维动作不是抖动）。
+	authBail := false
 	for attempt := 0; attempt < maxAttempts && len(pending) > 0; attempt++ {
 		if ctx.Err() != nil {
 			return // 上下文取消：不再重试
@@ -925,9 +932,18 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 
 				tr, err := e.callSingleLang(ctx, zhText, lang, examples, sourceLang, stage)
 				if err != nil {
-					log.Printf("[translate] %s 翻译失败（第%d次尝试）: %v", lang, attempt+1, err)
+					auth := llm.IsAuthError(err)
+					if auth {
+						observability.Error(ctx, "翻译上游鉴权失败（本批次不再重试，请检查 api key）",
+							"lang", lang, "attempt", attempt+1, "error", err.Error())
+					} else {
+						log.Printf("[translate] %s 翻译失败（第%d次尝试）: %v", lang, attempt+1, err)
+					}
 					mu.Lock()
 					failed = append(failed, lang) // 失败排到队尾，下一轮继续
+					if auth {
+						authBail = true
+					}
 					mu.Unlock()
 					tr = ""
 				}
@@ -939,6 +955,10 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 		}
 		wg.Wait()
 		pending = failed // 队尾重排：失败语言等其余语言完成后再试
+		if authBail {
+			observability.Error(ctx, "上游鉴权失败短路重试队列", "remaining_langs", len(pending), "rounds_used", attempt+1)
+			return
+		}
 		if len(pending) > 0 {
 			if !sleepCtx(ctx, retrySleep) { // ★ D9：上游已取消则不再排下一轮
 				return
@@ -1303,6 +1323,38 @@ func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
 	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
 }
 
+// resolveModelForStage 单条翻译这一趟该用哪份端点/密钥/模型（★ R-1 修法 C 的唯一咽喉）。
+//
+// 三档优先序：**本阶段自己的配置 ＞ 初翻（ai_initial）的配置 ＞ 全局路由/默认**。
+//
+// 中间那一档是本函数存在的理由。历史上只有批量腿（BatchTranslate）写了"这一阶段没配就退回
+// 初翻阶段"，单语腿漏了，于是「运营只在 ai_initial 上配过一份可用端点」这种很常见的库形态下，
+// kb_match / review 等阶段会绕开那份配置去拨全局默认端点——而 R-1 期间全局 Key 恰恰是随机占位符，
+// 所以这几条腿的表现是"配了却用不上"的静默 401（比"根本没配"更难发现：面板上是绿的）。
+//
+// 返回的 stageActive 表示"这一趟用的是阶段级配置"：调用方据此决定是否让多供应商降级链
+// 以阶段模型为主（整改 R-M5）。**不许把它拆回成两次 resolveStageModel 调用**——
+// 拆开就是重新长出"两条腿各写一份回退"的起点。
+//
+// ⚠️ 射程只覆盖「翻译类腿」（singleLangRaw 与 BatchTranslate）。
+// 审校类腿（TranslateWithFeedback / ReviewTranslation / ReviewTranslationBatch）**刻意不接这一档**：
+// 它们要的不是"退回初翻那份模型"，而是"换一个不同的模型来挑错"——
+// 让初翻模型自己审自己，质量门会退化成同模型复读，比回落全局更糟。
+// 审校阶段没配时回落全局才是正确语义，别"顺手统一"过来。
+func (e *Engine) resolveModelForStage(ctx context.Context, stage string) (base, key, model string, stageActive bool) {
+	base, key, model = e.resolveModel(ctx)
+	if b, k, m, ok := e.resolveStageModel(ctx, stage); ok {
+		return b, k, m, true
+	}
+	// 本阶段没配 ⇒ 退回初翻阶段（stage 本身就是 ai_initial 时上一档已命中，不必重复查库）
+	if stage != config.StageAIInitial {
+		if b, k, m, ok := e.resolveStageModel(ctx, config.StageAIInitial); ok {
+			return b, k, m, true
+		}
+	}
+	return base, key, model, false
+}
+
 // resolveStageModel 解析指定流程阶段的独立模型配置（system_config.stage_models，超管维护）。
 // 参数 stage: 流程阶段标识（config.StageKBMatch / StageAIInitial / StageEvals / StageReview）。
 // 返回 base/key/model 与是否命中；未配置该阶段或缺 model/api_base 时 ok=false（调用方回退 resolveModel）。
@@ -1508,13 +1560,7 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	}
 	messages := assembleTranslateMessages(instrCore, dynNotes.String(), ref, cultureBlock, zhText)
 
-	base, key, model := e.resolveModel(ctx)
-	// 阶段独立模型：配置了该阶段（stage_models）则优先使用；未配置回退 resolveModel
-	stageActive := false
-	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
-		base, key, model = b2, k2, m2
-		stageActive = true
-	}
+	base, key, model, stageActive := e.resolveModelForStage(ctx, stage)
 
 	// 模型路由策略：配置了全局多供应商路由时，主模型失败按权重降序逐一降级。
 	// 阶段模型（stageActive）同样参与多供应商降级：以阶段模型为主，路由链其余供应商为降级候选，
@@ -1960,10 +2006,11 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	//   「全局路由（按权重选主）→ 全局默认」解析与 ai_initial 阶段模型覆盖——
 	//   此前直用 cfg.Online* 常量，使文件管线（主力负载）完全绕过
 	//   多供应商路由/降级链，与 BYOK 移除后「平台统一调度」的商业口径冲突。
-	base, key, model := e.resolveModel(ctx)
-	if b2, k2, m2, ok := e.resolveStageModel(ctx, config.StageAIInitial); ok {
-		base, key, model = b2, k2, m2
-	}
+	// ★ R-1 修法 C（2026-10-04）：这一档改为调用与单语腿**同一个** resolveModelForStage，
+	//   两条腿从此共用一份回退口径。旧写法是两条腿各写一遍"取阶段模型"，
+	//   于是单语腿漏掉「本阶段没配 ⇒ 退回初翻」这半时，批量腿照样绿、单语腿照样死
+	//   ——同一段语义抄两份、改一份漏一份，正是本仓反复登记的"多把尺子"形态。
+	base, key, model, _ := e.resolveModelForStage(ctx, config.StageAIInitial)
 	hunyuan := strings.HasPrefix(model, "tencent/Hunyuan-MT")
 	if hunyuan && !cfg.HunyuanMTLangCode[targetLang] {
 		model = cfg.HunyuanFallbackModel

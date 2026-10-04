@@ -52,7 +52,13 @@ export function ModelsP() {
   // keyState 密钥态：translation/embedding 是否已配置 + embedding 掩码/端点，明文永不回传前端
   const [keyState, setKeyState] = useState<Any>({ translation: false, embedding: false, embeddingMasked: '', embeddingBase: '' })
 
-  // stageCards 五张卡即翻译流水线的五个取模点（初翻→嵌入→初评审校→复核→复评审校）；
+  // stageCards 七张卡＝后端 config.AllStages() 里「该给运营配」的全部取模点
+  // （初翻→嵌入→初评审校→复核→复评审校→知识库匹配兜底→企业包筛查）。
+  // ★ R-1 修法 D（2026-10-04）：这里曾经只有五张，而引擎确实在拿 kb_match 取模
+  //   （orchestrator/workflow.go、engine/file.go、engine/text.go）⇒ 运营看不见这一档，
+  //   配上旧的「整表替换」保存面，每点一次保存就把库里那一档抹掉一次。
+  //   现在键名清单由 src/components/admin/stageRegistryGate.test.ts 与后端名单**双向等值**锁住，
+  //   加/减档位只改一处就会红灯；旧键 evals 刻意不出卡（历史兼容读档，见那个测试的理由说明）。
   // key 必须与后端 stage 名逐字一致，否则 loadStages 回填不到、saveStages 也存不进
   const stageCards = [
     { key: 'ai_initial', title: t('models.s5Initial'), hint: t('models.s5InitialHint') },
@@ -60,6 +66,8 @@ export function ModelsP() {
     { key: 'initial_evals', title: t('models.s5InitialEvals'), hint: t('models.s5InitialEvalsHint') },
     { key: 'review', title: t('models.s5Review'), hint: t('models.s5ReviewHint') },
     { key: 'review_evals', title: t('models.s5ReviewEvals'), hint: t('models.s5ReviewEvalsHint') },
+    { key: 'kb_match', title: t('models.s6KbMatch'), hint: t('models.s6KbMatchHint') },
+    { key: 'kb_screen', title: t('models.s6KbScreen'), hint: t('models.s6KbScreenHint') },
   ]
 
   // loadModels 拉取主模型/embedding/多供应商路由（密钥只回掩码，不回明文）

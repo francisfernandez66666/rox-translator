@@ -49,7 +49,20 @@ for i in $(seq 1 10); do sleep 1; curl -s -m 2 "http://127.0.0.1:${MOCK_PORT}/v1
 
 # ---------- 2. 双实例启动（同库同 JWT_SECRET；探活自指向各自 /status） ----------
 log "启动双实例 :${A_PORT} / :${B_PORT}（共享 ${MDB}）..."
-COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" USER_DATA_DIR="$WORK/udata")
+# ★ 2026-10-04（〇-AR 第 2 波）：LLM 来源必须在**启动前**用 env 给两台实例，不能只靠下面
+#   第 3 段那次 A 侧 models/save。原因（都有实证，见 发布前E2E_UAT_20261003/证据/1004_08AR_第2波_诚实性/）：
+#   ① models/save 只刷新**写入进程自己的**内存快照（admin_models.go 的 s.Cfg.ModelRoutes=merged），
+#      B 实例早就起来了 ⇒ 永远拿启动时的随机占位 Key ⇒ 恒 401×3；
+#   ② 这个「B 从来没真成功过」在旧形态下**看不出来**：修法 F 之前引擎零可用译文仍回
+#      success:true（实测旧二进制响应 257 B：success:true / points_used:0 / translations.en=""），
+#      于是 M2、M4 两条 `"success":true` 判据绿的是「服务没崩」而不是「客户拿到了译文」；
+#   ③ 第 2 波把空壳收敛成 409 task_failed 之后，这两条腿第一次露出真值——**红是暴露，不是引入**。
+#   这里只补脚手架自己的前置条件，**判据一字未放宽**：env 档在 hydrateLLMKeys 里「一条都不覆盖」
+#   （cmd/server/llmkeys.go 的 llmKeyFromEnv），所以两台进程启动即拿到同一个可用 mock 来源。
+#   ⚠️ 产品侧「跨实例配置刷新」仍缺口（现网单实例，无客户面影响），已作为待决缺陷登记，不在此处顺手修。
+COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" USER_DATA_DIR="$WORK/udata"
+  SILICONFLOW_API_KEY=sk-mock ONLINE_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1" ONLINE_MODEL=mock-mt
+  EMBED_API_KEY=sk-mock EMBED_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1")
 # ★ 2026-09-26（步骤 6 清理测试数据时踩出）：USER_DATA_DIR 必须钉进 $WORK，与 run_uat.sh 的
 #   2026-09-22 修复同口径。此前本脚本没钉，双实例把「上传目录 / 启动备份 / memleak 堆快照」
 #   全写进了本机真实应用数据目录（~/Library/Application Support/能言/{backups,memleak} 里
@@ -86,6 +99,9 @@ dbcfg register_global_daily_limit 100000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
 # 模型路由指向 mock LLM（models 表在共享库，A 写 B 读）
+# ⚠️ 这一句测的是「共享库写读」，但它**不会**让 B 实例的运行期配置变新（见上面 COMMON_ENV 那段①）：
+#    保存之后 A 用的是库值快照、B 用的仍是启动时的 env 快照。两侧都指向同一个 mock ⇒ 都能出译文，
+#    本段的判据射程因此干净地落在「跨实例余额可见性」上，不再被配置陈旧污染。
 AJ=$(curl -s $A_URL/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@1234"}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 AH="Authorization: Bearer $AJ"
 curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
@@ -110,6 +126,11 @@ AK=$(curl -s $B_URL/api/apikeys/create -H "Authorization: Bearer $BT" -H 'Conten
 M2R=$(curl -s $B_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
   -d '{"text":"双实例余额可见性验证第一句","target_lang":"en","mode":"pro"}')
 ck M2-b-instance-consumes-immediately '"success":true' "$M2R"
+# ★ 收紧（2026-10-04 〇-AR 第 2 波）：除信封还须**译文非空**。
+#   旧形态下引擎零可用译文照样回 success:true（实测旧二进制回 257 B：success:true／points_used:0／
+#   translations.en=""），只看信封＝把「上游挂了」判成「跨实例余额没传过去」的反面——绿灯掩盖缺陷。
+#   这条非空锁就是当年能当场抓住 ⑭ 的那一句，此后长期保留。
+ck M2-b-instance-translation-nonempty '"translations":\{"en":"[^"]' "$M2R"
 sleep 4   # 等 sink 冲刷
 
 # ---------- M3：双实例并发扣费压测（30 路对半，双桶钉死：台账清零 + 永久余额 8000） ----------
@@ -123,6 +144,13 @@ import subprocess
 g=subprocess.run(['psql','$DB_DSN','-qAtc','SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID AND expires_at>now()'],capture_output=True,text=True).stdout.strip()
 b=subprocess.run(['psql','$DB_DSN','-qAtc','SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID'],capture_output=True,text=True).stdout.strip()
 print(int(g or 0)+int(b or 0))")
+# ★ 口径修复（2026-10-04 〇-AR 第 2 波）：流水读数必须与 TOT0 同时刻取基线，
+#   对账比的是**本窗口增量**，不是「窗口消耗」对「全生命周期流水合计」。
+#   为什么以前没红：旧形态下 M2 那次翻译是 ⑭ 空壳（success:true 但 points_used:0），
+#   窗口之前没有任何 charge 流水，累计值恰好等于窗口增量，两个口径数值相同⇒错公式被掩盖。
+#   M2 真出译文之后累计值多出 M2 那一笔（实测 302），当场判红。这条红同样是**暴露不是引入**。
+#   （M3b 段一直用的是 CHARGE_BASE/CHARGE_AFTER_PROBE 增量口径，本段与它对齐。）
+CHG0=$(dbq "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$TID AND charge_kind='charge'" | tr -d '[:space:]')
 D3=$(mktemp -d)
 PIDS3=()   # ★ 脚本修复（2026-09-16）：裸 wait 会连常驻 server/mock 进程一起等 → 永久挂起；
            #   只收集本段 curl 的 PID 定向等待
@@ -147,15 +175,23 @@ BAL3=$(dbq "SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TI
 # 无误报欠费清零（critical 告警仅允许 ≤1 条 settle）
 AL3=$(dbq "SELECT COUNT(*) FROM alerts WHERE tenant_id=$TID AND kind='billing_exhausted'" | tr -d '[:space:]')
 [ "${AL3:-0}" -le 1 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|M3-no-false-exhaust(alerts=$AL3)"; } || { FAIL=$((FAIL+1)); echo "FAIL|M3-no-false-exhaust(alerts=$AL3)"; }
-# ledger 与消耗对账（双桶合计口径，与 T16 一致）：SUM(实扣 cost) ≈ TOT0 - 剩余双桶
-TOT1=$(python3 -c "
+# ledger 与消耗对账（双桶合计口径，与 T16 一致）：本窗口实扣流水增量 ≈ TOT0 - 剩余双桶
+# ⚠️ 期末两把尺子放在同一次连接里读（原来分两次 psql，异步 sink 的尾行若恰好在两次之间落库，
+#    就会出现「钱还没扣到位、流水已经到了」的窗口外增量，判成假红）。
+TOT1_L3=$(python3 -c "
 import subprocess
-g=subprocess.run(['psql','$DB_DSN','-qAtc','SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID AND expires_at>now()'],capture_output=True,text=True).stdout.strip()
-b=subprocess.run(['psql','$DB_DSN','-qAtc','SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID'],capture_output=True,text=True).stdout.strip()
-print(int(g or 0)+int(b or 0))")
-L3=$(dbq "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$TID AND charge_kind='charge'" | tr -d '[:space:]')
-EQ3=$(python3 -c "print(1 if abs($L3 - ($TOT0 - $TOT1)) < 1 else 0)" 2>/dev/null || echo 0)
-[ "$EQ3" = "1" ] && { PASS=$((PASS+1)); echo "PASS|M3-ledger-reconcile(ledger=$L3 consumed=$((TOT0 - TOT1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|M3-ledger-reconcile(ledger=$L3 tot0=$TOT0 tot1=$TOT1)"; }
+def q(sql):
+    return subprocess.run(['psql','$DB_DSN','-qAtc',sql],capture_output=True,text=True).stdout.strip()
+g=int(float(q('SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID AND expires_at>now()') or 0))
+b=int(float(q('SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID') or 0))
+l=int(float(q(\"SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$TID AND charge_kind='charge'\") or 0))
+print(f'{g+b} {l}')")
+TOT1=$(printf '%s' "$TOT1_L3" | awk '{print $1}')
+L3=$(printf '%s' "$TOT1_L3" | awk '{print $2}')
+D3L=$(python3 -c "print(int(round(abs($L3 - $CHG0))))" 2>/dev/null || echo -1)
+EQ3=$(python3 -c "print(1 if abs($D3L - ($TOT0 - $TOT1)) < 1 else 0)" 2>/dev/null || echo 0)
+[ "$EQ3" = "1" ] && { PASS=$((PASS+1)); echo "PASS|M3-ledger-reconcile(窗口流水=$D3L 消耗=$((TOT0 - TOT1)) 基线流水=$CHG0)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|M3-ledger-reconcile(窗口流水=$D3L 消耗=$((TOT0 - TOT1)) 基线=$CHG0 累计=$L3 tot0=$TOT0 tot1=$TOT1)⇒ 只对增量，累计口径差属基线问题"; }
 rm -rf "$D3"
 
 # ---------- M3b：近零双桶下「欠费结算 × 并发扣减」资金守恒（★ D-1，2026-09-29） ----------
@@ -286,6 +322,8 @@ sleep 5
 M4R=$(curl -s $B_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
   -d '{"text":"充值后跨实例恢复消费验证句","target_lang":"en","mode":"pro"}')
 ck M4-topup-propagates-to-b '"success":true' "$M4R"
+# 同 M2 的非空锁（充值传播这条腿也一样不许拿信封当成功）
+ck M4-topup-translation-nonempty '"translations":\{"en":"[^"]' "$M4R"
 
 # ---------- 汇总 ----------
 DUR=$(( $(date +%s) - T0 ))

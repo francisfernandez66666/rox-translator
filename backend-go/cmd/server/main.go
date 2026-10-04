@@ -348,44 +348,14 @@ func main() {
 				log.Printf("模型路由策略已加载: %d 条", len(alive))
 			}
 		}
-		// ★ 启动水合：全局 Key 为占位符且主路由带真实密钥时回填，
-		// 修复「面板保存过真实 Key 但引擎兜底仍用占位符」的断链
-		if cfg.OnlineAPIKeyIsPlaceholder || cfg.OnlineAPIKey == "" {
-			for _, r := range cfg.ModelRoutes {
-				if r.APIKey != "" && !strings.HasPrefix(r.APIKey, "sk-****") {
-					cfg.OnlineAPIKey = r.APIKey
-					cfg.OnlineAPIKeyIsPlaceholder = false
-					log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
-					break
-				}
-				// ★ 后台可配 LLM Key 启动水合（2026-08-27，并入「全局模型」tab 的一部分）：
-				//   后台在 /api/admin/models/save 中把翻译/向量密钥以密文落库到 system_config，
-				//   此处启动时优先读取这些库内配置并覆盖（环境变量与 model_routes 的）默认值，
-				//   实现「后台设置优先、重启后仍生效」。
-				if v, _ := st.GetConfig("online_api_key"); v != "" {
-					if dec := store.DecryptSecret(v); dec != "" {
-						cfg.OnlineAPIKey = dec
-						cfg.OnlineAPIKeyIsPlaceholder = false
-						log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
-					}
-				}
-				if v, _ := st.GetConfig("online_api_base"); v != "" {
-					cfg.OnlineAPIBase = v
-				}
-				if v, _ := st.GetConfig("online_model"); v != "" {
-					cfg.OnlineModel = v
-				}
-				if v, _ := st.GetConfig("embed_api_key"); v != "" {
-					if dec := store.DecryptSecret(v); dec != "" {
-						cfg.EmbedAPIKey = dec
-						log.Println("[llmkey] 已从后台配置水合 Embedding Key")
-					}
-				}
-				if v, _ := st.GetConfig("embed_api_base"); v != "" {
-					cfg.EmbedAPIBase = v
-				}
-			}
-
+		// ★ 启动水合（★ R-1 修法 A/B，2026-10-04 整段搬到 llmkeys.go 的 hydrateLLMKeys）：
+		//   旧形态把「读后台库配置」那五句长在 `for _, r := range cfg.ModelRoutes` 循环体内，
+		//   于是管理台把全局路由存成 0 行的那天起，库里的可用 Key 就再也水合不上，
+		//   引擎拿着 config.go 生成的随机占位 Key 静默起跑 ⇒ Pro/知识库/试用三条客户腿全 401。
+		//   现在优先序＝env ＞ 后台库配置 ＞ 主路由，两腿皆空则 ERROR 日志＋平台告警＋健康面状态词。
+		if src := hydrateLLMKeys(cfg, st); src == llmKeyFromNone {
+			// 日志文案刻意不含任何 Key 片段：这一行会被 systemd journal 与运维看板原样采集
+			log.Println("[llmkey] 三档来源均无可用全局 Key，已落 critical 告警（见 /api/health.llm_global_key）")
 		}
 	}
 

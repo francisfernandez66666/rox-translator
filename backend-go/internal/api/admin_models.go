@@ -307,7 +307,11 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 // ============ 各流程阶段模型配置（仅超管） ============
 
 // handleStageModels 读取各流程阶段模型配置（仅超管）。
-// 返回 4 个阶段（kb_match/ai_initial/evals/review）的模型配置；未配置的返回空项以便前端渲染。
+// 返回的档位**一律从 config.AllStages() 派生**（★ R-1 修法 D，2026-10-04）：
+// 旧写法在这里手抄五项、漏了 kb_match，而引擎确实拿 kb_match 取模
+// （orchestrator/workflow.go 与 engine/file.go、engine/text.go），于是运营既看不见也配不了；
+// 又因为保存面是覆盖式提交，"看不见"直接等于"每次保存都把它删掉"。
+// 现在读面缺项也补一个空档返回，前端才能把它渲染出来。
 func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.requireAdminUser(r); err != nil {
 		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
@@ -326,9 +330,9 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）；输出业务五阶段
+	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）；输出的档位＝config.AllStages() 派生
 	out := config.StageModels{}
-	for _, k := range []string{config.StageAIInitial, config.StageKBEmbed, config.StageInitialEvals, config.StageReview, config.StageReviewEvals} {
+	for _, k := range config.AllStages() {
 		sm := stages[k]
 		out[k] = config.StageModel{
 			Provider: sm.Provider,
@@ -340,8 +344,13 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "stages": out})
 }
 
-// handleStageModelsSave 保存各流程阶段模型配置（仅超管）。
-// 覆盖式保存：全量提交；某项 api_base/model 为空表示清空该阶段独立模型（回退全局/路由）。
+// handleStageModelsSave 保存各流程阶段配置（仅超管）。
+// 语义（★ R-1 修法 D，2026-10-04 从「整表替换」改为「按提交键合并」）：
+//   - 本次提交里出现过的键：有 api_base+model 即覆盖，两者皆空即清空该档（删除键，回落全局/路由）；
+//   - 本次没出现的键：保留库里旧值，不再被顺手抹掉（旧形态下客户端少渲染一张卡＝每次保存都删一档真实配置）；
+//   - 名单（config.AllStages()）外的键：直接 400 拒收，不再原样落库成永不生效的死配置。
+//
+// 密钥面：库内密文存储；回显是掩码（sk-****），提交值仍为掩码时按该档旧真值回填，绝不把掩码写回库。
 func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireAdminUser(r)
 	if err != nil {
@@ -372,15 +381,33 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// 遍历请求中各阶段配置，做校验与缺省值补全
+	// ★ 合法阶段名单只有一份：config.AllStages()（修法 D 的派生源，禁止在此再抄一份字面量）
+	allowed := map[string]bool{}
+	for _, k := range config.AllStages() {
+		allowed[k] = true
+	}
+	// submitted 必须在下面那个循环**之前**采集：循环里的 delete 会把「这一档本次被清空」
+	// 这一事实抹掉，事后按 req.Stages 的键集合判定就会把被清空的档误判成"没提交"而保留旧值。
+	submitted := map[string]bool{}
+	for k := range req.Stages {
+		submitted[k] = true
+	}
 	for k := range req.Stages {
 		sm := req.Stages[k]
+		// 名单外的键一律拒：旧写法把任意 JSON 键原样落库，
+		// 于是"阶段名拼错"会留下一条永不生效的配置，运营看面板以为配上了（静默坏死）。
+		if !allowed[k] {
+			// ★ AGENTS §一·8：新增错误响应走统一出口（结构化 code，前端/SDK 才能按 code 分支）
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("未知流程阶段 %s", k)))
+			return
+		}
 		if sm.APIBase == "" && sm.Model == "" {
 			// 清空该阶段 → 删除键
 			delete(req.Stages, k)
 			continue
 		}
 		if sm.APIBase == "" || sm.Model == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("阶段 %s 缺少 api_base 或 model", k)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("阶段 %s 缺少 api_base 或 model", k)))
 			return
 		}
 		if sm.Provider == "" {
@@ -395,8 +422,19 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// ★ 入库前整体加密（评审整改 D3）；引擎读取侧 resolveStageModel 做对应解密
+	// ★ 覆盖式的边界（修法 D 配套，2026-10-04）：只有**本次提交里出现过的键**才参与覆盖/删除，
+	//   没出现的键保留旧值。旧写法是「整表替换」，客户端只要少渲染一张卡（历史上的 kb_match，
+	//   以及旧键 evals），保存一次就把那一档的真实配置从库里抹掉，且面板上看不出发生过什么。
+	//   清空某档的正路仍是显式提交该档的空值（上面那条 delete 分支），语义没有变松。
+	//   ⚠️ submitted 必须在上面那个循环之前采集：循环里的 delete 会把"提交过"这一事实抹掉，
+	//      事后按 req.Stages 的键集合判定会漏判所有被清空的档（把它们当成"没提交"而保留旧值）。
 	stored := config.StageModels{}
+	for k, sm := range old {
+		if !submitted[k] {
+			sm.APIKey = store.EncryptSecret(sm.APIKey) // 旧值已是解密态，回写要重新加密
+			stored[k] = sm
+		}
+	}
 	for k, sm := range req.Stages {
 		sm.APIKey = store.EncryptSecret(sm.APIKey)
 		stored[k] = sm
@@ -406,7 +444,7 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(s.effTenant(r, u), u.ID, "stage_models_save", "system", fmt.Sprintf("%d 阶段", len(req.Stages)))
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "stage_models_save", "system", fmt.Sprintf("%d 阶段", len(stored)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
