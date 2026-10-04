@@ -29,9 +29,9 @@ package main
 import (
 	"context"
 	"log"
-	"strings"
 
 	"translator/internal/config"
+	"translator/internal/llmsource"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -42,10 +42,10 @@ const llmKeyAlertKind = "llm_key_placeholder"
 
 // 水合来源档位（/api/health 与日志里出现的就只有这三个词）
 const (
-	llmKeyFromEnv   = "env"   // 环境变量给了可用 Key，本函数无事可做
-	llmKeyFromDB    = "db"    // 后台库 system_config.online_api_key
-	llmKeyFromRoute = "route" // 模型路由主路由
-	llmKeyFromNone  = "none"  // 两腿皆空 ⇒ 仍是随机占位符（调用必 401）
+	llmKeyFromEnv   = llmsource.FromEnv   // 环境变量给了可用 Key，本函数无事可做
+	llmKeyFromDB    = llmsource.FromDB    // 后台库 system_config.online_api_key
+	llmKeyFromRoute = llmsource.FromRoute // 模型路由主路由
+	llmKeyFromNone  = llmsource.FromNone  // 两腿皆空 ⇒ 仍是随机占位符（调用必 401）
 )
 
 // hydrateLLMKeys 按「库配置 ＞ 主路由」两档水合全局 LLM 密钥与配套端点/模型名。
@@ -56,58 +56,45 @@ func hydrateLLMKeys(cfg *config.Config, st *store.Store) string {
 	if cfg == nil {
 		return llmKeyFromNone
 	}
-	// env 那档已经拿到可用 Key ⇒ 一条都不覆盖（AGENTS §一·3：环境变量优先）
-	if !cfg.OnlineAPIKeyIsPlaceholder && cfg.OnlineAPIKey != "" {
+	// ★ 单一解析腿（〇-AR 第 5 波）：优先序判断整体收进 internal/llmsource，
+	//   启动期与运行期热加载共用同一把尺子。在这里再抄一份 if 就是"两把尺子"的起点，
+	//   而这两把尺子迟早会分叉——本仓计费侧那三把尺子的账就是这么长出来的（AGENTS §一·11）。
+	snap := llmsource.Resolve(cfg, st)
+
+	// env 那档已经拿到可用 Key ⇒ 库里两族配置一条都不覆盖（AGENTS §一·3：环境变量优先）
+	if snap.From == llmKeyFromEnv {
+		snap.ApplyTo(cfg)
+		llmsource.PublishFrom(st, snap)
 		return llmKeyFromEnv
 	}
-	if st == nil {
-		return raisePlaceholder(cfg, nil)
-	}
 
-	// —— ② 后台库配置：运营显式保存过的那一份，优先级最高的库内腿 ——
-	// ★ 关键修复点：这一段以前长在 range(cfg.ModelRoutes) 的循环体里，
-	//   routes 存成 0 行就永远不跑；现在搬出来，与路由条数彻底解耦。
-	if v, _ := st.GetConfig("online_api_key"); v != "" {
-		if dec := store.DecryptSecret(v); dec != "" {
-			cfg.OnlineAPIKey = dec
-			cfg.OnlineAPIKeyIsPlaceholder = false
-			log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
-		}
-	}
-	// 端点与模型名各自独立判断（缺一项不影响另一项），同样不再跟着路由条数走
-	if v, _ := st.GetConfig("online_api_base"); v != "" {
-		cfg.OnlineAPIBase = v
-	}
-	if v, _ := st.GetConfig("online_model"); v != "" {
-		cfg.OnlineModel = v
-	}
-	// Embedding 一族的库内腿（与翻译 Key 同源管理，独立生效）
-	if v, _ := st.GetConfig("embed_api_key"); v != "" {
-		if dec := store.DecryptSecret(v); dec != "" {
-			cfg.EmbedAPIKey = dec
-			log.Println("[llmkey] 已从后台配置水合 Embedding Key")
-		}
-	}
-	if v, _ := st.GetConfig("embed_api_base"); v != "" {
-		cfg.EmbedAPIBase = v
-	}
-
-	// —— ③ 主路由兜腿：只有库里也没给出可用 Key 时才走 ——
-	if cfg.OnlineAPIKeyIsPlaceholder || cfg.OnlineAPIKey == "" {
-		for _, r := range cfg.ModelRoutes {
-			// 掩码值（sk-****）不是密钥；空值更不是——见文件头「三条硬口径」第二条
-			if r.APIKey != "" && !strings.HasPrefix(r.APIKey, "sk-****") {
-				cfg.OnlineAPIKey = r.APIKey
-				cfg.OnlineAPIKeyIsPlaceholder = false
-				log.Printf("全局 API Key 已从主路由水合（provider=%s model=%s）", r.Provider, r.Model)
-				return llmKeyFromRoute
+	// Embedding 一族的库内腿（与翻译 Key 同源管理、独立生效）。
+	// ⚠️ 这一族刻意留在启动期：llmsource 的快照只管"发起翻译调用"那一套三件套＋路由，
+	//    向量重建另有每请求现读 stage_models.kb_embed 的请求级覆盖腿，不依赖本文件。
+	if st != nil {
+		if v, _ := st.GetConfig("embed_api_key"); v != "" {
+			if dec := store.DecryptSecret(v); dec != "" {
+				cfg.EmbedAPIKey = dec
+				log.Println("[llmkey] 已从后台配置水合 Embedding Key")
 			}
 		}
+		if v, _ := st.GetConfig("embed_api_base"); v != "" {
+			cfg.EmbedAPIBase = v
+		}
 	}
-	if cfg.OnlineAPIKeyIsPlaceholder || cfg.OnlineAPIKey == "" {
+
+	snap.ApplyTo(cfg)
+	llmsource.PublishFrom(st, snap)
+	switch snap.From {
+	case llmKeyFromDB:
+		log.Println("[llmkey] 已从后台配置水合 在线翻译 Key")
+	case llmKeyFromRoute:
+		// 只出档位与条数，不出 Key 片段（这一行会被 journal 与运维看板原样采集）
+		log.Printf("[llmkey] 全局 API Key 已从主路由水合（路由 %d 条）", len(snap.Routes))
+	default:
 		return raisePlaceholder(cfg, st)
 	}
-	return llmKeyFromDB
+	return snap.From
 }
 
 // raisePlaceholder 两腿皆空的显式暴露（★ R-1 修法 B「占位 Key 不许静默起跑」三条同时上）：

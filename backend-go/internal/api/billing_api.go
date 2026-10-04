@@ -301,8 +301,10 @@ func (s *Server) usageModel(r *http.Request, tid int64) (provider, model string)
 			return p, m
 		}
 	}
-	// 回退：全局默认（统一网关，无租户级覆盖）
-	provider, model = "global", s.Cfg.OnlineModel
+	// 回退：全局默认（统一网关，无租户级覆盖）。读快照而非开机 cfg（★ 〇-AR 第 5 波），
+	// 与上面 Engine.UsageModel 同一把尺子——流水上的 model 名是成本核算的分组键，
+	// 两台实例一个读新值一个读旧值时，同一模型的成本会被拆成两个名字各算一份账。
+	provider, model = "global", s.liveLLM(r.Context()).OnlineModel
 	return
 }
 

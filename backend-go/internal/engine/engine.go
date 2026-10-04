@@ -33,6 +33,7 @@ import (
 	"translator/internal/evals"
 	"translator/internal/kb"
 	"translator/internal/llm"
+	"translator/internal/llmsource"
 	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -324,11 +325,12 @@ func (e *Engine) UsageModel(ctx context.Context) (provider, model string) {
 			return p, m
 		}
 	}
-	if len(e.Cfg.ModelRoutes) > 0 {
+	snap := e.liveLLM(ctx)
+	if len(snap.Routes) > 0 {
 		p := e.pickPrimaryRoute()
 		return p.Provider, p.Model
 	}
-	return "global", e.Cfg.OnlineModel
+	return "global", snap.OnlineModel
 }
 
 // BreakerOpen 主模型是否处于熔断状态（监控告警用）
@@ -1316,11 +1318,28 @@ func assembleTranslateMessages(instrCore, dynNotes, ref, cultureBlock, zhText st
 //
 //	token 定价权 100% 归平台——原「租户 BYOK 路由 → 租户单模型」两级读取链已删除。
 func (e *Engine) resolveModel(ctx context.Context) (base, key, model string) {
-	if len(e.Cfg.ModelRoutes) > 0 {
+	snap := e.liveLLM(ctx)
+	if len(snap.Routes) > 0 {
 		p := e.pickPrimaryRoute()
 		return p.APIBase, p.APIKey, p.Model
 	}
-	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
+	return snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel
+}
+
+// liveLLM 取"这一台实例此刻生效"的上游模型配置（★ 2026-10-04 〇-AR 第 5 波，用户口径「每台热加载」）。
+//
+// 缺陷本体（㊻）：管理台保存模型配置的接口只刷新**发起写入的那一个进程**，
+// 另一台实例带着启动期的随机占位 Key 会一直 401——单机部署看不见，共库多实例／灰度／
+// 演示单元与主单元同时跑时就是"运营明明配好了，客户侧还是全红"。
+// 现在每一次取配置都先按 TTL＋指纹惰性重探一次库（探测与解析都在 internal/llmsource 那一把尺子里），
+// 所以"改完配置要重启才生效"不再是这台实例的行为。
+//
+// 返回: 不可变快照，**永不 nil**（读侧不写判空，判空迟早漏一个变成 panic）。
+// 无库启动形态（e.St==nil，主要是单测与裸引擎）⇒ 按本进程配置现场算一份，不去碰全局指针。
+func (e *Engine) liveLLM(ctx context.Context) *llmsource.Snapshot {
+	// 有库／无库两条分支的口径收在 llmsource.Current 里（读点六处共用一把尺子，
+	// 各写一遍迟早各长成一个版本——本仓计费侧那三把尺子就是这么来的）
+	return llmsource.Current(ctx, e.St, e.Cfg)
 }
 
 // resolveModelForStage 单条翻译这一趟该用哪份端点/密钥/模型（★ R-1 修法 C 的唯一咽喉）。
@@ -1386,7 +1405,9 @@ func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key
 
 // pickPrimaryRoute 按权重选取主路由（权重最高者；全为 0 时取第一个）
 func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
-	rs := e.Cfg.ModelRoutes
+	// ★ 路由列表同样只从快照读（〇-AR 第 5 波）：这张切片会被热加载整份换掉，
+	//   读快照是"拿到发布出去的那一整份"，读共享 cfg 字段则可能拼出新旧混合的 slice 头。
+	rs := e.liveLLM(context.Background()).Routes
 	if len(rs) == 0 {
 		return config.ProviderConfig{}
 	}
@@ -1457,7 +1478,7 @@ func clampF(v, lo, hi float64) float64 {
 // resolveRouteFallbacks 返回按权重降序的备用路由（排除主路由），用于主模型失败时降级
 func (e *Engine) resolveRouteFallbacks(primary config.ProviderConfig) []config.ProviderConfig {
 	out := []config.ProviderConfig{}
-	for _, r := range e.Cfg.ModelRoutes {
+	for _, r := range e.liveLLM(context.Background()).Routes {
 		if r.APIBase == primary.APIBase && r.Model == primary.Model {
 			continue
 		}
@@ -1561,6 +1582,7 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	messages := assembleTranslateMessages(instrCore, dynNotes.String(), ref, cultureBlock, zhText)
 
 	base, key, model, stageActive := e.resolveModelForStage(ctx, stage)
+	snap := e.liveLLM(ctx) // 这一趟的降级链用同一份快照，别在链路上再取第二次（取值会漂）
 
 	// 模型路由策略：配置了全局多供应商路由时，主模型失败按权重降序逐一降级。
 	// 阶段模型（stageActive）同样参与多供应商降级：以阶段模型为主，路由链其余供应商为降级候选，
@@ -1568,7 +1590,7 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	// ★ 2026-08-26 BYOK 移除：原「租户 BYOK 路由优先」分支删除——该分支还有两处
 	//   缺陷（降级链含主路由自身导致双倍请求放大；租户端点误配 Hunyuan 兜底模型必 404），随分支一并消除。
 	var routeFallbacks []config.ProviderConfig
-	if len(e.Cfg.ModelRoutes) > 0 {
+	if len(snap.Routes) > 0 {
 		if stageActive {
 			routeFallbacks = e.resolveRouteFallbacks(config.ProviderConfig{APIBase: base, APIKey: key, Model: model})
 		} else {
@@ -2271,7 +2293,8 @@ func (e *Engine) SummarizeContext(ctx context.Context, texts []string) string {
 	}
 	prompt := "请用1-2句中文总结以下文档的主要内容：\n\n" + preview
 	messages := []map[string]string{{"role": "user", "content": prompt}}
-	content, _, err := e.LLM.CallChat(ctx, e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel, messages, 256, false, e.Cfg.FallbackTemp)
+	snap := e.liveLLM(ctx)
+	content, _, err := e.LLM.CallChat(ctx, snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel, messages, 256, false, e.Cfg.FallbackTemp)
 	if err != nil {
 		return ""
 	}
@@ -2285,7 +2308,8 @@ func (e *Engine) LLMParseLang(ctx context.Context, hint string) string {
 		{"role": "system", "content": sys},
 		{"role": "user", "content": hint},
 	}
-	content, _, err := e.LLM.CallChat(ctx, e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel, messages, 10, false, 0.0)
+	snap := e.liveLLM(ctx)
+	content, _, err := e.LLM.CallChat(ctx, snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel, messages, 10, false, 0.0)
 	if err != nil {
 		return ""
 	}

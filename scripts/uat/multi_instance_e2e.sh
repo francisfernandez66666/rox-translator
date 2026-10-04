@@ -12,6 +12,8 @@
 #   M3b 近零双桶（余额刚够 2 笔）并发压测：★ D-1 欠费结算与扣减交错下的资金守恒
 #       （charge+settle 流水 == 双桶移走量、两桶均不为负、结算路径必须真被触发）
 #   M4 A 实例二次充值 → 5s 内 B 实例恢复可消费（TTL 重播种自愈闭环）
+#   M5 ★ 第三台实例 C 启动时库里没配 Key → A 侧保存后 C **不重启**自行热加载
+#      （〇-AR 第 5 波「每台热加载」的跨进程端到端锁：健康面／译文／日志／第二次翻转四条腿）
 #
 # 用法：bash scripts/uat/multi_instance_e2e.sh
 #   前置：本机 PG 可达（PG_ADMIN_DSN 可覆盖）、mock LLM 由脚本自起。
@@ -59,7 +61,13 @@ log "启动双实例 :${A_PORT} / :${B_PORT}（共享 ${MDB}）..."
 #   ③ 第 2 波把空壳收敛成 409 task_failed 之后，这两条腿第一次露出真值——**红是暴露，不是引入**。
 #   这里只补脚手架自己的前置条件，**判据一字未放宽**：env 档在 hydrateLLMKeys 里「一条都不覆盖」
 #   （cmd/server/llmkeys.go 的 llmKeyFromEnv），所以两台进程启动即拿到同一个可用 mock 来源。
-#   ⚠️ 产品侧「跨实例配置刷新」仍缺口（现网单实例，无客户面影响），已作为待决缺陷登记，不在此处顺手修。
+#   ★ 2026-10-05（〇-AR 第 5 波）：当年登记在这条注释末尾的「产品侧跨实例配置刷新仍缺口」**已经修掉了**，
+#     修法＝「每台热加载」（internal/llmsource：每个读点前按 TTL＋指纹惰性重探共享库），
+#     它的跨进程端到端锁就是本文件下面的 **M5 段**（第三台实例 C 启动时刻意不给 LLM 三项 env）。
+#     上面①那句描述的是**改造前**的形态：models/save 只碰写入进程自己的内存快照；现在保存链路
+#     先落库、落成了才发布快照，其余实例在 TTL 内自己跟上。
+#     A/B 两侧继续用 env 档，是为了让 M2–M4 的射程干净落在「跨实例余额可见性」上，
+#     **不再是**因为「刷新做不到所以只能靠 env 兜」。
 COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" USER_DATA_DIR="$WORK/udata"
   SILICONFLOW_API_KEY=sk-mock ONLINE_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1" ONLINE_MODEL=mock-mt
   EMBED_API_KEY=sk-mock EMBED_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1")
@@ -99,9 +107,13 @@ dbcfg register_global_daily_limit 100000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
 # 模型路由指向 mock LLM（models 表在共享库，A 写 B 读）
-# ⚠️ 这一句测的是「共享库写读」，但它**不会**让 B 实例的运行期配置变新（见上面 COMMON_ENV 那段①）：
-#    保存之后 A 用的是库值快照、B 用的仍是启动时的 env 快照。两侧都指向同一个 mock ⇒ 都能出译文，
-#    本段的判据射程因此干净地落在「跨实例余额可见性」上，不再被配置陈旧污染。
+# ★ 口径校正（2026-10-05 〇-AR 第 5 波）：旧注释在这里写的是「这一句**不会**让 B 的运行期配置变新」，
+#    那是改造前的事实，现在已经不成立——保存链路先落库、再发布快照，B 会在 TTL（默认 5s）内
+#    惰性重探并换上库里这份（M5 段就是把这条锁端到端钉住的）。
+#    本段之所以仍看不出差别，是因为 A/B 都带着 env 档，而 **env 优先级压过库**（AGENTS §一·3），
+#    换上后拿到的还是同一个 mock ⇒ 两侧都能出译文。
+#    于是 M2–M4 的射程依旧干净地落在「跨实例余额可见性」上；配置刷新这一层单独由 M5 覆盖，
+#    两段互不顶替——别把这里当成"跨实例配置没生效"的证据（那是旧文，会误导排障）。
 AJ=$(curl -s $A_URL/api/auth/login -H 'Content-Type: application/json' -d '{"username":"admin","password":"Admin@1234"}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 AH="Authorization: Bearer $AJ"
 curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
@@ -325,6 +337,85 @@ ck M4-topup-propagates-to-b '"success":true' "$M4R"
 # 同 M2 的非空锁（充值传播这条腿也一样不许拿信封当成功）
 ck M4-topup-translation-nonempty '"translations":\{"en":"[^"]' "$M4R"
 
+# ---------- M5：第三台实例「每台热加载」（★ 2026-10-05 〇-AR 第 5 波，㊻ 的端到端锁） ----------
+# 现场复现（现网 R-1/㊻ 的同一形态，双实例只是它的放大器）：
+#   C 实例**启动时**共享库里刻意不给全局 Key（env 档也不给它），于是它拿到随机占位 Key；
+#   随后运营在 **A 实例**的管理台保存可用 Key，C 必须在**不重启**的前提下、TTL 内
+#   （默认 5 秒）自己换上库里那一份 —— 这就是「每台热加载」。
+# 为什么单测不够：internal/llmsource 与 internal/api 的锁测的是"一个进程里的解析与读点"，
+#   而本批缺陷的完整链路跨**两个进程＋一座共享库**（A 写、C 读），只有这一层能证明它真通。
+# 四条判据各守一类失败，缺一类都可能留下静默：
+#   ① 前置负向对照：换 Key **之前** C 必须确实不行（健康面报 placeholder 且出不了非空译文）。
+#      没这一句，后面几条可能是恒真的空转锁——C 若从启动就拿到了 Key，测的就不是热加载。
+#   ② 内容腿：C 的译文**非空**。只看 "success":true 会被"空壳报成功"糊过去（第 2 波⑭ 的教训）。
+#   ③ 观测腿：C 自己的日志里「上游模型配置已热加载」必须**新增至少一条**
+#      ——界面上翻绿而日志里没有这一条＝某个读点没接上这把尺子（各自读开机值的老形态）。
+#   ④ 第二次翻转：运营**再**改一次模型名，C 的管理台读面必须跟着变。
+#      只验第一次＝一份 sync.Once 形态的假实现也能过（"每台热加载"里"持续"那一半没人管）。
+dbq "UPDATE balance_accounts SET balance=balance+500 WHERE tenant_id=$TID" >/dev/null
+sleep 6   # C 没见过的租户：等它按影子 TTL 从库里播种，别把"没额度"当成"没 Key"
+# 清掉共享库里的 LLM 三项＋路由表（只影响本段之后起的 C：A/B 走 env 档，一条都不覆盖）
+dbq "DELETE FROM system_config WHERE \"key\" IN ('online_api_key','online_api_base','online_model','model_routes')" >/dev/null
+C_PORT=8893; C_URL="http://127.0.0.1:${C_PORT}"
+# ★ 与 COMMON_ENV 唯一的差别就是**不给** SILICONFLOW_API_KEY / ONLINE_API_BASE / ONLINE_MODEL：
+#   这正是"另一台实例在运营配置之前就已经起来了"的形态。其余档位（JWT／库／数据目录）保持一致。
+nohup env ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" \
+  USER_DATA_DIR="$WORK/udata" EMBED_API_KEY=sk-mock EMBED_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1" \
+  SELFCHECK_URL="${C_URL}/status" \
+  "$WORK/server" -addr "127.0.0.1:${C_PORT}" -kbdb "$WORK/kbC.db" > "$WORK/instC.log" 2>&1 < /dev/null &
+C_PID=$!
+C_OK=0
+for i in $(seq 1 45); do sleep 1; curl -s -m 2 "$C_URL/status" | grep -q '"ok":true' && { C_OK=1; break; }; done
+if [ "$C_OK" != "1" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|M5-instance-c-started(等待 ${i}s 未就绪 ⇒ 本段判据一条都没跑)"
+  tail -5 "$WORK/instC.log" 2>/dev/null
+else
+  PASS=$((PASS+1)); echo "PASS|M5-instance-c-started"
+  # ① 前置负向对照
+  ck M5-c-health-is-placeholder '"llm_global_key":"placeholder"' "$(curl -s $C_URL/api/health)"
+  M5PRE=$(curl -s $C_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
+    -d '{"text":"热加载前置对照句：此刻库里还没有 Key","target_lang":"en","mode":"pro"}')
+  if echo "$M5PRE" | grep -qE '"translations":\{"en":"[^"]'; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-c-cannot-translate-before-config(换 Key 前就出了译文 ⇒ 前置没搭对，本段其余判据不成立)"
+  else
+    PASS=$((PASS+1)); echo "PASS|M5-c-cannot-translate-before-config"
+  fi
+  HOT0=$(grep -cE '上游模型配置已热加载' "$WORK/instC.log" 2>/dev/null || true)
+  # 运营在 A 实例上保存可用 Key（写共享库；C 自己不接这次请求）
+  curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
+    -d "{\"api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"api_key\":\"sk-mock\",\"model\":\"mock-mt\",\"embed_api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"embed_api_key\":\"sk-mock\"}" >/dev/null
+  # 等 C 自己翻（TTL 默认 5s，这里给 24s 预算；到点仍不翻即判红，不靠 sleep 猜）
+  M5WAIT=0
+  until curl -s -m 3 "$C_URL/api/health" | grep -q '"llm_global_key":"ok"'; do
+    sleep 2; M5WAIT=$((M5WAIT + 2))
+    [ "$M5WAIT" -ge 24 ] && break
+  done
+  ck M5-c-health-flips-after-a-saves '"llm_global_key":"ok"' "$(curl -s $C_URL/api/health)"
+  # ② 内容腿：C 不重启即可出真译文
+  M5R=$(curl -s $C_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
+    -d '{"text":"第二台实例热加载后翻译验证句","target_lang":"en","mode":"pro"}')
+  ck M5-c-translates-after-hot-reload '"success":true' "$M5R"
+  ck M5-c-translation-nonempty '"translations":\{"en":"[^"]' "$M5R"
+  # ③ 观测腿：C 自己记过热加载这一跳
+  HOT1=$(grep -cE '上游模型配置已热加载' "$WORK/instC.log" 2>/dev/null || true)
+  [ $(( ${HOT1:-0} - ${HOT0:-0} )) -ge 1 ] 2>/dev/null \
+    && { PASS=$((PASS+1)); echo "PASS|M5-c-logged-hot-reload(新增 $(( ${HOT1:-0} - ${HOT0:-0} )) 条，等待 ${M5WAIT}s)"; } \
+    || { FAIL=$((FAIL+1)); echo "FAIL|M5-c-logged-hot-reload(HOT0=${HOT0:-?} HOT1=${HOT1:-?} 等待 ${M5WAIT}s)⇒ 界面翻绿而日志无这一跳＝该读点没走同一把尺子"; }
+  # ④ 第二次翻转：运营再改模型名，C 的管理台读面必须跟着变（只验一次＝sync.Once 也能过）
+  curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
+    -d "{\"api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"api_key\":\"sk-mock\",\"model\":\"mock-mt-second\",\"embed_api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"embed_api_key\":\"sk-mock\"}" >/dev/null
+  M5WAIT2=0
+  until curl -s -m 3 -H "$AH" "$C_URL/api/admin/models" | grep -q 'mock-mt-second'; do
+    sleep 2; M5WAIT2=$((M5WAIT2 + 2))
+    [ "$M5WAIT2" -ge 24 ] && break
+  done
+  ck M5-c-reads-second-change '"model":"mock-mt-second"' "$(curl -s -m 3 -H "$AH" "$C_URL/api/admin/models")"
+  # 反证口径（改本段判据后必须逐条实跑，"绿"说明锁没射程）：
+  #   ⑤-A 把 llmsource.Refresh 的换指针一步摘掉 ⇒ ①②③④ 中 ②③④ 三条红；
+  #   ⑤-B 把任一读点改回直接读 s.Cfg（如 health_probes.go 的 llmGlobalKeyState）⇒ ②④ 红；
+  #   ⑤-C 跑法：bash scripts/uat/multi_instance_e2e.sh（PG 方言，整段跑，本段单独跑不起来）。
+fi
+
 # ---------- 汇总 ----------
 DUR=$(( $(date +%s) - T0 ))
 log "=============================="
@@ -332,7 +423,8 @@ log "双实例 UAT：PASS=$PASS FAIL=$FAIL DUR=${DUR}s"
 log "日志目录：$WORK"
 log "=============================="
 if [ "${KEEP:-0}" != "1" ]; then
-  kill $A_PID $B_PID $MOCK_PID 2>/dev/null
+  # ★ M5 起的第三台实例 C 必须一并收掉（${C_PID:-}：前置段失败时该变量没赋值，set -u 下裸写会中止清理）
+  kill $A_PID $B_PID ${C_PID:-} $MOCK_PID 2>/dev/null
   psql "$PG_ADMIN" -q -c "DROP DATABASE IF EXISTS $MDB WITH (FORCE)" >/dev/null 2>&1
 fi
 [ "$FAIL" = "0" ] || exit 1

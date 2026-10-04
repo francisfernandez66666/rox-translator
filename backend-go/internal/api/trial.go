@@ -301,8 +301,10 @@ func (s *Server) trialRecordCost(ctx context.Context, lang string, res *engine.T
 		return
 	}
 	model := "unknown"
-	if s.Cfg != nil && s.Cfg.OnlineModel != "" {
-		model = s.Cfg.OnlineModel
+	// 模型名读快照而不是开机 cfg（★ 〇-AR 第 5 波）：留痕行上的 model 是运营看板
+	// 与成本对账的读法来源，进程旧值会让"换了模型之后"的用量挂在旧模型名上。
+	if m := s.liveLLM(ctx).OnlineModel; m != "" {
+		model = m
 	}
 	qty := res.TokensUsed
 	if qty <= 0 {
