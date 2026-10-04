@@ -195,11 +195,16 @@ func TestStartupPrefersDBKeyOverRouteKey(t *testing.T) {
 	if err := st.SetConfig("online_api_key", store.EncryptSecret("sk-from-db")); err != nil {
 		t.Fatalf("写入 online_api_key 失败: %v", err)
 	}
-	if err := st.SetConfig("model_routes", "[]"); err != nil {
-		t.Fatalf("写入空 model_routes 失败: %v", err)
-	}
-	cfg.ModelRoutes = []config.ProviderConfig{
+	// 路由腿也照生产口径从库里给（〇-AR 第 5 波：库内 model_routes 那一行是路由的事实源），
+	// 这样"两腿皆有值 ⇒ 取库那一条"的对照是真的，而不是靠 cfg 上一个没人读的字段凑场景。
+	routesRaw, err := json.Marshal([]config.ProviderConfig{
 		{Provider: "global", APIBase: "https://route.example/v1", APIKey: "sk-from-route", Model: "route/Model", Weight: 100},
+	})
+	if err != nil {
+		t.Fatalf("序列化路由失败: %v", err)
+	}
+	if err := st.SetConfig("model_routes", string(routesRaw)); err != nil {
+		t.Fatalf("写入 model_routes 失败: %v", err)
 	}
 
 	if got := hydrateLLMKeys(cfg, st); got != llmKeyFromDB {
@@ -217,11 +222,17 @@ func TestStartupPrefersDBKeyOverRouteKey(t *testing.T) {
 func TestStartupFallsBackToRouteOnlyWhenDBEmpty(t *testing.T) {
 	st := newHydrateStore(t)
 	cfg := placeholderCfg(t)
-	if err := st.SetConfig("model_routes", "[]"); err != nil {
-		t.Fatalf("写入空 model_routes 失败: %v", err)
-	}
-	cfg.ModelRoutes = []config.ProviderConfig{
+	// ★ 〇-AR 第 5 波改的前置：路由现在**从库里给**（生产形态就是 system_config.model_routes）。
+	//   旧写法把路由塞在 cfg 上、库里却写 "[]"——那正是"清空了却还带着旧列表"的旧形态；
+	//   现在库里那一行是路由的唯一事实源，前置必须照生产口径摆（判据本身一字未动）。
+	routesRaw, err := json.Marshal([]config.ProviderConfig{
 		{Provider: "global", APIBase: "https://route.example/v1", APIKey: "sk-from-route", Model: "route/Model", Weight: 100},
+	})
+	if err != nil {
+		t.Fatalf("序列化路由失败: %v", err)
+	}
+	if err := st.SetConfig("model_routes", string(routesRaw)); err != nil {
+		t.Fatalf("写入 model_routes 失败: %v", err)
 	}
 	if got := hydrateLLMKeys(cfg, st); got != llmKeyFromRoute {
 		t.Fatalf("库空时应回落到主路由水合，实际来源 %q", got)
@@ -243,8 +254,15 @@ func TestStartupIgnoresRouteWithEmptyOrMaskedKey(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newHydrateStore(t)
 			cfg := placeholderCfg(t)
-			cfg.ModelRoutes = []config.ProviderConfig{
+			// 路由同样从库里给（事实源口径与上面两条一致），负向判据本身一字未动
+			routesRaw, err := json.Marshal([]config.ProviderConfig{
 				{Provider: "global", APIKey: tc.key, Model: "m", APIBase: "https://x.example/v1"},
+			})
+			if err != nil {
+				t.Fatalf("序列化路由失败: %v", err)
+			}
+			if err := st.SetConfig("model_routes", string(routesRaw)); err != nil {
+				t.Fatalf("写入 model_routes 失败: %v", err)
 			}
 			buf := captureSlog(t)
 			if got := hydrateLLMKeys(cfg, st); got != llmKeyFromNone {

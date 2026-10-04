@@ -14,6 +14,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/culture"
+	"translator/internal/llmsource"
 	"translator/internal/store"
 )
 
@@ -164,9 +165,12 @@ func (p *llmProducer) llmRoute() (base, key, model string) {
 			}
 		}
 	}
-	cfg := config.C
-	if cfg != nil && cfg.OnlineAPIBase != "" && cfg.OnlineModel != "" {
-		return cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.OnlineModel
+	// ★ 〇-AR 第 5 波「每台热加载」：全局默认这一档读快照，不读进程里的开机 cfg。
+	// 采集是后台任务，一次跑几十分钟：拿开机配置跑完整批的话，运营中途换了 Key／模型，
+	// 这一批仍然用旧的那把去打（而且 tier3 失败是静默降 tier，坏了也没人看见）。
+	snap := llmsource.Current(context.Background(), p.st, config.C)
+	if snap.OnlineAPIBase != "" && snap.OnlineModel != "" {
+		return snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel
 	}
 	return "", "", ""
 }

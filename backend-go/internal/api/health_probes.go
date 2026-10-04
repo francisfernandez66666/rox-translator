@@ -118,12 +118,21 @@ func (s *Server) probeStore() (state string, ok bool) {
 //   - "ok"          ：三档来源（环境变量 / 后台库配置 / 主路由）至少有一档给出了可用 Key；
 //   - "placeholder" ：仍是 config.Default() 生成的随机占位 Key，任何真调用都必 401。
 //
-// 判据取 `Cfg.OnlineAPIKeyIsPlaceholder` 这一**构造期就定死的来源标记**，不取派生值：
+// 判据取快照里的 `Placeholder` 这一**构造期就定死的来源标记**（值即 config.OnlineAPIKeyIsPlaceholder 的水合结论），
+// 不取派生值：
 // 派生标记（如"最近一次调用成没成功"）会把"配了但坏了"和"根本没配"混成同一个读数，
 // 而运维要区分的恰好是这两件事（前者去看告警与熔断，后者去管理台补 Key）。
 // 本端点匿名可达，返回值里绝不拼 Key、长度、供应商域名等任何坐标（与 dispatch 同口径）。
-func (s *Server) llmGlobalKeyState() string {
-	if s.Cfg == nil || s.Cfg.OnlineAPIKey == "" || s.Cfg.OnlineAPIKeyIsPlaceholder {
+//
+// ★ 〇-AR 第 5 波（用户口径「每台热加载」）：读的是 `llmsource.Live()` 而不是 `s.Cfg`。
+// 为什么必须换：㊻ 的现网形态就是「运营在管理台配好了 Key，另一台实例带着启动期占位 Key
+// 一直 401」——这一台的健康检查若只报本进程启动那一刻的 cfg，它报的是**开机快照**，
+// 运维会看到"库里明明配了、健康检查说没配"，然后去重启本可继续服务的进程。
+// 现在探一次之前先按 TTL＋指纹惰性重探库（探测本身有默认 5 秒节流，不是每 PING 一次读一次库），
+// 读到的就是**这台此刻真正会拿去调上游的那把 Key**，与引擎侧 `liveLLM` 同一把尺子。
+func (s *Server) llmGlobalKeyState(ctx context.Context) string {
+	snap := s.liveLLM(ctx)
+	if snap.OnlineAPIKey == "" || snap.Placeholder {
 		return "placeholder"
 	}
 	return "ok"

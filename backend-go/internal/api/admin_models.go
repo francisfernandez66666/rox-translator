@@ -19,6 +19,7 @@ import (
 
 	"translator/internal/config"
 	apierrors "translator/internal/errors"
+	"translator/internal/llmsource"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -88,10 +89,17 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthzError(w, r, err)
 		return
 	}
-	// 读全局配置
-	base := s.Cfg.OnlineAPIBase
-	key := s.Cfg.OnlineAPIKey
-	model := s.Cfg.OnlineModel
+	// 读全局配置（★ 〇-AR 第 5 波「每台热加载」：三件套读的是**这台此刻生效的快照**，不是开机 cfg）
+	// 快照读点统一走 liveLLM（本包唯一入口，见 llmsource_read.go 文件头）。
+	// 为什么管理台也要惰性重探：这一页是运营"改完想立刻看一眼有没有生效"的那个面，
+	// 只等下一次翻译请求才换快照的话，它会一直显示旧值＝"我配了但你说是空的"，
+	// 于是运营反复保存、甚至去重启进程。探测本身有默认 5 秒节流，不会把这一页打成读库风暴。
+	// 路由表本身仍读库内原文（loadRoutesDecrypted）：编辑面要显示"存着什么"，
+	// 含被快照停用的坏路由——把停用路由从表里抹掉，等于让运营下一次整表保存时把它永久删掉。
+	snap := s.liveLLM(r.Context())
+	base := snap.OnlineAPIBase
+	key := snap.OnlineAPIKey
+	model := snap.OnlineModel
 	routes := s.loadRoutesDecrypted()
 	if routes == nil {
 		routes = []config.ProviderConfig{}
@@ -107,7 +115,8 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	embSet, embMask := s.llmKeyState("embed_api_key")
 	// 翻译密钥是否已真实配置：占位随机 Key（未配置环境变量时生成的 sk-xxxx）视为「未配置」，
 	// 避免前端把占位 Key 误判为已生效，导致翻译实际失败却显示正常。
-	transSet := key != "" && !s.Cfg.OnlineAPIKeyIsPlaceholder
+	// 判据取快照的 Placeholder（构造期来源标记，与 /api/health 的 llm_global_key 同一把尺子）。
+	transSet := key != "" && !snap.Placeholder
 	writeJSON(w, 200, map[string]interface{}{"success": true,
 		// model：在线翻译/工单任务密钥（api_key 已掩码；set 表示是否真实配置）
 		"model":     map[string]interface{}{"api_base": base, "api_key": maskKey(key), "model": model, "set": transSet},
@@ -174,13 +183,50 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 			merged[i].APIKey = oldRoutes[i].APIKey // 回填明文旧值
 		}
 	}
-	// ★ 热同步用明文；入库前整体加密（评审整改 D3：库内不再存任何明文供应商 Key）
-	s.Cfg.ModelRoutes = merged
+	// ★ 入库前整体加密（评审整改 D3：库内不再存任何明文供应商 Key）
+	//
+	// ★★ 顺序是这一段的修法本体（〇-AR 第 5 波，㊻ 的另一半）：**先落库、落成了才碰进程侧**。
+	// 旧写法把 `s.Cfg.ModelRoutes = merged` 排在 SetConfig 之前，于是写库失败当场 500 返回时，
+	// 这一台的内存里已经是客户没提交成功的那份配置，库里还是旧的——
+	// 同一租户在两台实例上会拿到两套上游（一台按新配置、其余按库跑），
+	// 而且表现是"保存失败但有些请求已经变了"，比整批没生效更难归因。
 	b, _ := json.Marshal(encryptRoutes(merged))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
+	// 清空作用域先处理：clear_keys 指定的密钥直接从库里删（先于写入，避免刚写又被清）
+	for _, sc := range req.ClearKeys {
+		if sc == "translation" {
+			// 清除在线翻译 Key：库内三项（密钥/网关/模型）置空
+			_ = s.Store.SetConfig("online_api_key", "")
+			_ = s.Store.SetConfig("online_api_base", "")
+			_ = s.Store.SetConfig("online_model", "")
+		}
+		if sc == "embedding" {
+			// 清除 Embedding Key：库内密钥/网关置空
+			_ = s.Store.SetConfig("embed_api_key", "")
+			_ = s.Store.SetConfig("embed_api_base", "")
+		}
+	}
+	// 在线翻译 Key 持久化：仅在非空且非掩码时写入（掩码串表示前端未改动、保留原值）。
+	if req.APIKey != "" && !hasMask(req.APIKey) {
+		_ = s.Store.SetConfig("online_api_key", store.EncryptSecret(req.APIKey))
+	}
+	if req.APIBase != "" {
+		_ = s.Store.SetConfig("online_api_base", req.APIBase)
+	}
+	if req.Model != "" {
+		_ = s.Store.SetConfig("online_model", req.Model)
+	}
+	// Embedding Key 持久化（KB 向量重建用）：同样仅在非空且非掩码时写入，密文落库。
+	if req.EmbedAPIKey != "" && !hasMask(req.EmbedAPIKey) {
+		_ = s.Store.SetConfig("embed_api_key", store.EncryptSecret(req.EmbedAPIKey))
+	}
+	if req.EmbedAPIBase != "" {
+		_ = s.Store.SetConfig("embed_api_base", req.EmbedAPIBase)
+	}
+	// —— 以下全部是"库已经写成这样了"才做的本进程同步（★ 热同步用明文）——
 	// 若单模型字段非空，同时更新全局默认单模型（引擎回退链的最终兜底）
 	if req.APIBase != "" {
 		s.Cfg.OnlineAPIBase = req.APIBase
@@ -192,46 +238,38 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	if req.Model != "" {
 		s.Cfg.OnlineModel = req.Model
 	}
-	// ★ LLM Key 合并后的持久化逻辑（2026-08-27）：
-	//   翻译/工单任务 Key 与 Embedding Key 均以 enc:v1: 密文落库到 system_config，
-	//   并热同步到运行配置 s.Cfg，使配置立即生效；同时 main.go 启动时再从库水合，
-	//   保证「后台设置优先于环境变量、重启后仍生效」。
-	// 清空作用域优先处理：clear_keys 指定的密钥直接置回占位/删除（先于写入，避免刚写又被清）。
+	// 清除作用域的进程侧腿：运行配置恢复占位/清空。
+	// ⚠️ 这一条不许跟着"库读回来"那条统一路径走：环境变量那档优先于库，
+	//    本进程 cfg 里此刻装的还是启动期那把 Key，光删库里的行它不会自己松手，
+	//    "清除"按钮就会变成点了没反应（表现和缺陷本体一样是"配置与实际不符"）。
 	for _, sc := range req.ClearKeys {
 		if sc == "translation" {
-			// 清除在线翻译 Key：库内三项（密钥/网关/模型）置空，运行配置恢复占位随机 Key
-			_ = s.Store.SetConfig("online_api_key", "")
-			_ = s.Store.SetConfig("online_api_base", "")
-			_ = s.Store.SetConfig("online_model", "")
 			s.Cfg.OnlineAPIKey = ""
 			s.Cfg.OnlineAPIKeyIsPlaceholder = true
 		}
 		if sc == "embedding" {
-			// 清除 Embedding Key：库内密钥/网关置空，运行配置清空
-			_ = s.Store.SetConfig("embed_api_key", "")
-			_ = s.Store.SetConfig("embed_api_base", "")
 			s.Cfg.EmbedAPIKey = ""
 		}
 	}
-	// 在线翻译 Key 持久化：仅在非空且非掩码时写入（掩码串表示前端未改动、保留原值）。
-	// 写入后同步清除占位标志，使 GET 的 set 标志即时变为 true。
-	if req.APIKey != "" && !hasMask(req.APIKey) {
-		_ = s.Store.SetConfig("online_api_key", store.EncryptSecret(req.APIKey))
-	}
-	if req.APIBase != "" {
-		_ = s.Store.SetConfig("online_api_base", req.APIBase)
-	}
-	if req.Model != "" {
-		_ = s.Store.SetConfig("online_model", req.Model)
-	}
-	// Embedding Key 持久化（KB 向量重建用）：同样仅在非空且非掩码时写入，密文落库 + 热同步运行配置。
+	// Embedding 一族的进程侧现值（不在 llmsource 快照射程内，仍按字段同步）
 	if req.EmbedAPIKey != "" && !hasMask(req.EmbedAPIKey) {
 		s.Cfg.EmbedAPIKey = req.EmbedAPIKey
-		_ = s.Store.SetConfig("embed_api_key", store.EncryptSecret(req.EmbedAPIKey))
 	}
 	if req.EmbedAPIBase != "" {
 		s.Cfg.EmbedAPIBase = req.EmbedAPIBase
-		_ = s.Store.SetConfig("embed_api_base", req.EmbedAPIBase)
+	}
+	// ★ 把本进程的"当前生效"整体换成刚写库这一份（〇-AR 第 5 波「每台热加载」的写入侧）。
+	// 为什么还要 Publish：热加载腿是**惰性**的（引擎取配置时才按 TTL 探库），
+	// 若这里不发，改完配置的这一台要等到下一次翻译请求（且超过 TTL）才换上新配置，
+	// 而管理台紧接着的 GET 就已经在读快照了——"我保存了但它显示旧的"。
+	// PublishFrom 同时钉住"这份是从这座库读的、什么时候读的"，TTL 节流因此不会白探一次库。
+	// 其余实例不必重启：它们各自的 TTL 探测探到指纹变化即换上新快照。
+	// ApplyTo 保留的是既有口径：路由与三件套仍回写运行配置——启动期一次性判定
+	// （H2 能力位探测）与 Embedding 一族还在问 cfg，B5 那条能力位热同步断言也钉在这上面。
+	if s.Cfg != nil {
+		snap := llmsource.Resolve(s.Cfg, s.Store)
+		snap.ApplyTo(s.Cfg)
+		llmsource.PublishFrom(s.Store, snap)
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_save", "system", fmt.Sprintf("%d 条全局路由", len(merged)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -293,12 +331,19 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	// ★ 热同步明文；入库加密（评审整改 D3）
-	s.Cfg.ModelRoutes = req.Routes
+	// ★ 入库加密（评审整改 D3）；★ 〇-AR 第 5 波：先落库，落成才同步本进程（与 handleModelsSave 同口径）
 	b, _ := json.Marshal(encryptRoutes(req.Routes))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
+	}
+	// 把"当前生效"整份换成刚写库这一份：其余实例靠各自的 TTL 探测追上来，这一台立刻到位。
+	// ApplyTo 同 handleModelsSave：路由与三件套要回写 cfg（启动期判定与既有 B5 断言都读那里），
+	// 但必须在 SetConfig 成功之后——旧写法先改 cfg 再写库，写库失败就留下"这台新、库旧"的分叉。
+	if s.Cfg != nil {
+		snap := llmsource.Resolve(s.Cfg, s.Store)
+		snap.ApplyTo(s.Cfg)
+		llmsource.PublishFrom(s.Store, snap)
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "model_routes_save", "system", fmt.Sprintf("%d 条", len(req.Routes)))
 	writeJSON(w, 200, map[string]interface{}{"success": true})

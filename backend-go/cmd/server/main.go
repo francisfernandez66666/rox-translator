@@ -330,32 +330,17 @@ func main() {
 				}
 			}
 		}
-		if v, err := st.GetConfig("model_routes"); err == nil && v != "" {
-			var routes []config.ProviderConfig
-			if json.Unmarshal([]byte(v), &routes) == nil && len(routes) > 0 {
-				// ★ 库内为 enc:v1: 密文（评审整改 D3）：水合时解密；解密失败的路由打告警跳过
-				alive := make([]config.ProviderConfig, 0, len(routes))
-				for _, rt := range routes {
-					dec := store.DecryptSecret(rt.APIKey)
-					if dec == "" && strings.HasPrefix(rt.APIKey, store.SecretEncPrefix) {
-						log.Printf("[init] 路由 %s(%s) 密钥解密失败（疑 JWT_SECRET 轮换未同步），该路由停用", rt.Provider, rt.Model)
-						continue
-					}
-					rt.APIKey = dec
-					alive = append(alive, rt)
-				}
-				cfg.ModelRoutes = alive
-				log.Printf("模型路由策略已加载: %d 条", len(alive))
-			}
-		}
-		// ★ 启动水合（★ R-1 修法 A/B，2026-10-04 整段搬到 llmkeys.go 的 hydrateLLMKeys）：
-		//   旧形态把「读后台库配置」那五句长在 `for _, r := range cfg.ModelRoutes` 循环体内，
-		//   于是管理台把全局路由存成 0 行的那天起，库里的可用 Key 就再也水合不上，
-		//   引擎拿着 config.go 生成的随机占位 Key 静默起跑 ⇒ Pro/知识库/试用三条客户腿全 401。
-		//   现在优先序＝env ＞ 后台库配置 ＞ 主路由，两腿皆空则 ERROR 日志＋平台告警＋健康面状态词。
+		// ★ 模型路由与全局 Key 的水合整体委托给 hydrateLLMKeys（内部走 llmsource.Resolve）：
+		//   旧形态在这里自己读一遍 model_routes、解密、赋给 cfg，再另起一段读后台配置——
+		//   同一个优先序被抄成两处，运行期热加载就只能覆盖其中一处（㊻ 的根因形态）。
+		//   现在读库、解密、停用坏路由、三档取值全在 llmsource 那一把尺子里，
+		//   启动期与运行期调的是同一个 Resolve，"重启才生效"从此不再是配置语义的一部分。
 		if src := hydrateLLMKeys(cfg, st); src == llmKeyFromNone {
 			// 日志文案刻意不含任何 Key 片段：这一行会被 systemd journal 与运维看板原样采集
 			log.Println("[llmkey] 三档来源均无可用全局 Key，已落 critical 告警（见 /api/health.llm_global_key）")
+		}
+		if n := len(cfg.ModelRoutes); n > 0 {
+			log.Printf("模型路由策略已加载: %d 条", n)
 		}
 	}
 

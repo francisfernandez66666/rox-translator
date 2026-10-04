@@ -8,8 +8,11 @@
 //	③ parseScores 的权重口径（术语30/语法20/语义30/数字10/风格10）、模型自带 total 优先、
 //	   上限截 100、带代码块/前后缀噪声的 JSON 提取、无 JSON 必须报错；
 //	④ resolveJudge 的四级优先级（stage_models 分阶段 → 旧键 evals → ModelRoutes 最高权重 → Online*）
-//	   与「阶段 Key 为空继承全局 Key」的兜底；
-//	⑤ SaveRecord 的幂等语义（同单同语言重复打标不产生新行）与 Store=nil 的静默跳过。
+//	   与「阶段 Key 为空继承全局 Key」的兜底；★ 阶段档位每轮现查库（本来就有），
+//	   后两档自 〇-AR 第 5 波起读 llmsource 快照＝"这台此刻真正会用的那一份"（见 ⑥）；
+//	⑤ SaveRecord 的幂等语义（同单同语言重复打标不产生新行）与 Store=nil 的静默跳过；
+//	⑥ ㊻「每台热加载」在 Judge 这条腿上的落点：运营在管理台存的 Key 必须被**另一台实例**继承到，
+//	   不许停在开机那份占位符上（Judge 失败在评估侧是静默跳过的，不锁住就没人看得见）。
 //
 // 本文件不打真实 LLM 外网：Evaluate 的调用链由 mock server 场景在 UAT 覆盖。
 // =============================================
@@ -24,6 +27,7 @@ import (
 	"testing"
 
 	"translator/internal/config"
+	"translator/internal/llmsource"
 	"translator/internal/store"
 
 	_ "modernc.org/sqlite"
@@ -188,6 +192,13 @@ func TestResolveJudgePriority(t *testing.T) {
 	cfg := config.Default()
 	cfg.OnlineAPIBase = "https://online.example/v1"
 	cfg.OnlineAPIKey = "sk-online"
+	// ★ 必须把这个档位自己钉清楚（2026-10-05 〇-AR 第 5 波）：config.Default() 在没配环境变量时
+	// 会生成随机占位 Key 并把 OnlineAPIKeyIsPlaceholder 置真，本用例随后只改了 Key 的字面值。
+	// 旧实现读的是 e.Cfg 的裸字面值，占位标记在这条链上根本没参与判定，于是"假装有全局 Key"
+	// 也能通过；现在继承腿走的是 llmsource 快照，快照认为"启动占位符不算可用 Key"，
+	// 会把兜腿拨到 model_routes 那把 Key 上（本用例的路由里正有一把 "k"）——当场红。
+	// 这条红是**暴露**：它说明这一档的前置条件从来没写明过。此处按真实语义钉成"全局 Key 可用"。
+	cfg.OnlineAPIKeyIsPlaceholder = false
 	cfg.OnlineModel = "online-model"
 	cfg.ModelRoutes = []config.ProviderConfig{
 		{APIBase: "https://low.example/v1", APIKey: "sk-low", Model: "low-model", Weight: 10},
@@ -246,6 +257,69 @@ func TestResolveJudgePriority(t *testing.T) {
 	}
 	if base, _, _ := e2.resolveJudge("translate"); !strings.Contains(base, "example") {
 		t.Fatalf("脏 stage_models 应静默跳过并回落，实得 %q", base)
+	}
+}
+
+// TestResolveJudgeInheritsLiveKeyNotStartupCfg 是 ㊻「每台热加载」落在 Judge 这条腿上的锁。
+// 现场：一台实例**启动时**全局没配 Key（config.Default() 生成随机占位符），
+// 运营**之后**在另一台实例的管理台存了可用 Key，本机库里能读到——
+// 这台实例上「阶段只配端点与模型、没配 Key」的评估档位必须继承**库里那份**，不许停在开机占位符上。
+//
+// 为什么这条必须有机械锁：评估失败在本包是**静默跳过**的（不挡翻译、不报警），
+// 表现就是"运营换了 Key，评估还在拿旧 Key 打 401"而没人看见——正是本批要消灭的那类静默。
+// 反证：把 resolveJudge 里的 snap 换回 e.Cfg（即回到本进程开机值），第二、三段断言当场红。
+func TestResolveJudgeInheritsLiveKeyNotStartupCfg(t *testing.T) {
+	pinSQLite(t)
+	t.Setenv("LLM_CONFIG_RELOAD_TTL_SEC", "0") // 每次取配置都真探一次库，不测调度运气
+	llmsource.ResetForTest()
+	t.Cleanup(llmsource.ResetForTest)
+
+	cfg := config.Default()
+	cfg.OnlineAPIKey = "sk-startup-placeholder"
+	cfg.OnlineAPIKeyIsPlaceholder = true // 启动期没拿到可用 Key 的真实形态
+	cfg.OnlineAPIBase = "https://startup.example/v1"
+	cfg.OnlineModel = "startup-model"
+	cfg.ModelRoutes = nil
+
+	st := newStore(t)
+	if err := st.SetConfig("stage_models", `{"initial_evals":{"api_base":"https://ie.example/v1","model":"ie-model"}}`); err != nil {
+		t.Fatalf("写入阶段配置失败: %v", err)
+	}
+	e := New(cfg, nil, st, "sk-judge")
+
+	// 前置（负向对照）：库里还没有全局 Key ⇒ 继承的只能是本进程现值。
+	// 没有这一句，下面那条断言可能是"恒真"的空转锁。
+	if _, key, _ := e.resolveJudge("translate"); key != "sk-startup-placeholder" {
+		t.Fatalf("前置：库内无全局 Key 时应继承本进程现值，实得 %q", key)
+	}
+
+	// 运营在另一台实例上保存全局 Key（本机只会从共享库里读到它，自己的 cfg 一字未动）
+	if err := st.SetConfig(llmsource.KeyOnlineKey, store.EncryptSecret("sk-ops-saved")); err != nil {
+		t.Fatalf("写入运营保存的 Key 失败: %v", err)
+	}
+	if err := st.SetConfig(llmsource.KeyOnlineBase, "https://ops.example/v1"); err != nil {
+		t.Fatalf("写入运营保存的端点失败: %v", err)
+	}
+	if err := st.SetConfig(llmsource.KeyOnlineModel, "ops-model"); err != nil {
+		t.Fatalf("写入运营保存的模型名失败: %v", err)
+	}
+	if _, key, _ := e.resolveJudge("translate"); key != "sk-ops-saved" {
+		t.Fatalf("运营存库后 Judge 仍继承开机占位 Key：实得 %q ⇒ 热加载在评估腿没生效", key)
+	}
+	// 阶段没配的档位（review）整组回落库里那份，而不是开机的 startup.*
+	if base, key, model := e.resolveJudge("review"); base != "https://ops.example/v1" || key != "sk-ops-saved" || model != "ops-model" {
+		t.Fatalf("未配阶段应整组继承库里现值，实得 %s/%s/%s", base, key, model)
+	}
+	// 阶段自己配了 Key 时仍以阶段为准（热加载只补"没配"的那一档，不许顶掉显式配置）
+	if err := st.SetConfig("stage_models", `{"initial_evals":{"api_base":"https://ie.example/v1","api_key":"sk-ie","model":"ie-model"}}`); err != nil {
+		t.Fatalf("写入带 Key 的阶段配置失败: %v", err)
+	}
+	if _, key, _ := e.resolveJudge("translate"); key != "sk-ie" {
+		t.Fatalf("阶段自带 Key 应压过全局档，实得 %q", key)
+	}
+	// 本进程的 cfg 必须一字未动（热加载靠快照，不靠改写共享配置——AGENTS §三 并发回写那条）
+	if cfg.OnlineAPIKey != "sk-startup-placeholder" || !cfg.OnlineAPIKeyIsPlaceholder {
+		t.Fatalf("评估腿在运行期改写了共享 cfg: key=%q placeholder=%v", cfg.OnlineAPIKey, cfg.OnlineAPIKeyIsPlaceholder)
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/llm"
+	"translator/internal/llmsource"
 	"translator/internal/store"
 )
 
@@ -60,13 +61,27 @@ func (e *Evaluator) ShouldSample() bool {
 	return rand.Float64() < e.SampleRate
 }
 
+// liveLLM 取"这一台此刻生效"的上游模型配置（★ 〇-AR 第 5 波「每台热加载」）。
+// 与引擎侧 `Engine.liveLLM` 同一个口径、同一把尺子（internal/llmsource）：
+// Judge 走的是平台自掏成本的那条腿，配置一旦换手还读进程旧值，
+// 表现就是"运营换了 Key，评估还在拿旧 Key 打 401"，而 401 在评估侧是静默跳过的
+// （评估失败不挡翻译），坏了也没人看见——正是本批要消灭的那类静默。
+//
+// ctx 用 context.Background() 而非请求上下文：本函数被 resolveJudge／judgeKeyUsable
+// 这两个"纯解析"入口调用，它们没有 ctx 参数（改动它们要连带动 8 处既有断言，
+// 收益只有日志里的 trace_id；热加载那条 INFO 本身带 from/routes，够定位）。
+func (e *Evaluator) liveLLM() *llmsource.Snapshot {
+	return llmsource.Current(context.Background(), e.Store, e.Cfg)
+}
+
 // judgeKeyUsable 判断解析出的 Judge Key 是否可用（非空、非掩码、非启动占位符）。
 func (e *Evaluator) judgeKeyUsable(key string) bool {
 	if key == "" || strings.Contains(key, "****") {
 		return false
 	}
 	// 启动生成的随机占位符无法调用外部 API，视为不可用
-	if e.Cfg != nil && e.Cfg.OnlineAPIKeyIsPlaceholder && key == e.Cfg.OnlineAPIKey {
+	// 占位标记读快照的 Placeholder（与 /api/health 的 llm_global_key 同源）
+	if snap := e.liveLLM(); snap.Placeholder && key == snap.OnlineAPIKey {
 		return false
 	}
 	return true
@@ -75,11 +90,17 @@ func (e *Evaluator) judgeKeyUsable(key string) bool {
 // resolveJudge 解析 Judge 模型的 base/key/model。
 // 优先级：stage_models[初翻评估/校对评估] → stage_models.evals（旧键兼容）→ ModelRoutes → Online*。
 // 参数 taskType: "translate"=初翻评估（initial_evals），"review"=校对评估（review_evals）。
+//
+// ★ 后两档读的是 `liveLLM()` 快照而不是 `e.Cfg`（〇-AR 第 5 波）：
+// 阶段档位本来每轮现查库（`e.Store.GetConfig("stage_models")`），一直是热的；
+// 只有"阶段没配、继承全局"这一条腿过去拿的是本进程开机值，于是同一份全局配置
+// 在阶段腿与全局腿上是两个时刻——本批把两档统一到同一把尺子上。
 func (e *Evaluator) resolveJudge(taskType string) (base, key, model string) {
 	stage := config.StageInitialEvals
 	if taskType == "review" {
 		stage = config.StageReviewEvals
 	}
+	snap := e.liveLLM()
 	if e.Store != nil {
 		if raw, err := e.Store.GetConfig("stage_models"); err == nil && raw != "" {
 			var m config.StageModels
@@ -88,21 +109,21 @@ func (e *Evaluator) resolveJudge(taskType string) (base, key, model string) {
 					if sm.APIKey != "" {
 						return sm.APIBase, sm.APIKey, sm.Model
 					}
-					return sm.APIBase, e.Cfg.OnlineAPIKey, sm.Model
+					return sm.APIBase, snap.OnlineAPIKey, sm.Model
 				}
 				// 旧键兜底：未区分初翻/校对评估时共用 evals 阶段配置
 				if sm, ok := m[config.StageEvals]; ok && sm.APIBase != "" && sm.Model != "" {
 					if sm.APIKey != "" {
 						return sm.APIBase, sm.APIKey, sm.Model
 					}
-					return sm.APIBase, e.Cfg.OnlineAPIKey, sm.Model
+					return sm.APIBase, snap.OnlineAPIKey, sm.Model
 				}
 			}
 		}
 	}
-	if len(e.Cfg.ModelRoutes) > 0 {
-		best := e.Cfg.ModelRoutes[0]
-		for _, r := range e.Cfg.ModelRoutes[1:] {
+	if len(snap.Routes) > 0 {
+		best := snap.Routes[0]
+		for _, r := range snap.Routes[1:] {
 			if r.Weight > best.Weight {
 				best = r
 			}
@@ -111,7 +132,7 @@ func (e *Evaluator) resolveJudge(taskType string) (base, key, model string) {
 			return best.APIBase, best.APIKey, best.Model
 		}
 	}
-	return e.Cfg.OnlineAPIBase, e.Cfg.OnlineAPIKey, e.Cfg.OnlineModel
+	return snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel
 }
 
 // Evaluate LLM-as-Judge 5 维评分；返回总分（0-100）与各维分数。

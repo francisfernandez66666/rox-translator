@@ -45,6 +45,41 @@ func (s *Store) SetConfig(key, value string) error {
 	return err
 }
 
+// ConfigsByKeys 一次查询读取多个配置项（★ 2026-10-04 〇-AR 第 5 波「每台热加载」的探测腿）。
+// 参数 keys: 配置键名列表；返回 map[键]=值——**库里没有的键不出现在 map 里**（调用方按缺省处理，
+// 不许把"缺键"和"值为空串"混为一谈，那是两种运维动作）。
+// 为什么单独开这一个方法：热加载探测要在**每一次上游调用前**判断"库里那份模型配置变没变"，
+// 用 N 次 GetConfig 就是 N 次往返；一条 `key IN (...)` 把它压成一次，
+// 也让"指纹"建立在**同一次快照读**上（跨两次查询取值会读到半改状态：
+// 管理台保存是多个键分次写入的，分开读能拼出一把谁都没配过的组合）。
+// 方言口径：SQLite／PostgreSQL 都支持 `IN (?,?,…)`，无尾随 LIMIT，占位符按参数个数动态生成。
+func (s *Store) ConfigsByKeys(keys ...string) (map[string]string, error) {
+	out := make(map[string]string, len(keys))
+	if len(keys) == 0 {
+		return out, nil // 空清单直接回空 map，不生成 `IN ()` 这种两种方言都不认的句子
+	}
+	ph := strings.Repeat("?,", len(keys))
+	ph = ph[:len(ph)-1] // 去掉最后一个逗号：?,?,? 而不是 ?,?,
+	args := make([]interface{}, 0, len(keys))
+	for _, k := range keys {
+		args = append(args, k)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT key, value FROM system_config WHERE key IN ("+ph+")", args...)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			continue // 单行解析失败跳过（与 AllConfigs 同口径）
+		}
+		out[k] = v
+	}
+	return out, nil
+}
+
 // AllConfigs 返回全部配置项（按键名排序）。
 // 返回：配置项切片。
 func (s *Store) AllConfigs() ([]SysConfig, error) {
