@@ -104,6 +104,18 @@ type SSOProviderConfig struct {
 	DefaultTenantID int64  `json:"default_tenant_id"` // 自动开通归属租户（缺省 1）
 }
 
+// OriginAPIKey* 是在线翻译密钥的**来源档位**（字段 Config.OnlineAPIKeyOrigin 的取值）。
+// 词面值与 internal/llmsource 的 From* 常量逐字一致：那边是「一次解析结果的来源」，这边是「进程配置里
+// 这把密钥的来源锚点」，两侧用两套拼法会让同一行日志里出现两种词，运维排障要先翻译一遍。
+// 为什么在这里再写一份字面量而不是引用 llmsource：llmsource 依赖本包，本包反向 import 它就是循环依赖
+// （AGENTS §一·1.3「禁止基础包 import internal/store」同族形态）。
+const (
+	OriginAPIKeyEnv   = "env"   // 启动时环境变量真给了密钥 ⇒ 只有这一档有"库不许覆盖"的优先级
+	OriginAPIKeyDB    = "db"    // 来自 system_config.online_api_key（启动水合／管理台保存写回的都算）
+	OriginAPIKeyRoute = "route" // 来自模型路由主路由带的密钥
+	OriginAPIKeyNone  = "none"  // 三档皆空 ⇒ 现值是随机占位符（调用必 401）
+)
+
 // Config 保存运行时配置（等价于 Python lib.py 的模块级配置）
 type Config struct {
 	// 翻译 LLM（SiliconFlow）
@@ -114,7 +126,17 @@ type Config struct {
 	// OnlineAPIKeyIsPlaceholder 标记 OnlineAPIKey 是否为启动时生成的随机占位值
 	//（环境变量未配置）。占位 Key 调用外部 LLM 必失败，依赖方（如 Evals）应据此禁用。
 	OnlineAPIKeyIsPlaceholder bool
-	OnlineTimeout             int // 在线调用超时秒数
+	// OnlineAPIKeyOrigin 是「这个 Key 是从哪一档来的」的**构造期来源锚点**（★ 2026-10-05 〇-AR 第 5 波补腿）。
+	// 取值见 OriginAPIKey* 常量；只有启动时环境变量真给了密钥才是 OriginAPIKeyEnv。
+	//
+	// 为什么要单独一个来源字段、不拿 IsPlaceholder 反推：占位标记是**派生状态**，
+	// 水合（llmsource.Snapshot.ApplyTo）与管理台保存都会把它翻成 false，
+	// 于是「库里读来的 Key」在后续解析里长得和「env 配的 Key」一模一样——
+	// env 档的优先级会短路库读，结果就是**启动那一刻从库里水合来的那份把这台永久钉死在旧值上**，
+	// 运营之后在管理台改 Key 这台永远不跟（现网实证：演示单元启动日志 `上游模型配置已热加载 from=env`，
+	// 而它的 env 根本没配 SILICONFLOW_API_KEY，同一段启动日志前一行就是「未配置…已生成随机占位 Key」）。
+	OnlineAPIKeyOrigin string
+	OnlineTimeout      int // 在线调用超时秒数
 
 	// 模型路由策略：按权重选主模型，失败后按顺序降级。空则用 Online* 单供应商。
 	ModelRoutes []ProviderConfig // 多供应商路由列表（权重路由/降级链）
@@ -315,6 +337,15 @@ func Default() *Config {
 		c.OnlineAPIKey = "sk-" + randHex(16) // 随机占位，避免硬编码
 		c.OnlineAPIKeyIsPlaceholder = true
 		log.Println("[config] 警告: 未配置 SILICONFLOW_API_KEY，已生成随机占位 Key（LLM 调用将失败）")
+	}
+	// ★ 来源锚点只在构造期钉一次（〇-AR 第 5 波补腿）：此后水合／管理台保存改的是**值**，
+	//   不许把来源一起改写成 env——否则 llmsource 的「env 优先」会把这台钉死在它启动时水合到的旧值上。
+	//   另一档也必须显式钉成 none：留空串会让"这台没配 env"和"字段还没被写过"两种状态同形，
+	//   读到空串的人只能靠猜（而本批缺陷的根恰好就是"用派生状态反推来源"）。
+	if c.OnlineAPIKey != "" && !c.OnlineAPIKeyIsPlaceholder {
+		c.OnlineAPIKeyOrigin = OriginAPIKeyEnv
+	} else {
+		c.OnlineAPIKeyOrigin = OriginAPIKeyNone
 	}
 	if c.EmbedAPIKey == "" {
 		c.EmbedAPIKey = randHex(24) // 随机占位

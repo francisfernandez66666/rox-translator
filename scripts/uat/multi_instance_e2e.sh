@@ -14,6 +14,10 @@
 #   M4 A 实例二次充值 → 5s 内 B 实例恢复可消费（TTL 重播种自愈闭环）
 #   M5 ★ 第三台实例 C 启动时库里没配 Key → A 侧保存后 C **不重启**自行热加载
 #      （〇-AR 第 5 波「每台热加载」的跨进程端到端锁：健康面／译文／日志／第二次翻转四条腿）
+#   M5-D ★ 第四台实例 D 起来时库里**已经有**可用配置（＝现网演示单元那一台的形态）
+#      → 启动水合到的值不许被当成"env 给的"，否则这台被永久钉死在启动那一刻、
+#        运营之后再怎么改都不跟（〇-AR 第 5 波补腿：前置两半［健康＋快照仍是库里旧值］／
+#        第三次改动跟得上／日志档位不是 env）
 #
 # 用法：bash scripts/uat/multi_instance_e2e.sh
 #   前置：本机 PG 可达（PG_ADMIN_DSN 可覆盖）、mock LLM 由脚本自起。
@@ -30,6 +34,22 @@ T0=$(date +%s)
 PASS=0; FAIL=0
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:200}]"; fi; }
 log(){ echo "[multi_inst] $*"; }
+# ★ snap_model <实例 URL> <鉴权头> ＝ 取"这台**此刻生效**的模型名"，只问快照那一半（响应里的 model.model）。
+#   为什么不能用整段响应体做子串匹配（本批实测踩出来的假绿，D 实例第一次跑就是这样绿的）：
+#   同一个接口里的 `routes` 数组是 loadRoutesDecrypted() 从库里**原文**读的编辑面数据
+#   （管理台要显示"库里存着什么"，连被快照停用的坏路由都要显示，否则运营下一次整表保存会把它删掉），
+#   所以**运营一保存，routes 数组里立刻就有新模型名，而这台的快照还停在旧值上**——
+#   拿整段匹配等于把"库里存了"误判成"这台在用"，热加载一条没跑也能过。
+#   取值失败（非 JSON／字段缺）一律回空串，让上层等值比较自然判红，不兜底成"看起来像的值"。
+snap_model(){ curl -s -m 3 -H "$2" "$1/api/admin/models" 2>/dev/null | python3 -c '
+import json,sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit(0)
+m = d.get("model") if isinstance(d, dict) else None
+print(m.get("model", "") if isinstance(m, dict) else "")'; }
 
 # ---------- 0. PG 测试库 ----------
 PG_ADMIN="${PG_ADMIN_DSN:-postgres://${USER}@127.0.0.1:5432/postgres?sslmode=disable}"
@@ -401,18 +421,111 @@ else
   [ $(( ${HOT1:-0} - ${HOT0:-0} )) -ge 1 ] 2>/dev/null \
     && { PASS=$((PASS+1)); echo "PASS|M5-c-logged-hot-reload(新增 $(( ${HOT1:-0} - ${HOT0:-0} )) 条，等待 ${M5WAIT}s)"; } \
     || { FAIL=$((FAIL+1)); echo "FAIL|M5-c-logged-hot-reload(HOT0=${HOT0:-?} HOT1=${HOT1:-?} 等待 ${M5WAIT}s)⇒ 界面翻绿而日志无这一跳＝该读点没走同一把尺子"; }
-  # ④ 第二次翻转：运营再改模型名，C 的管理台读面必须跟着变（只验一次＝sync.Once 也能过）
+  # ④ 第二次翻转：运营再改模型名，C **此刻生效的快照**必须跟着变（只验一次＝sync.Once 也能过）
+  #    ★ 判据按快照字段等值，不按响应体子串（见文件头 snap_model 那段：库里存了 ≠ 这台在用）。
+  #    ★ 前置负向对照（补腿第二轮加的，缺它这条就是半空转）：再改**之前** C 的快照必须还停在第一次那份
+  #      `mock-mt`。本段在 A 上连保过 mock-mt／mock-mt-second，而 routes 数组读的是库里原文，
+  #      所以"响应体里出现 mock-mt-second"在保存那一瞬间就成立——先钉住"这台此刻还是第一份"，
+  #      后面那句"变成第二份"才只可能来自**这台自己的重探**。
+  ck M5-c-snapshot-is-first-value-before-2nd-change '^mock-mt$' "$(snap_model "$C_URL" "$AH")"
   curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
     -d "{\"api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"api_key\":\"sk-mock\",\"model\":\"mock-mt-second\",\"embed_api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"embed_api_key\":\"sk-mock\"}" >/dev/null
   M5WAIT2=0
-  until curl -s -m 3 -H "$AH" "$C_URL/api/admin/models" | grep -q 'mock-mt-second'; do
+  until [ "$(snap_model "$C_URL" "$AH")" = "mock-mt-second" ]; do
     sleep 2; M5WAIT2=$((M5WAIT2 + 2))
     [ "$M5WAIT2" -ge 24 ] && break
   done
-  ck M5-c-reads-second-change '"model":"mock-mt-second"' "$(curl -s -m 3 -H "$AH" "$C_URL/api/admin/models")"
-  # 反证口径（改本段判据后必须逐条实跑，"绿"说明锁没射程）：
-  #   ⑤-A 把 llmsource.Refresh 的换指针一步摘掉 ⇒ ①②③④ 中 ②③④ 三条红；
-  #   ⑤-B 把任一读点改回直接读 s.Cfg（如 health_probes.go 的 llmGlobalKeyState）⇒ ②④ 红；
+  ck M5-c-reads-second-change '^mock-mt-second$' "$(snap_model "$C_URL" "$AH")"
+
+  # ---------- D 实例：现网演示单元那一台（★ 第 5 波补腿：启动即水合到的值**不许冒充 env**） ----------
+  # 上面 C 的形态是「起来时库里没 Key」；现网真实形态恰好相反：**库里已经有可用配置，实例先起、
+  # 后有人改**。旧写法在水合之后把 cfg 的派生状态（值非空＋占位标记翻假）留在原地，下一轮解析
+  # 按「env 已给可用 Key ⇒ 库值一条都不覆盖」短路 ⇒ 这台被钉死在启动那一刻水合到的值上，
+  # 以后运营再怎么改它都不跟，而热加载日志还写着 from=env（现网演示单元的实证读数）。
+  # D 实例就是照着这个形态起的：**不给 LLM env**，但库里此刻已经有 A 刚保存的那一份。
+  # 四条判据（编号用 D1／D1b／D2／D3，与下面「反证 ⑤-A…⑤-F」那批区分开）：
+  #   D1 前置（一半）：D 起来就该是可用的（水合腿真的跑到了），否则后面测的是"没配"而不是"不跟"；
+  #   D1b 前置（另一半）：这台此刻生效的**快照**必须还是库里那份旧值（mock-mt-second）。
+  #        没有它，D2 有可能测的是"D 起得晚、库里本来就已是第三次改动"——那种形态"跟得上"恒真＝空转锁；
+  #   D2 内容腿：A 再保存第三次改动（模型名 mock-mt-third），D **不重启**必须读到；
+  #   D3 档位腿：D **新长出来的**那条热加载日志**不许**写 from=env（它的 env 压根没配 Key）——
+  #        这一条锁的是"排障抓手本身诚实"，档位假了，下一位排查的人会顺着 env 那条线找一整晚。
+  D_PORT=8894; D_URL="http://127.0.0.1:${D_PORT}"
+  nohup env ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" \
+    USER_DATA_DIR="$WORK/udata" EMBED_API_KEY=sk-mock EMBED_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1" \
+    SELFCHECK_URL="${D_URL}/status" \
+    "$WORK/server" -addr "127.0.0.1:${D_PORT}" -kbdb "$WORK/kbD.db" > "$WORK/instD.log" 2>&1 < /dev/null &
+  D_PID=$!
+  D_OK=0
+  for i in $(seq 1 45); do sleep 1; curl -s -m 2 "$D_URL/status" | grep -q '"ok":true' && { D_OK=1; break; }; done
+  if [ "$D_OK" != "1" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-instance-d-started(等待 ${i}s 未就绪 ⇒ D1/D1b/D2/D3 四条判据一条都没跑)"
+    tail -5 "$WORK/instD.log" 2>/dev/null
+  else
+    # 正读数也要记一条（与上面 C 段 `M5-instance-c-started` 同口径）：只记失败不记成功的话，
+    # 汇总里的 PASS 数就不含"D 起得来"这一件事，读账的人会以为四条判据都在计数内。
+    PASS=$((PASS+1)); echo "PASS|M5-instance-d-started(库里已有配置的那台，等待 ${i}s 就绪)"
+    # D1 前置：库里有可用配置的那台，启动就该是 ok（水合腿真跑到了；这一句同时排掉"D 其实没 Key"的空转）
+    ck M5-d-healthy-at-boot '"llm_global_key":"ok"' "$(curl -s -m 5 $D_URL/api/health)"
+    # D1b 前置的另一半：这台**此刻生效的快照**必须是库里那一份旧值（mock-mt-second）。
+    #   没有这一句，D2 可能测的是"本来就已经是新值"（D 起得晚、库里已是第三次改动），
+    #   那种形态下"跟得上"恒真＝空转锁。先钉"旧值在这台上"，后面的"变成新值"才有意义。
+    ck M5-d-boot-snapshot-is-old-value '^mock-mt-second$' "$(snap_model "$D_URL" "$AH")"
+    DHO0=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)
+    curl -s $A_URL/api/admin/models/save -H "$AH" -H 'Content-Type: application/json' \
+      -d "{\"api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"api_key\":\"sk-mock\",\"model\":\"mock-mt-third\",\"embed_api_base\":\"http://127.0.0.1:${MOCK_PORT}/v1\",\"embed_api_key\":\"sk-mock\"}" >/dev/null
+    DWAIT=0
+    # ★ 等的是**快照字段**变成新值，不是响应体里出现新名字（后者由库内 routes 原文提供，一保存就有，
+    #   等于"库里存了"就当"这台用了"——D 段第一次跑就是这样假绿的，见文件头 snap_model 注释）。
+    until [ "$(snap_model "$D_URL" "$AH")" = "mock-mt-third" ]; do
+      sleep 2; DWAIT=$((DWAIT + 2))
+      [ "$DWAIT" -ge 24 ] && break
+    done
+    ck M5-d-follows-change-after-hydration '^mock-mt-third$' "$(snap_model "$D_URL" "$AH")"
+    # D3 档位腿：**这一轮新长出来的**那条热加载日志里，来源必须**不是** env
+    #   （判据按增量数，不按"日志里有没有这一行"：D 从启动到就绪这一段本来就可能自己记过一条，
+    #     拿存量当增量＝把"根本没追上新配置"读成"追上了且档位合规"，正是本批要锁的那类假绿。）
+    DHO1=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)
+    DLINE=$(grep -E '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null | tail -1)
+    if [ $(( ${DHO1:-0} - ${DHO0:-0} )) -lt 1 ] 2>/dev/null; then
+      FAIL=$((FAIL+1)); echo "FAIL|M5-d-hotload-not-env-origin(D 侧没有新增热加载日志：HO0=${DHO0:-?} HO1=${DHO1:-?} 等待 ${DWAIT}s)⇒ D2 若同时绿就是别的路径把值带过去的，档位无从可查"
+    elif printf '%s' "$DLINE" | grep -qE '"from":"env"'; then
+      FAIL=$((FAIL+1)); echo "FAIL|M5-d-hotload-not-env-origin(水合值冒充 env：${DLINE:0:200})⇒ D 的 env 没配过 SILICONFLOW_API_KEY，这一档是派生状态骗出来的短路"
+    else
+      PASS=$((PASS+1)); echo "PASS|M5-d-hotload-not-env-origin(新增 $(( ${DHO1:-0} - ${DHO0:-0} )) 条，最后一行档位读数合规：${DLINE:0:160})"
+    fi
+  fi
+  # 反证口径（★ 本段每一条都是**逐条装回真跑过的**，红哪几条按实跑读数写，不按推断写；
+  #   上一波这里记的"②③④ 红／②④ 红"是**没实跑过的推断**，本轮两条都被实测推翻并改正）：
+  #   ⑤-A 把 llmsource.Refresh 的换指针一步（Publish(next)）摘掉 ⇒ 整段 PASS=24 FAIL=6，
+  #        红的是 c-health-flips／c-translates／c-translation-nonempty／c-snapshot-is-first-value(前置)／
+  #        c-reads-second-change／d-follows-change 六条；
+  #        ★ **两条日志腿照旧绿**（c-logged-hot-reload 新增 4 条、d-hotload-not-env-origin 出 from=db）——
+  #        那行日志在 Publish 之后无条件打，所以它锁的是"档位读数诚实"，**不是**"指针真换了"；
+  #        换指针这一层只能靠内容腿（健康面／译文／快照字段）抓，别把日志腿当证据。
+  #   ⑤-B 把健康面读点（health_probes.go 的 llmGlobalKeyState）改回直接读 s.Cfg ⇒ PASS=29 FAIL=1，
+  #        **只有 c-health-flips 这一条红**：六个读点各有自己的腿，管理台面／引擎腿都不在它射程里。
+  #        （上一波那句"②④ 红"就是把"任一读点"当成了"所有读点"，实测不成立。）
+  #   ⑤-D 把 ApplyTo 里的「来源同步回写」那一句（cfg.OnlineAPIKeyOrigin = s.From）摘掉 ⇒
+  #        **本段测不出来**（实测整脚本 PASS=30 FAIL=0，D 段五条读数全绿；档位停在 none，
+  #        而 nobody 读那个档位去拦库里腿），红的是两条单测的 ①：
+  #        cmd/server 的 TestHydratedKeyIsNotRecordedAsEnv ①（"档位=none，期望 route"）与
+  #        llmsource 的 TestHydratedValueNeverMasqueradesAsEnv ①（同因，①用 Fatalf 所以 ②不再执行）。
+  #        别拿"D 段还绿"当作这一句可以删；
+  #   ⑤-E 把 Resolve 里 envUsable 的**档位判据**（origin == OriginAPIKeyEnv）摘掉，只留
+  #        「非占位且非空」⇒ 实测 PASS=28 FAIL=2：D2 红（want ^mock-mt-third$ 实得 mock-mt-second，
+  #        等满 24 s 也不跟＝被钉死在启动水合那一刻）＋ D3 红（新出的那行热加载日志写着 from=env，
+  #        **与现网演示单元那条一字同形**）。
+  #        ★ 注意 C 段九条在这条反证下**依旧全绿**（实测）：C 起来时库里没 Key，占位标记是真的，
+  #        短路条件够不着它——"库里本来就有配置的那台会不会被钉死"只有 D 这一段管。
+  #        单测侧同因红两条 ②（got=sk-from-route from=env），读数见证据目录 RP1 两份日志。
+  #   ⑤-F 把 snap_model 换回"整段响应体做子串匹配"（＝本段第一次跑时的写法）⇒
+  #        D2 与 C 段④ **双双假绿**（本批实测读数：D 启动后 0.8 秒即跑完这两条，正落在默认 5 秒
+  #        TTL 之内、日志里热加载那行一条都还没有，快照仍是旧模型名，可响应体里已经出现新名字）。
+  #        为什么会假绿：/api/admin/models 的 model 对象读快照、routes 数组读**库里原文**
+  #        （编辑面要显示"存着什么"，含被快照停用的坏路由），一保存 routes 就带新值 ⇒
+  #        整段子串＝把"库里存了"读成"这台用了"。同段的 D3（按日志增量数）就是这条假绿的现形器：
+  #        它当场报 HO0=0 HO1=0，才把 D2 那条绿灯揪出来。
   #   ⑤-C 跑法：bash scripts/uat/multi_instance_e2e.sh（PG 方言，整段跑，本段单独跑不起来）。
 fi
 
@@ -423,8 +536,8 @@ log "双实例 UAT：PASS=$PASS FAIL=$FAIL DUR=${DUR}s"
 log "日志目录：$WORK"
 log "=============================="
 if [ "${KEEP:-0}" != "1" ]; then
-  # ★ M5 起的第三台实例 C 必须一并收掉（${C_PID:-}：前置段失败时该变量没赋值，set -u 下裸写会中止清理）
-  kill $A_PID $B_PID ${C_PID:-} $MOCK_PID 2>/dev/null
+  # ★ M5 起的第三台 C 与第四台 D 必须一并收掉（${C_PID:-}／${D_PID:-}：前置段失败时该变量没赋值，set -u 下裸写会中止清理）
+  kill $A_PID $B_PID ${C_PID:-} ${D_PID:-} $MOCK_PID 2>/dev/null
   psql "$PG_ADMIN" -q -c "DROP DATABASE IF EXISTS $MDB WITH (FORCE)" >/dev/null 2>&1
 fi
 [ "$FAIL" = "0" ] || exit 1

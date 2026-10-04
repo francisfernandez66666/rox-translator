@@ -52,6 +52,9 @@ func placeholderCfg() *config.Config {
 	c := config.Default()
 	c.OnlineAPIKey = "sk-random-placeholder"
 	c.OnlineAPIKeyIsPlaceholder = true
+	// 来源档位一起钉成"没来源"：config.Default() 在本机配了 SILICONFLOW_API_KEY 时会写 env，
+	// 留着它这个夹具就名不副实（〇-AR 第 5 波补腿：env 短路只认档位，不认值像不像）。
+	c.OnlineAPIKeyOrigin = config.OriginAPIKeyNone
 	c.OnlineAPIBase = ""
 	c.OnlineModel = ""
 	c.ModelRoutes = nil
@@ -63,6 +66,7 @@ func envCfg(key string) *config.Config {
 	c := config.Default()
 	c.OnlineAPIKey = key
 	c.OnlineAPIKeyIsPlaceholder = false
+	c.OnlineAPIKeyOrigin = config.OriginAPIKeyEnv // ★ 只有这一档才让 Resolve 的 env 短路生效
 	c.OnlineAPIBase = "https://env.example/v1"
 	c.OnlineModel = "env-model"
 	c.ModelRoutes = nil
@@ -406,6 +410,68 @@ func TestReloadTTLParsesEnv(t *testing.T) {
 	}
 }
 
+// TestHydratedValueNeverMasqueradesAsEnv 来源锚点锁（★ 2026-10-05 〇-AR 第 5 波现网补腿）。
+// 形态是现网抓到的那一条：一台**没配** SILICONFLOW_API_KEY 的实例启动 ⇒ 水合从库里的
+// 模型路由取到一把可用 Key 并 ApplyTo 回 cfg。此后 cfg 里"值非空＋占位标记为假"，
+// 与 env 配的 Key 完全同形。如果 env 档的短路只看这两条（派生状态），这台就把水合那一刻
+// 取到的值当成 env 的既有配置，**库里以后再改它永远不跟**，而热加载日志还写着 from=env。
+// 反证（已逐条实跑，两条各摘一条，红的位置不同）：
+//
+//	把 Resolve 里 envUsable 的档位判据去掉（回到 `!placeholder && key != ""`）⇒ 本条红在 ②
+//	（库里换了 Key 而这台仍用水合那一刻的旧值，档位读出 env）；
+//	把 ApplyTo 里回写 OnlineAPIKeyOrigin 那一行删掉 ⇒ 本条红在 ①
+//	（档位停在 none，与快照不同源；①用的是 t.Fatalf，所以 ②根本不再执行，别说成"②照旧绿"）。
+//	★ 实测：这条反证下跨进程闸门**全绿**（multi_instance_e2e 装回后跑 PASS=30 FAIL=0，
+//	  因为档位没人读、库里腿照旧跑）⇒ "值写对了、来源没写"只有本条 ① 管，
+//	  拿"D 段还绿"当作这一行可以删就是读错了归属。
+func TestHydratedValueNeverMasqueradesAsEnv(t *testing.T) {
+	forceEveryProbe(t)
+	st := newStore(t)
+	// 库里只有一条带 Key 的主路由（演示单元的现网形态：env 没配 Key，Key 来自路由）
+	routes, err := json.Marshal([]config.ProviderConfig{{Provider: "ops", APIBase: "https://route.example/v1",
+		Model: "route-model", APIKey: store.EncryptSecret("sk-from-route")}})
+	if err != nil {
+		t.Fatalf("序列化路由失败: %v", err)
+	}
+	if err := st.SetConfig(KeyModelRoutes, string(routes)); err != nil {
+		t.Fatalf("写路由失败: %v", err)
+	}
+	cfg := placeholderCfg() // env 档没给可用 Key ⇒ 档位是 none
+
+	// —— ① 启动水合：应取到路由那把，且来源档位不许翻成 env ——
+	first := Resolve(cfg, st)
+	if first.From != FromRoute {
+		t.Fatalf("水合来源应为 route，实得 %q", first.From)
+	}
+	first.ApplyTo(cfg)
+	if cfg.OnlineAPIKey != "sk-from-route" {
+		t.Fatalf("水合没把路由 Key 装进 cfg: %q", cfg.OnlineAPIKey)
+	}
+	if cfg.OnlineAPIKeyOrigin != first.From {
+		t.Fatalf("①水合后 cfg 来源档位=%q，期望与快照同源 %q（值与来源必须同时回写；"+
+			"只比不等 env 是弱判据——字段停在 none／空串同样说明回写没跑到）", cfg.OnlineAPIKeyOrigin, first.From)
+	}
+
+	// —— ② 运营随后在管理台保存了一把新的在线 Key：这台必须跟得上 ——
+	if err := st.SetConfig(KeyOnlineKey, store.EncryptSecret("sk-ops-new")); err != nil {
+		t.Fatalf("写库内 Key 失败: %v", err)
+	}
+	second := Resolve(cfg, st)
+	if second.OnlineAPIKey != "sk-ops-new" {
+		t.Fatalf("②库里改了 Key 而这台仍用水合那一刻的旧值（＝派生状态冒充 env 的那条短路）：got=%q from=%q",
+			second.OnlineAPIKey, second.From)
+	}
+	if second.From != FromDB {
+		t.Fatalf("②来源档位应翻成 db，实得 %q", second.From)
+	}
+
+	// —— 反向对照：env 真给了 Key 时，库值**照旧不许**覆盖（AGENTS §一·3 的优先序不能被这条改动削掉）——
+	envC := envCfg("sk-from-env")
+	if got := Resolve(envC, st); got.OnlineAPIKey != "sk-from-env" || got.From != FromEnv {
+		t.Fatalf("env 档优先序被改坏：key=%q from=%q", got.OnlineAPIKey, got.From)
+	}
+}
+
 // —— 反证口径（改本文件判据后必须逐条实跑，"绿"说明锁没射程）——
 //
 //	① 摘掉 Refresh 的换指针那一步（把 Publish(next) 注释掉）：
@@ -419,5 +485,18 @@ func TestReloadTTLParsesEnv(t *testing.T) {
 //	   TestCurrentIgnoresGlobalSnapshotWithoutStore 必须红（断言①命中别家配置）。
 //	⑥ 去掉 Refresh 节流里的 Store 身份判据（只比 TTL）：
 //	   TestCurrentReProbesWhenStoreIdentityChanges 必须红（第二座库读到第一座的快照）。
-//	⑦ 跑法：env DB_DRIVER=sqlite go test -count=1 ./internal/llmsource/
+//	⑦ ★ 本批补腿的两条锁，各摘一条分别实跑：
+//	   ⑦-a 把 envUsable 的**档位判据**摘掉（回到 `!placeholder && key != ""`）⇒
+//	       本文件 TestHydratedValueNeverMasqueradesAsEnv 的 ② 红（库里换了 Key 而这台不跟）。
+//	       ⚠️ 同包的 TestResolveAdoptsDBConfigAfterStartup 在这条反证下**照旧绿**：
+//	       那个用例从不 ApplyTo，cfg 的占位标记一直是真 ⇒ 够不着这条短路。
+//	       这就是为什么必须专门有一条"先水合、后改库"的锁（本函数＋cmd/server 的
+//	       TestHydratedKeyIsNotRecordedAsEnv＋UAT 的 D 实例）：只测"启动时没 Key"那一台，抓不到这一族。
+//	   ⑦-b 删掉 ApplyTo 里回写 OnlineAPIKeyOrigin 那一行 ⇒ 本文件 ① 红（档位停在 none，
+//	       与快照不同源），cmd/server 的 TestHydratedKeyIsNotRecordedAsEnv ① 同因红。
+//	       ⚠️ 跨进程那段（multi_instance_e2e 的 D 实例）**测不到 ⑦-b**：已实跑坐实——
+//	       装回这一行后整脚本仍 PASS=30 FAIL=0（档位没人读，库里腿照旧跑），
+//	       所以"回写这一句"只能由单测管——别拿 UAT 绿当这一句可以删。
+//	   （现网演示单元的真实形态：env 没配 Key、Key 从路由水合，档位被派生状态冒充成 env ⇒ 以后库里再改不跟）。
+//	⑧ 跑法：env DB_DRIVER=sqlite go test -count=1 ./internal/llmsource/
 //	   （整包跑，不带 -run；单跑一条会漏掉同包方言泄漏）。

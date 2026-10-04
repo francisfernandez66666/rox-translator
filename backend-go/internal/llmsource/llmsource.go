@@ -112,21 +112,31 @@ func reloadTTL() time.Duration {
 	return 5 * time.Second
 }
 
-// baseFromCfg 从运行期配置取"构造期就定死的那一份"在线三件套与占位标记。
+// baseFromCfg 从运行期配置取"构造期就定死的那一份"在线三件套、占位标记与**来源档位**。
 // 参数 cfg: 运行期配置，nil 时回落全局 config.C。
+// 返回: base/key/model 现值、是不是随机占位符、以及这把 Key 当初是从哪一档进来的（config.OriginAPIKey*）。
 // 为什么先问 cfg 而不是直接读库：env 档的可用性只有在启动快照里才作数
 //
-//	（config.Default() 读过 env 才知道是真实 Key 还是随机占位符），
-//	用库里有没有值去反推"是不是 env 给的"就是把派生状态当来源，那是本仓立过的那条红线。
-func baseFromCfg(cfg *config.Config) (base, key, model string, placeholder bool) {
+//	（config.Default() 读过 env 才知道是真实 Key 还是随机占位符）。
+//
+// ★ 为什么"可用性"必须问 Origin 而不能只看 Placeholder（〇-AR 第 5 波现网抓到的补腿）：
+//
+//	Placeholder 是**派生状态**——启动水合与管理台保存都会把它翻成 false，
+//	于是"从库里水合来的 Key"在下一轮解析里与"env 配的 Key"完全同形，
+//	env 档那条"库内现值一条都不覆盖"的短路就此把这台**永久钉死在启动那一刻水合到的旧值上**：
+//	运营之后在管理台改 Key，这台永远不跟，而日志还写着 `from=env`。
+//	现网实证：演示单元启动时明明打的是「未配置 SILICONFLOW_API_KEY，已生成随机占位 Key」，
+//	主路由水合之后的热加载日志却出 `from":"env"`。
+//	"用库里有没有值去反推是不是 env 给的"是本仓立过的那条红线，这里换个方向撞了同一条。
+func baseFromCfg(cfg *config.Config) (base, key, model string, placeholder bool, origin string) {
 	c := cfg
 	if c == nil {
 		c = config.C
 	}
 	if c == nil {
-		return "", "", "", true
+		return "", "", "", true, config.OriginAPIKeyNone
 	}
-	return c.OnlineAPIBase, c.OnlineAPIKey, c.OnlineModel, c.OnlineAPIKeyIsPlaceholder
+	return c.OnlineAPIBase, c.OnlineAPIKey, c.OnlineModel, c.OnlineAPIKeyIsPlaceholder, c.OnlineAPIKeyOrigin
 }
 
 // resolveRoutesFromRaw 把库内 model_routes 原文解成可用路由列表。
@@ -215,14 +225,16 @@ func cfgRoutesFor(cfg *config.Config) []config.ProviderConfig {
 // 参数 cfg: 运行期配置（提供 env 档现值）；st: 平台存储，nil 时只按 cfg 构造（无库启动形态）。
 // 返回: 不可变快照。副作用: 无（要产生"三档皆空"的告警请调用 Publish＋上层显式处理）。
 func Resolve(cfg *config.Config, st *store.Store) *Snapshot {
-	base, key, model, placeholder := baseFromCfg(cfg)
+	base, key, model, placeholder, origin := baseFromCfg(cfg)
 	snap := &Snapshot{
 		OnlineAPIBase: base, OnlineAPIKey: key, OnlineModel: model,
 		Placeholder: placeholder,
 		ResolvedAt:  time.Now(),
 	}
-	// env 那档已给出可用 Key ⇒ 在线三件套一条都不覆盖（硬口径 ②）
-	envUsable := !placeholder && key != ""
+	// env 那档已给出可用 Key ⇒ 在线三件套一条都不覆盖（硬口径 ②）。
+	// ★ 判据必须是**构造期来源锚点**而不是"占位标记为假＋值非空"（〇-AR 第 5 波现网补腿）：
+	//   后者是派生状态，启动水合一跑就恒真，env 短路会把这台钉死在水合那一刻的旧值上。
+	envUsable := !placeholder && key != "" && origin == config.OriginAPIKeyEnv
 	if st == nil {
 		// 无库启动形态：路由只能问进程内现值（配置文件／调用方直接构造的 cfg），
 		// 漏了这一句会让"配了路由却没有平台库"的引擎回落到单模型那一套——
@@ -313,6 +325,10 @@ func (s *Snapshot) ApplyTo(cfg *config.Config) {
 	}
 	cfg.OnlineAPIBase, cfg.OnlineAPIKey, cfg.OnlineModel = s.OnlineAPIBase, s.OnlineAPIKey, s.OnlineModel
 	cfg.OnlineAPIKeyIsPlaceholder = s.Placeholder
+	// ★ 值与来源**必须同时回写**（〇-AR 第 5 波现网补腿）：只写值不写来源，
+	//   cfg 就变成"看起来像 env 给的可用 Key"，下一轮 Resolve 的 env 短路会把这台钉死在
+	//   本次水合值上——库里再改也不跟，而日志写着 from=env，排查方向被整个带偏。
+	cfg.OnlineAPIKeyOrigin = s.From
 	if s.Routes != nil {
 		cfg.ModelRoutes = s.Routes
 	}
@@ -362,12 +378,12 @@ func Live() *Snapshot {
 	if s := live.Load(); s != nil {
 		return s
 	}
-	base, key, model, placeholder := baseFromCfg(nil)
+	base, key, model, placeholder, origin := baseFromCfg(nil)
 	fallback := &Snapshot{
 		OnlineAPIBase: base, OnlineAPIKey: key, OnlineModel: model,
 		Placeholder: placeholder, From: FromNone, ResolvedAt: time.Now(),
 	}
-	if !placeholder && key != "" {
+	if !placeholder && key != "" && origin == config.OriginAPIKeyEnv {
 		fallback.From = FromEnv
 	}
 	if c := config.C; c != nil && c.ModelRoutes != nil {
