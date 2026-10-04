@@ -472,6 +472,76 @@ func TestHydratedValueNeverMasqueradesAsEnv(t *testing.T) {
 	}
 }
 
+// TestRouteHydratedValueNeverMasqueradesAsDB 是上一条的**另一半**（★ 2026-10-05 第 6 波，现网演示单元抓到）。
+// 上一波把"水合值冒充 env"修掉了，同一族还剩一条：第 ② 档的收尾判据
+// `!snap.Placeholder && snap.OnlineAPIKey != ""` 问的是**值像不像可用**，而那个值就是上一次
+// ApplyTo 写回 cfg 的产物（档位 route）——库里**根本没有 online_api_key 那一行**时它照样成立。
+//
+// 现网实证（只读实测，两条读数同刻取）：演示单元的热加载日志出 `"from":"db"、routes:1`，
+// 而 langcross_demo 的 system_config 里**只有 model_routes 一行**（len=268），没有任何 online_api_* 行
+// ⇒ 那个 "db" 是编的（主库 langcross 才有 online_api_key|len=115|enc 那一行）。
+//
+// 后果不止于日志撒谎：运营把那条路由（或后台那份 Key）删掉之后，这台**永远洗不掉**——
+// 继续拿着库里已经不存在的凭据打上游，而健康面与日志都说"配置来自库"。
+// 这正是「每台热加载」要消灭的那类形态：配置在库里改，读的人不在库里读。
+func TestRouteHydratedValueNeverMasqueradesAsDB(t *testing.T) {
+	forceEveryProbe(t)
+	st := newStore(t)
+	// 现网演示单元的库里形态：只有一条带 Key 的主路由，online_api_* 一行都没有
+	routes, err := json.Marshal([]config.ProviderConfig{{Provider: "ops", APIBase: "https://route.example/v1",
+		Model: "route-model", APIKey: store.EncryptSecret("sk-route-only")}})
+	if err != nil {
+		t.Fatalf("序列化路由失败: %v", err)
+	}
+	if err := st.SetConfig(KeyModelRoutes, string(routes)); err != nil {
+		t.Fatalf("写路由失败: %v", err)
+	}
+	cfg := placeholderCfg() // env 档没给可用 Key
+
+	// —— ① 启动水合（route），并把结果写回 cfg（ApplyTo 就是"这台此刻生效"的形态）——
+	first := Resolve(cfg, st)
+	if first.From != FromRoute {
+		t.Fatalf("①水合档位=%q，期望 route（库里没有 online_api_key 那一行）", first.From)
+	}
+	first.ApplyTo(cfg)
+
+	// —— ② 同一份库、同一台，再解析一次：档位必须**仍是 route**，不许翻成 db ——
+	// 这一条就是现网那行谎言的复现点：库里始终没被写过，值也没变，档位却换了来源。
+	second := Resolve(cfg, st)
+	if second.From != FromRoute {
+		t.Fatalf("②库里根本没有 online_api_key 那一行，档位却报 %q（期望 route）"+
+			"⇒ 上一次 ApplyTo 写回的产物被当成了一种独立来源", second.From)
+	}
+	if second.OnlineAPIKey != "sk-route-only" {
+		t.Fatalf("②档位修对了但值被洗掉了：key=%q", second.OnlineAPIKey)
+	}
+
+	// —— ③ 运营把那条路由清空（库里写 "[]"）：这台必须跟着洗掉，不许继续打已删除的凭据 ——
+	if err := st.SetConfig(KeyModelRoutes, "[]"); err != nil {
+		t.Fatalf("清空路由失败: %v", err)
+	}
+	third := Resolve(cfg, st)
+	if third.OnlineAPIKey != "" {
+		t.Fatalf("③库里已经把路由删了，这台还拿着已不存在的凭据：key=%q from=%q", third.OnlineAPIKey, third.From)
+	}
+	if third.From != FromNone {
+		t.Fatalf("③三档皆空时期望档位 none，实得 %q", third.From)
+	}
+
+	// —— ④ 反向对照：库里**真**保存了 online_api_key 时，档位照旧是 db、值照旧取自库
+	//（这条改动不许把 ② 那一档打掉——它清的是"本机上一次写回的产物"，不是库里的现值）——
+	if err := st.SetConfig(KeyOnlineKey, store.EncryptSecret("sk-db-real")); err != nil {
+		t.Fatalf("写库内 Key 失败: %v", err)
+	}
+	fourth := Resolve(cfg, st)
+	if fourth.From != FromDB || fourth.OnlineAPIKey != "sk-db-real" {
+		t.Fatalf("④库里给了 Key 却判成 key=%q from=%q（期望 sk-db-real／db）", fourth.OnlineAPIKey, fourth.From)
+	}
+	if fourth.Placeholder {
+		t.Fatal("④已取到库里真 Key 却仍标占位符（健康面会继续报 placeholder）")
+	}
+}
+
 // —— 反证口径（改本文件判据后必须逐条实跑，"绿"说明锁没射程）——
 //
 //	① 摘掉 Refresh 的换指针那一步（把 Publish(next) 注释掉）：
@@ -500,3 +570,18 @@ func TestHydratedValueNeverMasqueradesAsEnv(t *testing.T) {
 //	   （现网演示单元的真实形态：env 没配 Key、Key 从路由水合，档位被派生状态冒充成 env ⇒ 以后库里再改不跟）。
 //	⑧ 跑法：env DB_DRIVER=sqlite go test -count=1 ./internal/llmsource/
 //	   （整包跑，不带 -run；单跑一条会漏掉同包方言泄漏）。
+//	⑨ ★ 第 6 波那条锁 TestRouteHydratedValueNeverMasqueradesAsDB 的两条反证，**均已实跑**：
+//	   ⑨-a 把 Resolve 里"非 env 来源的 base Key 按本轮无 Key 处理"那三行删掉 ⇒
+//	       只有本函数红，读数正是现网那句谎言：
+//	         「②库里根本没有 online_api_key 那一行，档位却报 "db"（期望 route）」
+//	       同批实跑的 TestResolveEnvLegBeatsStore／TestResolveAdoptsDBConfigAfterStartup／
+//	       TestHydratedValueNeverMasqueradesAsEnv **三条照旧绿**——
+//	       前两条要么不 ApplyTo、要么在 ② 之前就把库里的 online_api_key 写上了，
+//	       够不着"库里没这一行"这一形态。⇒ 又是一条"只测库里换了 Key 的那台抓不到这一族"，
+//	       与 ⑦-a 的教训同形：**归属要按"库里有没有那一行"分派**，别拿老锁的绿当这条可以删。
+//	   ⑨-b 把那三行**挪到库里 Key 赋值之后**（＝把库里真给的那份也一起清掉）⇒ 两条一起红：
+//	       本函数「④库里给了 Key 却判成 key="" from="none"（期望 sk-db-real／db）」＋
+//	       TestHydratedValueNeverMasqueradesAsEnv「②库里改了 Key 而这台仍用水合那一刻的旧值：
+//	         got="sk-from-route" from="route"」。
+//	       ⇒ 清除块的**位置**（必须在第 ② 档之前、env 短路之后）由断言钉住，不是靠注释。
+//	⑩ 跑法同上；改这一族判据时 ⑨-a／⑨-b 各跑一次，两条都要看到点名到行号的读数才算数。

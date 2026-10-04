@@ -139,6 +139,13 @@ func pwSetup(t *testing.T, reply func(prompt string) string) *pwHarness {
 	cfg.OnlineModel = "fake-model"
 	// 关闭占位符判定：假 Key 必须被当成可用 Key 才会真的打到 httptest
 	cfg.OnlineAPIKeyIsPlaceholder = false
+	// ★ 上面那条前置的第二半（〇-AR 第 6 波全仓竞态抓到本用例红，属**暴露**不是引入回归）：
+	//   这份"本机自己写进 cfg 的假 Key"必须同时钉上**来源锚点**，否则在
+	//   「水合／保存写回的值不是一种来源」那条规则下会被 Resolve 清零 ⇒ Judge 一次都没打到 httptest，
+	//   于是评估分不落载荷、打标／工单列／告警三条一起红。
+	//   本用例测的是"流水线把评估处置接上了没有"，不是档位优先级，故钉 env 档＝如实声明
+	//   "这台开机就拿到了可用 Key"（与 cmd/server／internal/evals 两处夹具同一口径）。
+	cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyEnv
 
 	eng := engine.NewEngine(cfg, kbdb, nil, ts)
 	eng.St = st // 阶段模型/系统配置读取走同一内存库

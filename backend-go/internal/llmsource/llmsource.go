@@ -277,6 +277,20 @@ func Resolve(cfg *config.Config, st *store.Store) *Snapshot {
 		return snap
 	}
 
+	// —— ★ 第 6 波（2026-10-05）：base 里的 Key 若既不是 env 给的、也不是启动期占位符，
+	//   那它就是**上一次 ApplyTo 写回的产物**（档位 route／db），不是一种来源 ——
+	// 不清零有两条后果，都是本批现网真读到的：
+	//   ① 档位撒谎：第 ② 档那条收尾判据问的是"值像不像可用"，于是库里**根本没有 online_api_key 那一行**
+	//      时照样成立 ⇒ 演示单元的热加载日志出 `"from":"db"`，而 langcross_demo 的 system_config
+	//      只有 model_routes 一行（主库 langcross 才有 online_api_key）。
+	//   ② 删掉的凭据洗不掉：运营把那条路由／那份后台 Key 删了之后，这台继续拿"库里已不存在"的值打上游，
+	//      健康面与日志都说"配置来自库"——正是「每台热加载」要消灭的"配置在库里改、读的人不在库里读"。
+	// 只清 Key、不动 Placeholder：占位那条腿是 R-1「占位 Key 不许静默起跑」的读数来源，
+	// 而三个读点（health_probes／admin_models／evals）本来就同时问 `key == ""`，清掉即整面翻旧。
+	if !placeholder && key != "" {
+		snap.OnlineAPIKey = ""
+	}
+
 	// —— ② 后台库配置：运营在管理台显式保存过的那一份 ——
 	if v := strings.TrimSpace(vals[KeyOnlineKey]); v != "" {
 		if dec := store.DecryptSecret(v); dec != "" {
