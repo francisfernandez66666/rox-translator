@@ -199,6 +199,11 @@ func TestResolveJudgePriority(t *testing.T) {
 	// 会把兜腿拨到 model_routes 那把 Key 上（本用例的路由里正有一把 "k"）——当场红。
 	// 这条红是**暴露**：它说明这一档的前置条件从来没写明过。此处按真实语义钉成"全局 Key 可用"。
 	cfg.OnlineAPIKeyIsPlaceholder = false
+	// ★ 同一个档位还要问"这把 Key 是哪一档来的"（2026-10-05 〇-AR 第 6 波，同族第二次现形）：
+	// 上面那句只把"是不是占位符"洗成假，来源仍停在 Default() 写的 none ⇒ 快照按"本机没有可用来源"
+	// 处理（只信 env 档与库里现值），这条继承腿会掉到路由那把 "k" 上。**这条红是暴露**：
+	// 本用例的前置本来就是"这台开机就拿到了全局 Key"，那就把它写明。
+	cfg.OnlineAPIKeyOrigin = config.OriginAPIKeyEnv
 	cfg.OnlineModel = "online-model"
 	cfg.ModelRoutes = []config.ProviderConfig{
 		{APIBase: "https://low.example/v1", APIKey: "sk-low", Model: "low-model", Weight: 10},

@@ -495,6 +495,67 @@ else
       PASS=$((PASS+1)); echo "PASS|M5-d-hotload-not-env-origin(新增 $(( ${DHO1:-0} - ${DHO0:-0} )) 条，最后一行档位读数合规：${DLINE:0:160})"
     fi
   fi
+  # ---------- E 段：档位必须与「库里此刻真有什么」同源（★ 2026-10-05 第 6 波，现网演示单元抓到的第二条谎言） ----------
+  # 现网读数（同刻取的两条）：演示单元的热加载行写着 `"from":"db"`，而 langcross_demo 的 system_config
+  # 里**只有 model_routes 一行**（len=268），一行 online_api_* 都没有 ⇒ 那个 "db" 不是库里来的，
+  # 是这台上一次把值写回 cfg、下一轮解析把**自己的产物**当成了一种来源（第 5 波只修了冒充 env 那一侧）。
+  # 危害不止日志撒谎：运营把那把 Key 撤掉之后，这台仍拿着"库里已不存在"的凭据继续打上游，
+  # 而健康面与日志都说"配置来自库"——正是「每台热加载」要消灭的那类"配置在库里改、读的人不在库里读"。
+  # 本段就照那一台摆：只撤库里 online_api_key 那一行的值（路由表留着），D **不重启**，问三件事：
+  #   E1 撤**之前**：档位必须等于"按库里内容现算出来的那一档"（此刻应是 db）——A/B 对照的 A 面，
+  #      没有这一句，E2 可能测的是"本来就对"（空转锁）；
+  #   E2 撤**之后**：新长出来的那条热加载行必须等于**当场重算**的那一档（应是 route）；
+  #   E3 内容腿：撤掉的是"这台没在用的那一把"，路由腿必须接住 ⇒ 仍出**非空**译文
+  #      （AGENTS §三 那条：只判 "success":true 会被"空壳报成功"糊过去）。
+  # ★ 两档期望都是**从库里现读现推**（db／route／none 三档），不写死字符串：
+  #   写死 "route" 的话，将来库内形态一变这条就成结构性假红或假绿（§一·3「派生态不是来源」同族）。
+  llm_expected_from(){
+    dbq "SELECT CASE
+           WHEN COALESCE((SELECT value FROM system_config WHERE \"key\"='online_api_key'),'') <> '' THEN 'db'
+           WHEN COALESCE((SELECT value FROM system_config WHERE \"key\"='model_routes'),'') NOT IN ('','[]') THEN 'route'
+           ELSE 'none' END" | tr -d '[:space:]'
+  }
+  # 档位取值也只问**那一行自己的字段**（整行子串匹配＝routes 数组里出现的任何字样都能冒充命中）
+  snap_from(){ printf '%s' "$1" | sed -n 's/.*"from":"\([^"]*\)".*/\1/p'; }
+  EXP0=$(llm_expected_from)
+  ELINE0=$(grep -E '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null | tail -1)
+  EFROM0=$(snap_from "$ELINE0")
+  if [ -n "$EFROM0" ] && [ "$EFROM0" = "$EXP0" ]; then
+    PASS=$((PASS+1)); echo "PASS|M5-e1-origin-equals-store-before-withdraw(from=$EFROM0＝库里读数 $EXP0)"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e1-origin-equals-store-before-withdraw(from=${EFROM0:-无行}，库里读数=${EXP0:-读库失败})⇒ 前置没搭对（此刻库里正有 online_api_key，D 的档位应与之一致），E2 不成立"
+  fi
+  dbq "UPDATE system_config SET value='' WHERE \"key\"='online_api_key'" >/dev/null
+  EHO0=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)
+  EWAIT=0
+  # ★ 循环体里必须**有一个读者**（snap_model 打的是 /api/admin/models，走 llmsource.Current）：
+  #   重探是惰性的——没有读点，这台就不会自己醒来探库，日志里永远等新行出来不了。
+  #   第一次跑这条腿就是只 grep 日志不读接口，等满 24 s HO0=1 HO1=1，把"没人读"误判成"没重探"。
+  #   判据用"新增行"而不是"档位变了"：变了才会打行，行里的 from 才是这台此刻的档位。
+  while : ; do
+    snap_model "$D_URL" "$AH" >/dev/null 2>&1
+    EN=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)
+    [ "${EN:-0}" != "${EHO0:-0}" ] && break
+    sleep 2; EWAIT=$((EWAIT + 2))
+    [ "$EWAIT" -ge 24 ] && break
+  done
+  ELINE1=$(grep -E '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null | tail -1)
+  EFROM1=$(snap_from "$ELINE1")
+  EXP1=$(llm_expected_from)
+  if [ "${EN:-0}" = "${EHO0:-0}" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(等待 ${EWAIT}s，D 侧热加载行没新增：HO0=${EHO0:-?} HO1=${EN:-?})⇒ 库里改了而这台没重探（循环里已真打过读点，不是「没人来读」）"
+  elif [ -z "$EFROM1" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(有新行但取不到档位读数)⇒ 日志字段名或格式变了：${ELINE1:0:200}"
+  elif [ "$EFROM1" = "$EFROM0" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(撤库里那行 Key 后档位纹丝不动＝from=$EFROM1，而此刻库里读数是 $EXP1)⇒ 这一档是上一次写回 cfg 的产物冒充来源，且被撤的凭据洗不掉（现网那句 from=db 就是这条）；等待 ${EWAIT}s HO0=${EHO0:-?} HO1=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)"
+  elif [ "$EFROM1" != "$EXP1" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(from=$EFROM1，库里读数=$EXP1)⇒ 换了档但换错了，档位与库内容不同源"
+  else
+    PASS=$((PASS+1)); echo "PASS|M5-e2-origin-follows-store-after-withdraw(from=$EFROM1＝库里读数，等待 ${EWAIT}s)"
+  fi
+  ER=$(curl -s $D_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
+    -d '{"text":"撤掉库里那把 Key 之后这台仍要能翻","target_lang":"en","mode":"pro"}')
+  ck M5-e3-translates-after-key-withdraw '"translations":\{"en":"[^"]' "$ER"
   # 反证口径（★ 本段每一条都是**逐条装回真跑过的**，红哪几条按实跑读数写，不按推断写；
   #   上一波这里记的"②③④ 红／②④ 红"是**没实跑过的推断**，本轮两条都被实测推翻并改正）：
   #   ⑤-A 把 llmsource.Refresh 的换指针一步（Publish(next)）摘掉 ⇒ 整段 PASS=24 FAIL=6，
