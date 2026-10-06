@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "Acreditación automática on-chain",
   "billing.usdtChains": "Cadenas habilitadas",
   "billing.usdtCheckoutHint": "Envía desde tu cartera exactamente el importe de arriba (los decimales sirven para conciliar). El saldo se acredita automáticamente tras alcanzar las confirmaciones; si no ocurre, declara el hash on-chain para una revisión manual.",
+  "billing.usdtCheckoutManual": "Envíe desde su cartera exactamente el importe de arriba (los decimales finales identifican su pedido). Tras la transferencia, introduzca abajo el hash on-chain; nuestro equipo lo comprobará manualmente y acreditará el saldo.",
   "billing.usdtCol": "Cobro en USDT",
   "billing.usdtConf": "Confirmaciones",
   "billing.usdtConfNeed": "Requiere {n} confirmaciones de bloque",

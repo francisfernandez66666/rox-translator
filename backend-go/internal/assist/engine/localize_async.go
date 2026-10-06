@@ -224,7 +224,10 @@ func cannedBackgroundCtx(reqCtx context.Context, budget time.Duration) (context.
 // 参数 reqCtx 只用来取 trace_id（值传递，见 cannedBackgroundCtx），
 // 声明键 flightKey 由本函数接手释放——移交成功后同步腿那条 defer 必须跳过，
 // 否则后台腿还在打上游时同键就能被第二个访客重新声明，去重直接失效（双拨上游）。
-func (e *Engine) launchCannedBackground(reqCtx context.Context, client *llm.Client, kind, text, uiLang, fp, flightKey, syncReason string) bool {
+//
+// wantLines（★ 0AR 第 4 波）由同步腿原样传下来：后台腿的产物**同样要过条数契约**，
+// 两侧不共用一个数就是"同步侧拦住了、后台侧把同一份坏稿写进库"的产地。
+func (e *Engine) launchCannedBackground(reqCtx context.Context, client *llm.Client, kind, text, uiLang, fp, flightKey, syncReason string, wantLines int) bool {
 	if client == nil || !client.Enabled() {
 		return false // 没上游就没资格补翻（同 translateOnce 的「LLM 未接入」档），也让声明立即释放
 	}
@@ -234,7 +237,7 @@ func (e *Engine) launchCannedBackground(reqCtx context.Context, client *llm.Clie
 		defer e.cannedBgWg.Done()
 		defer cancel()
 		defer e.releaseCannedFlight(flightKey)
-		e.runCannedBackground(bgCtx, client, kind, text, uiLang, fp, syncReason)
+		e.runCannedBackground(bgCtx, client, kind, text, uiLang, fp, flightKey, syncReason, wantLines)
 	}()
 	return true
 }
@@ -242,11 +245,17 @@ func (e *Engine) launchCannedBackground(reqCtx context.Context, client *llm.Clie
 // runCannedBackground 后台腿本体：打上游 → 过**同一道**出栈闸 → 过期判定 → 写缓存。
 // 与同步腿共用 translateOnce 和 cannedOutboundReject，一个字都不另写：
 // 两条腿各写一份判据就是下一次「同步侧修了、后台侧照投坏稿」的产地（canned_guard.go 同一口径）。
-func (e *Engine) runCannedBackground(ctx context.Context, client *llm.Client, kind, text, uiLang, fp, syncReason string) {
+//
+// ★ 0AR 第 4 波：这一腿**失败即开退避窗口**（见 canned_backoff.go 为什么连同步腿一起押），
+// 成功即清窗——退避的状态机只有这两个转移，没有第三态，所以不会有"永久占格"那一族 bug。
+func (e *Engine) runCannedBackground(ctx context.Context, client *llm.Client, kind, text, uiLang, fp, flightKey, syncReason string, wantLines int) {
 	// ★ 纪律第 4 条：这一条 goroutine 不在 net/http 的 recover 覆盖范围内，
 	// 一次没兜住的 panic 会把整个 assist 进程带走（所有访客一起挂，比 502 严重一个量级）。
+	// 退避照开：panic 的成因通常是**这批数据本身**（不是抖动），下一位访客这一枪同样不该打。
 	defer func() {
 		if r := recover(); r != nil {
+			e.markCannedBackoff(flightKey)
+			e.noteCannedCold(ctx, kind, uiLang, cannedBgPanic)
 			observability.Warn(ctx, "assist.engine canned 后台补翻腿 panic，已收住（进程无碍，缓存未写）",
 				"kind", kind, "lang", uiLang, "reason", cannedBgPanic, "panic", fmt.Sprint(r),
 				"sync_reason", syncReason, "stack", firstRunes(string(debug.Stack()), 800))
@@ -254,29 +263,43 @@ func (e *Engine) runCannedBackground(ctx context.Context, client *llm.Client, ki
 	}()
 
 	out, err := e.translateOnce(ctx, client, text, uiLang, localizeMaxTokens,
-		"产品欢迎语/短问句", "网站右下角的 AI 客服挂件的首屏")
+		"产品欢迎语/短问句", cannedSurface)
 	if err != nil {
 		reason := cannedFailureReason(err, ctx, cannedBgTimeout, cannedBgUpstream, cannedBgUpstream)
 		// 后台也失败 ⇒ 一行都不写（既有「不写负缓存」口径），下一次 greet 重新走一次有界同步腿。
 		// 这一行是"冷语种到底落没落库"的唯一读数：出现 canned_bg_timeout 就该调
 		// ASSIST_LLM_TIMEOUT／canned_background_timeout_sec，出现 canned_bg_upstream 就该查上游本身。
+		e.markCannedBackoff(flightKey)
+		e.noteCannedCold(ctx, kind, uiLang, reason)
 		observability.Warn(ctx, "assist.engine canned 后台补翻未成功，缓存保持不写",
-			"kind", kind, "lang", uiLang, "reason", reason, "sync_reason", syncReason, "err", err)
+			"kind", kind, "lang", uiLang, "reason", reason, "sync_reason", syncReason, "err", err,
+			"backoff_sec", int(e.CannedBackoff().Seconds()))
 		return
 	}
 	topics := srcTopicsOf(text)
-	if gateReason, detail, bad := cannedOutboundReject(uiLang, text, out, topics); bad {
+	gateFinal, gateReason, gateDetail, bad := cannedOutboundReject(uiLang, text, out, topics, wantLines)
+	if bad {
 		// 后台腿的产物同样要过闸：这一稿会**常驻**首屏，闸门在后台腿失效＝坏形态自动落库，
 		// 比同步侧漏放更糟（同步侧至少每次 greet 都重新判一次）。
+		// ★ 0AR ㊷：这一档正是现网 th 的闭环终点（同步超时 → 后台补枪 → 后台那稿被闸拒 →
+		// 缓存写不上 → 下一位访客从零再来）。旧形态这里 return 之后什么都不留，
+		// 于是同一句提示词每隔一位访客重拨一次、每次都拒；现在开退避窗口，
+		// 让"再试一次"发生在窗口到期那一次，而不是发生在每一位访客的首屏上。
+		e.markCannedBackoff(flightKey)
+		e.noteCannedCold(ctx, kind, uiLang, cannedBgGated)
 		observability.Warn(ctx, "assist.engine canned 后台补翻的译文未过出栈闸，按不写处理",
 			"kind", kind, "lang", uiLang, "reason", cannedBgGated, "gate_reason", gateReason,
-			"detail", detail, "sync_reason", syncReason, "before", firstRunes(out, 160))
+			"detail", gateDetail, "sync_reason", syncReason, "before", firstRunes(out, 160),
+			"backoff_sec", int(e.CannedBackoff().Seconds()))
 		return
 	}
-	key := "i18n:" + kind + ":" + canonicalLang(uiLang)
+	if gateReason != "" { // ★ 0AR 纯观测档：后台腿同一口径（三处共用一个方法，见 observeCannedSoftTier）
+		e.observeCannedSoftTier(ctx, kind, uiLang, gateReason, gateDetail, "bg_write", out)
+	}
 	// ★ 纪律第 3 条的过期判定：这条腿在途期间库里那一行可能已被运营手工改掉（!manual 头），
 	// 也可能原文/口径又变了一次（指纹不等）。两种都不许把后台这份旧稿盖回去——
 	// 后台腿没有访客在等，覆盖一份人工配置是纯风险零收益。
+	key := cannedCacheKey(kind, uiLang)
 	if cur := e.db.GetConfig(key, ""); cur != "" {
 		head, _, ok := splitCachedTranslation(cur)
 		if !ok || head != fp {
@@ -286,9 +309,18 @@ func (e *Engine) runCannedBackground(ctx context.Context, client *llm.Client, ki
 			return
 		}
 	}
-	_ = e.db.SetConfig(key, fp+"\n"+out)
+	if gateFinal != out { // ★ 0AR 修正腿生效：落库的必须是判过的那一串（与同步腿同一口径）
+		observability.Info(ctx, "assist.engine canned 后台补翻的译文经修正腿清洗后落库（同指纹，非新稿）",
+			"kind", kind, "lang", uiLang, "reason", cannedRepaired, "sync_reason", syncReason,
+			"before", firstRunes(out, 120), "after", firstRunes(gateFinal, 120))
+	}
+	_ = e.db.SetConfig(key, fp+"\n"+gateFinal)
+	// ★ 0AR ㊷：成功即清退避窗口——退避的全部意义是"下一批访客别再白烧一枪"，
+	// 而这一枪已经成了，窗口留着就会把**已经好了**的语种继续按坏了处理（那是把修法做成新故障）。
+	e.clearCannedBackoff(flightKey)
+	e.observeCannedScriptImpurity(ctx, kind, uiLang, gateFinal, false)
 	// 生效必留一行 INFO：这一条链的失败形态是"界面正常、缓存一直空"，
 	// 没有这行就没法证明后台腿真跑通过（排障时"从没出现这一行"本身就是结论）。
 	observability.Info(ctx, "assist.engine canned 后台补翻生效，译文已落缓存",
-		"kind", kind, "lang", uiLang, "sync_reason", syncReason, "len", len(out))
+		"kind", kind, "lang", uiLang, "sync_reason", syncReason, "len", len(gateFinal))
 }

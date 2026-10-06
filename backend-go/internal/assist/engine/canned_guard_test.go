@@ -72,7 +72,7 @@ func TestCannedContractFollowsSource(t *testing.T) {
 	t.Run("原文没提积分：不拼计费单位那句（少一句就够，不需要反向禁令）", func(t *testing.T) {
 		st := newSeqStub(t, "Which formats are supported?")
 		e := st.engine(t)
-		_ = e.localize(ctx, "welcome", "支持哪些格式？", "en")
+		_ = e.localize(ctx, "welcome", "支持哪些格式？", "en", 0)
 		if p := st.body(0); strings.Contains(p, "计费单位口径") {
 			t.Fatalf("源文没提计费单位却仍拼那句，等于邀请模型补一个 credits 进来：%s", firstRunes(p, 400))
 		}
@@ -162,16 +162,44 @@ func TestCannedRepairKeepsPreviousDraft(t *testing.T) {
 	}
 }
 
-// TestCannedGateRejectReasonsAreContract 三档拒绝名是**对外排障契约**，逐字钉（同 094x 那七个 reject*）。
+// TestCannedGateRejectReasonsAreContract 拒绝分档名是**对外排障契约**，逐字钉（同 094x 那七个 reject*）。
+//
+// ★ 0AR 第 4 波把这张脸从三档补到六档拒绝＋三档观测，**一条都不许改字面**：
+// 现网排障是先 grep 日志里的 reason 再决定动哪一档配置（改模型／抬闸门／调退避窗口），
+// 名字一变，那批"照日志行写好的排障动作"就全部指错地方。
 func TestCannedGateRejectReasonsAreContract(t *testing.T) {
-	if cannedRejectEmpty != "canned_empty" || cannedRejectResidue != "canned_han_residue" ||
-		cannedRejectBrandAdded != "canned_brand_injected" {
-		t.Fatalf("出栈闸的拒绝分档名被改了（日志与排障文档会一起失效）：%s / %s / %s",
-			cannedRejectEmpty, cannedRejectResidue, cannedRejectBrandAdded)
+	want := map[string]string{
+		"cannedRejectEmpty":       "canned_empty",
+		"cannedRejectResidue":     "canned_han_residue",
+		"cannedRejectBrandAdded":  "canned_brand_injected",
+		"cannedRejectLineCount":   "canned_line_count",
+		"cannedRejectPlaceholder": "canned_placeholder_residue",
+		"cannedRejectSeparator":   "canned_separator_residue",
 	}
-	// 通过档必须真的回空串＋false（不然是"恒判不合格"那种把首屏永久打回中文的空转闸门）
-	if r, d, bad := cannedOutboundReject("en", "支持哪些格式？", "Which formats are supported?", srcTopics{}); bad || r != "" || d != "" {
-		t.Fatalf("合格译文被判拒：reason=%q detail=%q bad=%v", r, d, bad)
+	got := map[string]string{
+		"cannedRejectEmpty":       cannedRejectEmpty,
+		"cannedRejectResidue":     cannedRejectResidue,
+		"cannedRejectBrandAdded":  cannedRejectBrandAdded,
+		"cannedRejectLineCount":   cannedRejectLineCount,
+		"cannedRejectPlaceholder": cannedRejectPlaceholder,
+		"cannedRejectSeparator":   cannedRejectSeparator,
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("出栈闸的拒绝分档名被改了（日志与排障文档会一起失效）：%s 应为 %q，实际 %q", k, v, got[k])
+		}
+	}
+	// 观测档同理逐字钉：它们**不改正文**，所以唯一的露面机会就是这一行名字
+	if cannedBrandDropped != "canned_brand_dropped" || cannedScriptImpure != "canned_script_impure" ||
+		cannedRepaired != "canned_repaired" {
+		t.Fatalf("纯观测/修正档的分档名被改了：%s / %s / %s", cannedBrandDropped, cannedScriptImpure, cannedRepaired)
+	}
+	// 通过档必须真的回空串＋false（不然是"恒判不合格"那种把首屏永久打回中文的空转闸门）。
+	// 第四个返回值 final 也要钉：合格译文经修正腿后**必须逐字等于**入稿——
+	// 修正腿对干净稿子应当完全不动手，否则它就成了第二条没人看的改写链。
+	const clean = "Which formats are supported?"
+	if final, r, d, bad := cannedOutboundReject("en", "支持哪些格式？", clean, srcTopics{}, 0); bad || r != "" || d != "" || final != clean {
+		t.Fatalf("合格译文被判拒或被改写：reason=%q detail=%q bad=%v final=%q", r, d, bad, final)
 	}
 	// 判"凭空多出品牌名"只认在**任何语种都不可能是普通词**的写法：日文档的「能与」不在这张脸上
 	// （中文源文里「能够与之」完全正常，收进来就是把好译文判成不合格）

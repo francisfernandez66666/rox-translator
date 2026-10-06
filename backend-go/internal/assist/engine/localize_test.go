@@ -66,6 +66,27 @@ func (s *seqStub) body(i int) string {
 	return s.prompts[i]
 }
 
+// countExcluding 数上游被打了几次，但**跳过**请求体里含 mark 的那几枪。
+//
+// 存在的理由：「恰好 N 次」这类锁测的是**守卫链不许给一条回复白加往返**，
+// 而 ★ 0AR 第 4 波 ⑱ 之后，一条带按钮的回答在**同一次 Respond 里**还会多打
+// 「按钮名翻译」那一枪（它有自己的有界同步预算与退避，不属于守卫链的往返预算）。
+// 把这条锁的数字从 2 抬到 3 就把它掏空了——将来谁真给回复加了一次重写，
+// 3 照样绿。所以按**那一枪是谁**拆开数，而不是把总数放宽。
+// mark 传那一个按钮的中文原名（canned 那一枪的请求体里必然带它，生成/补翻两枪都不带）。
+func (s *seqStub) countExcluding(mark string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for _, p := range s.prompts {
+		if mark != "" && strings.Contains(p, mark) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // engine 带这个假上游的测试引擎。
 func (s *seqStub) engine(t *testing.T) *Engine {
 	t.Helper()

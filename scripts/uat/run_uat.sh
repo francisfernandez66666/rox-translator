@@ -32,7 +32,7 @@ T0=$(date +%s)
 
 # ---------- 0-. 端口占位前置闸门（★ 2026-09-26 批 I 收尾踩坑后新增） ----------
 # 现象：本机 14:26 上一轮遗留下的 mock_chain 仍占着 :8902，本轮自己的 mock 起不来
-#       （mockchain.log 里 OSError: Address already in use），但就绪探针 curl /v1/blocks
+#       （mockchain.log 里 OSError: Address already in use），但就绪探针 curl 链头端点
 #       拨到的是**外来实例**⇒ 照样绿；于是断言跑在被陈旧状态污染的 mock 上
 #       （T42 的固定 tx_id 'c3'*32 与上一轮同名交易相撞，正确金额那笔被唯一键拒收，
 #        订单恒 pending、payments 无凭证 ⇒ 两条 T42 红）。这类红**不是回归**，
@@ -142,9 +142,12 @@ log "启动 mock chain :${MOCK_CHAIN_PORT}..."
 nohup python3 scripts/uat/mock_chain.py "$MOCK_CHAIN_PORT" > "$WORK/mockchain.log" 2>&1 < /dev/null &
 CHAIN_PID=$!
 OK=0
+# ★ 就绪探针打 mock **自有控制口** /state，不打链头路径：链端点形态归产品侧
+#   （payment/usdt.go 的 tronHeadURL）与单测断言；探针若打链端点，会把「mock 没起来」
+#   和「mock 起了但链路径变了」混成同一条红，等于替上游形态背书＝判据射程错位（⑮ 同族）。
 for i in $(seq 1 10); do
   sleep 1
-  if curl -s -m 2 "http://127.0.0.1:${MOCK_CHAIN_PORT}/v1/blocks" >/dev/null 2>&1; then OK=1; break; fi
+  if curl -s -m 2 "http://127.0.0.1:${MOCK_CHAIN_PORT}/state" >/dev/null 2>&1; then OK=1; break; fi
 done
 [ "${OK:-0}" = "1" ] || { echo "mock chain 启动失败"; exit 1; }
 # ★ 新鲜度复核（与上面 ensure_port_free 同族，双保险）：就绪探针只证明"有人应答"，

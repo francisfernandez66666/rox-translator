@@ -89,6 +89,24 @@ type Engine struct {
 	// cannedBgWg 只给测试当**显式同步点**用（生产代码不等它）。
 	// ⚠️ 本仓把「靠 time.Sleep 赌 goroutine 刚好来得及」定性为假绿形态，凡要等后台腿的用例都等这个。
 	cannedBgWg sync.WaitGroup
+
+	// ★ 0AR 第 4 波（台账 ㊷）：canned 首屏翻译链的退避窗口与冷语种计数，见 canned_backoff.go 文件头。
+	// cannedColdMu 保护 cannedCold*／cannedBackoff 全部字段（与 vec/syn/sysVal 同一范式：
+	// 缓存本体由自己的锁保护，只有 canned_backoff.go 读写它们）。
+	// ⚠️ 刻意**不落库**：进程重启＝窗口清零，最坏后果是多打一次上游；落库反而会把
+	// "运营刚改了模型、库里那份旧退避还押着不发"做成常驻坏状态（理由全文在 canned_backoff.go）。
+	cannedColdMu       sync.Mutex
+	cannedBackoff      map[string]time.Time // 键＝在途声明那一个（kind+语种+指纹），值＝窗口截止
+	cannedCold         map[string]int       // 键＝语种+kind+分档，值＝计数（容量上限 cannedColdMaxKeys）
+	cannedColdTotal    int                  // 不分容量的总数，overflow 时它是唯一还准的读数
+	cannedColdOverflow bool                 // 明细字典到过上限＝有组合只进了总数没进明细
+
+	// ★ 0AR ㊷①：canned 这一路的**专用非推理型快模型** client（`canned_llm_model` 非空时启用）。
+	// 与 e.llm 分开缓存在自己的锁后面：两把 client 的指纹口径不同（五元组 vs 四元组），
+	// 共用一个字段会让"改了对话模型"把 canned 的缓存误判失效，反之亦然。
+	cannedLLM   *llm.Client
+	cannedLLMFP string
+	cannedMu    sync.Mutex
 }
 
 // New 构建引擎
@@ -622,8 +640,18 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	// 位置刻意排在 reharden 之后、报价与品牌之前——这条删的是「抄提示词的旁白」，
 	// 先删干净再让报价／品牌对**留下的真正文**做判据，避免一条旁白里的假数字顶掉报价核验。
 	rep = e.guardReplyInstructionEcho(ctx, answer, rep)
+	// ★ 0AR 第 4 波 ⑲：编造承诺（假存量／能力清单外的交付物／模型自配的词条译法）整句丢弃。
+	// 位置刻意排在报价腿**之前**、与指令复述腿同族（两条都是"删句子"的腿）：
+	// 先删干净，报价腿再对**留下的真正文**做复算——独立成句的合法报价本腿一字不动（正向对照锁
+	// TestGuardReplyFabricationKeepsLegalQuote）；假存量与报价混在同一句里时本腿把整句删掉，
+	// 那是安全方向（前半句撒谎的句子里，后半句的报价主体也不可信）。判据与三条纪律见 reply_fabrication.go 文件头。
+	rep = e.guardReplyFabrication(ctx, answer, rep)
 	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
 	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 0AR 第 4 波 ⑱：动作按钮名跟着**本轮作答语言**出（缺陷本体是「正文已是外文＋一排中文按钮」，
+	// 因为这一路压根不在翻译层清单里）。吃 `answer` 不吃 `uiLang`——就是上面 〇-AC 那条尺子：
+	// 按钮跟的是"这一轮用什么语言说话"，不是"前台此刻挂在哪个语种"。机制见 canned_actions.go。
+	rep.Actions = e.localizeActionNames(ctx, rep.Actions, answer)
 	// ★ 082x 第十条：旁白观测（只记 WARN 不改正文）。词表追不上模型措辞是这条链的常态，
 	// 没有这条计数就只能等用户下一次带截图来报——见 reply_lang_check.go 的 unstrippedAsides。
 	e.observeVisitorAsides(ctx, answer, rep)

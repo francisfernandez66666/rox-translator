@@ -112,7 +112,17 @@ func TestRespondRehardensRepairedDraft(t *testing.T) {
 	if !strings.Contains(rep.Content, "文書翻訳で対応します") || !strings.Contains(rep.Content, "ご確認ください") {
 		t.Errorf("二次收口把正常正文改坏了：%q", rep.Content)
 	}
-	if got := st.count(); got != 2 {
-		t.Errorf("上游被打 %d 次（应为生成＋补翻各一次；二次收口是纯字符串处理，一律不加往返）", got)
+	// ⑤ 上游次数按**那一枪是谁**拆开数（★ 0AR 第 4 波 ⑱ 起必须这么写）。
+	//
+	//	这条回复带着一颗按钮（③ 那一腿正是从控制序列里并回来的 pricing），
+	//	而 ⑱ 把按钮名也接进了 canned 那条路 ⇒ 同一次 Respond 现在会多打一枪。
+	//	把下面那条"2 次"直接改成"3 次"是**掏空这条锁**的写法：
+	//	它原本防的是"守卫链逢人就重写"，抬成 3 之后，将来谁给回复真加一次往返照样绿灯。
+	//	正确形态＝守卫链那两枪（生成＋补翻）一个字都不许多，按钮那一枪单独点名。
+	if got := st.countExcluding(cannedSurface); got != 2 {
+		t.Errorf("守卫链打了 %d 次上游（应为生成＋补翻各一次；二次收口是纯字符串处理，一律不加往返）", got)
+	}
+	if got := st.count(); got != 3 {
+		t.Errorf("上游总次数 %d，期望 3（生成＋补翻＋按钮名翻译各一枪）——少了那一枪＝⑱ 从 Respond 上掉了", got)
 	}
 }

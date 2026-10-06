@@ -24,6 +24,7 @@ import (
 	"io"
 	"math/big"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -224,12 +225,52 @@ type tronTxResp struct {
 	} `json:"transfers"`
 }
 
-// tronBlockResp 链头高度（官方 data[0].block；mock 顶层 block_number）。
+// tronBlockResp 链头高度。上游有三种真实形态都要认（优先级见 tronNewestBlock）：
+//   - /v1/blocks/latest 官方形态：{"block_header":{"number":123}}
+//   - /v1/blocks?limit=1&order_by=… 列表形态：{"data":[{"block":123}]}
+//   - mock_chain（UAT）顶层形态：{"block_number":123}
+//
+// ★ 只认后两种是 ⑮ 的一条根因：光换端点不换结构体，链头照样读 0。
 type tronBlockResp struct {
 	Data []struct {
 		Block int64 `json:"block"`
 	} `json:"data"`
 	BlockNumber int64 `json:"block_number"`
+	BlockHeader struct {
+		Number int64 `json:"number"`
+	} `json:"block_header"`
+}
+
+// tronNewestBlock 按「block_header.number ＞ block_number ＞ data[0].block」取链头高度。
+// 三腿都留着是刻意的：上游换形态时读 0 会让确认数永远不达标（钱到了也不入账），
+// 而这一条腿一旦静默，界面上照样向客户承诺「达到确认数后自动入账」。
+func tronNewestBlock(r tronBlockResp) int64 {
+	if r.BlockHeader.Number > 0 {
+		return r.BlockHeader.Number
+	}
+	if r.BlockNumber > 0 {
+		return r.BlockNumber
+	}
+	if len(r.Data) > 0 {
+		return r.Data[0].Block
+	}
+	return 0
+}
+
+// tronHeadURL 链头查询端点。
+// ★ ⑮ 根因之一：旧形态裸打 GET {base}/v1/blocks —— TronGrid 这个集合端点要求
+//
+//	limit/order_by 参数，裸打恒回 404 {"status":404,"error":"Not Found"}，
+//	于是现网每 30s 一条「TRON 链头查询失败」、8 天零成功而界面照旧承诺自动入账。
+//	/latest 是无参形态；仍保留 env 覆盖口（USDT_TRON_HEAD_PATH）供上游再改路径时不改码顶住。
+func tronHeadURL(base string) string {
+	if p := strings.TrimRight(os.Getenv("USDT_TRON_HEAD_PATH"), "/"); p != "" {
+		if !strings.HasPrefix(p, "/") {
+			p = "/" + p
+		}
+		return strings.TrimRight(base, "/") + p
+	}
+	return strings.TrimRight(base, "/") + "/v1/blocks/latest"
 }
 
 // FetchDeposits 拉取指定地址自 sinceBlock（不含）以来的 TRC20-USDT 转入。
@@ -243,12 +284,14 @@ func (f *TronFetcher) FetchDeposits(ctx context.Context, addr string, sinceBlock
 		hdrs["TRON-PRO-API-KEY"] = f.APIKey
 	}
 	var head tronBlockResp
-	if err := httpJSON(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/blocks", nil, hdrs, &head); err != nil {
+	if err := httpJSON(ctx, http.MethodGet, tronHeadURL(base), nil, hdrs, &head); err != nil {
 		return nil, 0, fmt.Errorf("TRON 链头查询失败: %w", err)
 	}
-	newest := head.BlockNumber
-	if newest == 0 && len(head.Data) > 0 {
-		newest = head.Data[0].Block
+	newest := tronNewestBlock(head)
+	if newest <= 0 {
+		// 端点通了但三形态都没读到高度：显式失败，不许带 0 往下走
+		// （0 会让 newest-block+1 恒小于确认阈值 ⇒ 钱到了一辈子不入账，且日志一行不剩）
+		return nil, 0, fmt.Errorf("TRON 链头读数取不到（三种响应形态均为空）")
 	}
 	u := fmt.Sprintf("%s/v1/accounts/%s/transactions?only_confirmed=true&only_to=true&limit=50&contract=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t&from_block=%d",
 		strings.TrimRight(base, "/"), addr, sinceBlock+1)
@@ -318,6 +361,11 @@ func (f *EVMFetcher) FetchDeposits(ctx context.Context, addr string, sinceBlock 
 		return nil, 0, fmt.Errorf("EVM 链头查询失败: %w", err)
 	}
 	newest := hexInt(head.Result)
+	if newest <= 0 {
+		// 与 TRON 侧同一把尺子：链头读 0 会让 newest-block+1 永远不足确认数 ⇒ 钱到了不入账且零日志。
+		// 这一腿刻意显式失败，让上层监听把自己的存活态翻成 failing（见 api/pay_usdt_watch.go）。
+		return nil, 0, fmt.Errorf("EVM %s 链头读数取不到（eth_blockNumber 回空或非正高度）", f.Chain)
+	}
 	addrLow := strings.ToLower(strings.TrimPrefix(addr, "0x"))
 	if len(addrLow) != 40 {
 		return nil, 0, fmt.Errorf("EVM 收款地址非法: %s", addr)

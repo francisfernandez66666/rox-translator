@@ -18,6 +18,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -84,6 +85,15 @@ func main() {
 	// seed：首启灌入知识库/话术/流程/功能入口（外置文件优先，否则用内嵌 seed）
 	if err := loadSeed(db, cfg.SeedFile); err != nil {
 		slog.Warn("assist seed 跳过", "err", err)
+	}
+
+	// ★ 0AR 第 4 波：一次性清掉「口径已换代」的 canned 译文孤儿行（机制与三条放行分支见 engine/canned_purge.go）。
+	// 位置**必须在 seed 之后**：seed 会写 configs.welcome／quick_chips，在它之前现读的原文是空串，
+	// 于是每一行都走"算不出指纹就跳过"那条放行分支——白跑一趟还报 0 行，而 0 行看起来和"库里很干净"一模一样。
+	// 为什么不等运行期自愈（head≠fp 就是未命中，下一次 greet 会覆盖）：一个语种十天没访客，
+	// 那一行旧字节就在库里躺十天，而它是这条链上唯一一份"客户屏幕上投的是什么"的持久事实。
+	if n := eng.PurgeStaleCannedTranslations(context.Background()); n > 0 {
+		slog.Info("assist canned 旧代译文孤儿行已清理", "deleted", n, "rev", engine.CannedPromptRevForRead())
 	}
 
 	// ★ 改造 1A：管理台 Token 解析链 env → 主库 system_config（密文）→ 自身 configs（面板托管）

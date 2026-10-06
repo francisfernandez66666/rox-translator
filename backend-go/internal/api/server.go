@@ -880,6 +880,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"dispatch_expire":   disp.ExpireDate, // 远端配置的到期日（开闸时才非空）
 		"dispatch_mem_cap":  disp.MemCap,     // on / clamped / off / unknown / 关着时为空
 		"dispatch_selftest": disp.Selftest,   // pass / missing_asset / failed / unknown / 关着时为空
+		// ★ ⑮（2026-10-05 第 3 波）：USDT 链上到账监听存活态——disabled/unknown/ok/failing。
+		//   收银台那句「达到确认数后自动入账」跟着这个状态词走：非 ok 即不再对客户承诺自动。
+		//   同 #42 口径：本端点无鉴权，只出状态词，绝不出收款地址、上游域名或 Key。
+		"usdt_watch": s.usdtWatchHealthWord(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

@@ -49,6 +49,8 @@ import { Panel, Field, toastResp, num } from './parts'
 //   变成 `undefined.success` 崩点，guardRead 统一回一个 success:false 的壳才接得上。）
 import { fmtQuoteMoney, cnyToQuote } from '@/components/quoteFmt' // ★ #75 报价展示口径集中在 quoteFmt
 import { fmtTime } from '@/lib/ui'
+// ★ ⑮ 腿3（2026-10-05）：USDT 收银台「自动入账」承诺的唯一判据（跟随后端 auto_settle_live 读数）
+import { usdtCheckoutKey, usdtPromiseIsLive } from '@/lib/usdtPromise'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 
@@ -1457,7 +1459,13 @@ async function savePayChannels() {
                       <span>{tpl('billing.usdtConfNeed', { n: Number(usdtPay.confirmations) || 0 })}</span>
                     </div>
                     <input className="lc-input" value={usdtTxInput} onChange={(e) => setUsdtTxInput(e.target.value)} placeholder={t('billing.usdtTxPh')} style={{ width: '100%' }} />
-                    <div style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('billing.usdtCheckoutHint')}</div>
+                    {/* ★ ⑮ 腿3（2026-10-05）：「达到确认数后自动入账」这句话只在后端把**到账监听自己的
+                        存活读数**报成 live 时才许出现。旧形态无条件渲染这句 ⇒ 监听 8 天零成功（链头端点
+                        打错恒 404）时，客户按承诺转完账只能干等。判据收在 lib/usdtPromise（单一事实源），
+                        组件里不许再造第二套优先级（例如拿"开关字段"当"监听活着"——那正是本缺陷的原始形态）。 */}
+                    <div style={{ fontSize: 13, color: usdtPromiseIsLive(usdtPay.auto_settle_live) ? 'var(--adm-faint)' : 'var(--adm-warn-tx)' }}>
+                      {t(usdtCheckoutKey(usdtPay.auto_settle_live))}
+                    </div>
                   </div>
                 ) : curOrder.channel === 'manual' ? (
                   <div>

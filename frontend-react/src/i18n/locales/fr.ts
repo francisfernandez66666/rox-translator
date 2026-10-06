@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "Crédit automatique on-chain",
   "billing.usdtChains": "Chaînes activées",
   "billing.usdtCheckoutHint": "Envoyez depuis votre portefeuille exactement le montant ci-dessus (la digit finale sert au rapprochement automatique). Les fonds sont crédités automatiquement après suffisamment de confirmations ; sinon déclarez l'empreinte on-chain pour une vérification manuelle.",
+  "billing.usdtCheckoutManual": "Envoyez depuis votre portefeuille exactement le montant ci-dessus (les chiffres finaux identifient votre commande). Après le virement, saisissez ci-dessous l'empreinte on-chain ; notre équipe la vérifie manuellement avant le crédit.",
   "billing.usdtCol": "Paiement en USDT",
   "billing.usdtConf": "Confirmations",
   "billing.usdtConfNeed": "Nécessite {n} confirmations de bloc",

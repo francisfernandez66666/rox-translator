@@ -5,6 +5,9 @@
 //   - reply（★ 082x 增补批）：LocalizeReply —— 模型/兜底已经把中文答案吐出来时，
 //     出站再翻一次兜住。走 translateOnce 这条共用底座，但**不进缓存**：
 //     对话正文每轮都是新句子，缓存键无从下手（欢迎词一年改不了几次，才值得落库）。
+//   - feature（★ 0AR 第 4 波 ⑱）：动作按钮名 `feature_links.name` —— 一档一 key 一行缓存
+//     （kind＝`feature_<key>`，wantLines 恒 1），只在 `Engine.Respond` 咽喉按**本轮作答语言**翻。
+//     机制与两条口径（为什么逐键不整批／为什么不共享语种）见 canned_actions.go 文件头。
 //
 // ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
 //
@@ -124,7 +127,32 @@ const manualMark = "!manual"
 // ⚠️ 这一档还立了一条新的**同步义务**：口径段现在随源文内容而变（提没提品牌名／计费单位），
 // 所以缓存指纹必须跟着"真给出去的那段口径"算（见 localize 里 `srcTopicsOf(text)` 那一行）。
 // 将来谁把口径改成第三个话题维度，忘了把它进指纹，就是 082x 那条"换件没修"的第四次复发。
-const cannedPromptRev = "096x-1"
+// ★ 0AR-1（2026-10-06 第 4 波）**这一批必须抬，而且是三条不同的射程一起抬**：
+//
+//	① 出栈闸从三条补到**五道拒绝＋一条修正腿**（canned_guard.go 新增 `canned_line_count`／
+//	   `canned_placeholder_residue`／`canned_separator_residue`，并把 `normalizeBrandForms`
+//	   ＋剥装饰括号／内部记号残渣收成 `repairCannedOutbound` 一条**修正腿**）——
+//	   落库与发给访客的字节序列因此与 096x-1 不同，**这就是"最终形态变了"**；
+//	② 库里那三条坏行（`i18n:chips:ar` 尾部 `---`、`i18n:welcome:th` 留着字面量 `⟨BRAND⟩`、
+//	   `i18n:welcome:ko` 品牌名脱落）**指纹全部匹配、正在被原样命中**——
+//	   不抬这一档，新读侧闸门只救得到前两档（判不合格即作废），而品牌名脱落那一档经实测
+//	   只能设成**观测档**（拒绝它会把合格的英文首屏整体退回中文），正文照发＝现网那半句
+//	   破语法继续投着；抬档让它重翻一遍才有机会出好稿；
+//	③ chips 的条数契约现在进**写缓存之前**判定（`localize(..., wantLines)`），
+//	   同一句原文在两档代码下的落库形态不同，必须靠版本号把两档隔开，
+//	   否则老二进制写的行会被新二进制当成"我自己刚写的格式"命中。
+//
+// ⚠️ 抬这一档会让库里**每一行**非人工档译文当场失效（`!manual` 那条放行在指纹比对之前，
+// 不受影响）。这是设计内代价：下一次 greet 现翻一次、后台腿补写，量级＝语种数×2。
+// 配套起了一条启动期一次性清理腿（canned_purge.go），让"短期没人来访的语种"不要把旧字节
+// 常驻在库里——常驻的那一行是这条链上唯一一份"客户屏幕上投的是什么"的持久事实。
+const cannedPromptRev = "0AR-1"
+
+// CannedPromptRevForRead 把当前代号出给启动日志（★ 0AR）。
+// 为什么不让 main 直接引 cannedPromptRev：那是包私有常量，导出它等于把"每一代口径"变成一个对外 API，
+// 而这里要的只是**一行日志里的可读读数**——排障时先确认这台跑的哪一代，再去对缓存键头，
+// 少这一档就只能靠"源码里写的是哪个版本号"来猜二进制里是哪个（正是本仓踩过的那类猜）。
+func CannedPromptRevForRead() string { return cannedPromptRev }
 
 // translationEchoMarkers 翻译模型复述**指令本身**时的说法（★ 082x 第八条，现网日文首屏实证）。
 //
@@ -210,16 +238,43 @@ func srcFingerprint(s string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// cannedSurface canned 那一枪写给模型的「这块屏幕是什么」说明（★ 0AR 第 4 波抽成常量）。
+//
+// 抽出来不是为了复用，是为了给测试一个**不带字面量的辨认锚**：
+// 从 ⑱ 起，一条带按钮的回复在同一次 `Respond` 里会多打一枪按钮名翻译，
+// 而「上游恰好被打几次」那类锁真正要问的是**守卫链有没有给一条回复白加往返**——
+// 把那条锁的数字从 2 抬到 3 就等于把它掏空（将来真给回复加一次重写，3 照样绿）。
+// canned 这一枪的请求体里必然带这句表面描述，而生成／补翻两枪都不带 ⇒ 锁按它拆开数
+// （判据实现见 seqStub.countExcluding）。
+// ⚠️ 改这句文案会让那条辨认腿**当场红**而不是静默失效——辨认锚必须与判据同源，这是刻意的。
+const cannedSurface = "网站右下角的 AI 客服挂件的首屏"
+
 // localize 把中文 canned 文本翻成访客界面语言；下列任一情况**原样返回中文**：
-// uiLang 是中文系 / 文本为空 / LLM 未接入 / 上游失败 / 译文空 / **同步预算到点（★ 0AF）**。
-// 命中缓存（同指纹且非人工档）直接回缓存；指纹不符（运营改过原文）重翻并覆盖。
+// uiLang 是中文系 / 文本为空 / LLM 未接入 / 上游失败 / 译文空 / **被 max_tokens 截断** /
+// **产物没过出栈闸**（★ 096x-1）/ **同步预算到点（★ 0AF）**。
+// 命中缓存（同指纹）**还要再过一次闸**才敢返回（★ 0AR 第 4 波，见下面那段"命中不等于可用"）。
 //
 // ★ 0AF（2026-10-01 现网 greet 502 实证）：未命中时这一次上游调用**不再无限等下去**——
 // 只等 CannedSyncBudget（默认 8 秒，硬夹 ≤25 秒），到点立刻出中文原文，同时在请求链之外
 // 补一枪把译文写进缓存（机制、分档与四条纪律见 localize_async.go）。
 // ⚠️ 预算内成功的那一腿**行为与今天完全一致**：同一套出栈闸、同一个写缓存动作、同步返回译文。
 // 假上游在测试里是瞬间返回的，所以下面那批「同步拿到译文」的既有断言一条都不该改语义。
-func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string {
+//
+// ★ 0AR 第 4 波新增 wantLines（chips 的条数契约，welcome 传 0）与**读侧闸门**：
+//
+//	现网实证（台账 §六 ㉞）：`i18n:chips:ar` 那一行躺着 4 行正确阿语 **＋ 第 5 行 `---`**。
+//	旧代码的流程是「命中缓存 ⇒ 直接返回 body ⇒ 回到 LocalizeChips 才被条数校验丢弃 ⇒
+//	丢弃分支既不记日志也不作废那一行」。三条凑在一起是**自锁**：
+//	坏行用不上（被条数校验丢）、坏行不作废（命中缓存就不重翻）、坏行不出声（丢弃分支零日志）——
+//	于是那四个中文 chips 会一直投给每一个阿语访客，直到有人手工动库，而且日志里一行都查不到。
+//
+//	两条一起改才有效：
+//	  ① **丢弃必出声＋作废来源**：读侧判不合格 ⇒ 一行 WARN（reason 用闸门那套分档）＋ `DeleteConfig`，
+//	     下一次 greet 从 MISS 重走；只加日志不作废＝现网那一行永远还在。
+//	  ② **判据前移到写缓存之前**（wantLines 进闸门）：不再"先落库、下游再丢"，坏形态从一开始就不进库。
+//	读侧这道闸与写侧用的是**同一个** cannedOutboundReject（同函数同入参必然同值）：
+//	两侧各写一份判据就是下一次「写侧拦住了、读侧还在投旧形态」的产地。
+func (e *Engine) localize(ctx context.Context, kind, text, uiLang string, wantLines int) string {
 	if strings.TrimSpace(text) == "" || visitorWantsChinese(uiLang) {
 		return text
 	}
@@ -227,7 +282,7 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	if label == "" {
 		return text // 未知语言代码：不猜，原样出中文（同 reply_lang.go 的空档口径）
 	}
-	key := "i18n:" + kind + ":" + canonicalLang(uiLang)
+	key := cannedCacheKey(kind, uiLang)
 	// ★ 096x-1：口径与指纹都按**这句源文真提没提那两个话题**来算（见 translateContract 的注释）。
 	// 两件事必须同源：给模型的口径段、进指纹的口径段，是同一个 t 喂出来的同一串文本。
 	// 分成两次判断（一处按源文筛、一处无条件算）就是下一次"换件没修"的产地。
@@ -236,21 +291,66 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	if cached := e.db.GetConfig(key, ""); cached != "" {
 		if head, body, ok := splitCachedTranslation(cached); ok {
 			if strings.HasSuffix(head, manualMark) {
-				return body // 人工改过：永久放行（见文件头第 3 条）
+				return body // 人工改过：永久放行（见文件头第 3 条）；★ 0AR 起这条放行**不过闸门**，
+				//  因为运营写的那一行就是他要投出去的那一行，闸门在这里的角色是"防模型"，不是"防运营"。
 			}
 			if head == fp {
-				return body
+				// ★ 0AR：命中（指纹相符）不等于可用——判据比那一行新的时候，旧行必须被拦在读侧之外。
+				if final, reason, detail, bad := cannedOutboundReject(uiLang, text, body, topics, wantLines); bad {
+					observability.Warn(ctx, "assist.engine canned 缓存行未过出栈闸，已作废并按原文出（下一次重翻）",
+						"kind", kind, "lang", uiLang, "reason", reason, "detail", detail,
+						"stage", "cache_read", "before", firstRunes(body, 160))
+					if derr := e.db.DeleteConfig(key); derr != nil {
+						// 删不掉就不能让它继续被命中：把值写成空串（GetConfig 见空即按"没有这一行"处理，
+						// 后台腿那道 `cur != ""` 的过期判定也会跳过它，不会把好稿挡在门外）。
+						// 不这么做的后果就是现网那一行——判据已经拦得住，可它永远走不到判据那一步。
+						// ⚠️ 刻意**不**用"改写指纹头"那种做法：头一旦不等于 fp，后台腿会按已过期拒写，
+						//    于是失效变成了永久失效（这一条在写的时候踩过，注释留在这里防第二个人踩）。
+						observability.Warn(ctx, "assist.engine canned 坏缓存删除失败，置空逼它失效",
+							"kind", kind, "lang", uiLang, "reason", reason, "err", derr)
+						_ = e.db.SetConfig(key, "")
+					}
+				} else {
+					if reason != "" { // ★ 0AR 纯观测档（品牌名脱落那一族）：正文照发、缓存照留，只是必须出声
+						e.observeCannedSoftTier(ctx, kind, uiLang, reason, detail, "cache_read", body)
+					}
+					// ★ 0AR 修正腿生效：把清洗后的那一串**回写同一行**（同指纹，不算新稿）。
+					// 不回写的后果是"每次读都现修一遍"——看着没事，实际是这条修好永远只活在内存里，
+					// 库里那行坏字节会被任何一个读点（含历史回放）再投出去。幂等性保证这一次写完后不再触发。
+					if final != body {
+						observability.Info(ctx, "assist.engine canned 缓存行经出栈修正腿清洗后回写（同指纹，非新稿）",
+							"kind", kind, "lang", uiLang, "reason", cannedRepaired,
+							"before", firstRunes(body, 120), "after", firstRunes(final, 120))
+						_ = e.db.SetConfig(key, fp+"\n"+final)
+					}
+					e.observeCannedScriptImpurity(ctx, kind, uiLang, final, true)
+					return final
+				}
 			}
+			// head ≠ fp：原文或口径又变了一档，这一行本来就要被重写覆盖，不必单独作废。
 		}
 	}
-	client := e.ensureLLM(ctx)
+	client := e.cannedClient(ctx) // ★ 0AR ㊷①：配了 canned_llm_model 就用那一档，没配逐字等于 ensureLLM
 	if !client.Enabled() {
+		return text
+	}
+	// ★ ㊷ 退避腿（★ 0AR 第 4 波）：这一档冷语种（现网 th）的形态是「同步必超时 ⇒ 后台补一枪 ⇒
+	// 那一枪又被闸拒 ⇒ 缓存写不上」，于是**每个访客都白等 8 秒、每次都重拨一次上游**——
+	// 现网两天里 th 就这么烧掉几千枪，日志只有 WARN、没有任何告警，界面看着"只是慢"。
+	// 退避窗口内**两条腿都不打**（连同步那一枪也不打：只押后台腿的话，访客那 8 秒白等照旧，
+	// 而台账 ㊷ 的验收判据写的正是「首屏不再白等」）；窗口到了自然再试一次，成功即落库、失败即续窗。
+	// ⚠️ 退避只押**上游调用**这一件事，不押缓存读：命中缓存那条路在前面已经返回了。
+	flightKey := cannedFlightKey(kind, uiLang, fp)
+	if e.cannedBgInBackoff(flightKey) {
+		observability.Warn(ctx, "assist.engine canned 该语种处于后台退避窗口，本次不打上游直接出中文",
+			"kind", kind, "lang", uiLang, "reason", cannedBgBackoff,
+			"until_in_sec", int(e.cannedBackoffRemaining(flightKey).Seconds()))
+		e.noteCannedCold(ctx, kind, uiLang, cannedBgBackoff)
 		return text
 	}
 	// ★ 0AF 单飞声明（同键只允许一条腿打上游；为什么连同步腿也要占格，见 localize_async.go 文件头）。
 	// 拿不到就**直接出中文**：不排队、不等待——访客那侧多等一秒都不会让译文更早出现，
 	// 而赢家那一枪打完（或后台腿收尾）后，下一次 greet 自然命中缓存。
-	flightKey := cannedFlightKey(kind, uiLang, fp)
 	if !e.claimCannedFlight(flightKey) {
 		observability.Info(ctx, "assist.engine canned 文案同键已有在途翻译，本次直接出中文",
 			"kind", kind, "lang", uiLang, "in_flight", true)
@@ -268,7 +368,7 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 	callCtx, cancelCall := context.WithTimeout(ctx, e.CannedSyncBudget())
 	defer cancelCall()
 	out, err := e.translateOnce(callCtx, client, text, uiLang, localizeMaxTokens,
-		"产品欢迎语/短问句", "网站右下角的 AI 客服挂件的首屏")
+		"产品欢迎语/短问句", cannedSurface)
 	if err != nil {
 		// 失败原样出中文（见文件头「绝不编一份译文」）。这一行日志是这条软路径唯一的露面机会：
 		// greet 界面看不出「没翻成」，没有它就只能等访客截图来报。
@@ -281,24 +381,72 @@ func (e *Engine) localize(ctx context.Context, kind, text, uiLang string) string
 		// 超时／被取消／上游报错 ⇒ 请求链之外再补一次，成功后照样过闸再落库。
 		// ⚠️ 出栈闸拒掉的那一稿**不走这里**（那一枪上游是好的，重拨只会把重拨风暴送给上游，
 		// 取舍理由写在 localize_async.go 文件头）。
-		if e.launchCannedBackground(ctx, client, kind, text, uiLang, fp, flightKey, reason) {
+		// ⚠️ 退避窗口在这一支**不查**：能走到这里就说明窗口没生效（上面那道闸已经拦住了窗口内的请求），
+		// 而这一枪正是"再试一次"的那一次——押掉它就把退避做成了永久降级。
+		if e.launchCannedBackground(ctx, client, kind, text, uiLang, fp, flightKey, reason, wantLines) {
 			handedOff = true
 		}
+		e.noteCannedCold(ctx, kind, uiLang, reason)
 		return text
 	}
-	// ★ 096x-1 出栈闸：**调用成功不等于产物可用**（机制与三条判据见 canned_guard.go）。
+	// ★ 096x-1 出栈闸：**调用成功不等于产物可用**（机制与判据见 canned_guard.go）。
 	// 位置是刻意的——必须在 SetConfig 之前：这条路的产物会常驻，一次没拦住就是访客长期看到的那一屏
-	// （现网 en 的 `credits充值`、ja 四条 chips 各尾粘「能言」都是这么在首屏住下来的）。
+	// （现网 en 的 `credits充值`、ja 四条 chips 各尾粘「能言」、ar 尾部多一行 `---` 都是这么住下来的）。
 	// 不合格时按失败同一口径处理：出中文原文、一行缓存都不写（负缓存的取舍与代价见文件头）。
-	if reason, detail, bad := cannedOutboundReject(uiLang, text, out, topics); bad {
+	// ★ 0AR：这一函数现在会回「reason 非空但 bad 为假」的**纯观测档**（品牌名脱落），
+	// 所以两条腿要分开写——把 `reason != ""` 直接当拒绝，就等于把英文首屏整体退回中文。
+	gateFinal, gateReason, gateDetail, bad := cannedOutboundReject(uiLang, text, out, topics, wantLines)
+	if bad {
 		observability.Warn(ctx, "assist.engine canned 译文未过出栈闸，按原文出且不落缓存",
-			"kind", kind, "lang", uiLang, "reason", reason, "detail", detail,
+			"kind", kind, "lang", uiLang, "reason", gateReason, "detail", gateDetail,
 			"topics_brand", topics.brand, "topics_points", topics.points,
 			"before", firstRunes(out, 160))
+		// 被拒的那一稿**不进退避**（它压根没打后台枪，重拨的节流由访客流量自带，
+		// 见 canned_guard.go 文件头那条代价注释）；但同一句被反复拒这件事**必须被数到**，
+		// 否则现网 th 那种「每次 greet 各烧一枪」的形态在观测面上等同于"偶尔慢"。
+		e.noteCannedCold(ctx, kind, uiLang, gateReason)
 		return text
 	}
-	_ = e.db.SetConfig(key, fp+"\n"+out)
-	return out
+	if gateReason != "" {
+		e.observeCannedSoftTier(ctx, kind, uiLang, gateReason, gateDetail, "sync_write", out)
+	}
+	if gateFinal != out { // ★ 0AR 修正腿生效：落库与发给访客的必须是**同一串**判过的字节
+		observability.Info(ctx, "assist.engine canned 译文经出栈修正腿清洗后落库（同指纹，非新稿）",
+			"kind", kind, "lang", uiLang, "reason", cannedRepaired,
+			"before", firstRunes(out, 120), "after", firstRunes(gateFinal, 120))
+	}
+	// ★ 0AR 纯观测腿：脚本纯度只记读数、不拦正文（阈值待现网分布，见 cannedScriptImpurity）
+	e.observeCannedScriptImpurity(ctx, kind, uiLang, gateFinal, false)
+	_ = e.db.SetConfig(key, fp+"\n"+gateFinal)
+	return gateFinal
+}
+
+// observeCannedSoftTier 记一枪「闸门看得见、但刻意不拦」的形态（★ 0AR 第 4 波）。
+//
+// 为什么单独一个方法而不是就地 WARN：这一档在**三个地方**都会被观察到（读侧命中、同步腿写库前、
+// 后台腿写库前），就地写三遍就是下一次"只有一侧改了文案"的产地（同 observeCannedScriptImpurity）。
+// 判据本身不在这里——它来自 cannedOutboundReject 的第一个返回值，这一腿只负责**出声**：
+// 出声的形态与拒绝那一族逐字同构（同一批字段名），排障脚本才能一条 grep 罩住两族。
+func (e *Engine) observeCannedSoftTier(ctx context.Context, kind, uiLang, reason, detail, stage, out string) {
+	observability.Warn(ctx, "assist.engine canned 译文命中出栈闸的纯观测档（正文照发、缓存照写）",
+		"kind", kind, "lang", uiLang, "reason", reason, "detail", detail,
+		"stage", stage, "before", firstRunes(out, 160))
+}
+
+// observeCannedScriptImpurity 把"目标语脚本纯度"的可疑读数记进日志（★ 0AR，**不改变正文、不作废缓存**）。
+//
+// 为什么单独一个方法而不是就地 if：读侧与写侧都要记同一档读数，两处各写一遍就是
+// 下一次「一侧改了阈值、另一侧还在报旧数」的产地（本仓为这类分叉付过的账不止一次）。
+// fromCache 真＝投出去的正是库里那一行（现网 th 乱码 chips 属这一类）——
+// 排障时这一条比写侧那条更要紧：**读侧报出来的是"客户此刻正在看什么"**。
+func (e *Engine) observeCannedScriptImpurity(ctx context.Context, kind, uiLang, out string, fromCache bool) {
+	impure, detail := cannedScriptImpurity(uiLang, out)
+	if !impure {
+		return
+	}
+	observability.Warn(ctx, "assist.engine canned 译文目标语脚本纯度存疑（观测腿，正文照发）",
+		"kind", kind, "lang", uiLang, "reason", cannedScriptImpure,
+		"from_cache", fromCache, "detail", detail, "before", firstRunes(out, 160))
 }
 
 // translateOnce 真正打一次「把这段中文翻成目标语言」的上游调用；回 error＝不可用
@@ -418,9 +566,10 @@ func (e *Engine) LocalizeReply(ctx context.Context, text, uiLang string) (string
 		"AI 客服的一条回答", "网站右下角 AI 客服挂件的对话气泡")
 }
 
-// LocalizeGreeting 欢迎词按访客语言出（greet 关键路径；见文件头）
+// LocalizeGreeting 欢迎词按访客语言出（greet 关键路径；见文件头）。
+// wantLines 传 0：欢迎词是一段话（模型可能自然折行），拿行数当判据会把好稿子杀掉。
 func (e *Engine) LocalizeGreeting(ctx context.Context, text, uiLang string) string {
-	return e.localize(ctx, "welcome", text, uiLang)
+	return e.localize(ctx, "welcome", text, uiLang, 0)
 }
 
 // LocalizeChips 快捷提问 chips 按访客语言出。
@@ -428,20 +577,21 @@ func (e *Engine) LocalizeGreeting(ctx context.Context, text, uiLang string) stri
 // 逐条各翻一次会把 greet 打成 N 次 LLM 往返。
 // 拆回口径：**按原文条数取**——模型偶尔会把两行并成一行或多送一行，
 // 条数对不上就整串原样返回（宁可看到中文，也不要错位串案的 chips）。
+//
+// ★ 0AR 第 4 波：条数契约**由这里传下去**（`wantLines=len(src)`），判据发生在
+// `localize()` 写缓存之前与读缓存之后两处，而不是只在这里丢一次产物——
+// 旧形态"先落库、在这里丢"就是现网 ar 那一行自锁三件套里"永不重翻"那一条。
+// 这里保留的这道校验是**兜底**（防 localize 之外的路径漏进来），它不再是唯一防线，
+// 所以命中它必须出声：一声不吭地把 chips 换成中文，正是那次现网查不到任何日志的直接原因。
 func (e *Engine) LocalizeChips(ctx context.Context, csv, uiLang string) string {
 	if strings.TrimSpace(csv) == "" || visitorWantsChinese(uiLang) {
 		return csv
 	}
-	src := []string{}
-	for _, p := range strings.Split(csv, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			src = append(src, p)
-		}
-	}
+	src := chipsLinesFromCSV(csv)
 	if len(src) == 0 {
 		return csv
 	}
-	tr := e.localize(ctx, "chips", strings.Join(src, "\n"), uiLang)
+	tr := e.localize(ctx, "chips", strings.Join(src, "\n"), uiLang, len(src))
 	lines := []string{}
 	for _, l := range strings.Split(tr, "\n") {
 		if l = strings.TrimSpace(l); l != "" {
@@ -449,9 +599,39 @@ func (e *Engine) LocalizeChips(ctx context.Context, csv, uiLang string) string {
 		}
 	}
 	if len(lines) != len(src) {
+		// 走到这里说明 localize 那边漏了（它已经按同一个 wantLines 判过一次）——按缺陷记账，不许静默。
+		observability.Warn(ctx, "assist.engine canned chips 条数与原文不符，整串按原文出",
+			"kind", "chips", "lang", uiLang, "reason", cannedRejectLineCount,
+			"got", len(lines), "want", len(src), "before", firstRunes(tr, 160))
 		return csv
 	}
 	return strings.Join(lines, ",")
+}
+
+// cannedCacheKey 组 canned 译文的缓存键（`i18n:<kind>:<归一语种>`）。
+//
+// 唯一的一份构造逻辑（★ 0AR 第 4 波）：写侧（localize／后台腿）、读侧、以及启动期那一次性清孤儿行
+// 三条腿都必须算出**同一个键**。键在两侧各写一遍就是下一次「清的是 A 键、命中的是 B 键」的产地，
+// 而那一类缺陷的现网表现是"清理脚本跑绿了、坏行还在那儿"。
+// 语种必须走 canonicalLang：同一语种的不同写法（en／EN／en-US）在闸门与品牌表里是一档，
+// 在键上却会各开一行——不归一就是同一份译文存 N 份、每份各自的指纹漂移。
+func cannedCacheKey(kind, uiLang string) string {
+	return "i18n:" + kind + ":" + canonicalLang(uiLang)
+}
+
+// chipsLinesFromCSV 把 configs.quick_chips 那一种「逗号分隔一行一条」的存储形态拆成条列表。
+//
+// 抽成一个函数的理由与 cannedCacheKey 同源：写侧（LocalizeChips 算 wantLines）与
+// 启动期清理（重算那一行的指纹要按**同一个**入串）必须按同一口径拆，
+// 两处各拆一遍就会出现「清理算出的指纹 ≠ 库里那一行」，于是坏行被判定为"不是我们写的"而永久跳过。
+func chipsLinesFromCSV(csv string) []string {
+	out := []string{}
+	for _, p := range strings.Split(csv, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // splitCachedTranslation 拆缓存值：首行=指纹（可带 !manual 标记），其余=译文。

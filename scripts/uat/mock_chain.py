@@ -2,12 +2,17 @@
 # ============================================================================
 # scripts/uat/mock_chain.py — USDT 链上 mock（TronGrid 兼容 + 测试控制口）
 # 职责：为 UAT T42 提供确定性「链上环境」：
-#   GET  /v1/blocks                          → {"data":[{"block": TIP}]}（链头）
+#   GET  /v1/blocks/latest                   → {"block_header":{"number": TIP}}（链头）
+#        ★ 2026-10-05 ⑮ 修法：真 TronGrid 的裸 GET /v1/blocks 是 **404**（该路径必须带
+#          limit/order_by 等参数），链头取 /v1/blocks/latest。旧 mock 把裸 /v1/blocks
+#          做成有应答，于是产品侧那条死腿（打错端点、恒取不到高度）在 UAT 里**自己给自己
+#          发证**——T42 全绿但现网一行链头日志都在报 404。现在裸 /v1/blocks 照真上游回 404，
+#          端点写错就当轮扫描失败，判据才有牙齿。
 #   GET  /v1/accounts/{addr}/transactions?... → {"transfers":[{tx_id,block_number,from,to,value}]}
 #        （to=addr、block_number>=from_block；value 为 6 位小数 micro 字符串）
 #   POST /inject  {to,from,value,block?}     → 注入一笔转入（默认当前块），返回 tx_id
 #   POST /advance {n}                        → 链头 +n（模拟确认数增长）
-#   GET  /state                              → 全量状态（断言辅助）
+#   GET  /state                              → 全量状态（断言辅助，run_uat 就绪探针打这里）
 # 服务端经 env USDT_TRON_BASE 指向本进程；仅 UAT 使用，绝不公网暴露。
 # ============================================================================
 import json
@@ -37,10 +42,18 @@ class H(BaseHTTPRequestHandler):
         # GET 路由：链头查询 / 指定地址转入列表（按 to+from_block 过滤）/ 全量状态
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        if u.path == "/v1/blocks":
+        if u.path == "/v1/blocks/latest":
+            # 链头官方形态：{"block_header":{"number": TIP}}（产品侧 tronNewestBlock 的第一优先腿）
+            with LOCK:
+                self._send({"block_header": {"number": STATE["tip"]}})
+            return
+        if u.path == "/v1/blocks" and (q.get("limit") or q.get("order_by")):
+            # 带参数的列表形态才回 data[]，与真 TronGrid 一致（备用腿，非默认取数路径）
             with LOCK:
                 self._send({"data": [{"block": STATE["tip"]}]})
             return
+        # ★ 裸 /v1/blocks＝真上游的 404（缺 limit/order_by），这里刻意不兜活：
+        #   旧 mock 让它有应答＝给产品侧那条打错端点的死腿发绿证，T42 因此测不到现网故障。
         if u.path.startswith("/v1/accounts/") and u.path.endswith("/transactions"):
             addr = u.path.split("/")[3]
             frm = int((q.get("from_block") or ["0"])[0])

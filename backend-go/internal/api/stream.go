@@ -215,11 +215,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	var convID string
 	user := s.authUser(r) // ★ 提前取用户引用（goroutine 内可能过期）
 	if convID == "" && s.Store != nil && user != nil {
-		b := make([]byte, 16)
-		_, _ = io.ReadFull(rand.Reader, b)
-		b[6] = (b[6] & 0x0f) | 0x40 // version 4
-		b[8] = (b[8] & 0x3f) | 0x80 // variant 1
-		convID = fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[2:4], b[4:6], b[6:8], b[8:16])
+		convID = newConversationID()
 	}
 
 	// ★ D20：SSE 写序列化锁（progress/delta 均来自引擎并发管线）
@@ -347,6 +343,40 @@ func chatTitle(msg string) string {
 		return "翻译请求"
 	}
 	return t
+}
+
+// newConversationID 生成聊天会话主键，形态＝RFC 4122 的 UUID v4（8-4-4-4-12，整串 36 字符）。
+//
+// ★ 为什么单独抽出来（〇-AR 挂账收口）：旧形态写的是
+//
+//	`fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[2:4], b[4:6], b[6:8], b[8:16])`
+//
+//	两处偏差：① 段与段**重叠**（b[0:4] 与 b[2:4] 共用两个字节，等于白扔 8 位随机性）；
+//	② `%012x` 只保证**最小**宽度，末段喂 8 字节实际吐 16 位 ⇒ 整串 40 字符，
+//	不合 UUID 的「末段 12 位」。它只是 TEXT 主键，唯一性/长度/外键都对得上，所以功能无碍，
+//	但任何按 UUID 正则校验或按 36 位展示这个 id 的地方都会判不合式——按标准五段切片各取一次即根治。
+//
+// 随机源失败（crypto/rand 实践上不会失败）时不静默：记一条 WARN 后用时间戳补齐，
+// 仍返回**格式合规**的 id——会话主键不许因为随机源抖动就变成空串（空串会让整条持久化腿静默不写）。
+func newConversationID() string {
+	b := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		observability.Warn(context.Background(), "聊天会话 id 随机源取数失败，改用时间戳填充", "err", err.Error())
+		n := time.Now().UnixNano()
+		for i := range b {
+			b[i] = byte(n >> (8 * (i % 8)))
+		}
+	}
+	return formatConversationID(b)
+}
+
+// formatConversationID 把 16 字节钉成 UUID v4 形态（8-4-4-4-12，五段各取一次、互不重叠）。
+// 版本位与 variant 也在这里钉，是为了能用**已知字节**做等值锁——随机串只能验形态，
+// 验不出"哪一段取了哪几个字节"（旧形态正是把 b[2:4] 同时喂进了第一段和第二段）。
+func formatConversationID(b []byte) string {
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 1（RFC 4122）
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
 // dispatchTranslateWebhook 投递翻译完成 webhook 事件（text/file 通用）。

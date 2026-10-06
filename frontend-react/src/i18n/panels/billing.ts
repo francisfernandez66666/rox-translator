@@ -61,6 +61,7 @@ export const zh: Record<string, string> = {
   'billing.usdtTxCol': '链上交易哈希',
   'billing.usdtNoTx': '待声明哈希',
   'billing.usdtCheckoutHint': '请在钱包中按上述金额精确转账（尾数用于自动对单）。达到确认数后自动入账；未自动到账可声明链上哈希转人工核对。',
+  'billing.usdtCheckoutManual': "请在钱包中按上述金额精确转账（尾数用于对单）。转账后请在下方提交链上交易哈希，由运营人工核销入账。",
   'billing.usdtHint': '开启后在收银台展示 USDT 收款。建议开启尾数对单与链上自动入账（TRON 默认 api.trongrid.io，可经环境变量指向自建节点）。',
   // ★ 2026-09-22 支付渠道凭据管理台可配（微信 Native v3 / 支付宝当面付商户参数）
   'billing.paychSection': '支付渠道凭据（微信 / 支付宝）',
@@ -248,6 +249,7 @@ export const en: Record<string, string> = {
   'billing.usdtTxCol': 'Tx hash',
   'billing.usdtNoTx': 'Awaiting hash',
   'billing.usdtCheckoutHint': 'Send the exact amount above from your wallet (the tail is used for auto-matching). Funds are credited automatically after enough confirmations; otherwise declare the on-chain hash for manual review.',
+  'billing.usdtCheckoutManual': "Send the exact amount above from your wallet (the tail digits identify your order). After paying, submit your on-chain transaction hash below so our team can verify it manually and credit the order.",
   'billing.usdtHint': 'When enabled, USDT payment shows at checkout. Tail matching and on-chain auto-credit are recommended (TRON defaults to api.trongrid.io, override via env).',
   // ★ 2026-09-22 Pay channel credentials configurable from the admin console (WeChat Native v3 / Alipay)
   'billing.paychSection': 'Pay channel credentials (WeChat Pay / Alipay)',

@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "Automatische On-Chain-Gutschrift",
   "billing.usdtChains": "Aktive Chains",
   "billing.usdtCheckoutHint": "Bitte überweisen Sie den oben genannten Betrag exakt aus Ihrer Wallet (die Endziffer dient der automatischen Zuordnung). Nach sufficienten Bestätigungen erfolgt die Gutschrift automatisch; andernfalls melden Sie den On-Chain-Hash zur manuellen Prüfung.",
+  "billing.usdtCheckoutManual": "Bitte überweisen Sie den oben genannten Betrag exakt aus Ihrer Wallet (die Endziffern ordnen Ihre Bestellung zu). Nach der Übertragung tragen Sie unten den On-Chain-Hash ein; unser Team prüft ihn manuell und bucht den Betrag gut.",
   "billing.usdtCol": "USDT-Zahlung",
   "billing.usdtConf": "Bestätigungen",
   "billing.usdtConfNeed": "Erfordert {n} Blockbestätigungen",

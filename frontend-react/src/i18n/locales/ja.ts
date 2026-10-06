@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "オンチェーン自動計上",
   "billing.usdtChains": "開放中のチェーン",
   "billing.usdtCheckoutHint": "ウォレットから上記の金額を正確に送金してください（末尾桁で自動照合します）。必要な確認回数に達すると自動的に計上されます。計上されない場合はオンチェーンハッシュを申告のうえ、手動でご確認ください。",
+  "billing.usdtCheckoutManual": "ウォレットから上記の金額を正確に送金してください（末尾の桁で注文を照合します）。送金後に下の欄へオンチェーンハッシュをご入力ください。担当者による手動確認後に計上されます。",
   "billing.usdtCol": "USDT 入金",
   "billing.usdtConf": "確認数",
   "billing.usdtConfNeed": "ブロック確認 {n} 回後に計上されます",

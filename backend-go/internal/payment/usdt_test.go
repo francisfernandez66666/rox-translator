@@ -80,7 +80,9 @@ func TestUSDTValidators(t *testing.T) {
 func TestTronFetcherParsesOfficialAndMockShapes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.Contains(r.URL.Path, "/v1/blocks"):
+		// ★ 只认 /latest 这一条路径（HasSuffix 而非 Contains）：⑮ 的旧 stub 用 Contains("/v1/blocks")，
+		//   把裸打错端点也算"命中"，于是这条用例对死腿完全无感。裸 /v1/blocks 落 default 回 400 ⇒ 当场红。
+		case strings.HasSuffix(r.URL.Path, "/v1/blocks/latest"):
 			_, _ = w.Write([]byte(`{"data":[{"block":100}]}`))
 		case strings.Contains(r.URL.Path, "/transactions"):
 			// 官方形态 + mock 简形态混发，验证双解析
@@ -106,6 +108,140 @@ func TestTronFetcherParsesOfficialAndMockShapes(t *testing.T) {
 	}
 	if deps[1].TxHash != strings.Repeat("d", 64) || deps[1].AmountMicro != 2000000 {
 		t.Fatalf("mock 形态解析错误: %+v", deps[1])
+	}
+}
+
+// TestTronHeadUsesLatestEndpoint ⑮ 端点腿：链头必须打 GET {base}/v1/blocks/latest。
+// 假上游**只**在 /latest 上应答，裸 /v1/blocks 照真 TronGrid 回 404（该集合端点要求
+// limit/order_by 参数）⇒ 端点写回旧的裸 /v1/blocks 时，本用例当场红（反证口径）。
+// 同时锁"取到的第一个路径就是 /latest"：只看 newest 非零会被 default 分支的兜底应答蒙过。
+func TestTronHeadUsesLatestEndpoint(t *testing.T) {
+	var hit []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = append(hit, r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/blocks/latest":
+			_, _ = w.Write([]byte(`{"block_header":{"number":123}}`))
+		case "/v1/accounts/Taddr/transactions":
+			_, _ = w.Write([]byte(`{"transfers":[]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"status":404,"error":"Not Found","path":"/v1/blocks"}`))
+		}
+	}))
+	defer srv.Close()
+	f := &TronFetcher{Base: srv.URL}
+	deps, newest, err := f.FetchDeposits(context.Background(), "Taddr", 100)
+	if err != nil {
+		t.Fatalf("链头走 /latest 应成功，实得 err=%v（命中路径 %v）", err, hit)
+	}
+	if newest != 123 {
+		t.Fatalf("链头高度应为 123，实得 %d", newest)
+	}
+	if len(deps) != 0 {
+		t.Fatalf("本轮无转入，deps 应为空，实得 %d 笔", len(deps))
+	}
+	if len(hit) == 0 || hit[0] != "/v1/blocks/latest" {
+		t.Fatalf("第一个上游请求必须是 /v1/blocks/latest，实际命中 %v", hit)
+	}
+}
+
+// TestTronHeadPathEnvOverride USDT_TRON_HEAD_PATH 覆盖腿：上游改路径时不改码顶住。
+// 判据＝换档后打的确实是覆盖路径（不是默认 /latest），且高度照读得出。
+func TestTronHeadPathEnvOverride(t *testing.T) {
+	t.Setenv("USDT_TRON_HEAD_PATH", "api/chain-head") // 刻意不带前导斜杠：覆盖腿要自己补齐
+	var hit []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit = append(hit, r.URL.Path)
+		if r.URL.Path == "/api/chain-head" {
+			_, _ = w.Write([]byte(`{"block_header":{"number":55}}`))
+			return
+		}
+		if r.URL.Path == "/v1/accounts/Taddr/transactions" {
+			_, _ = w.Write([]byte(`{"transfers":[]}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+	f := &TronFetcher{Base: srv.URL}
+	_, newest, err := f.FetchDeposits(context.Background(), "Taddr", 10)
+	if err != nil || newest != 55 {
+		t.Fatalf("覆盖路径应生效并读到高度：newest=%d err=%v 命中 %v", newest, err, hit)
+	}
+	for _, p := range hit {
+		if p == "/v1/blocks/latest" {
+			t.Fatalf("设了覆盖口还打默认 /latest，命中 %v", hit)
+		}
+	}
+}
+
+// TestTronHeadAcceptsThreeShapes ⑮ 结构腿：三种真实响应形态都必须读出同一个高度。
+// 只认后两种（block_number／data[].block）是旧缺陷的第二条根因——光换端点不换结构体，
+// /latest 的 block_header.number 照样读 0，而 newest=0 会让确认数永不自达标。
+func TestTronHeadAcceptsThreeShapes(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"latest/block_header", `{"block_header":{"number":7}}`},
+		{"mock/顶层 block_number", `{"block_number":7}`},
+		{"列表 data[0].block", `{"data":[{"block":7}]}`},
+		{"优先级取第一腿", `{"block_header":{"number":7},"block_number":9,"data":[{"block":11}]}`},
+	}
+	for _, c := range cases {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/v1/blocks/latest") {
+				_, _ = w.Write([]byte(c.body))
+				return
+			}
+			_, _ = w.Write([]byte(`{"transfers":[]}`))
+		}))
+		f := &TronFetcher{Base: srv.URL}
+		_, newest, err := f.FetchDeposits(context.Background(), "Taddr", 1)
+		srv.Close()
+		if err != nil {
+			t.Fatalf("%s: 应解析成功，err=%v", c.name, err)
+		}
+		if newest != 7 {
+			t.Fatalf("%s: 链头应读 7，实得 %d", c.name, newest)
+		}
+	}
+}
+
+// TestTronHeadEmptyReadingFailsLoudly 端点通了但三形态都读不到高度 ⇒ **必须显式报错**，
+// 不许带 newest=0 往下走。旧形态带 0 返回＝"这一轮扫过了"，日志一行不剩，
+// 而 newest-block+1 恒小于确认阈值 ⇒ 客户转账永远不会入账（⑮ 的静默形态）。
+func TestTronHeadEmptyReadingFailsLoudly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"success":true}`)) // 合法 JSON、零高度字段
+	}))
+	defer srv.Close()
+	f := &TronFetcher{Base: srv.URL}
+	if _, _, err := f.FetchDeposits(context.Background(), "Taddr", 1); err == nil {
+		t.Fatal("链头读数为空必须报错，实得 nil")
+	} else if !strings.Contains(err.Error(), "链头读数取不到") {
+		t.Fatalf("报错文案要点名链头读数，实得: %v", err)
+	}
+}
+
+// TestEVMHeadEmptyReadingFailsLoudly 同族判据的 EVM 腿：eth_blockNumber 回空/非正高度
+// 必须报错，不许带 0 继续（旧形态静默把"读不到"当"链还没长"）。
+func TestEVMHeadEmptyReadingFailsLoudly(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Method == "eth_blockNumber" {
+			_, _ = w.Write([]byte(`{"result":""}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"result":[]}`))
+	}))
+	defer srv.Close()
+	f := &EVMFetcher{RPC: srv.URL, Contract: "0xdAC17F958D2ee523a2206206994597C13D831ec7", Chain: "erc20"}
+	if _, _, err := f.FetchDeposits(context.Background(), "0x1111111111111111111111111111111111111111", 1); err == nil {
+		t.Fatal("eth_blockNumber 回空必须报错，实得 nil")
+	} else if !strings.Contains(err.Error(), "链头读数取不到") {
+		t.Fatalf("报错文案要点名链头读数，实得: %v", err)
 	}
 }
 
