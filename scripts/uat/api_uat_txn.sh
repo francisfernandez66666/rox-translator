@@ -1387,6 +1387,31 @@ ML=$(get "$AH" /api/admin/orders/manual)
 T41CHK=$(echo "$ML" | python3 -c "import sys,json;ids=[int(o['id']) for o in json.load(sys.stdin).get('orders',[])];print('STILL' if $OIDA in ids else 'GONE')" 2>/dev/null || echo ERR)
 if [ "$T41CHK" = "STILL" ]; then FAIL=$((FAIL+1)); echo "FAIL|T42-paid-left-manual-list"; else PASS=$((PASS+1)); echo "PASS|T42-paid-left-manual-list"; fi
 
+# ★ ⑮（2026-10-05 第 3 波）到账监听存活态的四条现网级读数：
+#   ① /api/health 出 usdt_watch 状态词（旧形态这一档**完全没有读数**，
+#      链头端点打错时 8 天零成功、监控看不见、只有滚日志才数得出来）；
+#   ② 链头取到＝监听健康 ⇒ 收银台出栈 auto_settle_live=true（正向对照，缺了它
+#      "永远 false"也能让下面③绿灯）；
+#   ③ 自动核销开关关掉 ⇒ 同一字段必须翻 false 且 health 收敛成 disabled（承诺跟能力走）；
+#   ④ 整轮 mock 是健康的 ⇒ 不许有 usdt_watch_dead 的 open 告警（反向锁，配①的正向读数）。
+HW=$(curl -s "$B/api/health" --max-time 20)
+ck T42-health-usdt-watch-word '"usdt_watch":"(ok|failing|unknown|disabled)"' "$HW"
+R=$(post "$H1" '{"points":27,"channel":"usdt"}' /api/pay/create)
+OIDZ=$(echo "$R" | pv '["order"]["id"]')
+LIVE=$(echo "$R" | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("usdt_pay",{}).get("auto_settle_live")).lower())' 2>/dev/null || echo ERR)
+[ "$LIVE" = "true" ] && { PASS=$((PASS+1)); echo "PASS|T42-usdt-live-true-while-watch-ok"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-usdt-live-true-while-watch-ok(got=$LIVE)"; }
+sq "UPDATE orders SET status='cancelled' WHERE id=$OIDZ AND status='pending'" >/dev/null
+SSAVE '{"usdt_auto_settle":"0"}' >/dev/null
+ck T42-health-usdt-watch-disabled-when-off '"usdt_watch":"disabled"' "$(curl -s "$B/api/health" --max-time 20)"
+R=$(post "$H1" '{"points":28,"channel":"usdt"}' /api/pay/create)
+LIVE2=$(echo "$R" | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("usdt_pay",{}).get("auto_settle_live")).lower())' 2>/dev/null || echo ERR)
+[ "$LIVE2" = "false" ] && { PASS=$((PASS+1)); echo "PASS|T42-usdt-live-false-when-off"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-usdt-live-false-when-off(got=$LIVE2)"; }
+OIDY=$(echo "$R" | pv '["order"]["id"]')
+sq "UPDATE orders SET status='cancelled' WHERE id=$OIDY AND status='pending'" >/dev/null
+SSAVE '{"usdt_auto_settle":"1"}' >/dev/null
+N=$(sq "SELECT COUNT(*) FROM alerts WHERE kind='usdt_watch_dead' AND status='open'")
+[ "$N" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T42-no-false-watch-alert"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-no-false-watch-alert($N)"; }
+
 # 收尾自关（不留给前端 E2E）：关闭后下单恢复拒单
 SSAVE '{"usdt_auto_settle":"0"}' >/dev/null
 SSAVE '{"usdt_enabled":"0"}' >/dev/null

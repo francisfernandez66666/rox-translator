@@ -538,10 +538,20 @@ func TestCannedAsyncReasonTagsAreContract(t *testing.T) {
 		t.Fatalf("后台腿分档名被改：%s / %s / %s / %s / %s",
 			cannedBgTimeout, cannedBgUpstream, cannedBgGated, cannedBgStale, cannedBgPanic)
 	}
-	// 三档必须能互相区分：把「超时」和「上游报错」合成一档就回到"只能猜"的原状态
+	// ★ 0AR 第 4 波：退避窗口那一档同属对外契约（它的运维动作是"等"，与其余八档的"查"不同，
+	// 混成一档就会把"正在节流"读成"又在失败"）
+	if cannedBgBackoff != "canned_bg_backoff" {
+		t.Fatalf("退避分档名被改：%s", cannedBgBackoff)
+	}
+	if cannedHealthOK != "ok" || cannedHealthCold != "cold" || cannedHealthBackoff != "backoff" {
+		t.Fatalf("/health 的 canned 状态词被改（运维面板与冒烟脚本按这三个词判定）：%s / %s / %s",
+			cannedHealthOK, cannedHealthCold, cannedHealthBackoff)
+	}
+	// 九档必须能互相区分：把「超时」和「上游报错」合成一档就回到"只能猜"的原状态
 	tags := map[string]bool{cannedSyncTimeout: true, cannedSyncCanceled: true, cannedSyncUpstream: true,
-		cannedBgTimeout: true, cannedBgUpstream: true, cannedBgGated: true, cannedBgStale: true, cannedBgPanic: true}
-	if len(tags) != 8 {
+		cannedBgTimeout: true, cannedBgUpstream: true, cannedBgGated: true, cannedBgStale: true,
+		cannedBgPanic: true, cannedBgBackoff: true}
+	if len(tags) != 9 {
 		t.Fatal("分档名出现重复，日志将无法区分两种不同的病")
 	}
 }

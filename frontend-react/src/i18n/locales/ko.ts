@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "온체인 자동 입금",
   "billing.usdtChains": "활성화된 체인",
   "billing.usdtCheckoutHint": "지갑에서 위 금액을 정확히 송금하세요 (테일 숫자로 자동 매칭됩니다). 충분한 확인 횟수에 도달하면 자동 입금되며, 자동 입금이 없으면 온체인 해시를 신고해 수동 확인을 받으세요.",
+  "billing.usdtCheckoutManual": "지갑에서 위 금액을 정확히 송금하세요(테일 숫자로 주문을 대조합니다). 송금 후 아래 칸에 온체인 해시를 제출하시면 담당자의 수동 확인 후 입금 처리됩니다.",
   "billing.usdtCol": "USDT 입금",
   "billing.usdtConf": "확인 횟수",
   "billing.usdtConfNeed": "{n}회 블록 확인 후 입금됩니다",

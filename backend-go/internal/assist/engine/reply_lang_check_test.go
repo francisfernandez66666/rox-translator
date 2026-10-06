@@ -66,6 +66,22 @@ func (b *bodyLog) at(i int) string {
 	return b.bodies[i]
 }
 
+// countExcluding 数调用次数，但跳过请求体里含 mark 的那几枪（口径同 seqStub.countExcluding：
+// ★ 0AR 第 4 波 ⑱ 之后，一条带按钮的回复会额外打「按钮名翻译」那一枪，
+// 它有自己的有界预算／退避／单飞，不占「守卫链不许白加往返」那条锁的额度）。
+func (b *bodyLog) countExcluding(mark string) int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var n int64
+	for _, s := range b.bodies {
+		if mark != "" && strings.Contains(s, mark) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
 // scriptedLLM 按调用次序回吐预设应答，序列用尽后一直回最后一条。
 // 三个返回值分别是：上游地址、调用计数、每次请求体——
 // 计数是本批最重要的证据（一次对话该打几次上游＝有没有把合格答案拖去重翻），
@@ -215,7 +231,7 @@ func TestCompliantReplyPaysExactlyOneCall(t *testing.T) {
 // 场景是现网真实形态：对话调用 502 → fallbackReply 把**中文知识原文**拼出去（根本不经过模型），
 // 补翻那次调用却是好的 ⇒ 访客仍应拿到英文气泡。只在 llmReplyWith 里补翻的话，这条必红。
 func TestFallbackChineseKnowledgeAlsoGetsLocalized(t *testing.T) {
-	url, hits, _ := scriptedLLM(t,
+	url, hits, bodies := scriptedLLM(t,
 		llmCall{code: 502}, // 第 1 次：对话生成失败 → 走兜底
 		llmCall{content: "Credits are billed per task; the current rate shows in your console."}, // 第 2 次：补翻成功
 	)
@@ -238,8 +254,16 @@ func TestFallbackChineseKnowledgeAlsoGetsLocalized(t *testing.T) {
 	if !rep.LangLocalized || strings.Contains(rep.Content, "积分") {
 		t.Fatalf("兜底中文素材没被翻出去（source=%q content=%q）", rep.Source, rep.Content)
 	}
-	if n := hits.Load(); n != 2 {
-		t.Fatalf("上游调用 %d 次，应为 2（1 次对话失败 + 1 次补翻）", n)
+	// ★ 0AR 第 4 波 ⑱：这条兜底回复带着一颗按钮（kb 的 link_keys=pricing），
+	// 按钮名翻译现在也挂在同一次 Respond 上。两条一起写才是这条锁的本意：
+	// 　· 对话链自己**只**打两枪（一次失败＋一次补翻）——把总数抬成 3 而不拆开数，
+	//   等于放行"逢人就再翻一次"那种退化（理由同 respond_outbound_test.go ⑤ 那段）；
+	//	· 总数确实是 3，少掉第三枪不是省了一次调用，是 ⑱ 从出站咽喉上掉了（按钮继续投中文原名）。
+	if n := bodies.countExcluding(cannedSurface); n != 2 {
+		t.Fatalf("对话链打了 %d 次上游，应为 2（1 次对话失败 + 1 次补翻）", n)
+	}
+	if n := hits.Load(); n != 3 {
+		t.Fatalf("上游总次数 %d，应为 3（对话失败 + 补翻 + 按钮名翻译各一枪）", n)
 	}
 }
 

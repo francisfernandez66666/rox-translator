@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "鏈上自動入帳",
   "billing.usdtChains": "已開啟鏈",
   "billing.usdtCheckoutHint": "請在錢包中依上述金額精確轉帳（尾數用於自動對單）。達到確認數後自動入帳；未自動到帳可聲明鏈上哈希轉人工核對。",
+  "billing.usdtCheckoutManual": "請在錢包中依上述金額精確轉帳（尾數用於對單）。轉帳後請在下方提交鏈上交易哈希，由營運人工核銷入帳。",
   "billing.usdtCol": "USDT 收款",
   "billing.usdtConf": "確認數",
   "billing.usdtConfNeed": "需 {n} 次區塊確認後到帳",

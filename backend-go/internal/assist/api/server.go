@@ -197,8 +197,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/assist/admin/system-values", s.guard(s.handleSystemValues))
 
 	// 健康检查
+	// ★ 0AR ㊷④：canned 那一路的失败形态是「界面正常、只是慢／只是中文」——没有 5xx、没有告警，
+	// 运维只能 grep 日志数行。这里挂上状态词与计数，让"此刻有语种在被节流"成为一个读得到的事实。
+	// ⚠️ 只出状态词与计数（见 engine.CannedHealth），绝不出上游地址／Key／原文／译文文本。
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, map[string]any{"ok": true, "time": time.Now().Format(time.RFC3339)})
+		writeJSON(w, 200, map[string]any{
+			"ok":     true,
+			"time":   time.Now().Format(time.RFC3339),
+			"canned": s.eng.CannedHealth(),
+		})
 	})
 
 	// 管理页静态托管

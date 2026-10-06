@@ -673,6 +673,7 @@ export const dict: Record<string, string> = {
   "billing.usdtAuto": "Pontos automático on-chain",
   "billing.usdtChains": "Redes habilitadas",
   "billing.usdtCheckoutHint": "Envie exatamente o valor acima da sua carteira (a cauda é usada para a conciliação automática). Os fundos são creditados após o número suficiente de confirmações; caso contrário, declare o hash on-chain para análise manual.",
+  "billing.usdtCheckoutManual": "Envie exatamente o valor acima da sua carteira (os dígitos finais identificam o seu pedido). Após a transferência, informe o hash on-chain no campo abaixo; nossa equipe fará a verificação manual e creditará o valor.",
   "billing.usdtCol": "Pagamento em USDT",
   "billing.usdtConf": "Confirmações",
   "billing.usdtConfNeed": "Aguarda {n} confirmações de bloco para o pontos",

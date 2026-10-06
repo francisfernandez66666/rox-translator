@@ -33,6 +33,10 @@ type usdtPayPayload struct {
 	SettledTxHash  string `json:"settled_tx_hash"`   // 已结算链上凭证（paid 后）
 	ExplorerTxURL  string `json:"explorer_tx_url"`   // 声明哈希的浏览器链接（可空）
 	AutoSettleOn   bool   `json:"-"`
+	// ★ ⑮（2026-10-05 第 3 波）：这台此刻**能不能**自动入账＝开关开着 **且** 到账监听是健康的。
+	// 旧形态只把 cfg.AutoSettle 投给界面 ⇒ 监听 8 天零成功、收银台照旧承诺"自动入账"，
+	// 客户按承诺转完账只能干等。现在这一档由监听自己的存活态决定，不健康即文案转人工核销。
+	AutoSettleLive bool `json:"auto_settle_live"`
 }
 
 // attachUSDTMeta 为 pending 订单挂 USDT 收款要素（充值单与订阅单共用）。
@@ -106,6 +110,7 @@ func (s *Server) usdtPayPayload(meta *store.USDTOrderMeta, cfg *store.USDTSettin
 		DeclaredTxHash: meta.ClientTxHash,
 		SettledTxHash:  meta.MatchedTxHash,
 		AutoSettleOn:   cfg.AutoSettle,
+		AutoSettleLive: s.usdtWatchAllowsAutoPromise(),
 	}
 	p.PayURI = "tron:" + meta.ToAddr + "?amount=" + p.Amount
 	if meta.Chain != "trc20" {

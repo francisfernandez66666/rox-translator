@@ -16,7 +16,11 @@
 #   ★ 093x（2026-09-30）W 段：真机挂件复问的四条现网漏点（日文正文嵌中文词形／模型自算乘法总额／
 #         品牌名翻成「能与」／括号旁白与裸方括号）——用假上游回放逐字原文，
 #         从 /api/assist/chat 这条 HTTP 面证明出站四道守卫**接在链上**（不只是单测绿）
-# 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794；W 段另起假上游 8796）
+#   ★ 0AR 第 4 波（2026-10-06）X 段：canned 出栈闸门／冷语种退避／按钮名本地化／编造承诺守卫／
+#         读侧二次闸门／启动期旧代孤儿行清理——同一手法（档位假上游 :8798 + 现读临时库 + /health canned 段），
+#         把"界面正常、只是慢/只是中文/只是三个中文按钮"这一族静默形态在 HTTP 面点名
+# 依赖：无（自起 assist mock 模式，临时 SQLite，端口默认 8793/8794；W 段另起假上游 8796；
+#         X 段再起档位假上游 8798（跟随 ASSIST_UAT_MOCK_PORT）与清理验证实例 8795（ASSIST_UAT_PORT3））
 # 用法：bash scripts/uat/assist_uat.sh
 # ============================================================================
 set -u
@@ -366,6 +370,391 @@ fi
 { kill $MOCK_PID 2>/dev/null; wait $MOCK_PID 2>/dev/null; } 2>/dev/null || true
 { kill ${MOCK_PID2:-} 2>/dev/null; wait ${MOCK_PID2:-} 2>/dev/null; } 2>/dev/null || true
 
+# ---------- 5g. ★ 0AR 第 4 波（2026-10-06）X 段：canned 出栈那道闸的**HTTP 面接线证明**
+# 单测钉的是判据本身（canned_guard_test.go 逐档钉字面量），这一段钉的是另一件事：
+# **闸门拦下的那一稿真的没发给访客、真的没写进缓存，而且拦下来说得出为什么**。
+# 这一族缺陷的现网形态不是报错，是"界面正常、首屏是中文／是坏字节"（现网 ar 那一行第 5 个 `---`
+# 就是既用不上、又永不重翻、又不出声地住了十几天的），所以只有 HTTP 面＋库里那一行**同时**读出结论才算锁住。
+# 三条纪律（与 W 段同源，这里各多一条）：
+#   ① 每条负向判据配正向对照——X1 那条 clean 档存在的唯一理由就是"缓存写这条路本来是通的"，
+#      没有它，后面六条"库里没这一行"会在「上游压根没接通」那种坏实现下一起绿（假绿）；
+#   ② 档位由桩的 /uat/set 控制口点名，且**每条腿先回读桩此刻在哪一档**（控制口没接上时
+#      所有档位腿会一起绿，而那正是"闸门全开"的形态）；
+#   ③ 段落结束把 llm_base_url 写回不可达端点，别让后面的段落意外依赖这个桩；
+#   ④ ★ 段首把库里 i18n:% 全部清掉——前面那些段落（W 段／LG 段）已经在同一个库里写过译文行，
+#      不清就是"读的是上一段的缓存、判的是这一段的判据"，第一条档位腿会莫名其妙命中旧字节。
+XPORT=$((MOCK_PORT + 2))
+XB="http://127.0.0.1:${XPORT}"
+XRUN="uat0ARx-$$-$(date +%s)"
+# 端口预检（同 093x 那条端口抢占教训：X 段有三台桩的历史，8798 上坐着谁的实例没人知道）
+if curl -s -m 1 "$XB/uat/stats" | grep -q '"ok"'; then
+  FAIL=$((FAIL+1)); echo "FAIL|X0-port-busy|假上游端口 ${XPORT} 已被占用（kill 掉它或 ASSIST_UAT_MOCK_PORT 换端口），X 段全部无效"
+else
+  nohup python3 scripts/uat/mock_assist.py "$XPORT" "$XRUN" > "$WORK/mockassist_x.log" 2>&1 < /dev/null &
+  MOCK_PID3=$!
+  OKX=0
+  for i in $(seq 1 10); do
+    sleep 1
+    # 就绪判据里带 `"set"`：这是 0AR 第 4 波才加的字段，能同时证明「应答的是本次这台桩」
+    # 与「桩带得上新的控制口」（旧桩残留会回 200 但没有 set 那一格）。
+    if curl -s -m 2 "$XB/uat/stats" | grep -qE "\"ok\": *true.*\"run\": *\"${XRUN}\".*\"set\""; then OKX=1; break; fi
+  done
+  if [ "$OKX" != "1" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|X0-mock-start|档位桩起不来（:${XPORT}），X 段全部无效：$(tail -3 "$WORK/mockassist_x.log" 2>/dev/null | tr '\n' ' ')"
+  else
+    log "档位假上游 :${XPORT} 就绪（${i}s）"
+    # 段首清库：只清本模块写的那一段键（禁止全表 dump／禁止动别的键，见 canned_purge.go 文件头同条纪律）
+    python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10);n=c.execute("DELETE FROM configs WHERE key LIKE '"'"'i18n:%'"'"'").rowcount;c.commit();c.close();print("cleared",n)' "$WORK/assist.db" >/dev/null
+    curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+      -d "{\"key\":\"llm_base_url\",\"value\":\"${XB}/v1\"}" >/dev/null
+    curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+      -d '{"key":"llm_model","value":"uat-assist-model"}' >/dev/null
+
+    xset(){ curl -s -X POST "$XB/uat/set" -H "$J" -d "$1" >/dev/null; }
+    # 桩此刻在哪一档（控制口的自证腿，见上面纪律 ②）
+    xband(){ curl -s "$XB/uat/stats" | python3 -c "import sys,json;print(json.load(sys.stdin).get('set',{}).get('$1',''))"; }
+    # 切档并**当场回读档位名**：控制口是一次 POST，没人规定它一定听（桩若是旧版／路径改了／JSON 拼错，
+    # 它照样回 200 但档位根本没变）。不点名的话，后面三条"被拒"判据演的是**上一档**的戏——
+    # 而上一档恰好也全被拒时那三条一路绿灯（AGENTS §三 那条"断言自己会撒谎"的第一族形态）。
+    xswitch(){ # $1=侧（canned|gen） $2=档位名
+      xset "{\"$1\":\"$2\"}"
+      local G; G=$(xband "$1")
+      [ "$G" = "$2" ] && { PASS=$((PASS+1)); echo "PASS|X-switch-$1-$2"; } \
+        || { FAIL=$((FAIL+1)); echo "FAIL|X-switch-$1-$2|控制口没把桩切到这一档（实读 ${G:-空}），后续判据无效"; }
+    }
+    # 桩侧读数（canned 那一枪的模型名／次数）
+    xstat(){ curl -s "$XB/uat/stats" | python3 -c "import sys,json;print(json.load(sys.stdin).get('$1',0))"; }
+    # 库里那一行：只问本模块那一段键，值原样回（换行转成可见标记，免得 python 打印劈行）
+    dbcount(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10);print(c.execute(sys.argv[2]).fetchone()[0]);c.close()' "$WORK/assist.db" "$1"; }
+    dbval(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10);r=c.execute(sys.argv[2]).fetchone();print("" if not r or not r[0] else str(r[0]).replace("\n","\\n"));c.close()' "$WORK/assist.db" "$1"; }
+    # /health 的 canned 段（状态词＋按 reason 计数）：这一档是运维面**唯一**的读数，别用日志行数替代它
+    hstatus(){ curl -s -m 5 "$B/health" | python3 -c "import sys,json;print(json.load(sys.stdin).get('canned',{}).get('status',''))" 2>/dev/null; }
+    hreason(){ curl -s -m 5 "$B/health" | python3 -c "import sys,json;print(json.load(sys.stdin).get('canned',{}).get('by_reason',{}).get('$1',0))" 2>/dev/null; }
+    # 出栈的那**一个字段**，不拿整段响应体做子串匹配：欢迎词与 chips 同住一个 JSON，
+    # 整段匹配会把"chips 那句出现在 greeting 里"读成两半都通过。
+    # 本轮 X1 首跑真踩到（桩按整段提示词数行数 ⇒ welcome 里落了一排 chip 句，
+    # 而 X1c 整段命中 'How does it work here' 跟着假绿）——字段级读法才分得开"谁是谁"，
+    # 与 §一·3 那条「同一个接口的两个字段可以来自两个不同时刻，判据必须点名那一个字段」同一条纪律。
+    greetof(){ echo "$1" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("greeting",""))' 2>/dev/null; }
+    chips_of(){ echo "$1" | python3 -c 'import sys,json;print("\n".join(json.load(sys.stdin).get("chips") or []))' 2>/dev/null; }
+    # 拒绝档的三条通用读数：访客拿到的是中文原文／库里一行都没写／闸门报得出档位名
+    rej(){ # $1=语种 $2=reason $3=kind(welcome|chips) $4=锚定中文原文的子串
+      local L="$1" R="$2" K="$3" A="$4" GR
+      GR=$(newgreet "$L")
+      # 只问被拒的那**一个字段**（chips 腿不许被 greeting 顶掉，反之亦然）
+      FIELD=""
+      if [ "$K" = "chips" ]; then FIELD=$(chips_of "$GR"); else FIELD=$(greetof "$GR"); fi
+      ck "X-$K-$L-chinese-served" "$A" "$FIELD"
+      local N; N=$(dbcount "select count(*) from configs where key='i18n:$K:$L'")
+      [ "$N" = "0" ] && { PASS=$((PASS+1)); echo "PASS|X-$K-$L-no-cache-row"; } \
+        || { FAIL=$((FAIL+1)); echo "FAIL|X-$K-$L-no-cache-row|库里写了 $N 行（被拒的那一稿一行都不许留）"; }
+      local HN; HN=$(hreason "$R")
+      [ "${HN:-0}" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|X-$K-$L-health($R=$HN)"; } \
+        || { FAIL=$((FAIL+1)); echo "FAIL|X-$K-$L-health|/health 的 canned.by_reason 里没有 $R（读数=$HN）"; }
+    }
+
+    # ---- X1 正向对照：clean 档必须**放行并写缓存**（这一段所有负向判据的底座）----
+    xswitch canned clean; xswitch gen dirty
+    RX1=$(newgreet en)
+    ck X1b-greet-translated 'Welcome from LangCross' "$(greetof "$RX1")"
+    ck X1c-chips-translated 'How does it work here' "$(chips_of "$RX1")"
+    # chips 的**条数**也在出栈面核一次：闸门放行的是"四行对四行"，字段级读到四条才算这条链闭合
+    [ "$(chips_of "$RX1" | grep -c . )" = "4" ] \
+      && { PASS=$((PASS+1)); echo "PASS|X1d-chips-four-lines"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X1d-chips-four-lines|界面拿到 $(chips_of "$RX1" | grep -c .) 条（库里四条、界面一条是另一族缺陷：拆条腿没接上）"; }
+    [ "$(dbcount "select count(*) from configs where key='i18n:welcome:en'")" = "1" ] \
+      && { PASS=$((PASS+1)); echo "PASS|X1e-welcome-row-written"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X1e-welcome-row-written|闸门放行时缓存没写＝X 段所有负向判据失去底座"; }
+    [ "$(dbcount "select count(*) from configs where key='i18n:chips:en'")" = "1" ] \
+      && { PASS=$((PASS+1)); echo "PASS|X1f-chips-row-written"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X1f-chips-row-written|chips 四条一行翻完却没写缓存（条数契约或写库那条腿断了）"; }
+
+    # ---- X2..X6 六道拒绝档里的五条（第六档 canned_empty 在 HTTP 面物理到不了，见段末那条登记）----
+    # 每条都按「档名 → reason → 不许写缓存 → /health 出数」同一口径问，五档共用 rej()：
+    # 五处各写一遍就是下一次"只有一侧改了判据"的产地（AGENTS §一·13 同条纪律）。
+    xswitch canned lines;          rej ar canned_line_count chips '积分怎么收费'
+    xswitch canned placeholder;    rej de canned_placeholder_residue welcome '你好，我是能言'
+    xswitch canned separator;      rej es canned_separator_residue welcome '你好，我是能言'
+    xswitch canned residue;        rej fr canned_han_residue welcome '你好，我是能言'
+    # ⚠️ 档位腿的语种只能从**挂件认的那 12 个语种**里挑（reply_lang.go 的 langLabels：
+    #    zh/zh_hant/en/ru/fr/ar/es/pt/de/ja/ko/th，**没有 it**）。
+    #    本轮首跑用 it 打这一档，三条读数里两条"绿"、第三条恒红，机制是：
+    #    localize() 见 langLabel 为空就**原样出中文**（不拨上游、不写缓存、一行日志都不出），
+    #    于是 chinese-served 与 no-cache-row 是**结构性必真**（它们根本不是在测闸门），
+    #    而 by_reason 那条永远 0。语种挑错不会让这一腿报错，只会让它悄悄变成空转——
+    #    与 §一·6「链路型用例必须自带可达探针」同族：判据要有判别力，先要走到那条腿上。
+    #    这里改用 ru：现网那四条 chips 各前挂 "LangCross: " 的实证语种就是它（canned_guard.go 注释）。
+    xswitch canned brand;          rej ru canned_brand_injected chips '企业术语库怎么建'
+
+    # ---- X7 修正腿（canned_repaired 是一行 INFO，不是失败）----
+    # 现网 ko 那一行落库时是 ⟨LangCross⟩、ja 那一路的错形是「能与」：两条都属于
+    # "我们已知的形态、且确定性地能改回去"，所以闸门**先就地修再判**，判完必须放行。
+    # 三条读数缺一不可：正文是翻好的（不是退回中文）、库里那一行是**清洗后**的字节、
+    # 而且 reason 记的是 canned_repaired（"救回来了"这件事必须能被看见，长期靠它救＝该去查上游）。
+    xswitch canned repaired
+    RX7=$(newgreet ja)
+    ck X7a-repaired-served '翻訳のご相談' "$(greetof "$RX7")"
+    V7=$(dbval "select value from configs where key='i18n:welcome:ja'")
+    ck X7b-cache-has-correct-brand '能言' "$V7"
+    if echo "$V7" | grep -qE '能与|⟨|⟩'; then
+      FAIL=$((FAIL+1)); echo "FAIL|X7c-cache-not-cleaned|落库的还是清洗前那一串（发出去与存下来的必须同一串字节）：${V7:0:160}"
+    else
+      PASS=$((PASS+1)); echo "PASS|X7c-cache-not-cleaned"
+    fi
+    # X7d：**修正腿在"库里已经躺着坏字节"那一路的读数**（现网 ko 那一行的真实形态）。
+    # 为什么不能拿同步那一枪判这一档：translateOnce 出栈前本来就做同一族清洗
+    #   （cleanTranslated／剥口径复述括号／restoreBrandAfterTranslation 末尾那次
+    #    stripBrandDecorBrackets＋stripBrandTokenResidue，见 localize.go 505-560），
+    #   所以到闸门手里的 out **已经是干净的**，`gateFinal != out` 那行 INFO 在同步路径上到不了。
+    #   本轮实测读数即为此：repaired 档那一枪正文与库里落的是清洗后的字节（X7a/X7b/X7c 全绿），
+    #   而 assist.log 里 `"reason":"canned_repaired"` 出现 0 次。
+    # ⇒ 这一腿改成先拿 X7 刚落库的那一行**保留指纹头、把正文换回清洗前的坏形态**，
+    #   再打一次 greet：命中读侧 ⇒ 修正腿把 final 洗回来 ⇒ 必须回写同一行（同指纹、非新稿）
+    #   并出那一行 INFO。不回写的后果就是注释里那句"这条修好永远只活在内存里"，
+    #   库里那行坏字节会被任何读点（含历史回放）再投出去——这一腿锁的正是这件事。
+    HEAD7=$(dbval "select value from configs where key='i18n:welcome:ja'" | head -c 12)
+    python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10)
+c.execute("UPDATE configs SET value=? WHERE key='"'"'i18n:welcome:ja'"'"'", (sys.argv[2]+"\n⟨LangCross⟩へようこそ。翻訳のご相談は能与まで、いつでもどうぞ。",))
+c.commit();c.close()' "$WORK/assist.db" "$HEAD7"
+    RX7B=$(newgreet ja)
+    ck X7d-served-still-clean '翻訳のご相談' "$(greetof "$RX7B")"
+    if [ "$(grep -c '"reason":"canned_repaired"' "$WORK/assist.log")" -ge 1 ]; then
+      PASS=$((PASS+1)); echo "PASS|X7e-repaired-rewrite-log"
+    else
+      FAIL=$((FAIL+1)); echo "FAIL|X7e-repaired-rewrite-log|读侧那次回写没出 canned_repaired（「救回来了」这件事必须能被看见，长期靠这一腿救＝该去查上游）"
+    fi
+    V7D=$(dbval "select value from configs where key='i18n:welcome:ja'")
+    if echo "$V7D" | grep -qE '能与|⟨|⟩'; then
+      FAIL=$((FAIL+1)); echo "FAIL|X7f-repaired-row-rewritten|读侧修好了却没回写，库里仍是坏字节：${V7D:0:160}"
+    else
+      PASS=$((PASS+1)); echo "PASS|X7f-repaired-row-rewritten"
+    fi
+
+    # ---- X8／X9 两档"刻意只观测、不拦正文"（拒绝与观测混在一起是这个模块最容易长歪的地方）----
+    # 判据取向那句话在这里的实面：**没写够**（品牌名脱落、脚本纯度可疑）不许把访客退回看中文，
+    # 所以这两档的断言方向与 X2..X6 **完全相反**——正文照发、缓存照写、只在日志与 /health 里露面。
+    xswitch canned brand_drop
+    RX8=$(newgreet pt)
+    ck X8a-dropped-still-serves 'Welcome' "$(greetof "$RX8")"
+    [ "$(dbcount "select count(*) from configs where key='i18n:welcome:pt'")" = "1" ] \
+      && { PASS=$((PASS+1)); echo "PASS|X8b-brand-dropped-row-written"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X8b-brand-dropped-row-written|观测档把正文拦回去了＝把英文首屏那种代价搬到了葡语（canned_brand_dropped 只许出声）"; }
+    # ⚠️ 判据落在日志而不是 /health：`noteCannedCold` 是 by_reason 那本账的**唯一写方**，
+    # 而它只在「上游没拨通／闸门拒绝／退避窗口」这三类**失败**路径上被调；
+    # 两档纯观测（品牌名脱落、脚本纯度）走的是 observeCannedSoftTier／observeCannedScriptImpurity，
+    # 只出声不计数（本轮实测：/health 里 canned_brand_dropped 恒 0，而 assist.log 那一行明明白白带着 reason）。
+    # 把观测档计进失败数会把 canned.status 从 ok 打成 cold，那是对运维撒谎——所以改判据，不改产品。
+    [ "$(grep -c '"reason":"canned_brand_dropped"' "$WORK/assist.log")" -ge 1 ] \
+      && { PASS=$((PASS+1)); echo "PASS|X8c-brand-dropped-logged"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X8c-brand-dropped-logged|只观测档没出声（现网 ko 那一行就是这么无声无息住在首屏的）"; }
+    # X9：泰文界面拿到的是一句纯拉丁（clean 档天然形态）⇒ canned_script_impure 出声、正文照发
+    xswitch canned clean
+    RX9=$(newgreet th)
+    ck X9a-impure-still-serves 'Welcome' "$(greetof "$RX9")"
+    [ "$(dbcount "select count(*) from configs where key='i18n:welcome:th'")" = "1" ] \
+      && { PASS=$((PASS+1)); echo "PASS|X9b-script-impure-row-written"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X9b-script-impure-row-written|纯度档拦住了正文（阈值未定之前拦住＝拿整段回中文换可疑读数）"; }
+    # 同上：纯度档也是**只观测**，读数在日志里（现网那一族将来靠这批 detail 定阈值，
+    # 而拿 /health 计数判它＝要求它进失败账，方向与「不许把观测当失败」相反）。
+    [ "$(grep -c '"reason":"canned_script_impure"' "$WORK/assist.log")" -ge 1 ] \
+      && { PASS=$((PASS+1)); echo "PASS|X9c-script-impure-logged"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X9c-script-impure-logged|纯度读数没出声（下一批就没了定阈值的分布）"; }
+
+    # ⚠️ **X12／X13 这两条对话腿必须排在 X10 之前**（本轮实测的排法事故）：
+    # X10 用 http500 档把上游真打死，连续失败会触发 llm provider 自己的**五分钟冷却**
+    # （日志行「候选模型都在冷却中（连续失败会冷却 5 分钟，本次未发起请求）」）。
+    # 冷却是按 provider 算的、不分语种、不分链路，于是排在 X10 之后的 chat 一律走规则兜底：
+    # `"source":"llm"` 恒假、⑲ 那三句压根没进过守卫、⑱ 的按钮名还是库里那句中文——
+    # 五条腿一起红，而产品一行没错。这一族红灯的形态是「上游活着但矩阵说它挂了」，
+    # 判据修不了，只能修**排程**：把破坏性档位（打死上游、开退避窗口）放到所有需要上游的腿之后。
+    # ---- X12 ⑱ 按钮名本地化：过去 feature_links.name 是**原样**塞进回复的 ----
+    # 这类"某条腿压根不在清单里"的形态日志一行都看不见（不是翻坏，是没翻），
+    # 所以判据只能落在两处：回复里的按钮名不许有汉字，且库里必须真长出 i18n:feature_<key>:<lang> 那几行。
+    xswitch canned clean; xswitch gen actions
+    RA=$(newgreet en); SA=$(sidof "$RA"); TA=$(tokof "$RA")
+    RX12=$(curl -s -m 30 "$B/api/assist/chat" -H "$J" \
+      -d "{\"session\":\"$SA\",\"tok\":\"$TA\",\"message\":\"what can you do for my team\",\"lang\":\"en\",\"page\":\"/\"}")
+    if [ -n "${ASSIST_UAT_KEEP:-}" ]; then echo "DEBUG|X12-response|$RX12"; fi
+    ck X12b-has-actions '"actions":\[' "$RX12"
+    CJK_NAMES=$(echo "$RX12" | python3 -c '
+import sys,json,re
+d=json.load(sys.stdin)
+names=[a.get("name","") for a in (d.get("actions") or [])]
+print(sum(1 for n in names if re.search(r"[一-鿿]",n)))' 2>/dev/null || echo ERR)
+    # 正向对照（按钮真的翻到了）与负向对照（一个汉字都没有）必须同时成立：
+    # 只留后者的话，"actions 被整条摘掉"也能绿——那是把功能入口连坐删掉的另一种失败。
+    [ "$CJK_NAMES" = "0" ] && { PASS=$((PASS+1)); echo "PASS|X12c-action-names-no-cjk"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X12c-action-names-no-cjk|英文回复里挂着 $CJK_NAMES 个中文按钮名（⑱ 那条腿没接上）"; }
+    ck X12d-action-names-translated 'Welcome' "$RX12"
+    [ "$(dbcount "select count(*) from configs where key LIKE 'i18n:feature_%:en'")" -ge 2 ] \
+      && { PASS=$((PASS+1)); echo "PASS|X12e-feature-rows-written"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X12e-feature-rows-written|按钮名翻完了没写缓存（每一句带按钮的回复都要现翻一遍＝白烧上游）"; }
+    # ㊷① 的另一半（与 X11 同一进程、同一时刻）：对话那一枪仍必须打**主模型**
+    [ "$(xstat gen_model)" = "uat-assist-model" ] && { PASS=$((PASS+1)); echo "PASS|X12f-chat-still-uses-main-model"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X12f-chat-still-uses-main-model|对话那一枪被 canned 快模型带走了（$(xstat gen_model)）＝把音色档让给了首屏档"; }
+
+    # ---- X13 ⑲ 编造承诺守卫：现网三条实证各一句，外加一句**必须留下**的正当正文 ----
+    # 「给您开一个 API sandbox 直接联调」「我们有 327 个标准词」「火花塞 固定译 ignition plug」
+    # 这三条报价闸与承诺闸都拦不住——没有一条问"这个能力库里有吗"。
+    # ⚠️ 这一腿的问句用**中文**、界面语言用 en：接管后作答语言=中文，
+    #    桩回的这份中文草稿才会原样走到 ⑲（拿英文草稿测中文判据＝恒红的假靶子）。
+    xswitch gen fabricated
+    RF=$(newgreet en); SF=$(sidof "$RF"); TF=$(tokof "$RF")
+    RX13=$(curl -s -m 30 "$B/api/assist/chat" -H "$J" \
+      -d "{\"session\":\"$SF\",\"tok\":\"$TF\",\"message\":\"我们厂里主要做设备说明书，这块你们一般怎么配合\",\"lang\":\"en\",\"page\":\"/\"}")
+    if [ -n "${ASSIST_UAT_KEEP:-}" ]; then echo "DEBUG|X13-response|$RX13"; fi
+    ck X13a-source-llm '"source":"llm"' "$RX13"
+    for bad in '327' 'sandbox' '火花塞'; do
+      if echo "$RX13" | grep -q "$bad"; then
+        FAIL=$((FAIL+1)); echo "FAIL|X13b-no-fabrication|编造句里的「$bad」还是发出去了：${RX13:0:200}"
+      else
+        PASS=$((PASS+1)); echo "PASS|X13b-no-fabrication-$bad"
+      fi
+    done
+    ck X13c-keep-legal-sentence '您可以先在编辑器里试一段' "$RX13"
+    for r in fabr_count_claim fabr_unknown_deliverable fabr_term_example; do
+      [ "$(grep -c "\"reason\":\"$r\"" "$WORK/assist.log")" -ge 1 ] \
+        && { PASS=$((PASS+1)); echo "PASS|X13d-log-$r"; } \
+        || { FAIL=$((FAIL+1)); echo "FAIL|X13d-log-$r|三档 reason 里这一档没出声（分档名是对外排障契约，静默删句＝运维不知道是该补知识还是该改判据）"; }
+    done
+
+    # ---- X10 ㊷ 退避窗口：这一档要证明的是**下一位访客不再白等也不再白拨** ----
+    # 现网 th 那两天的形态是「同步必超时 → 后台补一枪 → 那一枪又被闸拒 → 缓存写不上」，
+    # 于是每一位访客从零重拨一次、每次都烧满同步预算——界面看着"只是慢"，日志只有 WARN。
+    # 桩这侧用 http500 把上游真的打死：后台腿必然失败 ⇒ 开窗口；窗口内那一条腿**连同步那一枪也不许打**。
+    xswitch canned http500
+    C0=$(xstat canned)
+    RX0A=$(newgreet ko)
+    ck X10a-first-greet-chinese '你好，我是能言' "$(greetof "$RX0A")"
+    sleep 3   # 后台腿在请求链之外，给它一次收尾时间（窗口只能由后台腿那次失败开）
+    C1=$(xstat canned)
+    RX0B=$(newgreet ko)
+    C2=$(xstat canned)
+    ck X10b-second-greet-chinese '你好，我是能言' "$(greetof "$RX0B")"
+    # 前后两次 greet 之间**没有新增上游调用**＝窗口内两条腿都没打（这一条是退避的本体：
+    # 只押后台腿的话访客那 8 秒白等照旧，台账 ㊷ 的验收判据写的正是"首屏不再白等"）
+    [ "$C1" -gt "$C0" ] && { PASS=$((PASS+1)); echo "PASS|X10c-first-round-dialed($C0→$C1)"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10c-first-round-dialed|第一次 greet 压根没拨上游（$C0→$C1），后面那条'不再拨'就成了空判"; }
+    [ "$C2" = "$C1" ] && { PASS=$((PASS+1)); echo "PASS|X10d-window-dials-nothing($C1→$C2)"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10d-window-dials-nothing|退避窗口内又拨了 $((C2-C1)) 次（$C1→$C2）＝窗口没生效"; }
+    [ "$(hstatus)" = "backoff" ] && { PASS=$((PASS+1)); echo "PASS|X10e-health-backoff-word"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10e-health-backoff-word|/health canned.status 不是 backoff（实读 $(hstatus)）"; }
+    [ "$(hreason canned_bg_backoff)" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|X10f-backoff-reason-counted"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10f-backoff-reason-counted|窗口内那次没记 canned_bg_backoff（'没拨'与'查上游'两种动作分不开＝排障只能猜）"; }
+
+    # ---- X11 ㊷① canned 用独立快模型：欢迎词/chips 是全网一份的短文本，不该拿推理模型买思考 ----
+    # 这一档不是管理台键（configKeyWhitelist 里没有 canned_*），所以按现网运维口径直接写库。
+    python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10);c.execute("INSERT INTO configs(key,value) VALUES('"'"'canned_llm_model'"'"','"'"'uat-fast-model'"'"') ON CONFLICT(key) DO UPDATE SET value=excluded.value");c.commit();c.close()' "$WORK/assist.db"
+    xswitch canned clean
+    RX11=$(newgreet ru)
+    ck X11a-ru-served 'Welcome' "$(greetof "$RX11")"
+    [ "$(xstat canned_model)" = "uat-fast-model" ] && { PASS=$((PASS+1)); echo "PASS|X11b-canned-dials-fast-model"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X11b-canned-dials-fast-model|canned 那一枪还在打主模型（实读 $(xstat canned_model)）"; }
+
+    # ---- X14 读侧二次闸门：库里那一行的**字节**比判据旧时，命中也必须被拦在读侧之外 ----
+    # 现网 ar／th 那两行的终点不是写侧漏放，是"判据已经能拦，可它永远走不到判据那一步"。
+    # 手法：拿 X1 那次**合法落库**的行，保留指纹头、只把正文换成坏形态——
+    # 这样 head==fp（读侧按命中走），坏字节只有读侧那道闸看得见。
+    # 断言方向：这一轮访客必须拿回中文原文；同一轮里那条被拒的旧行必须作废；
+    # 而**重翻后的新行**必须是干净的（否则就成了"每轮各白烧一枪"的死循环）。
+    xswitch canned clean
+    HEAD14=$(dbval "select value from configs where key='i18n:welcome:en'" | head -c 12)
+    python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10)
+c.execute("UPDATE configs SET value=? WHERE key='"'"'i18n:welcome:en'"'"'", (sys.argv[2]+"\nWelcome! I can translate 文件翻译 for you.\n---",))
+c.commit();c.close()' "$WORK/assist.db" "$HEAD14"
+    RX14=$(newgreet en)
+    # X14a 的期望按**实测行为**写：读侧判不合格 ⇒ 那一行作废 ⇒ 本轮继续往下走同步腿重拨
+    #   （localize.go 的 cache_read 分支不作废后**不 return**，日志里那句"下一次重翻"是旧措辞，
+    #    真实读数是同一轮里就拿到干净新稿）。所以这一腿判的是**坏字节没投出去**，
+    #    而不是"访客这一轮看到中文"——后者会把一条更好的行为判成红。
+    #   正向对照（拿到了翻好的正文）与负向对照（坏形态一个字都没有）两条一起成立才算数。
+    ck X14a2-bad-cache-row-serves-clean 'Welcome' "$(greetof "$RX14")"
+    if echo "$(greetof "$RX14")" | grep -qE '文件翻译|---'; then
+      FAIL=$((FAIL+1)); echo "FAIL|X14a-bad-cache-row-not-served|库里那行坏字节仍然投给了访客：$(greetof "$RX14" | head -c 160)"
+    else
+      PASS=$((PASS+1)); echo "PASS|X14a-bad-cache-row-not-served"
+    fi
+    [ "$(grep -c '"stage":"cache_read"' "$WORK/assist.log")" -ge 1 ] \
+      && { PASS=$((PASS+1)); echo "PASS|X14b-read-side-stage-logged"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X14b-read-side-stage-logged|读侧那次拦截没记 stage=cache_read（写侧与读侧的账必须分得开）"; }
+    V14=$(dbval "select value from configs where key='i18n:welcome:en'")
+    ck X14c-refilled-clean 'Welcome from LangCross' "$V14"
+    if echo "$V14" | grep -qE '文件翻译|^---'; then
+      FAIL=$((FAIL+1)); echo "FAIL|X14d-refill-not-gated|重翻那一行又写回了坏形态：${V14:0:160}"
+    else
+      PASS=$((PASS+1)); echo "PASS|X14d-refill-not-gated"
+    fi
+
+    # ---- X15 ③ 启动期旧代孤儿行清理：只删过期指纹，人工档与不认识的键一行都不许碰 ----
+    # 抬 rev 让**每一行**非人工档指纹当场失效，而运行期自愈的前提是**有人来**：
+    # 一个语种十天没访客，那一行旧字节就在库里躺十天，而它是"客户屏幕上正在投什么"的持久事实。
+    # 判据必须**逐行现算指纹**（按前缀 LIKE 一条都抓不到——指纹头里根本没有 rev 字样），
+    # 所以这里用**独立库的第四台实例**：清库动作只在启动期发生一次，进程内造不出第二次。
+    PORT3="${ASSIST_UAT_PORT3:-8795}"
+    B3="http://127.0.0.1:${PORT3}"
+    if curl -s -m 1 "$B3/health" | grep -q '"ok":true'; then
+      FAIL=$((FAIL+1)); echo "FAIL|X15-port-busy|清理实例端口 ${PORT3} 已被占用，这一腿无效"
+    else
+      log "启动清理验证实例 :${PORT3}（独立临时库，先灌两行孤儿行再重启）..."
+      ASSIST_MOCK=1 ASSIST_ADMIN_TOKEN="uat-purge-tok" ASSIST_ADDR="127.0.0.1:${PORT3}" \
+        ASSIST_DB="$WORK/purge.db" nohup "$BIN" > "$WORK/purge1.log" 2>&1 < /dev/null &
+      PID4=$!
+      OKP=0
+      for i in $(seq 1 10); do
+        sleep 1
+        if curl -s -m 2 "$B3/health" | grep -q '"ok":true'; then OKP=1; break; fi
+      done
+      if [ "$OKP" != "1" ]; then
+        FAIL=$((FAIL+1)); echo "FAIL|X15-purge-instance-start|清理验证实例起不来：$(tail -3 "$WORK/purge1.log" | tr '\n' ' ')"
+      else
+        { kill $PID4 2>/dev/null; wait $PID4 2>/dev/null; } 2>/dev/null || true
+        sleep 1
+        # 三行靶子：过期指纹（该删）／人工档（永不删）／不认识的 kind（不是本模块写的，不碰）
+        python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10)
+rows=[("i18n:welcome:it","0123456789ab\nVecchia generazione: welcome stale"),
+      ("i18n:welcome:ru","!manual\nBenvenuto scritto a mano"),
+      ("i18n:somethingelse:xx","0123456789ab\nNot written by this module")]
+c.executemany("INSERT INTO configs(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",rows)
+c.commit();c.close()' "$WORK/purge.db"
+        ASSIST_MOCK=1 ASSIST_ADMIN_TOKEN="uat-purge-tok" ASSIST_ADDR="127.0.0.1:${PORT3}" \
+          ASSIST_DB="$WORK/purge.db" nohup "$BIN" > "$WORK/purge2.log" 2>&1 < /dev/null &
+        PID5=$!
+        OKP2=0
+        for i in $(seq 1 10); do
+          sleep 1
+          if curl -s -m 2 "$B3/health" | grep -q '"ok":true'; then OKP2=1; break; fi
+        done
+        if [ "$OKP2" != "1" ]; then
+          FAIL=$((FAIL+1)); echo "FAIL|X15-purge-instance-restart|清理实例重启失败：$(tail -3 "$WORK/purge2.log" | tr '\n' ' ')"
+        else
+          pc(){ python3 -c 'import sqlite3,sys;c=sqlite3.connect(sys.argv[1],timeout=10);print(c.execute("SELECT COUNT(*) FROM configs WHERE key=?", (sys.argv[2],)).fetchone()[0]);c.close()' "$WORK/purge.db" "$1"; }
+          STALE=$(pc "i18n:welcome:it"); MAN=$(( $(pc "i18n:welcome:ru") )); UNK=$(pc "i18n:somethingelse:xx")
+          [ "$STALE" = "0" ] && { PASS=$((PASS+1)); echo "PASS|X15a-stale-row-deleted"; } \
+            || { FAIL=$((FAIL+1)); echo "FAIL|X15a-stale-row-deleted|过期指纹那一行还在（现算判据没跑或算错了）"; }
+          [ "$MAN" = "1" ] && { PASS=$((PASS+1)); echo "PASS|X15b-manual-row-kept"; } \
+            || { FAIL=$((FAIL+1)); echo "FAIL|X15b-manual-row-kept|!manual 人工档被删了＝换代把运营手写的那一行洗掉（宁可漏删不可误删）"; }
+          [ "$UNK" = "1" ] && { PASS=$((PASS+1)); echo "PASS|X15c-unknown-kind-kept"; } \
+            || { FAIL=$((FAIL+1)); echo "FAIL|X15c-unknown-kind-kept|不认识的 kind 也被删了＝替别人清库"; }
+          # 逐行 INFO＋收尾总数：这一腿是**一次性**的，没有这两行就没有人能证明它跑过
+          [ "$(grep -c 'canned_purge_stale' "$WORK/purge2.log")" = "1" ] \
+            && { PASS=$((PASS+1)); echo "PASS|X15d-purge-per-line-log"; } \
+            || { FAIL=$((FAIL+1)); echo "FAIL|X15d-purge-per-line-log|逐行清理读数不是 1 行（库里只种了一行过期靶子；只报总数就分不清'清过'与'没扫到'）"; }
+          ck X15e-purge-done-log 'canned_purge_done' "$(cat "$WORK/purge2.log")"
+          { kill $PID5 2>/dev/null; wait $PID5 2>/dev/null; } 2>/dev/null || true
+        fi
+      fi
+    fi
+
+    # 纪律 ③：段末把上游指回不可达端点，并 gen 复位（后面 D／E／F／G 段不许意外依赖这个桩）
+    xswitch gen dirty
+    curl -s -X PUT "$B/api/assist/admin/config" -H "$AH" -H "$J" \
+      -d '{"key":"llm_base_url","value":"http://127.0.0.1:9/v1"}' >/dev/null
+  fi
+fi
+# ★ X 段有第三台桩：kill 仍旧放在 if 外面（只在成功分支里收，W0/X0 红的那一次会把孤儿留在端口上，
+# 下一次运行以"端口被占"的形式红一次——同一族坑不会因为多了一台就自己少踩一次）。
+{ kill ${MOCK_PID3:-} 2>/dev/null; wait ${MOCK_PID3:-} 2>/dev/null; } 2>/dev/null || true
+
 # ---------- 6. 管理端 CRUD 回归 ----------
 NID=$(curl -s -X POST "$B/api/assist/admin/scripts" -H "$AH" -H "$J" \
   -d "{\"key\":\"uat$(date +%s)\",\"stype\":\"keyword\",\"title\":\"UAT\",\"keywords\":\"uattest魔法词\",\"content\":\"UAT话术命中\",\"priority\":9,\"enabled\":1}" \
@@ -498,6 +887,15 @@ log "assist UAT：PASS=$PASS FAIL=$FAIL DUR=${DUR}s"
 log "日志目录：$WORK"
 log "=============================="
 { kill $PID 2>/dev/null; wait $PID 2>/dev/null; } 2>/dev/null || true
-rm -rf "$WORK"
+# ★ 排障口子（默认关，行为与以前逐字一致）：`ASSIST_UAT_KEEP=1 bash scripts/uat/assist_uat.sh`
+#   保留那一个临时目录（库里那些 i18n:% 行＋assist.log 都在里面）。
+#   为什么值得留这一格：X 段判的是"闸门拦下时**有没有出声**"，而 by_reason 与日志行是两条不同的腿——
+#   只看矩阵那三行 PASS/FAIL 分不开"拒了但记成别的档"与"压根没拒"（本轮 X-chips-it-health 就是这么卡了一轮）。
+#   目录在 mktemp 下，留着不外泄；排完自己 rm -rf。
+if [ -n "${ASSIST_UAT_KEEP:-}" ]; then
+  log "ASSIST_UAT_KEEP=1：临时目录不清理（库与日志留在 $WORK）"
+else
+  rm -rf "$WORK"
+fi
 [ "$FAIL" = "0" ] || exit 1
 exit 0
