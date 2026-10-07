@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/store"
 )
 
@@ -71,6 +72,17 @@ func (c *Crawler) RunDaily(ctx context.Context) (int, error) {
 	ctx = llm.WithPlatformCost(ctx, llm.PlatformPackScrape)
 	if c.St == nil {
 		return 0, fmt.Errorf("store 未初始化")
+	}
+	// ★ 2026-10-07 〇-AR 第 7 波（入账（51）的回收腿）：进度账按日拼键、只写不删，
+	// 现网 system_config 已长到 13,844 行（本族 13,793 行），而读侧只认「当天」那一把键。
+	// **收在 RunDaily 入口而不是新起一个定时器**：这一轮要写的就是它要清的，
+	// 定时器（api/packscraper.go）与管理台「立即采集」（api/admin_scrape.go）两条入口都会顺带跑一次回收，
+	// 不额外增加调度面（也不给现网添一个新 unit）。
+	// 回收失败**绝不阻断采集**：账目膨胀是可治理问题，采集停摆才是客户可见问题。
+	// 成功侧不在此处再记一行——`PruneScrapeLedger` 自己按删除条数出 INFO（带 retention_days/cutoff_date），
+	// 这里重复一遍只会让排障时数不清到底哪一行是真相。
+	if _, perr := c.St.PruneScrapeLedger(time.Now()); perr != nil {
+		observability.Warn(ctx, "采集进度账回收失败（不影响本轮采集）", "err", perr.Error())
 	}
 	date := time.Now().Format("2006-01-02")
 	sources, err := c.St.ListEnabledScrapeSources()

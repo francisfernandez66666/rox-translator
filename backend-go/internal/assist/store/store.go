@@ -908,7 +908,20 @@ func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
 		return 0, err
 	}
 	msgCnt, _ := res.RowsAffected()
-	// 删除空会话
+	// ★ 〇-AR 第 7 波（㊿ 的修法）：删会话的判据必须先问**消息表里还有没有行**，不信 msg_count 这个写时计数器。
+	// 旧形态只有 `msg_count=0` 那一档能被删，而计数是 AddMessage 时 +1、消息被本函数删掉时**从来不减**，
+	// 于是任何"消息已被清空"的会话都带着旧计数变成**永远清不掉的壳行**；
+	// 最典型的来源是 〇-AM 的旧表搬迁（`sessions`→`sessions_base` 把历史计数原样搬过来），
+	// 现网实证：搬迁后整点清理把 65 条消息按批删空，`messages_base=0` 而 `sessions_base` 剩 13 行、每小时都删不动。
+	// ⇒ 先把本轮**碰到的**那批（过期匿名会话）的计数按真值归一次，再走原来的 `msg_count=0` 删除判据：
+	//   计数不再是第二把尺子（它和消息表在删除时刻同源），运营在管理台看到的条数也不再撒谎。
+	// 关联子查询两方言都支持；范围只圈「过期＋匿名」那一小批，不去动登录态会话与未过期会话。
+	if _, err := d.sql.Exec("UPDATE sessions_base SET msg_count=(SELECT COUNT(*) FROM messages_base WHERE messages_base.session_id=sessions_base.id) WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)"); err != nil {
+		// 归一失败即**停在这里**：宁可这一轮多留一批壳行（下一轮还会再来），
+		// 也不能带着"可能是假的 0"去执行删除——那会把刚被误清零的正常会话删掉。
+		return int(msgCnt), err
+	}
+	// 删除空会话（此处 msg_count 已与消息表同源，`msg_count=0` 才真的等于"没有消息"）
 	_, _ = d.sql.Exec("DELETE FROM sessions_base WHERE anonym_hash!='' AND msg_count=0 AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)")
 	return int(msgCnt), nil
 }
