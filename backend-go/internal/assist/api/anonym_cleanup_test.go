@@ -52,6 +52,116 @@ func TestDrainEmptyDBTerminates(t *testing.T) {
 	}
 }
 
+// TestShellSessionIsReclaimed ★ 〇-AR 第 7 波（㊿）：msg_count 带着旧计数、消息表里已经一行的会话
+// 必须被回收掉。
+// 现网实证：〇-AM 把旧 `sessions` 搬进 `sessions_base` 时把**历史计数原样搬过来**，
+// 整点清理把 65 条消息按批删空后，13 个会话壳因 `msg_count>0` 永远满足不了删除判据
+// （`messages_base=0`／`sessions_base=13`，每小时都删不动）。
+// 这里不碰迁移、只用 TouchSession 造出同一个形态：计数被抬过、消息却不存在。
+// ★ 反证：把 CleanupExpiredAnonymous 里那条「按消息表真值归一 msg_count」的 UPDATE 摘掉，
+//
+//	本测当场红（壳行留下的正是旧形态）。
+func TestShellSessionIsReclaimed(t *testing.T) {
+	_, db := newCleanupServer(t)
+
+	// 匿名＋已过期（expires_at 为 NULL 即视为过期），计数靠 TouchSession 抬到 3，但一条消息都没落。
+	if err := db.CreateSession("s-shell", "/x", 0, 0, "hash-shell"); err != nil {
+		t.Fatalf("建会话失败: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := db.TouchSession("s-shell"); err != nil {
+			t.Fatalf("TouchSession 失败: %v", err)
+		}
+	}
+	row, err := db.SessionRow("s-shell")
+	if err != nil || row == nil {
+		t.Fatalf("前置读数失败: row=%v err=%v", row, err)
+	}
+	if mc, _ := row["msg_count"].(int); mc != 3 {
+		t.Fatalf("前置：壳行计数应为 3，实际 %v（造数据形态变了，断言射程也随之失效）", row["msg_count"])
+	}
+
+	if _, err := db.CleanupExpiredAnonymous(100); err != nil {
+		t.Fatalf("清理不应报错: %v", err)
+	}
+	row, err = db.SessionRow("s-shell")
+	if err != nil {
+		t.Fatalf("复查会话失败: %v", err)
+	}
+	if row != nil {
+		t.Fatalf("消息已空却仍留着会话壳（msg_count=%v）＝㊿ 回归：清理腿还在信写时计数器，壳行永远清不掉", row["msg_count"])
+	}
+}
+
+// TestLoggedInSessionWithStaleCountIsUntouched ★ ㊿ 修法的**反向对照**：归一与回收只圈「匿名＋已过期」那一小批，
+// 登录态会话（anonym_hash 为空串）即使计数与消息表不一致也**一个字都不许动**。
+// 误伤这一档的代价是把客户/运营还在看的会话记录洗掉，比留 13 个壳行严重得多。
+func TestLoggedInSessionWithStaleCountIsUntouched(t *testing.T) {
+	_, db := newCleanupServer(t)
+
+	if err := db.CreateSession("s-auth", "/y", 7, 42, ""); err != nil {
+		t.Fatalf("建登录态会话失败: %v", err)
+	}
+	if err := db.TouchSession("s-auth"); err != nil {
+		t.Fatalf("TouchSession 失败: %v", err)
+	}
+	if err := db.TouchSession("s-auth"); err != nil {
+		t.Fatalf("TouchSession 失败: %v", err)
+	}
+
+	if _, err := db.CleanupExpiredAnonymous(100); err != nil {
+		t.Fatalf("清理不应报错: %v", err)
+	}
+	row, err := db.SessionRow("s-auth")
+	if err != nil {
+		t.Fatalf("复查会话失败: %v", err)
+	}
+	if row == nil {
+		t.Fatal("登录态会话被清理腿删掉了＝越界：回收射程只许是「匿名＋已过期」")
+	}
+	if mc, _ := row["msg_count"].(int); mc != 2 {
+		t.Fatalf("登录态会话的计数被改写（应仍为 2，实际 %v）＝归一腿漏了 anonym_hash 条件", row["msg_count"])
+	}
+}
+
+// TestExpiredAnonymousWithMessagesDrainsAndReclaimsSession 正常形态（有过期会话**且真带消息**）：
+// 同一轮里消息被删空后，会话也必须跟着回收——不能出现"消息清了、壳还在"。
+// 这一条同时证明归一腿没有把该留的会话误判成空（删消息在前、归一在后，顺序反了就把有消息的会话删了）。
+func TestExpiredAnonymousWithMessagesDrainsAndReclaimsSession(t *testing.T) {
+	_, db := newCleanupServer(t)
+
+	if err := db.CreateSession("s-live", "/x", 0, 0, "hash-live"); err != nil {
+		t.Fatalf("建会话失败: %v", err)
+	}
+	const msgs = 2
+	for i := 0; i < msgs; i++ {
+		if err := db.AddMessage("s-live", "user", fmt.Sprintf("问 %d", i), nil); err != nil {
+			t.Fatalf("灌消息失败: %v", err)
+		}
+	}
+	if err := db.TouchSession("s-live"); err != nil {
+		t.Fatalf("TouchSession 失败: %v", err)
+	}
+
+	n, err := db.CleanupExpiredAnonymous(100)
+	if err != nil {
+		t.Fatalf("清理不应报错: %v", err)
+	}
+	if n != msgs {
+		t.Fatalf("应删 %d 条消息，实际 %d", msgs, n)
+	}
+	if hs, _ := db.History("s-live", 100); len(hs) != 0 {
+		t.Fatalf("消息应被清空，残留 %d 条", len(hs))
+	}
+	row, err := db.SessionRow("s-live")
+	if err != nil {
+		t.Fatalf("复查会话失败: %v", err)
+	}
+	if row != nil {
+		t.Fatalf("消息已空的匿名过期会话仍留着壳（msg_count=%v）＝回收腿没跟上", row["msg_count"])
+	}
+}
+
 // TestDrainMultiBatch 过期消息超过一整批（>100）时，drain 必须分批删干净并返回累计条数。
 // 锁"批删循环"在修好收敛口径后仍能排空多批（不是删一批就漏剩下的）。
 func TestDrainMultiBatch(t *testing.T) {
