@@ -139,18 +139,46 @@ for u in translator translator-demo ai-assist; do
   echo "unit=$u active=$(systemctl is-active "$u") pid=$pid NRestarts=$(systemctl show -p NRestarts --value "$u") exe=$exe size=$(stat -c %s "$exe" 2>/dev/null || echo '<无>') sha16=$(sha256sum "$exe" 2>/dev/null | cut -c1-16)"
 done
 
-echo "----- P5 启动后 err 级日志（★ 必须先滤掉 journalctl 的「-- No entries --」横幅，否则 grep -c . 把它也数成 1 条）-----"
+echo "----- P5 启动后 err 级日志（★ 两条腿都要，只留一条就是结构性空转锁）-----"
+# ★ 踩点：`journalctl -u translator` 对这个 unit 恒近乎空——它的 StandardOutput/StandardError 是
+#   `append:/opt/translator/log/translator.log`（本文档 10-06 段 ③ 那条口径），只有 translator-demo 走 journal。
+#   所以「journal err 行=0」对主单元**什么都不能证明**（本轮实测：journal 恒 0，而日志文件里有 1 行 "level":"ERROR"）。
+#   正确形态＝先 `systemctl show -p StandardOutput` 现取落点，是文件就读文件、是 journal 就读 journal。
 for u in translator translator-demo ai-assist; do
   n=$(journalctl -u "$u" --since "$RESTART_SINCE" -p err --no-pager 2>/dev/null | grep -v '^-- No entries --$' | grep -c . || true)
-  echo "unit=$u err行数=$n"
+  # ★ 落点必须从 `systemctl cat` 取：`systemctl show -p StandardOutput`（含 `--value`）在这台 systemd 上
+  #   只回模式名 `append`、**把路径截掉了**（实测读数），按它判 case 会永远落进"journal"那一支＝假绿。
+  so=$(systemctl cat "$u" 2>/dev/null | grep -a '^StandardOutput=' | tail -1)
+  case "$so" in
+    StandardOutput=append:*)
+      f="${so#StandardOutput=append:}"
+      if [ -f "$f" ]; then
+        # 文件没有 journald 的优先级别，按 slog 的 "level":"ERROR" 数；窗口起点＝重启前抓的那一刻，
+        # 日志里的 time 是 `YYYY-MM-DDTHH:MM:SS+08:00`，服务器与日志同时区 ⇒ **字典序比较**在本日同区内成立（跨时区/跨日要先归一，见本文档那条「本机 JST 与现网 CST 差一小时」）
+        rs=$(printf '%s' "$RESTART_SINCE" | tr ' ' 'T')
+        # ★ 偏移量踩点（本轮实测）：`index($0,"\"time\":\"")` 落在 `{` 之后那位（＝2），而那一段本身**有 8 个字符**
+        #   （`"time":"`），所以时间戳要从 `i+8` 起取。错写成 `i+7` 会把**前导引号**一起取进来，
+        #   `"2026-…"` 字典序恒小于 `2026-…` ⇒ 计数**恒 0**，journal 那条腿也 0 ⇒ 两条腿一起假绿。
+        jn=$(awk -v ts="$rs" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=ts && index($0,"\"level\":\"ERROR\"")) c++ } END { print c+0 }' "$f" 2>/dev/null || true)
+        [ -n "$jn" ] || jn='<读数失败>'
+        echo "unit=$u journal_err行=$n（该 unit 不落 journal，只作对照） 文件落点=$f ERROR行(重启后)=$jn"
+      else
+        echo "unit=$u journal_err行=$n 文件落点=$f <文件不存在⇒读不到，不等于零错误>"
+      fi
+      ;;
+    *)
+      echo "unit=$u journal_err行=$n（StandardOutput=$so）"
+      ;;
+  esac
 done
 
 echo "----- P6 回收腿接线读数：采集器跑一轮才会出账（scrape_poll_sec 默认 300s）-----"
+echo "  ★ 回收那行 INFO 在哪：主站只在 /opt/translator/log/translator.log（journal 里恒无），演示站在 journal——读错落点会把「跑了」读成「没跑」。"
 echo "  现在（重启即刻）："
 for d in langcross langcross_demo; do
   echo "    PG $d kb_scrape_% 行=$(sudo -u postgres psql -At -c "select count(*) from system_config where key like 'kb_scrape_%';" "$d" 2>/dev/null || echo '<失败>')"
 done
-echo "  挂件库壳行判据（清理腿每小时整点跑一次，重启后第一次 tick 内应归 0）："
+echo "  挂件库壳行判据（清理腿是 **time.NewTicker(1h)⇒ 从进程启动那一刻起算**，不是自然整点；首 tick≈重启时刻＋1h）："
 echo "    壳行=$(sqlite3 -readonly "$DB" "select count(*) from sessions_base where msg_count>0 and id not in (select session_id from messages_base);" 2>/dev/null || echo '<失败>') sessions_base=$(sqlite3 -readonly "$DB" "select count(*) from sessions_base;" 2>/dev/null || echo '<失败>') messages_base=$(sqlite3 -readonly "$DB" "select count(*) from messages_base;" 2>/dev/null || echo '<失败>')"
 echo "----- P7 /api/health 状态词（两件件的主/演示面＋挂件面）-----"
 curl -s -m 10 http://127.0.0.1:8787/api/health | head -c 700; echo
