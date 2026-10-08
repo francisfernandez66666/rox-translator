@@ -94,7 +94,11 @@ echo "----- P2-B2 特征串负向对照（★ 必须在落位之前读线上旧�
 # 期望三个 0；任一非 0 ⇒ 该特征串不唯一，换件后"日志里出现这行"不能再当"本批已上线"的证据。
 for pair in "/opt/translator/bin/translator-server:采集进度账已回收" "/opt/translator/bin/translator-server:scrape_ledger_retention_days" "/opt/ai-assist/bin/translator-assist:msg_count=(SELECT COUNT(*)"; do
   f="${pair%%:*}"; pat="${pair#*:}"
-  echo "旧件 $f 命中『$pat』=$(grep -a -c -F -- "$pat" "$f" 2>/dev/null || echo '<失败>')  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
+  # ★ 计数写法踩点：`grep -c` **无命中时退 1**，所以 `$(grep -c … || echo '<失败>')` 会把"0"和"<失败>"两截一起打出来
+  #   （本轮首跑实测就是这样，读起来像查询坏了）。正确形态＝`|| true` 吃掉退出码、空串才判"文件读不到"。
+  n=$(grep -a -c -F -- "$pat" "$f" 2>/dev/null || true)
+  [ -n "$n" ] || n='<文件读不到>'
+  echo "旧件 $f 命中『$pat』=$n  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
 done
 
 place() { # $1 源 $2 目标目录 $3 目标文件名 $4 模式
