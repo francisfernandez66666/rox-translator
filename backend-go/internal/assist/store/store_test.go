@@ -156,12 +156,19 @@ func TestCleanupExpiredAnonymousRemovesExpiredMessages(t *testing.T) {
 	_ = db.AddMessage("s-live", "user", "在效问题", nil)
 
 	// 清理：旧形态此处直接 err≠nil（near "LIMIT" 语法错），修法落地后应正常返回、无错。
-	n, err := db.CleanupExpiredAnonymous(100)
+	// ★ 〇-AR 第 8 波（52）：这一条现在同时锁**会话回收的读数**——旧形态把 DELETE 会话的
+	//
+	//	RowsAffected 写成 `_, _ =` 丢掉了，"消息清了、壳也回收了"在出参里只剩消息那一条。
+	//	反证：把 store.go 里会话回收那一条的条数改回丢弃（`_, _ =` ＋ return 0），本用例当场红。
+	n, sess, err := db.CleanupExpiredAnonymous(100)
 	if err != nil {
 		t.Fatalf("清理不应报语法错（旧 `DELETE … LIMIT` 形态此处必红）: %v", err)
 	}
 	if n != 2 {
 		t.Fatalf("应清掉过期会话的 2 条消息，实际清 %d 条", n)
+	}
+	if sess != 1 {
+		t.Fatalf("应回收 1 个过期空会话（s-exp），实际读数 %d＝会话腿又静默了（52）", sess)
 	}
 	if hs, _ := db.History("s-exp", 10); len(hs) != 0 {
 		t.Fatalf("过期会话的消息应被清空: %+v", hs)

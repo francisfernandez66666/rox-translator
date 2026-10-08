@@ -10,10 +10,13 @@
 package engine
 
 import (
+	"context"
 	"log"
 	"regexp"
 	"strings"
 	"sync"
+
+	"translator/internal/observability"
 )
 
 // ============ 退化输出观测计数（★ P0-4，2026-09-18） ============
@@ -543,6 +546,21 @@ func PostProcessTranslation(text, langCode string) string {
 		text = stripTrailingCJKNotes(text)
 	} else {
 		text = stripTrailingCJKNotesStrict(text)
+	}
+	// ★ 0AR 第 8 波（㊶④）：尾段整句异脚本剥离（四道前置，任一不过就**原样返回**）。
+	// 这一档管的是"没有上一版可退"的那条腿——初翻腿自己把原文/回译拼在尾段时，
+	// 丢弃就等于没译文，只能剥。审校腿的"不纯即丢"见 review_purity.go。
+	if stripped, did := stripTrailingForeignResidual(langCode, text); did {
+		recordPurityAction(langCode, "tail_stripped")
+		// 日志口径：这一条走 observability 而**不是** log.Printf——AGENTS §一·2 的棘轮闸门
+		// 要求存量只减不增（internal 基线 176，2026-10-08 实测恰等），新代码加一行标准库
+		// log 当场顶红。本函数是无 ctx 纯函数（调用点全在翻译主链里），拿不到 trace_id，
+		// 故用 context.Background()：结构化字段与聚合计数（/metrics 的 purity 序列）都在，
+		// 只有 trace_id 这一维缺——需要按请求定位的人请看调用方那两条 observability.Warn
+		// （engine.go 的 ② 审校拒绝腿带 ctx）。
+		observability.Warn(context.Background(), "译文出栈尾段整句外语残留，已剥掉尾段保留正文",
+			"lang", langCode, "latin_words", maxLatinWordRun(text), "raw", clipRunes(text, 80))
+		text = stripped
 	}
 	return strings.TrimSpace(text)
 }

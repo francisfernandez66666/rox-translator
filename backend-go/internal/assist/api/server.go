@@ -47,6 +47,15 @@ type Server struct {
 	tokAt time.Time
 	// ★ 〇-AM 匿名会话过期清理：定期删除已过期匿名用户及其孤儿消息。
 	anonymCleanupInterval time.Duration
+	// ★ 〇-AR 第 8 波（52）最近一轮清理的读数（供 /health 出栈）。
+	// 旧形态里会话回收的 RowsAffected 被 `_, _ =` 丢弃 ⇒ "壳行归零"这件事只在日志里都没有，
+	// 现网问「那批旧会话清了没」只能人手数表。这里把它变成一个读得到的事实。
+	anonymMu           sync.RWMutex
+	anonymRounds       int
+	anonymLastMsgs     int
+	anonymLastSessions int
+	anonymLastStatus   string
+	anonymLastAt       string
 }
 
 // adminTokenTTL 管理 Token 的缓存时长。取 60s 与 engine 的 LLM 配置、store 的词表缓存同量级：
@@ -74,36 +83,100 @@ func (s *Server) startAnonymCleanup() {
 	ticker := time.NewTicker(s.anonymCleanupInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		total, err := s.drainExpiredAnonymous()
-		if err != nil {
-			slog.Error("assist.api 过期匿名会话清理失败", "err", err)
-			continue
-		}
-		if total > 0 {
-			slog.Info("assist.api 过期匿名会话清理完成", "deleted_msgs", total)
-		}
+		s.runAnonymCleanupRound()
 	}
 }
 
-// drainExpiredAnonymous 逐批（每批 100 行）清空过期匿名会话及其孤儿消息，返回累计删除条数。
-// ★ 收敛口径：某一批删除 0 行即视为已排空、停手返回——绝不"删 0 还继续转"（那是本次修 SQL 后才暴露的
+// runAnonymCleanupRound 跑一轮过期匿名清理：排空＋记读数＋出声。
+// ★ 〇-AR 第 8 波（52）把这一轮从 ticker 循环体里抽成独立方法，理由有两条：
+//  1. 周期任务本身要能被**真拨一次**测到（同 §一·12 那条"有 tracker 但腿没接上"的防空转锁口径）——
+//     只测 drain 的纯逻辑，把这里的记录/日志两行删掉照样全绿；
+//  2. 读数必须与日志出自同一次调用，不许健康面报"上一轮删了 8 条"而日志报 0。
+//
+// 返回本轮的（消息条数，会话条数，error），纯供调用方断言；生产路径不看返回值。
+func (s *Server) runAnonymCleanupRound() (int, int, error) {
+	msgs, sessions, err := s.drainExpiredAnonymous()
+	s.recordAnonymCleanupRound(msgs, sessions, err)
+	if err != nil {
+		slog.Error("assist.api 过期匿名会话清理失败", "err", err, "deleted_msgs", msgs, "deleted_sessions", sessions)
+		return msgs, sessions, err
+	}
+	// ★ 52 的落点：旧形态判据是 `total > 0`，而 total 只数消息 ⇒
+	// 「这一轮回收了 13 个壳行、一条消息都没删」在日志里一行不剩（㊿ 修好之后正是每小时都撞这个形态）。
+	// 两条腿**任一**有条数就得出声。
+	if msgs > 0 || sessions > 0 {
+		slog.Info("assist.api 过期匿名会话清理完成", "deleted_msgs", msgs, "deleted_sessions", sessions)
+	}
+	return msgs, sessions, nil
+}
+
+// 过期匿名清理的四个状态词（★ 52，对外排障契约，逐字钉在单测里）。
+// never 与 idle 必须分得开：前者＝周期任务压根没跑过一轮（腿没接），后者＝跑过但确实无事可做。
+// 合成一个"看起来一切正常"的词，就是把〇-AP 那类"清理从没成功跑过"重新写成绿灯。
+const (
+	anonymCleanupNever   = "never"
+	anonymCleanupIdle    = "idle"
+	anonymCleanupOK      = "ok"
+	anonymCleanupFailing = "failing"
+)
+
+// recordAnonymCleanupRound 把最近一轮清理写成读数（供 /health 出栈）。
+// ⚠️ 只出状态词与条数，不出会话 id／匿名哈希／时间戳以外的任何内容。
+func (s *Server) recordAnonymCleanupRound(msgs, sessions int, err error) {
+	status := anonymCleanupOK
+	if err != nil {
+		status = anonymCleanupFailing
+	} else if msgs == 0 && sessions == 0 {
+		status = anonymCleanupIdle
+	}
+	s.anonymMu.Lock()
+	s.anonymLastMsgs, s.anonymLastSessions, s.anonymLastStatus = msgs, sessions, status
+	s.anonymLastAt = time.Now().Format(time.RFC3339)
+	s.anonymRounds++
+	s.anonymMu.Unlock()
+}
+
+// anonymCleanupHealth 出最近一轮清理的读数。
+// ★ 52：这一档是"壳行归零"这件事的**非日志读面**——日志会轮转、会被 grep 字符踩空，
+// 而 `/health` 让现网排障能一句话问出"清理腿此刻在不在跑、上一轮回收了几条"。
+// 没跑过一轮时出 never（不是 0／idle），否则"进程起了但 ticker 没接上"与"跑得很勤但没东西清"读起来一样。
+func (s *Server) anonymCleanupHealth() map[string]any {
+	s.anonymMu.RLock()
+	defer s.anonymMu.RUnlock()
+	if s.anonymRounds == 0 {
+		return map[string]any{"status": anonymCleanupNever, "rounds": 0}
+	}
+	return map[string]any{
+		"status":           s.anonymLastStatus,
+		"rounds":           s.anonymRounds,
+		"deleted_msgs":     s.anonymLastMsgs,
+		"deleted_sessions": s.anonymLastSessions,
+		"last_at":          s.anonymLastAt,
+	}
+}
+
+// drainExpiredAnonymous 逐批（每批 100 行）清空过期匿名会话及其孤儿消息。
+// 参数无（自己带批量口径）。返回：累计删掉的消息条数、累计回收的会话条数、error。
+// ★ 收敛口径：**某一批删 0 条消息**即视为已排空、停手返回——绝不"删 0 还继续转"（那是本次修 SQL 后才暴露的
 //
 //	空转隐患：旧循环 `for total == 0` 会把"这一轮没有过期数据"误判成"还没删过"，永远退不出内层循环）。
+//	★ 52 明确：续跑判据只看消息那一条，**不看会话数**。会话回收那条 DELETE 不带 LIMIT、一轮就排空，
+//	把它并入续跑条件＝把〇-AP 刚请走的那类空转再请回来（每小时都有新壳行的库会一直转）。
 //	上游清理报错误直接上抛（由调用方记 ERROR），不在这里吞。
-func (s *Server) drainExpiredAnonymous() (int, error) {
+func (s *Server) drainExpiredAnonymous() (msgs, sessions int, err error) {
 	const batch = 100
-	total := 0
 	for {
-		n, err := s.db.CleanupExpiredAnonymous(batch)
-		if err != nil {
-			return total, err
+		n, sess, e := s.db.CleanupExpiredAnonymous(batch)
+		if e != nil {
+			return msgs, sessions, e
 		}
+		sessions += sess
 		if n == 0 {
-			return total, nil // 这一批没删到任何行＝已排空，正常收敛退出
+			return msgs, sessions, nil // 这一批没删到任何消息＝已排空，正常收敛退出
 		}
-		total += n
+		msgs += n
 		if n < batch {
-			return total, nil // 不足一整批，后面已无更多，省一次往返
+			return msgs, sessions, nil // 不足一整批，后面已无更多，省一次往返
 		}
 	}
 }
@@ -205,6 +278,8 @@ func (s *Server) Handler() http.Handler {
 			"ok":     true,
 			"time":   time.Now().Format(time.RFC3339),
 			"canned": s.eng.CannedHealth(),
+			// ★ 0AR 第 8 波（52）：清理腿的读数（状态词＋两条腿的条数），同上只出状态词与计数，不出内容。
+			"anonym_cleanup": s.anonymCleanupHealth(),
 		})
 	})
 

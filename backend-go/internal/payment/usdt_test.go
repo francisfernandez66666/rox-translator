@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -80,9 +81,10 @@ func TestUSDTValidators(t *testing.T) {
 func TestTronFetcherParsesOfficialAndMockShapes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		// ★ 只认 /latest 这一条路径（HasSuffix 而非 Contains）：⑮ 的旧 stub 用 Contains("/v1/blocks")，
-		//   把裸打错端点也算"命中"，于是这条用例对死腿完全无感。裸 /v1/blocks 落 default 回 400 ⇒ 当场红。
-		case strings.HasSuffix(r.URL.Path, "/v1/blocks/latest"):
+		// ★ 链头这一族按真上游形态应答（POST /wallet/getnowblock，㊾ 2026-10-08）；
+		//   只认这一条路径（HasSuffix 而非 Contains）：⑮ 的旧 stub 用 Contains("/v1/blocks")，
+		//   把裸打错端点也算"命中"，于是这条用例对死腿完全无感。打错路径落 default 回 400 ⇒ 当场红。
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/wallet/getnowblock"):
 			_, _ = w.Write([]byte(`{"data":[{"block":100}]}`))
 		case strings.Contains(r.URL.Path, "/transactions"):
 			// 官方形态 + mock 简形态混发，验证双解析
@@ -111,48 +113,75 @@ func TestTronFetcherParsesOfficialAndMockShapes(t *testing.T) {
 	}
 }
 
-// TestTronHeadUsesLatestEndpoint ⑮ 端点腿：链头必须打 GET {base}/v1/blocks/latest。
-// 假上游**只**在 /latest 上应答，裸 /v1/blocks 照真 TronGrid 回 404（该集合端点要求
-// limit/order_by 参数）⇒ 端点写回旧的裸 /v1/blocks 时，本用例当场红（反证口径）。
-// 同时锁"取到的第一个路径就是 /latest"：只看 newest 非零会被 default 分支的兜底应答蒙过。
-func TestTronHeadUsesLatestEndpoint(t *testing.T) {
-	var hit []string
+// TestTronHeadUsesWalletPostEndpoint ★ ㊾（2026-10-08）端点与方法两条腿一起锁：
+// 链头必须打 POST {base}/wallet/getnowblock，高度读嵌套的 block_header.raw_data.number。
+//
+// 这一条替代的是 ⑮ 那版 `TestTronHeadUsesLatestEndpoint`——它把端点锁在 `/v1/blocks/latest`，
+// 而㊾ 用本机独立网络实测证明**那一族四条 GET 全 404**（/v1/blocks/latest、/v1/blocks?limit=1、
+// /v1/blocks/1000、/v1/statistics），真上游只剩 `POST /wallet/getnowblock`。
+// 假上游照真上游的形态回：GET 同一路径 404、默认那族旧路径 404 ⇒
+// 谁把方法写回 GET、或把路径写回 /v1/blocks/latest，本用例当场红（两层反证）。
+// 判据取「第一个上游请求的方法＋路径＋请求体」做等值，不看兜底应答：
+// 只断言 newest 非零会被 default 分支的随便什么回显蒙过（⑮/㊾ 两批反复点名的假绿形态）。
+func TestTronHeadUsesWalletPostEndpoint(t *testing.T) {
+	type hitT struct {
+		method, path, body string
+	}
+	var hits []hitT
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = append(hit, r.URL.Path)
-		switch r.URL.Path {
-		case "/v1/blocks/latest":
-			_, _ = w.Write([]byte(`{"block_header":{"number":123}}`))
-		case "/v1/accounts/Taddr/transactions":
+		b, _ := io.ReadAll(r.Body)
+		hits = append(hits, hitT{r.Method, r.URL.Path, strings.TrimSpace(string(b))})
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/wallet/getnowblock":
+			// 真上游形态（㊾ 实测层级）：高度在嵌套的 raw_data.number
+			_, _ = w.Write([]byte(`{"block_header":{"raw_data":{"number":86875123,"timestamp":1762000000000}}}`))
+		case r.URL.Path == "/v1/accounts/Taddr/transactions":
 			_, _ = w.Write([]byte(`{"transfers":[]}`))
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{"status":404,"error":"Not Found","path":"/v1/blocks"}`))
+			_, _ = w.Write([]byte(`{"status":404,"error":"Not Found"}`))
 		}
 	}))
 	defer srv.Close()
 	f := &TronFetcher{Base: srv.URL}
 	deps, newest, err := f.FetchDeposits(context.Background(), "Taddr", 100)
 	if err != nil {
-		t.Fatalf("链头走 /latest 应成功，实得 err=%v（命中路径 %v）", err, hit)
+		t.Fatalf("链头走 POST /wallet/getnowblock 应成功，实得 err=%v（命中 %+v）", err, hits)
 	}
-	if newest != 123 {
-		t.Fatalf("链头高度应为 123，实得 %d", newest)
+	if newest != 86875123 {
+		t.Fatalf("链头高度应为 86875123（raw_data.number），实得 %d", newest)
 	}
 	if len(deps) != 0 {
 		t.Fatalf("本轮无转入，deps 应为空，实得 %d 笔", len(deps))
 	}
-	if len(hit) == 0 || hit[0] != "/v1/blocks/latest" {
-		t.Fatalf("第一个上游请求必须是 /v1/blocks/latest，实际命中 %v", hit)
+	if len(hits) == 0 {
+		t.Fatal("一次上游请求都没打到")
+	}
+	if hits[0].method != http.MethodPost || hits[0].path != "/wallet/getnowblock" {
+		t.Fatalf("第一个上游请求必须是 POST /wallet/getnowblock，实际 %s %s（全部 %+v）", hits[0].method, hits[0].path, hits)
+	}
+	// 请求体这一格也锁住：wallet 那一族要合法 JSON 体，nil 体在某些自建网关上是 400。
+	if hits[0].body != "{}" {
+		t.Fatalf("POST 链头的请求体必须是 {}，实得 %q", hits[0].body)
+	}
+	for _, h := range hits {
+		if h.path == "/v1/blocks/latest" || h.path == "/v1/blocks" {
+			t.Fatalf("默认端点已按㊾换成 wallet 那一族，仍在打退役的 %s（全部 %+v）", h.path, hits)
+		}
 	}
 }
 
-// TestTronHeadPathEnvOverride USDT_TRON_HEAD_PATH 覆盖腿：上游改路径时不改码顶住。
-// 判据＝换档后打的确实是覆盖路径（不是默认 /latest），且高度照读得出。
+// TestTronHeadPathEnvOverride USDT_TRON_HEAD_PATH／_METHOD 覆盖腿：上游改路径**或改方法**时不改码顶住。
+// ★ ㊾ 补的就是方法这一把：旧覆盖口只重写 URL 路径，方法钉死 GET ⇒ 面对"同一路径 GET 也 404"的真上游，
+// 运营侧无论怎么调档都到不了（那正是 ㊾ 现网恒 404 的第二层）。
+// 判据＝换档后第一个请求打到的是覆盖后的 **方法＋路径**（默认那一路一次都不许出现），且高度照读得出。
 func TestTronHeadPathEnvOverride(t *testing.T) {
 	t.Setenv("USDT_TRON_HEAD_PATH", "api/chain-head") // 刻意不带前导斜杠：覆盖腿要自己补齐
-	var hit []string
+	t.Setenv("USDT_TRON_HEAD_METHOD", "get")          // 刻意小写：覆盖口要归一成大写方法
+	type hitT struct{ method, path string }
+	var hits []hitT
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hit = append(hit, r.URL.Path)
+		hits = append(hits, hitT{r.Method, r.URL.Path})
 		if r.URL.Path == "/api/chain-head" {
 			_, _ = w.Write([]byte(`{"block_header":{"number":55}}`))
 			return
@@ -167,28 +196,40 @@ func TestTronHeadPathEnvOverride(t *testing.T) {
 	f := &TronFetcher{Base: srv.URL}
 	_, newest, err := f.FetchDeposits(context.Background(), "Taddr", 10)
 	if err != nil || newest != 55 {
-		t.Fatalf("覆盖路径应生效并读到高度：newest=%d err=%v 命中 %v", newest, err, hit)
+		t.Fatalf("覆盖路径应生效并读到高度：newest=%d err=%v 命中 %+v", newest, err, hits)
 	}
-	for _, p := range hit {
-		if p == "/v1/blocks/latest" {
-			t.Fatalf("设了覆盖口还打默认 /latest，命中 %v", hit)
+	if len(hits) == 0 || hits[0].method != http.MethodGet || hits[0].path != "/api/chain-head" {
+		t.Fatalf("覆盖口生效时第一个请求必须是 GET /api/chain-head，实际 %+v（全部 %+v）", hits, hits)
+	}
+	for _, h := range hits {
+		if h.path == "/wallet/getnowblock" {
+			t.Fatalf("设了覆盖口还打默认 wallet 端点，命中 %+v", hits)
 		}
 	}
 }
 
-// TestTronHeadAcceptsThreeShapes ⑮ 结构腿：三种真实响应形态都必须读出同一个高度。
-// 只认后两种（block_number／data[].block）是旧缺陷的第二条根因——光换端点不换结构体，
-// /latest 的 block_header.number 照样读 0，而 newest=0 会让确认数永不自达标。
-func TestTronHeadAcceptsThreeShapes(t *testing.T) {
+// TestTronHeadAcceptsFourShapes ⑮＋㊾ 结构腿：四种真实响应形态都必须读出同一个高度，
+// 且优先级钉成「raw_data.number 优先 ＞ block_header.number ＞ block_number ＞ data[0].block」。
+//
+// 只认后三种（block_header.number／block_number／data[].block）是 ㊾ 的第二层根因：
+// 真上游 `POST /wallet/getnowblock` 的高度在**再往里一层**的 raw_data.number，
+// 光把端点改对也照样读 0 ⇒ 而 newest=0 会让确认数永远不达标（钱到了也不入账）。
+// ★ 带引号那一档（数字写成 "7"）不是凑数：wallet 那一族由 protobuf 直转 JSON，
+// 数字字段可能是 7 也可能是 "7"，按 int64 硬解会在 Unmarshal 阶段整条报错——
+// 表现与「端点不存在」完全同形（监听恒 failing、日志只说查询失败），是最难分的一档。
+func TestTronHeadAcceptsFourShapes(t *testing.T) {
 	cases := []struct{ name, body string }{
+		{"真上游 raw_data.number（数字）", `{"block_header":{"raw_data":{"number":7}}}`},
+		{"真上游 raw_data.number（带引号）", `{"block_header":{"raw_data":{"number":"7"}}}`},
 		{"latest/block_header", `{"block_header":{"number":7}}`},
 		{"mock/顶层 block_number", `{"block_number":7}`},
 		{"列表 data[0].block", `{"data":[{"block":7}]}`},
-		{"优先级取第一腿", `{"block_header":{"number":7},"block_number":9,"data":[{"block":11}]}`},
+		{"优先级取第一腿（raw_data 赢）", `{"block_header":{"raw_data":{"number":7},"number":8},"block_number":9,"data":[{"block":11}]}`},
+		{"优先级第二腿（raw_data 缺位时 block_header 顶上）", `{"block_header":{"raw_data":{"timestamp":1},"number":7},"block_number":9}`},
 	}
 	for _, c := range cases {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if strings.HasSuffix(r.URL.Path, "/v1/blocks/latest") {
+			if strings.HasSuffix(r.URL.Path, "/wallet/getnowblock") {
 				_, _ = w.Write([]byte(c.body))
 				return
 			}

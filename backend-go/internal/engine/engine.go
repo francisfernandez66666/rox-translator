@@ -1049,6 +1049,18 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	if err != nil || strings.TrimSpace(content) == "" {
 		return ""
 	}
+	// ★ 0AR 第 8 波（㊶②）：这一腿的产物同样会**覆盖**客户手上那版译文，
+	// 所以脚本纯度判据和审校腿共用一把尺子——不纯就返回 ""，让调用方保留上一版，
+	// 而不是把"中文＋整句英文回译"当成修正版发出去。
+	// ★ 判据吃的是**清洗前的原始产物**：④ 那条剥尾段的腿在 PostProcessTranslation 里，
+	// 先洗后判会让"中文＋整句回译"看起来干净从而被采纳，而会多吐一句的模型
+	// 它改出来的中文本身同样可疑 ⇒ 保守方向＝整份丢弃、保留上一版。
+	if reason := reviewOutputRejectReason(targetLang, content); reason != "" {
+		recordPurityAction(targetLang, "review_rejected")
+		observability.Warn(ctx, "译文改写腿产物脚本不纯，已丢弃改写结果保留上一版",
+			"reason", reason, "lang", targetLang, "stage", stage, "latin_words", maxLatinWordRun(content))
+		return ""
+	}
 	return PostProcessTranslation(content, targetLang)
 }
 
@@ -1073,6 +1085,23 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	}
 	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 2048, false, e.Cfg.FallbackTemp)
 	if err != nil || strings.TrimSpace(content) == "" {
+		return ""
+	}
+	// ★ 0AR 第 8 波（㊶ 的本体修法）：审校腿的产物在 text.go 的校对环节会**直接覆盖**初翻，
+	//
+	//	而出栈前只过 PostProcessTranslation——那条链里没有任何"目标语种纯度"判据
+	//	（StripChineseInNonZh 只管拉丁目标里的中文残留，中文目标里的整句英文回译它按设计放过）。
+	//	于是第三方网关每多吐一句回译，客户就拿掉一次正确初翻（现网 3/3 复现，见本文件头那条字节级读数）。
+	//	⇒ 判据不纯即返回 ""：调用方（text.go:403 / file.go:1144）本来就把 "" 当"这一轮没改"，
+	//	  退路是**已存在的正确初翻**，不是空结果——这是本条爆炸半径最小的落点。
+	// ★ 判据吃**清洗前的原始产物**（理由见 review_purity.go 文件头④那一段）：
+	// 先过 PostProcessTranslation 会把尾段回译剥干净，于是"整份丢弃"这一档永远不触发，
+	// 客户拿到的是"会多吐一句的模型"改出来的中文——保守方向应该是退回初翻。
+	if reason := reviewOutputRejectReason(targetLang, content); reason != "" {
+		recordPurityAction(targetLang, "review_rejected")
+		observability.Warn(ctx, "审校产物脚本不纯，已丢弃审校结果保留初翻",
+			"reason", reason, "lang", targetLang, "stage", stage,
+			"latin_words", maxLatinWordRun(content), "bytes", len(content))
 		return ""
 	}
 	return PostProcessTranslation(content, targetLang)
@@ -1105,6 +1134,12 @@ func srcName(code string) string {
 // F-15（2026-09-25 批 D）：实测「¥3,800」被 Hunyuan-MT 英译成 "R3,800"（兰特），
 // 数字一致性闸门天然放行凭空注入的货币符号。收口＝指令尾部固定加一句货币口径；
 // 这会让 B4 缓存前缀整体换一次内容（按语言组合分桶，等效一次冷启动，一次性成本可接受）。
+// ★ 〇-AR 第 8 波（㊶③）：**全部**目标语种分支（zh/zh_hant/ja/ko 四条显式＋哈萨克＋兜底档，
+// 中英文两套提示词）都带齐两句约束——「不得复述原文」＋「不得在译文后附加回译／解释／备注」。
+// 这四条显式分支原先比 default 分支少一句抗回声约束（㊶ 现网形态正是"中文译文＋整句英文回译"），
+// 而 default 分支原先只禁"复述原文"、没禁"附加回译" ⇒ 本批两侧一起补齐，判据才写得出派生式锁。
+// 同 F-15 的口径：这会让 B4 缓存前缀整体换一次
+// 内容（按语言组合分桶，等效一次冷启动，一次性成本可接受；F-15 已有同形先例）。
 // 「双十一→11.11」这类词条级译法不走本函数（写死通用指令表达不了），交行业包术语层数据驱动。
 func translateInstruction(source, target, uiLang string) string {
 	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang)
@@ -1126,43 +1161,56 @@ func translateInstructionCore(source, target, uiLang string) string {
 	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
 		switch target {
 		case "zh":
-			return "Translate the following text into Simplified Chinese. Output only the Simplified Chinese translation."
+			// ★ 0AR 第 8 波（㊶③）：四条显式分支原先只说「Output only the … translation」，
+			//
+			//	缺 default 分支那句 without reproducing the original text ⇒ 抗回声约束比兜底档弱一档。
+			//	补同一句并把"附加回译"单独点名（㊶ 现网形态正是"中文译文＋整句英文回译"）。
+			return "Translate the following text into Simplified Chinese. Output only the Simplified Chinese translation, without reproducing the original text, and without appending any back-translation, explanation or notes."
 		case "zh_hant":
-			return "Convert the following text into Traditional Chinese. Output only the Traditional Chinese translation."
+			return "Convert the following text into Traditional Chinese. Output only the Traditional Chinese translation, without reproducing the original text, and without appending any back-translation, explanation or notes."
 		case "ja":
-			return "Translate the following text into Japanese, using proper Kanji+Kana mixed writing (not only Kana). Output only the Japanese translation."
+			return "Translate the following text into Japanese, using proper Kanji+Kana mixed writing (not only Kana). Output only the Japanese translation, without reproducing the original text, and without appending any back-translation, explanation or notes."
 		case "ko":
-			return "Translate the following text into Korean (한국어), using Hangul. Do not output Japanese. Output only the Korean translation."
+			return "Translate the following text into Korean (한국어), using Hangul. Do not output Japanese. Output only the Korean translation, without reproducing the original text, and without appending any back-translation, explanation or notes."
 		default:
 			cn := config.LangNames[target]
 			if cn == "" {
 				cn = target
 			}
 			if strings.Contains(cn, "哈萨克") {
-				return "Translate the following text into Kazakh, the state language of Kazakhstan (Qazaq tili). Use ONLY the Cyrillic alphabet (Қазақ тілі), NOT the Arabic-based script used by the Kazakh ethnic minority in China. Output only the Kazakh translation in Cyrillic, with no original text, no explanations, no placeholders like 【】 or brackets."
+				return "Translate the following text into Kazakh, the state language of Kazakhstan (Qazaq tili). Use ONLY the Cyrillic alphabet (Қазақ тілі), NOT the Arabic-based script used by the Kazakh ethnic minority in China. Output only the Kazakh translation in Cyrillic, with no original text, no back-translation of the result, no explanations, no placeholders like 【】 or brackets."
 			}
-			return "Translate the following text into " + cn + ". Output only the translation, without reproducing the original text, without extra explanations, and without placeholder symbols like 【原文】 or 【】."
+			// ★ 0AR 第 8 波（㊶③）：兜底分支同样点名「不得附加回译」，让抗回声约束在
+			//	**全部** 目标语种上一字同宽（派生式锁 TestTranslateInstructionForbidsSourceEchoForAllTargets
+			//	遍历 config.TranslateLangs＋zh，不给"某条分支漏一句"留死角）。
+			return "Translate the following text into " + cn + ". Output only the translation, without reproducing the original text, without appending any back-translation of the result, without extra explanations, and without placeholder symbols like 【原文】 or 【】."
 		}
 	}
 	// 中文界面 → 中文提示词
 	switch target {
 	case "zh":
-		return fmt.Sprintf("把下面的%s翻译为简体中文，只输出简体中文结果", src)
+		// ★ 0AR 第 8 波（㊶③）：与繁体档对齐，并点名"回译"这一现网形态。
+		return fmt.Sprintf("把下面的%s翻译为简体中文，只输出简体中文结果，不得复述原文，也不得在译文后面附加英文回译、解释或备注", src)
 	case "zh_hant":
-		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果，不要复述原文，不要输出类似【原文】【待審校譯文】的标记", src)
+		// ★ 0AR 第 8 波（㊶③）：与简体档同宽补「不得附加回译」。
+		return fmt.Sprintf("把下面的%s转换为繁体中文，只输出繁体中文结果，不要复述原文，也不要在译文后面附加外语回译、解释或备注，不要输出类似【原文】【待審校譯文】的标记", src)
 	case "ja":
-		return fmt.Sprintf("把下面的%s翻译为日语，必须使用规范的日语汉字+假名混合书写，不要只用假名", src)
+		// ★ 0AR 第 8 波（㊶③）：补抗回声/抗回译一句（原先只有书写体系约束）。
+		return fmt.Sprintf("把下面的%s翻译为日语，必须使用规范的日语汉字+假名混合书写，不要只用假名，不得复述原文，也不得在译文后面附加外语回译、解释或备注", src)
 	case "ko":
-		return fmt.Sprintf("把下面的%s翻译为韩语（한국어），必须使用韩语谚文书写，禁止输出日语", src)
+		// ★ 0AR 第 8 波（㊶③）：同上。
+		return fmt.Sprintf("把下面的%s翻译为韩语（한국어），必须使用韩语谚文书写，禁止输出日语，不得复述原文，也不得在译文后面附加外语回译、解释或备注", src)
 	default:
 		cn := config.LangNames[target]
 		if cn == "" {
 			cn = target
 		}
 		if strings.Contains(cn, "哈萨克") {
-			return fmt.Sprintf("把下面的%s翻译为哈萨克语（哈萨克斯坦国家的官方语言，Qazaq tili）。只使用西里尔字母书写（Қазақ тілі），禁止使用中国哈萨克族使用的阿拉伯字母写法。只输出西里尔哈萨克语译文，不要复述原文，不要任何解释，不要输出【】等占位符号", src)
+			return fmt.Sprintf("把下面的%s翻译为哈萨克语（哈萨克斯坦国家的官方语言，Qazaq tili）。只使用西里尔字母书写（Қазақ тілі），禁止使用中国哈萨克族使用的阿拉伯字母写法。只输出西里尔哈萨克语译文，不要复述原文，不要在译文后面附加回译、解释或备注，不要输出【】等占位符号", src)
 		}
-		return fmt.Sprintf("把下面的%s翻译为%s，只输出译文本身，不要复述原文，不要输出【原文】【待審校譯文】等任何标记，不要额外解释", src, cn)
+		// ★ 0AR 第 8 波（㊶③）：兜底分支与上面四条显式分支同宽（补「不得附加回译」一句），
+		//	这样派生式锁才能遍历全部语种而不留例外档。
+		return fmt.Sprintf("把下面的%s翻译为%s，只输出译文本身，不要复述原文，不要在译文后面附加回译、解释或备注，不要输出【原文】【待審校譯文】等任何标记，不要额外解释", src, cn)
 	}
 }
 
@@ -2809,6 +2857,16 @@ func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translatio
 			continue
 		}
 		if revised := strings.TrimSpace(line[dot+1:]); revised != "" {
+			// ★ 0AR 第 8 波（㊶②）：批量腿与单段腿**共用同一把尺子**（不另立第二道判据）。
+			// 逐条判、逐条丢：某一条带了整句回译只丢那一条，其余照旧应用——
+			// 旧形态"编号解析失败即整段回退"已经有了，这一档补的是"解析成功但内容脏"。
+			if reason := reviewOutputRejectReason(targetLang, revised); reason != "" {
+				recordPurityAction(targetLang, "review_batch_rejected")
+				observability.Warn(ctx, "批量审校某条产物脚本不纯，该条保留原译文",
+					"reason", reason, "lang", targetLang, "index", idx,
+					"latin_words", maxLatinWordRun(revised))
+				continue
+			}
 			out[idx-1] = PostProcessTranslation(revised, targetLang)
 			applied++
 		}

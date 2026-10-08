@@ -2,12 +2,21 @@
 # ============================================================================
 # scripts/uat/mock_chain.py — USDT 链上 mock（TronGrid 兼容 + 测试控制口）
 # 职责：为 UAT T42 提供确定性「链上环境」：
-#   GET  /v1/blocks/latest                   → {"block_header":{"number": TIP}}（链头）
-#        ★ 2026-10-05 ⑮ 修法：真 TronGrid 的裸 GET /v1/blocks 是 **404**（该路径必须带
-#          limit/order_by 等参数），链头取 /v1/blocks/latest。旧 mock 把裸 /v1/blocks
-#          做成有应答，于是产品侧那条死腿（打错端点、恒取不到高度）在 UAT 里**自己给自己
-#          发证**——T42 全绿但现网一行链头日志都在报 404。现在裸 /v1/blocks 照真上游回 404，
-#          端点写错就当轮扫描失败，判据才有牙齿。
+#   POST /wallet/getnowblock                 → {"block_header":{"raw_data":{"number": TIP}}}（链头）
+#        ★ 2026-10-08 ㊾ 定档：桩的形态**必须来自真上游的实测读数**，不能来自"我以为的契约"。
+#          本轮用本机独立网络把上游问了一遍：`GET /v1/blocks/latest`、`GET /v1/blocks?limit=1`、
+#          `GET /v1/blocks/1000`、`GET /v1/statistics` **四条全 404**，能通的只有
+#          `POST /wallet/getnowblock`（200，高度在嵌套的 block_header.raw_data.number）。
+#          于是这版做了三件事：
+#            ① 链头改服务 POST /wallet/getnowblock，回**真上游那一层的嵌套结构**（不再回平铺的 number）；
+#            ② 把 /v1/blocks 那一族（含 /latest、含带参数的列表形态）**一并改成照真上游回 404**——
+#              留着应答等于给"谁把端点写回 /v1/blocks/latest"那条回归发证，
+#              与 ⑮ 当年"旧 mock 服务裸 /v1/blocks"是同一个死法，只是换了一层；
+#            ③ 同一批退役路径只保留在**产品侧解析**里（tronNewestBlock 的四腿，兼容上游改回来），
+#              桩不再服务它们 ⇒ 现网如果只用新端点，UAT 与现网打的是同一条路。
+#        ★ 历史（保留给排障的人看，别照着实现）：2026-10-05 ⑮ 曾把链头做成 GET /v1/blocks/latest，
+#          理由是"裸 /v1/blocks 恒 404"——那个推理只证到"裸路径不行"，没证到"带 /latest 就行"，
+#          于是 T42 又一次全绿而现网继续 404（八天⇒㊾）。教训同 AGENTS §一·12「桩只认协议」。
 #   GET  /v1/accounts/{addr}/transactions?... → {"transfers":[{tx_id,block_number,from,to,value}]}
 #        （to=addr、block_number>=from_block；value 为 6 位小数 micro 字符串）
 #   POST /inject  {to,from,value,block?}     → 注入一笔转入（默认当前块），返回 tx_id
@@ -42,18 +51,12 @@ class H(BaseHTTPRequestHandler):
         # GET 路由：链头查询 / 指定地址转入列表（按 to+from_block 过滤）/ 全量状态
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        if u.path == "/v1/blocks/latest":
-            # 链头官方形态：{"block_header":{"number": TIP}}（产品侧 tronNewestBlock 的第一优先腿）
-            with LOCK:
-                self._send({"block_header": {"number": STATE["tip"]}})
+        # ★ ㊾：GET 链头这一族**一律照真上游回 404**（含 /wallet/getnowblock——上游那族只认 POST，
+        #   所以"路径写对、方法写错"也必须当轮失败；这正是旧覆盖口只改路径不改方法时运营踩到的形态）。
+        #   刻意不给 /v1/blocks/latest 与带参数的 /v1/blocks 留应答：留了就是给回归发证（见文件头 ②）。
+        if u.path.startswith("/v1/blocks") or u.path == "/wallet/getnowblock":
+            self._send({"status": 404, "error": "Not Found"}, 404)
             return
-        if u.path == "/v1/blocks" and (q.get("limit") or q.get("order_by")):
-            # 带参数的列表形态才回 data[]，与真 TronGrid 一致（备用腿，非默认取数路径）
-            with LOCK:
-                self._send({"data": [{"block": STATE["tip"]}]})
-            return
-        # ★ 裸 /v1/blocks＝真上游的 404（缺 limit/order_by），这里刻意不兜活：
-        #   旧 mock 让它有应答＝给产品侧那条打错端点的死腿发绿证，T42 因此测不到现网故障。
         if u.path.startswith("/v1/accounts/") and u.path.endswith("/transactions"):
             addr = u.path.split("/")[3]
             frm = int((q.get("from_block") or ["0"])[0])
@@ -78,6 +81,12 @@ class H(BaseHTTPRequestHandler):
             return
         u = urlparse(self.path)
         with LOCK:
+            if u.path == "/wallet/getnowblock":
+                # ★ 真上游嵌套形态（㊾ 实测）：高度在 block_header.raw_data.number，
+                #   且该族字段在 protobuf→JSON 的转换里**可能带引号**——这里按现网读到的裸数字回，
+                #   带引号那一档由产品侧单测 TestTronHeadAcceptsFourShapes 覆盖（桩不制造第二种形态）。
+                self._send({"block_header": {"raw_data": {"number": STATE["tip"], "timestamp": 1762000000000}}})
+                return
             if u.path == "/inject":
                 STATE["seq"] += 1
                 tx = {

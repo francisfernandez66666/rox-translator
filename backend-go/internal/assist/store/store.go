@@ -894,7 +894,18 @@ func (d *DB) MergeSessions(oldID, newID string) error {
 }
 
 // CleanupExpiredAnonymous 清除过期的匿名会话及其孤儿消息。
-func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
+// 参数 batchSize: 单批删除的消息上限（<=0 视为 100）。
+// 返回：本轮删掉的消息条数、本轮回收掉的会话条数、error（两档计数在出错时按已确定的部分返回）。
+// ★ 〇-AR 第 8 波（52）：返回值由「只有消息条数」扩成**两条腿各自的条数**。
+//
+//	旧形态里会话回收那条 DELETE 写成 `_, _ = Exec(...)`，RowsAffected 原地丢弃 ⇒
+//	"壳行被清掉了"这件事在日志与健康面上永远是零读数，而 ㊿ 修好之后
+//	「这一轮只清到壳行、一条消息都没删」恰恰是最常见的形态（每小时整点都会撞上），
+//	运营问「那批旧会话到底清了没有」只能人手数表。⇒ 清理腿的每一条删除都必须自己出声，
+//	且会话回收失败也**不再静默**（静默失败与静默零读数是同一族缺陷的两种表现）。
+//	⚠️ 调用方的**续跑判据仍只看消息那一条**（见 api.drainExpiredAnonymous）：
+//	会话回收的 SQL 不带 LIMIT、一轮就排空，拿它当循环条件会把〇-AP 修掉的那类空转再请回来。
+func (d *DB) CleanupExpiredAnonymous(batchSize int) (msgs, sessions int, err error) {
 	if batchSize <= 0 {
 		batchSize = 100
 	}
@@ -903,11 +914,11 @@ func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
 	// `near "LIMIT": syntax error`（现网实读：每小时整点一条 ERROR「过期匿名会话清理失败」，
 	// 自 10-02 起匿名会话与孤儿消息从未真正清过、只堆库）。
 	// 改走 `id IN (SELECT id … LIMIT ?)`：两方言都支持（AGENTS §一·4），批量语义不变。
-	res, err := d.sql.Exec("DELETE FROM messages_base WHERE id IN (SELECT id FROM messages_base WHERE session_id IN (SELECT id FROM sessions_base WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)) LIMIT ?)", batchSize)
+	mres, err := d.sql.Exec("DELETE FROM messages_base WHERE id IN (SELECT id FROM messages_base WHERE session_id IN (SELECT id FROM sessions_base WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)) LIMIT ?)", batchSize)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	msgCnt, _ := res.RowsAffected()
+	msgCnt, _ := mres.RowsAffected()
 	// ★ 〇-AR 第 7 波（㊿ 的修法）：删会话的判据必须先问**消息表里还有没有行**，不信 msg_count 这个写时计数器。
 	// 旧形态只有 `msg_count=0` 那一档能被删，而计数是 AddMessage 时 +1、消息被本函数删掉时**从来不减**，
 	// 于是任何"消息已被清空"的会话都带着旧计数变成**永远清不掉的壳行**；
@@ -919,11 +930,16 @@ func (d *DB) CleanupExpiredAnonymous(batchSize int) (int, error) {
 	if _, err := d.sql.Exec("UPDATE sessions_base SET msg_count=(SELECT COUNT(*) FROM messages_base WHERE messages_base.session_id=sessions_base.id) WHERE anonym_hash!='' AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)"); err != nil {
 		// 归一失败即**停在这里**：宁可这一轮多留一批壳行（下一轮还会再来），
 		// 也不能带着"可能是假的 0"去执行删除——那会把刚被误清零的正常会话删掉。
-		return int(msgCnt), err
+		return int(msgCnt), 0, err
 	}
 	// 删除空会话（此处 msg_count 已与消息表同源，`msg_count=0` 才真的等于"没有消息"）
-	_, _ = d.sql.Exec("DELETE FROM sessions_base WHERE anonym_hash!='' AND msg_count=0 AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)")
-	return int(msgCnt), nil
+	// ★ 52：这一条腿的条数与失败一起上抛，不再 `_, _ =`。
+	sres, err := d.sql.Exec("DELETE FROM sessions_base WHERE anonym_hash!='' AND msg_count=0 AND (expires_at IS NULL OR expires_at<=CURRENT_TIMESTAMP)")
+	if err != nil {
+		return int(msgCnt), 0, err
+	}
+	sessCnt, _ := sres.RowsAffected()
+	return int(msgCnt), int(sessCnt), nil
 }
 
 // AddMessage 追加消息（匿名态，tenant_id、user_id 为 NULL，anonym_hash 为空串）。

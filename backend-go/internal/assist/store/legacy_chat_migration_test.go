@@ -138,7 +138,8 @@ func TestLegacyMigratedRowsArePurgeable(t *testing.T) {
 		t.Fatalf("前置：期望 3 行旧消息，实际 %d", n)
 	}
 	// 清理谓词按「匿名且有/无到期时刻」收，历史 last_at 早已过 ⇒ 这一轮就该排空
-	deleted, err := db.CleanupExpiredAnonymous(100)
+	// ★ 52：清理出参现在是两条腿各自的条数，这里顺带核一次「迁进来的壳会话也被回收」。
+	deleted, sess, err := db.CleanupExpiredAnonymous(100)
 	if err != nil {
 		t.Fatalf("清理报错: %v", err)
 	}
@@ -147,6 +148,9 @@ func TestLegacyMigratedRowsArePurgeable(t *testing.T) {
 	}
 	if n := db.tableRowCount("messages_base"); n != 0 {
 		t.Fatalf("messages_base 应清空，实际 %d", n)
+	}
+	if sess != 2 {
+		t.Fatalf("迁进来的 2 个过期匿名会话壳都应被回收，读数 %d＝会话腿静默（52）", sess)
 	}
 }
 

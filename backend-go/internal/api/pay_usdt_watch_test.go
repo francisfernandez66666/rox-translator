@@ -217,7 +217,8 @@ func TestUsdtWatchTickMarksDisabledWhenSwitchOff(t *testing.T) {
 }
 
 // TestUsdtWatchTickDialsDeadUpstreamThenRecovers 真拨一次监听链（不起 ticker，直接调 tick）：
-// 端点指向一个没人听的端口 ⇒ 连续 3 次 tick 后落告警；把端点换成认 /v1/blocks/latest 的假上游
+// 端点指向一个没人听的端口 ⇒ 连续 3 次 tick 后落告警；把端点换成**按真上游形态应答**的假上游
+// （★ ㊾ 2026-10-08：POST /wallet/getnowblock ＋ 高度在 block_header.raw_data.number）
 // ⇒ 下一次 tick 恢复并收敛告警。
 // ★ 这条是「有 tracker 但周期任务根本没接上」的防空转锁：只测 usdtWatchReportRound
 //
@@ -232,8 +233,11 @@ func TestUsdtWatchTickDialsDeadUpstreamThenRecovers(t *testing.T) {
 		t.Fatalf("3 轮拨不通应落 1 条告警，实得 %d（tick 里的 reportRound 接线是否被摘？）", n)
 	}
 	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/v1/blocks/latest") {
-			_, _ = w.Write([]byte(`{"block_header":{"number":1200000}}`))
+		// ★ 桩的形态**来源**＝㊾ 本机独立网络对真上游的实测读数（只认 POST 那一族，
+		//   高度在嵌套的 raw_data.number）。旧桩在这里服务 /v1/blocks/latest，
+		//   等于给一条不存在的路发证——T42 那批"全绿而现网恒 404"的同形死法不许再来一次。
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/wallet/getnowblock") {
+			_, _ = w.Write([]byte(`{"block_header":{"raw_data":{"number":1200000}}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"transfers":[]}`))
