@@ -168,6 +168,12 @@
 #       受邀加入在两档都触顶时照样放行且不推进计数（客户自己发的码不占平台名额）；
 #       脏设备号不返 400（公开接口契约，F-64/F-79 同形教训）但照记平台账；
 #       库里删档位键后回落代码默认 3 格。收尾清 rate_limits/alerts 并钉回开闸值。
+#   T70 译文脚本纯度：审校腿不许用「中文＋整句回译」覆盖掉正确初翻（★ 2026-10-08 〇-AR 第 8 波 · ㊶）：
+#       现场由 mock_llm.py 的 UATPURITYREV／UATPURITYINIT 两个触发器**按提示词是哪条腿**定点伪造 →
+#       ① 审校腿产物不纯 ⇒ 出栈必须是初翻那份正文（两个正文标记刻意不同名，否则"覆盖了"与"没覆盖"
+#          在字节上无法区分）＋那句英文回译不得出口；② 初翻腿自带尾段回译且无上一版可退 ⇒ 只剥尾段、
+#          中文句号必须留下（④ 首跑真踩）；③ /metrics 的 purity 计数按 (lang,action) **就地取基线比增量**，
+#          每档恰好 +1、另一档 0；④ 第三条无触发器的对照请求两条计数**一动不动**（过度拦截哨）。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -3465,6 +3471,129 @@ ALEFT69=$(dbq "SELECT COUNT(*) FROM alerts WHERE kind='register_budget'" | tr -d
 ckq T69-cleanup-alerts-empty 0 "${ALEFT69:-0}"
 ckq T69-cleanup-device-tier-restored 100000 "$(dbq "SELECT value FROM system_config WHERE key='register_device_daily_limit'" | tr -d '[:space:]')"
 ckq T69-cleanup-global-tier-restored 100000 "$(dbq "SELECT value FROM system_config WHERE key='register_global_daily_limit'" | tr -d '[:space:]')"
+
+# ---------- T70 ㊶ 译文脚本纯度：审校腿不许用「中文＋整句回译」覆盖掉正确初翻 ----------
+# ★ 2026-10-08 〇-AR 第 8 波。现网实证（匿名 POST /api/trial/translate，en→zh 三次实跑全 200）：
+#   出栈 = 「我们需要为下周的法兰克福汽车展翻译产品手册。」＋一整句英文**回译**（auto show→Motor Show、
+#   compatible→suitable，逐字与原文不同 ⇒ 是从中文译文再生成出来的，不是原文复述）。
+#   客户看到的是"译文后面挂了一句英文讲解"，而三面（对话气泡／OpenAPI／试用出栈）都记成功。
+# 进程内那一层已经锁住的细则本段一概不重复（阈值 8 词的取值依据、④ 的四道前置、三条腿的分派、
+#   档名逐字，全在 internal/engine/review_purity_test.go）。本段锁的是单测**结构上看不见**的四层：
+#   ① **真 HTTP 出栈形态**：判据吃的是响应 body，不是某个函数的返回值——
+#      "审校产物被丢弃"这件事只有客户那一侧的字才算数；
+#   ② **这条腿真的接在主链上**：试用面服务端钉 pro（trial.go），pro 才会走校对环节；
+#      纯函数测试对"ReviewTranslation 有没有被接到 HandleText 的校对块"一无所知，
+#      接线被摘掉时出栈照样带尾巴、单测照样全绿（AGENTS §一·13 那条"恒着色的绿灯"形态）；
+#   ③ **观测腿读得到**：/metrics 的 translator_translation_purity_total 按 (lang,action) 增量涨。
+#      这一档的失败形态是"界面正常、只是少润色了一句"，不报错不退 5xx，
+#      现网排障与"改完有没有真生效"只能靠它（不数日志行数——§一·13③「锁的是文案与档位诚实，
+#      不是副作用真发生」在这里的反面用法：计数器由那一个动作自己累加，才是副作用）；
+#   ④ **只在该拦的时候拦**：本段前两条请求各产生**恰好一次**纯度动作，
+#      第三条「无触发器」的对照请求产生**零次**——多出来的那一次就是"纯度腿在正常流量上误伤"
+#      （过度拦截会把合法润色整轮抹掉，静默且无害状，界面与接口都不报错）。
+# 耗材口径：三条请求各用**独立设备号**（3s 间隔闸与 5 句倒计时都挂在设备号上，混用会把后续每条打成 429）；
+#   留痕行、限流行、三档配置键跑完自己清，并各配一条"账真清了"的反证。
+# 上游侧的现场由 scripts/uat/mock_llm.py 的 UATPURITYREV / UATPURITYINIT 两个触发器定点伪造
+#   （分腿判据见该文件的★段）：本段不需要真模型，也不需要网络。
+# ★ 反证三份，都在 /tmp 副本树上改产品代码后重建二进制实测（仓内源文件一字未动；
+#   判据与本段逐字同形，由 /tmp/t70_judge.sh 打同一台临时实例的同一个出口读同一批计数器。
+#   未改动二进制基线实测 PASS=18 FAIL=0）：
+#   M1 摘掉 ReviewTranslation 里那道 ② 判据 ⇒ 红 4 条：
+#      T70-a-keeps-initial、T70-a-review-body-not-adopted、T70-a-metric-review-rejected-delta、
+#      T70-a-metric-no-extra-strip（实测读数 got=1：审校那份不纯产物改由 ④ 剥尾段，
+#      于是 tail_stripped 被顶起来——这条交叉负向顺手抓住了"丢润色升级成削正文"）。
+#      ⚠️ **T70-a-no-backtranslation 在 M1 下仍然绿**：④ 会把尾巴剥掉。
+#      这一条就是"两个正文标记必须不同名"的实测依据——只锁尾巴的话，M1 是本段的盲区。
+#   M2 摘掉 PostProcessTranslation 里那道 ④ 调用 ⇒ 红 3 条：
+#      T70-b-no-backtranslation、T70-b-metric-tail-stripped-delta、T70-b-keeps-cjk-punctuation；
+#      case A 全绿（② 不依赖 ④，两档各自有独立红点＝定位价值）。
+#   M3 把阈值 reviewLatinRunMinWords 从 8 抬到 40（过度宽松）⇒ 红 7 条，两条腿同时失明，
+#      且 case A 的出栈连"被丢弃的审校正文＋原样回译"一起发给客户＝㊶ 现网形态逐字复现。
+#   反向（过度严格）那一侧由本段第③条对照请求守：无触发器的正常请求两条计数必须一动不动。
+DEV70A="uat70devAAAA01"; DEV70B="uat70devBBBB01"; DEV70C="uat70devCCCC01"
+TXT70A="UATPURITYREV product manual cover"
+TXT70B="UATPURITYINIT product manual cover"
+TXT70C="今天的产品评审会改到下午三点，请给出结论。"
+# 两个正文标记**刻意不同名**，这是本段有判别力的唯一原因：
+#   若审校腿的产物也带 UAT-INIT-KEPT，那么"② 被摘掉、审校覆盖了初翻"与"② 生效"两种形态
+#   在出栈字节上无法区分，这条锁就退化成"尾巴有没有被 ④ 剥掉"——那是另一条腿的射程。
+MTOK70="${METRICS_TOKEN:-uat-metrics-36}"
+# p70 <action> — 读 /metrics 里 zh 档的纯度动作计数；**没有这一行时回 0**（同 t66cnt 的口径：
+#   「一行都没有」与「计数为 0」是同一件好事，漏给 ckq 就是一条假红）。
+#   ⚠️ 先数一次可达性再取值：拿不到 metrics（Token 换了/路由挪了）时这里也回 0，
+#   于是"增量=0"会看起来完全正常——所以本段第一条判据就是"这一面读得到"。
+#   ⚠️ 基线**每档各取一次、就地比增量**（AGENTS §一·13②「对账类判据必须在同一时刻取基线」）：
+#   拿段首那一份 PRE_RJ70 去减"② 之后的第二次读数"，会把第一条请求自己涨的那一格
+#   当成第二条请求的误伤算出来（本段首跑真踩：判据写成 0 却读出 1）。
+p70(){ local v; v=$(curl -s --max-time 60 $B/metrics -H "Authorization: Bearer $MTOK70" \
+    | grep -E "translator_translation_purity_total\{lang=\"zh\",action=\"$1\"\}" | awk '{print $NF}' | head -1)
+  printf '%s' "${v:-0}"; }
+MT070=$(curl -s --max-time 60 $B/metrics -H "Authorization: Bearer $MTOK70")
+ck T70-0-metrics-reachable 'translator_info' "$MT070"
+ckn T70-0-metrics-not-html '<!DOCTYPE html' "$MT070"
+MAXID70=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -d '[:space:]')
+PRE_RJ70=$(p70 review_rejected); PRE_TS70=$(p70 tail_stripped)
+
+# ① ② 那一档：审校腿产物脚本不纯 ⇒ 整份丢弃、出栈必须是**初翻**
+B70A=$(printf '{"text":"%s","target_lang":"zh","device_id":"%s"}' "$TXT70A" "$DEV70A")
+req3 POST "" /api/trial/translate "$B70A"; cks T70-a-ok 200
+ck T70-a-has-translation '"translation":"[^"]' "$R3BODY"
+# 正例：出栈里是初翻那份正文（只有"审校结果被丢掉"才会留下它——审校腿回的是另一份正文）
+ck T70-a-keeps-initial 'UAT-INIT-KEPT' "$R3BODY"
+# 负例①：审校腿那份正文不得出现在出栈里（出现了＝它把初翻覆盖了，㊶ 本体）
+ckn T70-a-review-body-not-adopted 'UAT-REV-BODY' "$R3BODY"
+# 负例②：那句整句回译不得出口（这就是客户截图上的东西）
+ckn T70-a-no-backtranslation 'back translation appended' "$R3BODY"
+# 反证边界（如实登记，别让它看起来像锁住了阈值）：本段用定点触发器，所以它锁的是
+#   "不纯⇒丢弃并保留初翻"这一条**接线与形态**，不锁阈值取值本身（阈值由
+#   TestReviewPurityThresholdOnRealReadings 拿现网 13/10/10 词读数钉）。
+ckq T70-a-metric-review-rejected-delta 1 "$(( $(p70 review_rejected) - PRE_RJ70 ))"
+# 交叉负向：② 这一档不该顺带触发 ④（初翻腿那份正文本来就是干净的，没有尾段可剥）。
+#   它要是也涨了，说明两条腿在同一条请求上连着开火——那会把"只丢润色"升级成"正文也被削"。
+ckq T70-a-metric-no-extra-strip 0 "$(( $(p70 tail_stripped) - PRE_TS70 ))"
+# 就地取一次"② 之后"的基线，供③那条交叉负向做差（见上面 p70 的★注释）
+MID_RJ70=$(p70 review_rejected); MID_TS70=$(p70 tail_stripped)
+
+# ② ④ 那一档：初翻腿自己把回译拼在尾段，且**没有上一版可退**（审校腿这轮回空）
+#   ⇒ 只能剥尾段，正文一个字都不许动。
+B70B=$(printf '{"text":"%s","target_lang":"zh","device_id":"%s"}' "$TXT70B" "$DEV70B")
+req3 POST "" /api/trial/translate "$B70B"; cks T70-b-ok 200
+ck T70-b-keeps-body 'UAT-INIT-TAIL' "$R3BODY"
+ckn T70-b-no-backtranslation 'back translation appended' "$R3BODY"
+ckq T70-b-metric-tail-stripped-delta 1 "$(( $(p70 tail_stripped) - MID_TS70 ))"
+# ★ 交叉负向：这一档**不该**产生 review_rejected（审校腿回空＝"这一轮没改"，压根没到判据那一步）。
+#   它涨了就说明"审校腿的空产物"被当成不纯处理，那是把"没改"判成"改坏了"的第二形态。
+ckq T70-b-metric-no-extra-reject 0 "$(( $(p70 review_rejected) - MID_RJ70 ))"
+# 标点前置的现场复现（④ 首跑真踩过把中文句号一起削掉）：剥完正文末尾那个「。」必须还在。
+#   ⚠️ 这一条只在 JSON 转义后成立——出栈正文里的句号紧跟在转义引号之前，
+#   所以判据问的是「回译。」那段中文的结尾，不问整段 body（整段里有英文尾巴的痕迹就早被上面两条抓了）。
+ck T70-b-keeps-cjk-punctuation '回译。"' "$R3BODY"
+
+# ③ 交叉对照（**没有触发器**的正常请求）：纯度腿两条计数都必须一动不动。
+#   这一条是本段的"过度拦截"哨：② 与 ④ 的判据一旦被写宽（比如阈值调到 4 词、
+#   或把拉丁目标也拉进射程），现网表现不是报错而是**每轮润色都被丢掉、客户以为模型变笨了**，
+#   日志与界面上都看不出事——只有这一档能把"该拦的拦、不该拦的绝不拦"钉成一对。
+#   ⚠️ 本条**不问出栈内容**（无触发器时 mock 的通用回包形态由它自己那套规则决定，
+#   不是本段射程；这里只问"纯度腿有没有被误触发"），实测读数：delta 全 0。
+#   基线就在这一条请求前就地取（同 p70 那条★注释：跨请求复用旧基线会把上一条的增量算成误伤）。
+PRE_C70R=$(p70 review_rejected); PRE_C70T=$(p70 tail_stripped)
+B70C=$(printf '{"text":"%s","target_lang":"zh","device_id":"%s"}' "$TXT70C" "$DEV70C")
+req3 POST "" /api/trial/translate "$B70C"; cks T70-c-ok 200
+ckq T70-c-no-review-reject 0 "$(( $(p70 review_rejected) - PRE_C70R ))"
+ckq T70-c-no-tail-strip 0 "$(( $(p70 tail_stripped) - PRE_C70T ))"
+
+# ④ 收尾清账＋反证：试用面写的三档限流行、租户 0 的留痕行、三档配置键一并归零。
+#    ⚠️ 纯度计数器**不清**：它是进程内的累计量，随进程重启归零，
+#    矩阵里的对账一律按增量判（写宽成"绝对值=0"就是把下一条判据做成恒红）。
+dbq "DELETE FROM rate_limits WHERE scope IN ('trial_dev','trial_ip','trial_day') OR (scope='guard_int' AND key LIKE 'trial:%')" >/dev/null
+dbq "DELETE FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0 AND id>$MAXID70" >/dev/null
+dbq "DELETE FROM system_config WHERE key IN ('trial_device_quota','trial_ip_daily','trial_global_daily')" >/dev/null
+L70=$(dbq "SELECT COUNT(*) FROM rate_limits WHERE scope LIKE 'trial_%' OR key LIKE 'trial:%'" | tr -d '[:space:]')
+ckq T70-cleanup-rate-limits-empty 0 "${L70:-0}"
+LG70=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind='log' AND user_id=0 AND id>$MAXID70" | tr -d '[:space:]')
+ckq T70-cleanup-ledger-empty 0 "${LG70:-0}"
+CK70=$(dbq "SELECT COUNT(*) FROM system_config WHERE key LIKE 'trial_%'" | tr -d '[:space:]')
+ckq T70-cleanup-config-empty 0 "${CK70:-0}"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

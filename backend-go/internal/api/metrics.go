@@ -296,6 +296,25 @@ func (s *Server) metricsText() string {
 		}
 	}
 
+	// ★ 0AR 第 8 波（㊶）：译文脚本纯度腿的观测计数（按语种×动作）。
+	// 有了这两档计数，"上游又在往译文里拼回译"才是一个问得出来的事实，而不是等客户截图。
+	sb.WriteString("# HELP translator_translation_purity_total 译文脚本纯度腿动作总数（按语种×动作：review_rejected/review_batch_rejected/tail_stripped）\n# TYPE translator_translation_purity_total counter\n")
+	{
+		pur := engine.PuritySnapshot()
+		keys := make([]string, 0, len(pur))
+		for k := range pur {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			l, action, ok := strings.Cut(k, "|")
+			if !ok {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("translator_translation_purity_total{lang=%q,action=%q} %d\n", l, action, pur[k]))
+		}
+	}
+
 	// ★ P1-4（2026-09-18）：分布式锁异常累计次数——非 0 说明周期任务正在走「保守降级本进程执行」路径
 	sb.WriteString("# HELP translator_distlock_errors_total Redis 分布式锁获取异常总数（调用方已降级本地执行）\n# TYPE translator_distlock_errors_total counter\n")
 	sb.WriteString(fmt.Sprintf("translator_distlock_errors_total %d\n", distlock.ErrCount()))

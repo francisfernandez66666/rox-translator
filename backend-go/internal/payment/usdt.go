@@ -225,26 +225,68 @@ type tronTxResp struct {
 	} `json:"transfers"`
 }
 
-// tronBlockResp 链头高度。上游有三种真实形态都要认（优先级见 tronNewestBlock）：
+// jsonInt64 兼容「数字」与「带引号的字符串」两种 JSON 形态的整数读法。
+// ★ ㊾（2026-10-08）为什么需要它：真上游 `POST /wallet/getnowblock` 的高度在嵌套的
+//
+//	`block_header.raw_data.number` 那一层，而 wallet 这一族是从 protobuf 直接转 JSON 的，
+//	数字字段**可能是 86875xxxx、也可能是 "86875xxxx"**（同族字段如 raw_data.timestamp 就有带引号的形态）。
+//	若按 `int64` 硬解，带引号那档会在 Unmarshal 阶段整条报类型错 ⇒ 链头读失败，
+//	表现和端点写死成一条不存在的路一模一样：监听恒 failing、钱到了也不入账，而日志只说"查询失败"。
+//	读不出来时保持 0——**取不到值与取到 0 由 tronNewestBlock 之上那条"三腿皆空即显式报错"统一处理**，
+//	这里不吞错误也不造假值。
+type jsonInt64 int64
+
+// UnmarshalJSON 实现按需容错：合法数字／带引号数字都收，其余形态留 0。
+func (j *jsonInt64) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(strings.TrimSpace(string(b)), "\"")
+	if s == "" || s == "null" {
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		// 认不出来的形态（对象、科学计数、上游换字段类型）不当成错误上抛：
+		// 这一腿的判据是"四形态里有没有一条读到正高度"，单字段解析失败应当**落到下一腿**，
+		// 而不是让整次链头查询在 Unmarshal 处炸掉（那会把"还能读第 2 腿"的可用上游打成失败）。
+		return nil
+	}
+	*j = jsonInt64(n)
+	return nil
+}
+
+// tronBlockResp 链头高度。上游四种真实形态都要认（优先级见 tronNewestBlock）：
+//   - ★ ㊾ 真上游 `POST /wallet/getnowblock`：{"block_header":{"raw_data":{"number":123}}}
+//     （2026-10-06 本机独立网络实测：这一族里只有它在，四条 GET 全 404）
 //   - /v1/blocks/latest 官方形态：{"block_header":{"number":123}}
 //   - /v1/blocks?limit=1&order_by=… 列表形态：{"data":[{"block":123}]}
 //   - mock_chain（UAT）顶层形态：{"block_number":123}
 //
-// ★ 只认后两种是 ⑮ 的一条根因：光换端点不换结构体，链头照样读 0。
+// ★ 只认后三种是 ⑮ 的一条根因：光换端点不换结构体，链头照样读 0；
+//
+//	而第 3 波那次换的 `/v1/blocks/latest` **本身就是一条不存在的路**（㊾ 实测）——
+//	两条腿必须一起动，只动其一现网仍恒 404／恒读 0。
 type tronBlockResp struct {
 	Data []struct {
 		Block int64 `json:"block"`
 	} `json:"data"`
 	BlockNumber int64 `json:"block_number"`
 	BlockHeader struct {
-		Number int64 `json:"number"`
+		Number  int64 `json:"number"`
+		RawData struct {
+			Number jsonInt64 `json:"number"`
+		} `json:"raw_data"`
 	} `json:"block_header"`
 }
 
-// tronNewestBlock 按「block_header.number ＞ block_number ＞ data[0].block」取链头高度。
-// 三腿都留着是刻意的：上游换形态时读 0 会让确认数永远不达标（钱到了也不入账），
+// tronNewestBlock 按「raw_data.number ＞ block_header.number ＞ block_number ＞ data[0].block」取链头高度。
+// 四腿都留着是刻意的：上游换形态时读 0 会让确认数永远不达标（钱到了也不入账），
 // 而这一条腿一旦静默，界面上照样向客户承诺「达到确认数后自动入账」。
+// 顺序按"真上游当前形态优先"排：真件里 raw_data.number 与 block_header.number 不会同时出现，
+// 但**同时出现时问 raw_data**才是问那台机器现在真正在用的字段（㊾ 实测形态），
+// 反过来会让"上游把 /v1 那族补回来"那一天悄悄读到一个过时的外层高度。
 func tronNewestBlock(r tronBlockResp) int64 {
+	if int64(r.BlockHeader.RawData.Number) > 0 {
+		return int64(r.BlockHeader.RawData.Number)
+	}
 	if r.BlockHeader.Number > 0 {
 		return r.BlockHeader.Number
 	}
@@ -257,20 +299,44 @@ func tronNewestBlock(r tronBlockResp) int64 {
 	return 0
 }
 
-// tronHeadURL 链头查询端点。
-// ★ ⑮ 根因之一：旧形态裸打 GET {base}/v1/blocks —— TronGrid 这个集合端点要求
+// 链头查询的默认端点（★ ㊾ 2026-10-08 定档）：真上游只认
 //
-//	limit/order_by 参数，裸打恒回 404 {"status":404,"error":"Not Found"}，
-//	于是现网每 30s 一条「TRON 链头查询失败」、8 天零成功而界面照旧承诺自动入账。
-//	/latest 是无参形态；仍保留 env 覆盖口（USDT_TRON_HEAD_PATH）供上游再改路径时不改码顶住。
-func tronHeadURL(base string) string {
-	if p := strings.TrimRight(os.Getenv("USDT_TRON_HEAD_PATH"), "/"); p != "" {
-		if !strings.HasPrefix(p, "/") {
-			p = "/" + p
-		}
-		return strings.TrimRight(base, "/") + p
+//	POST {base}/wallet/getnowblock，高度在 block_header.raw_data.number。
+//	旧默认 /v1/blocks/latest 是 2026-10-05 第 3 波按「裸 /v1/blocks 恒 404」推出来的另一条不存在的路
+//	（㊾ 本机独立网络实测：/v1/blocks/latest、/v1/blocks?limit=1、/v1/blocks/1000、/v1/statistics 四条全 404），
+//	于是现网每 30 s 失败一次、每昼夜约 2,880 条失败日志、监听恒 failing、收银台恒降级人工核销。
+const (
+	tronHeadDefaultPath    = "/wallet/getnowblock"
+	tronHeadDefaultMethod  = http.MethodPost
+	tronHeadWalletBodyJSON = "{}"
+)
+
+// tronHeadRequest 链头查询的**方法＋路径＋请求体**三元组（★ ㊾ 的修法本体）。
+//
+// 为什么不再是 tronHeadURL 只给路径：上游那一族是 wallet API，**GET 同一路径也回 404**，
+// 旧那个 `USDT_TRON_HEAD_PATH` 覆盖口"只重写路径、不改方法也不改解析"，
+// 运营侧调档绕不过去（㊾ 现网实证）。所以覆盖口拆成两把、彼此**不做派生推断**：
+//   - USDT_TRON_HEAD_PATH：路径（缺省 /wallet/getnowblock）；
+//   - USDT_TRON_HEAD_METHOD：方法（缺省 POST）——"这条路径该用 GET 还是 POST"是上游契约，
+//     禁止按路径前缀猜（猜错的表现就是又造一条死腿，同 ⑮/㊾ 两次的同形死法）。
+//
+// 请求体：POST 时固定发 `{}`（wallet 那一族接受空体）；GET 时不带体。
+func tronHeadRequest(base string) (method, url string, body []byte) {
+	p := strings.TrimRight(os.Getenv("USDT_TRON_HEAD_PATH"), "/")
+	if p == "" {
+		p = tronHeadDefaultPath
 	}
-	return strings.TrimRight(base, "/") + "/v1/blocks/latest"
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	method = strings.ToUpper(strings.TrimSpace(os.Getenv("USDT_TRON_HEAD_METHOD")))
+	if method == "" {
+		method = tronHeadDefaultMethod
+	}
+	if method == http.MethodGet {
+		return method, strings.TrimRight(base, "/") + p, nil
+	}
+	return method, strings.TrimRight(base, "/") + p, []byte(tronHeadWalletBodyJSON)
 }
 
 // FetchDeposits 拉取指定地址自 sinceBlock（不含）以来的 TRC20-USDT 转入。
@@ -284,14 +350,17 @@ func (f *TronFetcher) FetchDeposits(ctx context.Context, addr string, sinceBlock
 		hdrs["TRON-PRO-API-KEY"] = f.APIKey
 	}
 	var head tronBlockResp
-	if err := httpJSON(ctx, http.MethodGet, tronHeadURL(base), nil, hdrs, &head); err != nil {
+	// ★ 链头这一腿的 key/URL/体**只有一份来源**＝tronHeadRequest（㊾：方法也是契约的一部分，
+	// 过去只有 URL 能被 env 覆盖，运营侧无论怎么调都到不了真上游那一族）
+	headMethod, headURL, headBody := tronHeadRequest(base)
+	if err := httpJSON(ctx, headMethod, headURL, headBody, hdrs, &head); err != nil {
 		return nil, 0, fmt.Errorf("TRON 链头查询失败: %w", err)
 	}
 	newest := tronNewestBlock(head)
 	if newest <= 0 {
 		// 端点通了但三形态都没读到高度：显式失败，不许带 0 往下走
 		// （0 会让 newest-block+1 恒小于确认阈值 ⇒ 钱到了一辈子不入账，且日志一行不剩）
-		return nil, 0, fmt.Errorf("TRON 链头读数取不到（三种响应形态均为空）")
+		return nil, 0, fmt.Errorf("TRON 链头读数取不到（四种响应形态均为空）")
 	}
 	u := fmt.Sprintf("%s/v1/accounts/%s/transactions?only_confirmed=true&only_to=true&limit=50&contract=TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t&from_block=%d",
 		strings.TrimRight(base, "/"), addr, sinceBlock+1)
