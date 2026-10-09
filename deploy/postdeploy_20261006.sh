@@ -152,5 +152,18 @@ echo "    translator-demo 才是 journal（StandardOutput=journal）——journa
 echo
 if [ "$RC" = "0" ]; then echo "POSTDEPLOY_ALL_OK=1"; else echo "POSTDEPLOY_FAIL=1（上面有 bad 行）"; fi
 echo POSTDEPLOY_EXIT=$RC
+exit "$RC"
 REMOTE_EOF
-echo "POSTDEPLOY_LOCAL_EXIT=$?"
+SSH_RC=$?
+echo "POSTDEPLOY_LOCAL_EXIT=$SSH_RC"
+# ★ 10-10 补的**这一族脚本自己的**「有判据没接线」：旧形态远端段最后一句是 echo（恒退 0），
+#   本机层又把 `$?` 打成一行读数就结束 ⇒ **整份脚本永远退 0**，哪怕同一屏写着
+#   POSTDEPLOY_FAIL=1。第 9 波复跑实测抓到的（`tail` 那层看到 exit 0，日志里却是 FAIL=1）。
+#   这一族会被下一波照着抄，所以两份一起改，并配了静态锁
+#   （internal/fileproc/postdeploy_exit_gate_test.go：远端 RC 必须一路带到本机退出码）。
+if [ "$SSH_RC" = "0" ]; then
+  echo "本机结论：复查全绿（现网接线一条不缺）"
+else
+  echo "本机结论：复查**未通过**，退出码 $SSH_RC（255＝链路没通，别读成『现网没问题』）"
+fi
+exit "$SSH_RC"

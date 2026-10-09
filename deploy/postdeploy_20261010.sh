@@ -7,8 +7,11 @@
 #      ⇒ 它的账只有单测＋反证，台账按**已上线·现网无读数**记，别在这份脚本里补一条恒绿的锁。
 #
 # 它补的是 release_20261010.sh（以及它复用的第 8 波那批改动）当场**取不到**或**要等时间窗**的那几条读数，一条都不重复写数字：
-#   ① ㊾（TRON 链头）：`usdt_watch` 状态词 **＋** 「这一轮真的探过」的成功侧行数。
-#      只看"没有失败行"是不够的——监听压根没跑时失败行也是 0（假绿）。两条腿一起读才叫恢复。
+#   ① ㊾（TRON 链头）：**三条腿**一起读——状态词 ＋ 失败行数归 0 ＋ **扫描成功才会写的库侧游标**
+#      （`system_config.usdt_cursor_<链>` 的 `updated_at` 晚于本单元启动）。
+#      只看"没有失败行"是不够的——监听压根没跑时失败行也是 0（假绿）。
+#      ⚠️ 第三条原先写的是"日志里带 [usdt-watch] 的行数 >0"，那是**结构性必红**：
+#      那个前缀只在失败三处落日志，健康轮次一行都不写（2026-10-10 复查实测抓到，细则见 B 段头部）。
 #   ② 告警归宿：`usdt_watch_dead` 那条 open 行有没有随健康轮次自动收敛，
 #      以及当时 `open=20` 那一堆到底是什么 kind（不分组就永远不知道 20 条里有几条是本批的）。
 #   ③ ㊶（回译拼尾）：`/metrics` 的 purity 序列接线（HELP/TYPE 在位＝计数器接了线）。
@@ -74,6 +77,17 @@ ALOG=/opt/ai-assist/data/assist.log
 RC=0
 bad() { echo "  FAIL $1"; RC=1; }
 ok()  { echo "  ✔ $1"; }
+# ★ systemd 状态读数必须走这一个函数，不许再写 `$(systemctl is-enabled X || echo '<未装>')`：
+#   unit 不存在时 systemctl **既**往 stdout 打 "not-found"**又**退非 0，于是命令替换把两个值都收进来，
+#   读数行变成 `enabled=not-found\n<未装>` 两行；更坏的是 `PT_EN` 里带换行，判据永远不等于
+#   `enabled`（方向倒是对的），但那条 FAIL 文案被劈成三行，看日志的人会先怀疑脚本坏了。
+#   （10-10 复跑实测抓到；空值回落 `<未读>`，绝不回落成"看着像正常"的词。）
+sysd() {  # sysd <is-enabled|is-active> <unit>
+  local v
+  v=$(systemctl "$1" "$2" 2>/dev/null) || true
+  [ -n "$v" ] || v='<未读>'
+  printf '%s' "$v"
+}
 
 # ★ 时间窗锚点＝**该单元本次启动的那一刻**，不是「近 N 分钟」的墙上钟（10-10 实测自伤后改）。
 # 为什么：本脚本跑在换件之后，而旧件那几轮的失败行还在同一个日志文件里。按墙上 10 分钟数，
@@ -118,7 +132,25 @@ for p in 8787 8789 8790; do
 done
 
 echo
-echo "----- B ㊾ 两腿一起读：状态词＋失败行数＋**成功侧真的探过**（缺第三条＝'压根没跑'读成'没问题'）-----"
+echo "----- B ㊾ 三条腿一起读：状态词＋失败行数＋**成功轮次在库里留没留写入**（缺第三条＝'压根没跑'读成'没问题'）-----"
+# ★★ 第三条正腿为什么从日志搬到库里（2026-10-10 现网复查第一次跑就是被这条判据红的）：
+#   `[usdt-watch]` 这个前缀在代码里**只出现在失败三处**（扫描失败／入账落库失败／自动入账失败），
+#   成功那一轮走的是 `MarkUSDTDepositSeenBlock`，一行带该前缀的日志都不写
+#   ⇒ "健康态 [usdt-watch] 全部行 > 0" 是一条**结构性必红**的判据：监听越健康它越红，
+#     把它当"真的跑过"的证据，等于选错了账本（同族第二条假绿＝拿日志行数判副作用真发生）。
+#   能证明"这一轮真的拨过上游并且拨通了"的读面只有一个：扫描成功才会写的那一行链游标
+#   `system_config.usdt_cursor_<链>`——它由 `SetConfig` 每次写入把 `updated_at` 刷成当下时刻，
+#   而 `usdtScanChain` 只有在 `FetchDeposits` 成功且链头读数 >0 时才走到这一句。
+#   ⚠️ 链名一律从库里 `usdt_chains` 现读再拼键（禁止写死 trc20：运营加一条链这条腿就空转）。
+# 腿①／3：主站状态词（进程态、重启即清 ⇒ 它说的就是"这一代件"；演示单元按运营意图是 disabled，只作读数）
+WORD=$(curl -s --max-time 8 http://127.0.0.1:8787/api/health | sed -n 's/.*"usdt_watch":"\([a-z_]*\)".*/\1/p' || true)
+[ -n "$WORD" ] || WORD="<取不到>"
+echo "  主站 usdt_watch 状态词=$WORD（ok＝本进程至少跑完一轮且清单内全链无失败／unknown＝压根没跑过一轮／disabled＝开关关着）"
+if [ "$WORD" = "ok" ]; then
+  ok "B 腿①：主站监听状态词＝ok"
+else
+  bad "B 腿①：主站 usdt_watch=$WORD 不是 ok——unknown 是'还没探过'，别跟'探过且没问题'混读"
+fi
 for p in 8787 8789; do
   echo "  port=$p $(curl -s --max-time 8 http://127.0.0.1:$p/api/health | grep -o '"usdt_watch":"[a-z]*"' || echo '<无该字段>') $(curl -s --max-time 8 http://127.0.0.1:$p/api/health | grep -o '"dispatch":"[a-z]*"' || echo '')"
 done
@@ -128,14 +160,53 @@ LIM=$(unit_start_iso translator)
 if [ -z "$LIM" ]; then
   bad "㊾ 时间窗锚点取不到（translator MainPID 读不到）——此时**不许**把窗口判据当通过，先看 A 段"
 else
+# 腿②／3：失败行数（负向判据，期望 0；同段的"全部行"降级成**只作读数**，理由见上面那段）
   FAILS=$(awk -v lim="$LIM" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"[usdt-watch]") && index($0,"扫描失败")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || true)
   SCANS=$(awk -v lim="$LIM" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"[usdt-watch]")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || true)
   : "${FAILS:=<读数失败>}" "${SCANS:=<读数失败>}"
-  echo "  自 $LIM（本单元启动）以来：[usdt-watch] 扫描失败行=$FAILS（期望 **0**）  [usdt-watch] 全部行=$SCANS（期望 **>0**＝这一轮真的拨过上游）"
-  if [ "$FAILS" = "0" ] && [ "$SCANS" != "0" ] && [ "$SCANS" != "<读数失败>" ]; then
-    ok "㊾ 现网坐实：本件启动以来无失败行且确有探测"
+  echo "  自 $LIM（本单元启动）以来：[usdt-watch] 扫描失败行=$FAILS（期望 **0**）  [usdt-watch] 全部行=$SCANS（**只作读数不作判据**：成功轮不带这个前缀，健康态它恒 0）"
+  if [ "$FAILS" = "0" ]; then
+    ok "B 腿②：本件启动以来零失败行"
   else
-    bad "㊾ 判据不成立（fails=$FAILS scans=$SCANS）——scans=0 意味着监听压根没跑，别把'零失败'读成健康"
+    bad "B 腿②：有 $FAILS 行扫描失败（⑮／㊾ 那一族回潮，去看下面那两条样本）"
+  fi
+
+# 腿③／3：成功轮次的库侧证据——清单里每条链都必须有一行「本件启动之后写过的游标」
+  CHAIN_LIST=$(sudo -u postgres psql -d langcross -Atc "select value from system_config where key='usdt_chains';" 2>/dev/null || true)
+  CUR_ROWS=$(sudo -u postgres psql -d langcross -Atc "select key||'@'||substr(updated_at,1,19) from system_config where key like 'usdt_cursor_%' order by key;" 2>/dev/null || true)
+  NOW_E=$(date +%s)
+  LIM_E=$(date -d "$LIM" +%s 2>/dev/null || true)
+  if [ -z "$CHAIN_LIST" ]; then
+    bad "B 腿③：库里 usdt_chains 现值读不到 ⇒ 不知道该核哪几条游标（这一格判『未验证』，不等于通过）"
+  elif [ -z "$LIM_E" ]; then
+    bad "B 腿③：启动锚点转不成时刻（LIM=$LIM）⇒ 游标新鲜度无从比较（同样判『未验证』）"
+  else
+    DIAL_BAD=0
+    DIAL_DETAIL=""
+    for ch in $(printf '%s' "$CHAIN_LIST" | tr ',' ' '); do
+      ch=$(printf '%s' "$ch" | tr -d ' \r')
+      [ -n "$ch" ] || continue
+      TS=$(printf '%s\n' "$CUR_ROWS" | sed -n "s/^usdt_cursor_$ch@//p")
+      if [ -z "$TS" ]; then
+        bad "B 腿③：链 $ch 在库里**没有游标行** ⇒ 这台从没成功拨通过上游（旧件那代写的行也会被下面那条『早于启动』抓到，别当没看见）"
+        DIAL_BAD=1
+        continue
+      fi
+      TS_E=$(date -d "$TS" +%s 2>/dev/null || true)
+      if [ -z "$TS_E" ]; then
+        bad "B 腿③：链 $ch 游标时刻解析不了（原值 $TS）⇒ 判未验证"
+        DIAL_BAD=1
+        continue
+      fi
+      DIAL_DETAIL="$DIAL_DETAIL $ch=$((${NOW_E} - TS_E))s前"
+      if [ "$TS_E" -lt "$LIM_E" ]; then
+        bad "B 腿③：链 $ch 最后一次成功扫描写在 $TS，**早于本件启动** $LIM ⇒ 这一代件还没拨通过上游（别拿旧件的游标当新件的健康）"
+        DIAL_BAD=1
+      fi
+    done
+    if [ "$DIAL_BAD" = "0" ]; then
+      ok "B 腿③：清单内每条链都有『本件启动之后』的游标写入（距今${DIAL_DETAIL}）＝监听真的拨过上游并且拨通了"
+    fi
   fi
 fi
 echo "  最近 2 条 usdt-watch 行（遮 URL 与 hex，只作定位不作判据）："
@@ -166,7 +237,7 @@ echo "    恢复行=$REC（本单元启动以来，期望 **≥1**＝遗留 open
 if [ "${REC:-0}" != "0" ] && [ "${REC:-}" != "<读数失败>" ]; then
   ok "(53) 补腿现网坐实：恢复行存在且带档名（$WHY）"
 else
-  bad "(53) 补腿没跑出恢复行（rec=$REC）——两种形态别混：①监听被闸关着/一条都没探过（看 B 段 scans）；②库里那条 open 本来就不归这一腿管（看上面 status 行）。open 还在＝这一格没闭环，别记成已修"
+  bad "(53) 补腿没跑出恢复行（rec=$REC）——两种形态别混：①监听被闸关着/一条都没探过（看 B 段腿①状态词与腿③游标）；②库里那条 open 本来就不归这一腿管（看上面 status 行）。open 还在＝这一格没闭环，别记成已修"
 fi
 OPENW=$(sudo -u postgres psql -d langcross -Atc "select count(*) from alerts where kind='usdt_watch_dead' and status<>'resolved';" 2>/dev/null || echo "")
 if [ -n "$OPENW" ]; then
@@ -210,11 +281,27 @@ rm -f /tmp/_pd_health
 
 echo
 echo "----- F #29 有脚本无调度：派发探针闹钟在不在位（装了才算补上）-----"
-echo "  probe.timer enabled=$(systemctl is-enabled translator-dispatch-probe.timer 2>/dev/null || echo '<未装>') active=$(systemctl is-active translator-dispatch-probe.timer 2>/dev/null || echo '<未装>')"
-echo "  expiry.timer enabled=$(systemctl is-enabled translator-dispatch-expiry.timer 2>/dev/null || echo '<未装>') active=$(systemctl is-active translator-dispatch-expiry.timer 2>/dev/null)"
+# ★ 这一段现在**带判据**了（10-10 首跑时只出读数，于是"闹钟没装"这件事要靠人看输出看出来）：
+#   #29 的缺陷本体就是"脚本在、文档在、运行面是零"，所以这里三件事必须逐条判红：
+#   ① timer enabled 且 active（只 enable 不 --now＝下一个日历点前不装填，读数面看着像装好了）；
+#   ② 两份脚本在位且可执行（ExecStart 指的就是它们）；
+#   ③ 样张在位且够档（缺它探针每天判红，安装器按设计就不该 enable 闹钟）。
+PT_EN=$(sysd is-enabled translator-dispatch-probe.timer)
+PT_AC=$(sysd is-active translator-dispatch-probe.timer)
+echo "  probe.timer enabled=$PT_EN active=$PT_AC"
+if [ "$PT_EN" = enabled ] && [ "$PT_AC" = active ]; then
+  ok "#29 闹钟已装配并已装填（enabled/active）"
+else
+  bad "#29 闹钟没装上（enabled=$PT_EN active=$PT_AC）——『有脚本无调度』这一格仍未闭，别把 scripts/ 里那份文件当成已生效"
+fi
+echo "  expiry.timer enabled=$(sysd is-enabled translator-dispatch-expiry.timer) active=$(sysd is-active translator-dispatch-expiry.timer)"
 systemctl list-timers --all --no-pager 2>/dev/null | grep -E 'dispatch' | head -3 | sed 's/^/    /'
 for f in /opt/translator/bin/dispatch_preflight.sh /opt/translator/bin/dispatch_probe_daily.sh; do
-  [ -f "$f" ] && echo "  $f 在位 mtime=$(stat -c %y "$f" | cut -c1-16)" || echo "  $f <不在位>"
+  if [ -x "$f" ]; then
+    echo "  $f 在位可执行 mtime=$(stat -c %y "$f" | cut -c1-16)"
+  else
+    bad "$f $( [ -f "$f" ] && echo '在位但不可执行' || echo '<不在位>' ) ⇒ 闹钟 ExecStart 直接跑不起来（#29 那一条没补上）"
+  fi
 done
 ls -1d /opt/translator/data/_dispatch_probe 2>/dev/null | sed 's/^/  工作目录=/' || echo "  工作目录 <不存在>"
 stat -c '  属主=%U:%G 权限=%a' /opt/translator/data/_dispatch_probe 2>/dev/null || true
@@ -311,5 +398,20 @@ sudo -u postgres psql -d langcross -Atc "select '    pending_usdt_orders='||coun
 echo
 if [ "$RC" = "0" ]; then echo "POSTDEPLOY_ALL_OK=1"; else echo "POSTDEPLOY_FAIL=1（上面有 bad 行）"; fi
 echo POSTDEPLOY_EXIT=$RC
+exit "$RC"
 REMOTE_EOF
-echo "POSTDEPLOY_LOCAL_EXIT=$?"
+SSH_RC=$?
+echo "POSTDEPLOY_LOCAL_EXIT=$SSH_RC"
+# ★ 这一行是 10-10 复跑时才发现的**本脚本自己的**一条「有判据没接线」：
+#   旧形态远端段跑完只 `echo POSTDEPLOY_EXIT=$RC` 就结束了（最后一句 echo 恒退 0），
+#   本机这一层又把 `$?` 打进一行读数就到此为止 ⇒ **同一份输出里写着 POSTDEPLOY_FAIL=1，
+#   脚本退出码仍然是 0**。表现完全就是本波点名的那一族：证据链看着齐（判据在、红也出了），
+#   运行面是零——因为下一个把它挂进定时器或 CI 的人，第一个读的就是退出码。
+#   现在把远端 RC 一路带到本机：1＝有 FAIL 行；2＝硬前置不满足；
+#   255＝ssh 链路压根没通（这**不是**现网健康，必须照样红）。
+if [ "$SSH_RC" = "0" ]; then
+  echo "本机结论：复查全绿（现网接线一条不缺）"
+else
+  echo "本机结论：复查**未通过**，退出码 $SSH_RC（255＝链路没通，别读成『现网没问题』）"
+fi
+exit "$SSH_RC"
