@@ -20,6 +20,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,18 @@ const usdtWatchFailAlert = 3
 // usdtWatchAlertKind 平台级告警类型（对外排障契约，逐字钉在用例里）。
 const usdtWatchAlertKind = "usdt_watch_dead"
 
+// 三条收敛腿的档名（★ 内部排障契约：只进日志的 why 字段，不进对外文案；逐字钉在用例里）。
+//
+//	① in_process_recovery      本进程内死过又活了；
+//	② post_restart_reconcile   换件／重启之后才好的（(53) 补的那条腿）；
+//	③ chain_unlisted           挂过的那条链已被运营**从 usdt_chains 里删掉**（★ (54)）——
+//	   这一条**不是恢复**，是"那条告警不再是关于这台的事实"，所以日志文案单独走一档（见 resolveOpenWatchAlerts）。
+const (
+	usdtWatchWhyInProcessRecovery = "in_process_recovery"
+	usdtWatchWhyPostRestart       = "post_restart_reconcile"
+	usdtWatchWhyChainUnlisted     = "chain_unlisted"
+)
+
 // 状态词常量（对外契约：现网判据与收银台联动都按这几个字面量比）
 const (
 	usdtWatchDisabled = "disabled"
@@ -70,6 +83,12 @@ type usdtWatchState struct {
 	fails      map[string]int // 链 → 连续失败轮数（成功即清零）
 	everRan    bool           // 是否跑过至少一轮（没跑过＝unknown，不许谎报 ok）
 	wasFailing bool           // 上一档是否处于 failing（用于恢复时收敛告警）
+	// ★ (53) 2026-10-10 现网实证补的腿：本进程有没有把"库里遗留的 open 行"核过一次。
+	//	wasFailing 是**进程态**，换件/重启即清零，而告警行在**库里**——
+	//	现网读数：10-06 12:17 落的 usdt_watch_dead 一直 open，而 10-10 复查时监听已 ok，
+	//	于是告警中心长期挂着一条"监听已死"的 critical 对着一个健康的事实 ⇒ 假告警。
+	//	每进程只核一次（别每 30s 查一遍库），且**只在真的健康那一轮**才消费这一档。
+	alertReconciled bool
 }
 
 // usdtWatch 进程内单例（对账器本身也是单进程周期任务，没有第二份状态）
@@ -101,6 +120,8 @@ func (w *usdtWatchState) markDisabled() {
 	w.fails = map[string]int{}
 	w.everRan = false
 	w.wasFailing = false
+	// ★ (53)：重新开闸＝新的一轮监控周期，遗留告警那一次核对要重做（否则关一开就把补腿永久吃掉）
+	w.alertReconciled = false
 }
 
 // word 当前状态词；chains 为本轮应参与的链（跑过但没链可跑＝unknown）。
@@ -146,6 +167,76 @@ func (w *usdtWatchState) tookRecovery() bool {
 	return true
 }
 
+// alertReconcilePending 纯内存快判：本进程还有没有"库里遗留的 open 行"这一课要补。
+// ★ 刻意**不读链清单、不查库**——它是那道"要不要为此多读一次 system_config"的门闩，
+//
+//	读库与收敛都归下面那一个带 chains 的判据管（(53) 的开销口径：每进程最多一次）。
+func (w *usdtWatchState) alertReconcilePending() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return !w.alertReconciled
+}
+
+// takeAlertReconcile 领取"本进程唯一一次遗留告警核对"的资格：
+// 只有**跑过一轮、链清单非空、且全部已记录链当前都无失败**时才发，发了即消费（不再发第二次）。
+// ★ 三条不放行的形态各有意图：
+//
+//	没跑过（everRan=false）⇒ 此刻对监听一无所知，"没有 open 行可关"与"还不知道该不该关"是两件事；
+//	链清单空 ⇒ 与 word() 同档，回落 unknown，不许拿空清单当"全链健康"；
+//	任一链有失败计数 ⇒ 那条 open 告警可能正是它挂的，现在关掉就是把真故障洗绿。
+func (w *usdtWatchState) takeAlertReconcile(chains []string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.alertReconciled {
+		return false
+	}
+	if !w.everRan || len(chains) == 0 {
+		return false
+	}
+	// 判"全链无失败"按**全部已记录链**数，不只按当前清单：运营刚改过 usdt_chains 时，
+	// 清单外那条留下的失败计数照样说明"监听不是全绿的"，此刻关掉告警就是把真故障洗绿。
+	for _, n := range w.fails {
+		if n > 0 {
+			return false
+		}
+	}
+	w.alertReconciled = true
+	return true
+}
+
+// forgetUnlisted 丢掉**已不在保留名单里**的链的失败计数；返回"是否有曾达告警档的链被丢掉"。
+// 保留名单由调用方给（见 usdtListedChains：本轮实际监听的链 ∪ usdt_chains 原文里还写着的名）——
+// ★ (54)：这一条补的是 (53) 自己留下的洞。note() 只按清单里的链调用，所以一条链掉出
+//
+//	usdt_chains 之后，它在 w.fails 里那个 ≥3 的计数**再也不会被写、也永远不会被清零**——
+//	于是三条腿全被顶死：tookRecovery 见 n≥阈值 永假、takeAlertReconcile 见 n>0 永假、
+//	而 word() 只扫当前清单 ⇒ 它同时报 ok 并继续承诺自动入账，库里那行 usdt_watch_dead
+//	却任何一条腿都关不掉（旧写法只能靠"把总开关关一轮"来清，等于用关闸排一次配置漂移）。
+//
+// 取向：链既然既不被监听、也不再写在配置里，那条告警就**不再是关于这台的事实**；
+// 收敛它必须出声（调用方走 why=chain_unlisted 的 WARN，**不写成"已恢复"**），不是把故障洗绿。
+// ⚠️ 名单里必须带上"配置里还写着但没配收款地址"的那条链（这正是 usdtListedChains 存在的原因）：
+// 那种形态是配置故障、不是运营撤链，告警必须留着等地址补回来。
+func (w *usdtWatchState) forgetUnlisted(chains []string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	keep := make(map[string]bool, len(chains))
+	for _, c := range chains {
+		keep[c] = true
+	}
+	droppedAlerted := false
+	for c, n := range w.fails {
+		if keep[c] {
+			continue
+		}
+		if n >= usdtWatchFailAlert {
+			droppedAlerted = true
+		}
+		delete(w.fails, c)
+	}
+	return droppedAlerted
+}
+
 // usdtWatchHealthWord /api/health 的状态词读点（只读，不触发任何上游调用）
 func (s *Server) usdtWatchHealthWord() string {
 	if s.Store == nil {
@@ -183,14 +274,49 @@ func (s *Server) usdtWatchReportRound(chain string, err error) {
 		observability.Error(context.Background(), "USDT 到账监听连续失败达阈值",
 			"chain", chain, "rounds", usdtWatchFailAlert)
 	}
-	if err == nil && s.Store != nil && usdtWatch.tookRecovery() {
-		for _, a := range s.listOpenWatchAlerts() {
-			if aerr := s.Store.ResolveAlert(a.ID); aerr != nil {
-				observability.Warn(context.Background(), "USDT 监听告警收敛失败", "id", a.ID, "err", aerr.Error())
-			}
-		}
-		observability.Info(context.Background(), "USDT 到账监听已恢复", "chain", chain)
+	if err != nil || s.Store == nil {
+		return
 	}
+	// 恢复腿有**两条**，各堵一种"死而复愈"，缺一条就有一类告警永不收敛：
+	// ① tookRecovery＝本进程内死过又活了（⑮ 原来只有这一条）；
+	// ② takeAlertReconcile＝**换件/重启之后**才好的——wasFailing 是进程态，重启即清零，
+	//    而库里那行 open 不认识这次重启（现网实证 (53)：10-06 12:17 落的那条 open 行，
+	//    到 10-10 复查时监听已连跑多轮 ok，它还在告警中心挂着）。
+	if usdtWatch.tookRecovery() {
+		s.resolveOpenWatchAlerts(usdtWatchWhyInProcessRecovery)
+		return
+	}
+	if usdtWatch.alertReconcilePending() {
+		// 快判只读内存；真要领资格得拿链清单，于是这里才多读一次配置（每进程最多一次）
+		if usdtWatch.takeAlertReconcile(s.Store.GetUSDTCfg().Chains) {
+			s.resolveOpenWatchAlerts(usdtWatchWhyPostRestart)
+		}
+	}
+}
+
+// resolveOpenWatchAlerts 把库里 open 的 usdt_watch_dead 行逐条收敛，并留一行可 grep 的恢复读数。
+// why 是**内部排障档名**（见上面那三个常量），只进日志不进对外文案；
+// 三条腿共用这一份实现，避免"其中一条被改坏、另一条还绿"的假绿（同一句 ResolveAlert 抄两遍迟早分叉）。
+// ★ (54)：chain_unlisted 那一档**不许写成"监听已恢复"**——监听并没有恢复，是那条链被从配置里删掉了。
+// 把"撤掉一条链"记成"恢复了"，下一次同样的故障就藏在一条假的健康读数后面（人只会去 grep「已恢复」）。
+func (s *Server) resolveOpenWatchAlerts(why string) {
+	rows := s.listOpenWatchAlerts()
+	for _, a := range rows {
+		if aerr := s.Store.ResolveAlert(a.ID); aerr != nil {
+			observability.Warn(context.Background(), "USDT 监听告警收敛失败",
+				"id", a.ID, "why", why, "err", aerr.Error())
+		}
+	}
+	if len(rows) == 0 {
+		return
+	}
+	if why == usdtWatchWhyChainUnlisted {
+		observability.Warn(context.Background(), "USDT 到账监听告警因链清单收窄而收敛（非恢复，请核配置）",
+			"why", why, "resolved", len(rows))
+		return
+	}
+	observability.Info(context.Background(), "USDT 到账监听已恢复",
+		"why", why, "resolved", len(rows))
 }
 
 // listOpenWatchAlerts 查平台级 open 状态的 usdt_watch_dead 告警行
@@ -204,6 +330,35 @@ func (s *Server) listOpenWatchAlerts() []*store.Alert {
 		if a != nil && a.Kind == usdtWatchAlertKind {
 			out = append(out, a)
 		}
+	}
+	return out
+}
+
+// usdtListedChains "这条链还挂在配置里"的完整名单：本轮实际监听的链 ∪ usdt_chains 原文里的名。
+//
+//	两份名单都要，是因为 store.GetUSDTCfg 会把**没配收款地址**的链从 Chains 里剔掉——
+//	那条链这时既不被扫描、又还写在配置里，语义是"这台本该收这条链的钱却配坏了"，
+//	不是"运营撤掉了这条链"。拿 Chains 单当保留名单就会把一次配置故障收敛成一条已解决的告警
+//	（★ (54)：这一族"洗绿"比"永不收敛"更贵——前者让人以为处理过了）。
+//	归一化口径与 store.GetUSDTCfg 一致（去空白＋小写、跳过空段），
+//	这一份**只用来判"名字还在不在"**，不重算优先级、不重算地址有效性（那一份判定只在那一个函数里）。
+func (s *Server) usdtListedChains(cfg *store.USDTSettings) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(c string) {
+		c = strings.TrimSpace(strings.ToLower(c))
+		if c == "" || seen[c] {
+			return
+		}
+		seen[c] = true
+		out = append(out, c)
+	}
+	for _, c := range cfg.Chains {
+		add(c)
+	}
+	raw, _ := s.Store.GetConfig("usdt_chains")
+	for _, c := range strings.Split(raw, ",") {
+		add(c)
 	}
 	return out
 }
@@ -243,6 +398,15 @@ func (s *Server) usdtReconcileTick() {
 	if !cfg.Enabled || !cfg.AutoSettle {
 		usdtWatch.markDisabled() // 开关关着就别说"健康"，也别留着上一轮的失败计数
 		return                   // 自动对账默认关闭：真链冒烟通过前不产生任何自动入账
+	}
+	// ★ (54)：先清掉「运营已经从 usdt_chains 里删掉的链」留下的失败计数，再谈本轮成败。
+	//	不清这一笔的后果不是难看，是**三条恢复腿同时被顶死**：note() 只按清单里的链调用，
+	//	掉出清单那条链的计数（可能已经 ≥usdtWatchFailAlert）从此既没人写、也没人清零 ⇒
+	//	tookRecovery 永假、takeAlertReconcile 永假，而 word() 只扫当前清单照样报 ok——
+	//	于是库里那行 usdt_watch_dead 谁都合不掉，旧写法只能靠"把总开关关一整轮"来清
+	//	（拿关闸排一次配置漂移，等于让运营用停机来消一条告警）。
+	if droppedAlerted := usdtWatch.forgetUnlisted(s.usdtListedChains(cfg)); droppedAlerted {
+		s.resolveOpenWatchAlerts(usdtWatchWhyChainUnlisted)
 	}
 	for _, chain := range cfg.Chains {
 		if err := s.usdtScanChain(chain, cfg); err != nil {
@@ -310,9 +474,18 @@ func (s *Server) usdtScanChain(chain string, cfg *store.USDTSettings) error {
 		}
 		_ = fresh // 已存在（重复扫描）也走一次匹配尝试——上轮未达确认数、本轮已达的自愈路径
 	}
-	// 匹配：对全部未匹配入账（含历史轮）逐一评估
-	for _, d := range s.Store.ListUnmatchedDeposits(200) {
-		if d.Chain != chain {
+	// 匹配：对本链的未匹配入账（含历史轮）逐一评估
+	// ★ (54)：这里过去是「全链共用一个 LIMIT 200 窗口 + Go 里按链筛」，孤儿一多就把新入账饿死
+	//	在窗口外且零日志；现在按链各开窗口（口径见 store.ListUnmatchedDepositsForChain）。
+	for _, d := range s.Store.ListUnmatchedDepositsForChain(chain, 200) {
+		// ★ (54) 第二条：块高缺失＝确认数**无从计算**，绝不按 0 起算。
+		//	旧形态 c = newest - 0 + 1 ≈ 当前链头高度 ⇒ 未达确认阈值那条判据直接被顶穿，
+		//	未确认、可回滚的转账会被立刻置 paid，而且全程没有任何告警面。
+		//	上游字段换名/漏发是现实存在的形态（㊾ 就是为链头读数专门造的 jsonInt64），
+		//	所以"读不到"必须当成**未知**而不是当成"很久以前"。
+		if d.BlockNo <= 0 {
+			observability.Warn(context.Background(), "USDT 入账缺块高读数，本轮不评确认数（留在未匹配池）",
+				"chain", chain, "deposit_id", d.ID)
 			continue
 		}
 		// 实时确认数：newest - block + 1（链头用本轮查询值）
@@ -334,7 +507,16 @@ func (s *Server) usdtScanChain(chain string, cfg *store.USDTSettings) error {
 
 // usdtTryMatch 单笔入账匹配订单并结算（唯一命中才自动入账）。
 func (s *Server) usdtTryMatch(d *store.USDTDeposit, chain string, newest int64) {
-	order, ambiguous := s.Store.FindPendingUSDTOrderByDeposit(chain, d.AmountMicro)
+	order, ambiguous, qerr := s.Store.FindPendingUSDTOrderByDeposit(chain, d.AmountMicro)
+	if qerr != nil {
+		// ★ (54)：查询失败＝**结论未知**，与"库里没有对应单"是两件事。
+		//	旧形态把 err 折成 (nil,false) 走"无单"分支 ⇒ 这笔钱静默留在池里，72h 后才以
+		//	「from 打错金额，请人工裁决退款」的误导文案冒头（真因是那次查询没成功）。
+		//	现在只出声并保留原状，下一轮自然重评（入账腿幂等，重复评估无副作用）。
+		observability.Warn(context.Background(), "USDT 匹配查询失败，本笔保留未匹配状态待下轮重评",
+			"chain", chain, "err", qerr.Error())
+		return
+	}
 	if ambiguous {
 		_ = s.Store.CreateAlert(0, "critical", "usdt_ambiguous",
 			fmt.Sprintf("USDT 入账 %s 金额 %s 命中多笔待结算订单（唯一索引失效？），已停止自动入账，请人工裁决",

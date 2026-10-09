@@ -859,6 +859,461 @@ func TestDispatchProbeDailyBehaviourMutations(t *testing.T) {
 	}
 }
 
+// ============================================================================ 安装器（#29 的落账批，2026-10-10）
+//
+// 这份锁为什么必须存在（现网读数，不是推演）：
+//
+//	scripts/dispatch_probe_daily.sh 与两只 unit 在 10-01 就建好了，"怎么装"只写在该脚本的文件头
+//	注释里（四步：拷两份脚本、拷两只 unit、建工作目录、放样张再 enable --now）。10-10 只读实测
+//	`systemctl is-enabled translator-dispatch-probe.timer` ⇒ **not-found**，/opt/translator/bin 下
+//	两份脚本与 /opt/translator/data/_dispatch_probe 目录**都不在位** ⇒ 那只闹钟从写下那天起
+//	**一次都没响过**。这就是本仓点名的「有脚本无调度」：证据链看着齐（脚本在、unit 在、文档在），
+//	运行面是零。⇒ 修法不是"下次记得装"，而是把装这一步变成一条幂等命令（dispatch_probe_install.sh）
+//	**并且给这条命令本身配锁**——否则安装器又是一个"有脚本没人跑"，只是把同一件事往后推一层。
+//
+//	第一条证据就来自本批：`--root --apply` 首跑在两份 unit 的 cp 上各报一次
+//	"No such file or directory"（执行段只建了 BIN_DIR 与 WORK_DIR，$UNIT_DIR 留给"生产上反正存在"
+//	这一假设，而 --root 的假想根目录里根本没有 etc/systemd/system）⇒ 退码 1（M1 复现实测）。
+//	这条锁就是把"安装器至少在自己的测试形态里真跑得通"钉住——它正是 M1 的反证靶子。
+//
+// 射程边界：安装器**会写**（落文件、daemon-reload、enable --now），这与 wrapper 相反，
+// 所以禁止名单只圈"改现役配置/关闸"那一族动作；而"--root 形态一行 systemctl 都不碰"这一条
+// 靠**假 systemctl 的调用日志必须为空**来证，不靠代码里那句注释——注释会撒谎，日志不会。
+
+// probeRepoRelInstaller 安装器在仓库里的相对路径（写点与判据都在这份文件里）。
+const probeRepoRelInstaller = "scripts/dispatch_probe_install.sh"
+
+// installerHarness 在 t.TempDir() 里真跑安装器：--root 把四个绝对写点整体换到临时树，
+// PATH 前面挂一只**只记不调**的假 systemctl。
+type installerHarness struct {
+	root     string
+	fakeBin  string
+	callsLog string
+	script   string
+}
+
+func newInstallerHarness(t *testing.T) *installerHarness {
+	t.Helper()
+	repo := findDispatchRepoRoot(t)
+	h := &installerHarness{
+		root:     t.TempDir(),
+		fakeBin:  t.TempDir(),
+		callsLog: filepath.Join(t.TempDir(), "systemctl_calls"),
+		script:   filepath.Join(repo, filepath.FromSlash(probeRepoRelInstaller)),
+	}
+	// 假 systemctl：把每一次调用原样记进日志再退 0。退 0 是刻意的——如果让它退非 0，
+	// "碰了 systemd"就会顺带把退出码也弄红，判据就分不清是**越界**还是**失败**（AGENTS §一·12
+	// dispatch_revert 那批用同一套假 systemctl 的理由：失败语义与射程语义必须各测各的）。
+	fake := "#!/usr/bin/env bash\nprintf 'systemctl %s\\n' \"$*\" >> \"${HARNESS_SYSTEMCTL_CALLS:-/dev/null}\"\necho fake-unit-state\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(h.fakeBin, "systemctl"), []byte(fake), 0o755); err != nil {
+		t.Fatalf("放假 systemctl 失败：%v", err)
+	}
+	return h
+}
+
+// installerRun 一次真跑的读数：退出码、全部输出、假 systemctl 被拨的调用清单。
+type installerRun struct {
+	code  int
+	out   string
+	calls []string
+}
+
+// run 真跑一次安装器（始终带 --root h.root）。scriptPath 空串＝仓库原件，反证时指到变异副本。
+func (h *installerHarness) run(t *testing.T, scriptPath string, args ...string) installerRun {
+	t.Helper()
+	if scriptPath == "" {
+		scriptPath = h.script
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("本机没有 bash（%v）⇒ 这份安装器的 shebang 就是 bash，缺 bash 不该当放行", err)
+	}
+	_ = os.Remove(h.callsLog)
+	cmd := exec.Command(bash, append([]string{scriptPath, "--root", h.root}, args...)...)
+	cmd.Env = append(os.Environ(),
+		"HARNESS_SYSTEMCTL_CALLS="+h.callsLog,
+		"PATH="+h.fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	r := installerRun{code: 0, out: string(out)}
+	if err != nil {
+		var ee *exec.ExitError
+		if !asExitError(err, &ee) {
+			t.Fatalf("启动安装器失败：%v（输出：\n%s）", err, out)
+		}
+		r.code = ee.ExitCode()
+	}
+	if b, err := os.ReadFile(h.callsLog); err == nil {
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			if s := strings.TrimSpace(l); s != "" {
+				r.calls = append(r.calls, s)
+			}
+		}
+	}
+	if t.Failed() {
+		t.Logf("安装器输出：\n%s", r.out)
+	}
+	return r
+}
+
+// copyInstallerVariant 把安装器原文按 old⇒new 改一处，落到一棵**仿仓库树**里
+// （variantRoot/scripts/dispatch_probe_install.sh ＋ 四份被装件用符号链接指回仓库真件）。
+//
+// 为什么要仿树而不是把副本丢在临时目录里：安装器的 REPO_ROOT 是按
+// `dirname "${BASH_SOURCE[0]}"/..` 现算的，副本要是孤零零一个文件，评件段会先因
+// "仓库里找不到 scripts/dispatch_probe_daily.sh" 报 bad、退码翻成 1 ⇒ **反证会因为完全
+// 无关的原因红**，那等于没验（AGENTS §三 那条"反证必须打在靶子上"）。仿树之后，
+// 唯一变量就是那处替换。
+//
+// old 必须在原文里**恰好出现一次**：0 次＝靶子已不在射程（改名式破坏让反证静默失效），
+// 多次＝替换打错地方，两种都当场 Fatal。
+func copyInstallerVariant(t *testing.T, name, old, new string) string {
+	t.Helper()
+	repo := findDispatchRepoRoot(t)
+	src := readRepoText(t, repo, probeRepoRelInstaller)
+	n := strings.Count(src, old)
+	if n != 1 {
+		t.Fatalf("%s：靶子串出现 %d 次（期望恰 1 次）⇒ 反证打不到那一处或打错地方：%q", name, n, old)
+	}
+	variantRoot := t.TempDir()
+	for _, rel := range []string{"scripts", "deploy/systemd"} {
+		if err := os.MkdirAll(filepath.Join(variantRoot, filepath.FromSlash(rel)), 0o755); err != nil {
+			t.Fatalf("建仿树目录失败：%v", err)
+		}
+	}
+	for _, rel := range []string{probeRepoRelWrapper, "scripts/dispatch_preflight.sh",
+		probeRepoRelService, probeRepoRelTimer} {
+		link := filepath.Join(variantRoot, filepath.FromSlash(rel))
+		if err := os.Symlink(filepath.Join(repo, filepath.FromSlash(rel)), link); err != nil {
+			t.Fatalf("仿树里挂 %s 失败：%v", rel, err)
+		}
+	}
+	dst := filepath.Join(variantRoot, "scripts", "dispatch_probe_install.sh")
+	if err := os.WriteFile(dst, []byte(strings.Replace(src, old, new, 1)), 0o644); err != nil {
+		t.Fatalf("写变异副本失败：%v", err)
+	}
+	return dst
+}
+
+// installerLandedCount 数临时树里真落上了几份（期望 4：两脚本＋两 unit）。
+func installerLandedCount(t *testing.T, h *installerHarness) int {
+	t.Helper()
+	n := 0
+	for _, rel := range installerLandedFiles {
+		if _, err := os.Stat(filepath.Join(h.root, filepath.FromSlash(rel))); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// installerLandedFiles 安装器在 --root 形态下应落的那四份（相对 h.root）。
+var installerLandedFiles = []string{
+	"opt/translator/bin/dispatch_probe_daily.sh",
+	"opt/translator/bin/dispatch_preflight.sh",
+	"etc/systemd/system/translator-dispatch-probe.service",
+	"etc/systemd/system/translator-dispatch-probe.timer",
+}
+
+// countFilesUnder 数临时树里的文件个数（干跑必须为 0——"只读档"变成写档就是越界）。
+func countFilesUnder(t *testing.T, root string) int {
+	t.Helper()
+	n := 0
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			n++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("扫临时树失败：%v", err)
+	}
+	return n
+}
+
+// TestDispatchProbeInstallerRootFormDryRunThenApply 行为锁（三场连着跑，同一棵临时树）：
+//  1. 干跑：四件都不在位 ⇒ 有待办 ⇒ **退 1**，且临时树里一个文件都不许多出来；
+//  2. 执行：--root --apply ⇒ **退 0**（10-10 首跑在这里退 1，M1 复现），四件真落位、两份脚本带可执行位、
+//     两只 unit 与仓库**逐字节一致**（"落位"不等于"落对内容"，漂移件装上去照样起不来）；
+//  3. 幂等：再 apply 一次 ⇒ 仍退 0 且四件都报"已在位"——安装器不幂等就等于第二次部署手动踩坑。
+//
+// 三场都顺带断言**假 systemctl 一次都没被拨**：--root 是测试形态，旧写法把 root/systemd 两道
+// 硬检查放在它前面，于是"落位与 enable 判据"那几条腿在单测里**一行都没跑过**却报"跑过了"；
+// 现在反过来——跑到 daemon-reload 就是越界（会把一棵临时树当现役 unit 装进真系统）。
+func TestDispatchProbeInstallerRootFormDryRunThenApply(t *testing.T) {
+	pinSQLiteDialectForProbeTests(t)
+	h := newInstallerHarness(t)
+	root := findDispatchRepoRoot(t)
+
+	r := h.run(t, "")
+	if r.code != 1 {
+		t.Errorf("干跑退码=%d 期望 1（四件没落位必须报待办并**非零**，否则 CI 里『装好了』和『什么都没做』同形）\n%s", r.code, r.out)
+	}
+	if !strings.Contains(r.out, "干跑结论") {
+		t.Errorf("干跑没出结论行 ⇒ 判据段被跳过：\n%s", r.out)
+	}
+	if n := countFilesUnder(t, h.root); n != 0 {
+		t.Errorf("干跑写出了 %d 个文件 ⇒ 只读档变成写档（--apply 的语义被稀释）", n)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("干跑就碰了 systemctl：%v ⇒ 干跑的射程是**只报待办**", r.calls)
+	}
+
+	r = h.run(t, "", "--apply")
+	if r.code != 0 {
+		t.Fatalf("--root --apply 退码=%d 期望 0（这条安装链在自己的测试形态里跑不通＝从没被跑过）\n%s", r.code, r.out)
+	}
+	for _, rel := range installerLandedFiles {
+		abs := filepath.Join(h.root, filepath.FromSlash(rel))
+		b, err := os.ReadFile(abs)
+		if err != nil {
+			t.Errorf("没落位 %s：%v\n输出：\n%s", rel, err, r.out)
+			continue
+		}
+		if !strings.HasPrefix(rel, "etc/systemd") {
+			st, err := os.Stat(abs)
+			if err == nil && st.Mode().Perm()&0o111 == 0 {
+				t.Errorf("%s 落了但**没有可执行位** ⇒ wrapper 的判据里有四件齐才 enable 这一档，缺执行位就是永远不 enable", rel)
+			}
+		}
+		want := readRepoText(t, root, installerRepoRelForLanded(rel))
+		if string(b) != want {
+			t.Errorf("%s 与仓库不逐字节一致 ⇒ 落位≠落对，装上去照样起不来", rel)
+		}
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("--root 测试形态却拨了 systemctl：%v ⇒ daemon-reload/enable 会把一棵临时树当现役 unit 装进系统", r.calls)
+	}
+	if strings.Contains(r.out, "闹钟已启用") {
+		t.Errorf("--root 形态却报了 enable 成功 ⇒ 系统 systemd 被动过")
+	}
+
+	r = h.run(t, "", "--apply")
+	if r.code != 0 {
+		t.Fatalf("第二次 --apply 退码=%d 期望 0（安装器不幂等＝第二次部署必须手动清）\n%s", r.code, r.out)
+	}
+	// 幂等判据按**四条"已在位"读数**分别数，不按 ✔ 总数：评件段认现位（5 条 ✔），执行段仍
+	// 无条件按仓库覆盖一次（4 条"已落"），合计 9——"与仓库一致也要覆盖"是现网口径
+	// （漂移只可能来自人为改过线上文件），拿总数当判据会把这一设计读成缺陷。
+	if got := strings.Count(r.out, "已在位且与仓库逐字节一致"); got != 2 {
+		t.Errorf("幂等复跑里『已在位且与仓库逐字节一致』（两份脚本）=%d 期望 2 ⇒ 现位判定失效、每次都报成缺失：%s", got, r.out)
+	}
+	// 两行 unit 的文案结尾就是"已在位且与仓库一致"，两份脚本那两行中间多了"逐字节"三字，
+	// 所以这个串恰只数到 unit（改任一侧文案时这条读数要跟着核，别调成恒真）。
+	if got := strings.Count(r.out, "已在位且与仓库一致"); got != 2 {
+		t.Errorf("幂等复跑里『已在位且与仓库一致』（两只 unit）=%d 期望 2 ⇒ 现位判定失效：%s", got, r.out)
+	}
+	if got := strings.Count(r.out, "✔ 已落"); got != 4 {
+		t.Errorf("第二次 apply 的『已落』=%d 期望 4（执行段无条件按仓库覆盖）⇒ 覆盖腿被摘掉，线上手改过的漂移件再也刷不回来：%s", got, r.out)
+	}
+	if !strings.Contains(r.out, "✔ 工作目录可写") {
+		t.Errorf("幂等复跑没认工作目录 ⇒ 每次都报成待办：%s", r.out)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("幂等复跑碰了 systemctl：%v", r.calls)
+	}
+}
+
+// installerRepoRelForLanded 把"落点相对路径"换回"仓库相对路径"（内容等值锁用得上）。
+func installerRepoRelForLanded(rel string) string {
+	switch rel {
+	case "opt/translator/bin/dispatch_probe_daily.sh":
+		return probeRepoRelWrapper
+	case "opt/translator/bin/dispatch_preflight.sh":
+		return "scripts/dispatch_preflight.sh"
+	case "etc/systemd/system/translator-dispatch-probe.service":
+		return probeRepoRelService
+	case "etc/systemd/system/translator-dispatch-probe.timer":
+		return probeRepoRelTimer
+	}
+	return rel
+}
+
+// TestDispatchProbeInstallerShellDiscipline 静态锁：AGENTS §一·7 的 shell 纪律
+// ＋§一·12 的"位置与条件"两条顺序判据（grep 锁不住位置，这里按**生效行的行号**问先后）。
+func TestDispatchProbeInstallerShellDiscipline(t *testing.T) {
+	pinSQLiteDialectForProbeTests(t)
+	root := findDispatchRepoRoot(t)
+	rel := probeRepoRelInstaller
+	abs := filepath.Join(root, filepath.FromSlash(rel))
+
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Fatalf("本机没有 bash（%v）⇒ 语法面无法验证", err)
+	}
+	if out, err := exec.Command(bash, "-n", abs).CombinedOutput(); err != nil {
+		t.Errorf("%s bash -n 失败：%v\n%s", rel, err, strings.TrimSpace(string(out)))
+	}
+
+	content := readRepoText(t, root, rel)
+	if !strings.HasPrefix(content, "#!/usr/bin/env bash") {
+		t.Errorf("%s 首行不是 #!/usr/bin/env bash ⇒ sh 下数组/[[ ]] 都会炸", rel)
+	}
+	if !regexp.MustCompile(`(?m)^set -u`).MatchString(content) {
+		// 不用 `\b` 收口：这份脚本钉的是 `set -uo pipefail`，u 后面紧跟 o，按词边界会**匹配不到**
+		// 而判红——检查器自己假红比漏判更坏（AGENTS §三 那条"先怀疑检查器"）。
+		t.Errorf("%s 没有 set -u ⇒ 变量写错静默展开成空串（派发脚本一律钉 -u）", rel)
+	}
+
+	breGrep := regexp.MustCompile(`grep[^\n]*'[^'\n]*\\\|[^'\n]*'`)
+	ipRe := regexp.MustCompile(`\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b`)
+	allowedIP := map[string]bool{"127.0.0.1": true, "0.0.0.0": true}
+	for i, line := range stripShellCommentLines(content) {
+		if line == "" {
+			continue
+		}
+		if breGrep.MatchString(line) {
+			t.Errorf("%s:%d 用了 BRE 交替 ⇒ 精简实现当字面量、静默 0 命中：%s", rel, i+1, strings.TrimSpace(line))
+		}
+		if regexp.MustCompile(`\bmapfile\b`).MatchString(line) {
+			t.Errorf("%s:%d 用了 mapfile（macOS bash 3.2 无此内建）：%s", rel, i+1, strings.TrimSpace(line))
+		}
+		for _, ip := range ipRe.FindAllString(line, -1) {
+			if !allowedIP[ip] {
+				t.Errorf("%s:%d 出现 IP 裸值 %s ⇒ 主机只许从 dispatch.env 现读：%s", rel, i+1, ip, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	// 禁止名单：安装器**会写文件、会 enable**（这是它的职责，与 wrapper 的只读射程相反），
+	// 所以这里只圈"改现役配置／关闸／删件"那一族：装一只日检闹钟不该顺手把闸拨了。
+	forbidden := []string{"systemctl stop", "systemctl restart", "systemctl disable", "systemctl mask",
+		"dispatch_revert", "sed -i", "rm -rf", "EnvironmentFile=", "scp ", "ssh "}
+	if hits := probeForbiddenLines(t, rel, content, forbidden); len(hits) > 0 {
+		t.Errorf("安装器越界（它的射程是落位＋装闹钟，不是关闸／改配置／连远端）：\n%s", strings.Join(hits, "\n"))
+	}
+
+	// 正向对照（负向名单必须有东西可扫）：四件、两条顺序、样张拒绝档都在。
+	for _, want := range []string{
+		`systemctl daemon-reload`,
+		`systemctl enable --now "$TIMER_NAME"`,
+		`mkdir -p "$BIN_DIR" "$UNIT_DIR" "$WORK_DIR"`, // ★ M1 的靶子：UNIT_DIR 漏在建齐名单外＝10-10 首跑退 1
+		`if [ "$can_enable" = 1 ]; then`,
+		`--allow-no-sample`,
+		`FPDPROBE_PATH_DEFAULT`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("%s 里找不到 %q ⇒ 上面那条负向锁同时失效（或这一档判据已被摘掉）", rel, want)
+		}
+	}
+
+	lines := probeActiveLines(content)
+	// 顺序判据①：**--root 的提前退出必须排在 daemon-reload 之前**。
+	// 反证 M2：把那一步 exit 摘掉后退出码仍是 0（样张不在位 ⇒ can_enable=0 ⇒ 不 enable），
+	// 与正常态**完全无法区分**，只有假 systemctl 的调用日志抓得到——所以这条也写成静态双保险。
+	firstExit, firstReload := -1, -1
+	for i, l := range lines {
+		if firstReload < 0 && strings.Contains(l, "systemctl daemon-reload") {
+			firstReload = i
+		}
+		if firstExit < 0 && strings.Contains(l, `exit "$RC"`) && i > 0 && strings.Contains(lines[i-1], "（--root 测试形态") {
+			firstExit = i
+		}
+	}
+	if firstExit < 0 {
+		t.Errorf("%s 找不到 --root 形态的提前退出（紧邻那行 say 之后）⇒ 测试形态开始碰系统 systemd，行为锁的假 systemctl 判据也没了依据", rel)
+	} else if firstReload >= 0 && firstExit > firstReload {
+		t.Errorf("%s 的 --root 提前退出排在 daemon-reload **之后**（exit 行 %d 对 reload 行 %d）⇒ --apply 在测试形态里仍会装临时树", rel, firstExit, firstReload)
+	}
+	// 顺序判据②：**enable 必须排在 can_enable 复算之后**（"刚才拷成功了"不等于"现在可跑"）。
+	iCheck, iEnable := -1, -1
+	for i, l := range lines {
+		if iCheck < 0 && strings.Contains(l, `if [ "$can_enable" = 1 ]; then`) {
+			iCheck = i
+		}
+		if iEnable < 0 && strings.Contains(l, `systemctl enable --now "$TIMER_NAME"`) {
+			iEnable = i
+		}
+	}
+	if iCheck < 0 || iEnable < 0 {
+		t.Errorf("%s 缺 enable 前置复算或 enable 本体（can_enable 判=%d enable 行=%d）⇒ 四件齐才装闹钟这一档没了", rel, iCheck, iEnable)
+	} else if iEnable < iCheck {
+		t.Errorf("%s 的 enable 排在 can_enable 复算**之前**（%d 对 %d）⇒ 缺件也照样装闹钟", rel, iEnable, iCheck)
+	}
+	// 样张那一档的拒绝判据要在（缺它就是"闹钟天天红把真故障淹掉"）。
+	if !strings.Contains(content, `warn "样张不在位`) {
+		t.Errorf("%s 不再因缺样张拒绝 enable ⇒ 无样张的闹钟每天判红，两周后没人再看 reason=probe_red", rel)
+	}
+	// --help 那条腿**不许写死行号**：本批往文件头加了 5 行退出码说明，旧写法 `sed -n '1,45p'`
+	// 正好把"退出码"那一段切一半——帮助文本切在半句上＝运维照着敲错，而脚本自己一行错都不报。
+	// （同族坑：AGENTS §三 那条"钉死数字的锁要改派生式"。）
+	if strings.Contains(content, "sed -n '1,") {
+		t.Errorf("%s 的 --help 又用写死行号截文件头 ⇒ 头注一加长就切在半句上：改 awk '/^set -uo/{exit}'", rel)
+	}
+	if !strings.Contains(content, `awk '/^set -uo/`) {
+		t.Errorf("%s 的 --help 不再是『打到 set 那行为止』的自维护形态 ⇒ 帮助文本会随文件头漂移", rel)
+	}
+}
+
+// TestDispatchProbeInstallerCounterproof 反证（两条，都在临时副本上跑，**仓库原件一字不动**）：
+//
+//	M1 建目录漏掉 "$UNIT_DIR" ⇒ 10-10 --root --apply 首跑的真缺陷（两份 unit 的 cp 各报一次
+//	   No such file or directory，退码翻成 1，而干跑早就把"复制到 $UNIT_DIR"写成待办放行）；
+//	M2 摘掉 --root 形态那句 exit（保留那行 say，让它继续自称"系统 systemd 一字未动"）⇒
+//	   退码仍是 0、输出照常，**只有假 systemctl 的调用日志抓得到**（§一·12 那条"退出码与正常态
+//	   无法区分"的形态在这一份脚本上原样存在）。
+//
+// 两条都必须被 TestDispatchProbeInstallerRootFormDryRunThenApply 当场抓到，抓不到就 Fatal：
+// 反证跑绿＝判据是空气。
+func TestDispatchProbeInstallerCounterproof(t *testing.T) {
+	pinSQLiteDialectForProbeTests(t)
+	cases := []struct {
+		name        string
+		old, new    string
+		wantFailure string // 期望在哪一条断言上红（只进报错文案，不参与判定）
+	}{
+		{
+			name:        "M1 建目录名单漏掉 UNIT_DIR（10-10 首跑真缺陷）",
+			old:         `mkdir -p "$BIN_DIR" "$UNIT_DIR" "$WORK_DIR" \`,
+			new:         `mkdir -p "$BIN_DIR" "$WORK_DIR" \`,
+			wantFailure: "退码",
+		},
+		{
+			name: "M2 摘掉 --root 的提前退出（自称没碰 systemd 却拨了 daemon-reload）",
+			old: `  say "（--root 测试形态：跳过 daemon-reload 与 enable，只验落位与判据；系统 systemd 一字未动）"
+  exit "$RC"`,
+			new: `  say "（--root 测试形态：跳过 daemon-reload 与 enable，只验落位与判据；系统 systemd 一字未动）"
+  true`,
+			wantFailure: "systemctl",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			h := newInstallerHarness(t)
+			p := copyInstallerVariant(t, c.name, c.old, c.new)
+			if out, err := exec.Command("bash", "-n", p).CombinedOutput(); err != nil {
+				t.Fatalf("变异体连语法都坏了（不是有效反证）：%v\n%s", err, out)
+			}
+			r := h.run(t, p, "--apply")
+			landed := installerLandedCount(t, h)
+			// ① 与原件读数**不同**才算抓到（原件：exit 0／零调用／四件齐）；
+			// ② 还必须**落在文档写的那一格**上，否则就是被无关原因弄红的（仿树那条理由）。
+			if r.code == 0 && len(r.calls) == 0 && landed == 4 {
+				t.Fatalf("变异体跑得和原件一模一样（exit=%d systemctl=%v landed=%d）⇒ 行为锁抓不到这一类破坏\n%s",
+					r.code, r.calls, landed, r.out)
+			}
+			switch c.name[:2] {
+			case "M1":
+				if landed != 2 || r.code == 0 {
+					t.Errorf("M1 的破坏形态应是『两份 unit 没落上（landed=2）且退码非 0』，实得 landed=%d exit=%d\n%s",
+						landed, r.code, r.out)
+				}
+			case "M2":
+				if len(r.calls) != 1 || !strings.Contains(r.calls[0], "daemon-reload") {
+					t.Errorf("M2 的破坏形态应是『假 systemctl 被拨一次 daemon-reload』，实得 %v\n%s", r.calls, r.out)
+				}
+				if r.code != 0 {
+					t.Logf("M2 实测退码=%d（原件那一场是 0）⇒ 这一格**能**靠退出码区分；但样张不在位那档一被改动就只剩日志抓得到，所以 calls 判据不许摘", r.code)
+				}
+			}
+			t.Logf("反证成立：%s → exit=%d 假 systemctl 调用=%v landed=%d", c.name, r.code, r.calls, landed)
+		})
+	}
+}
+
 // pinSQLiteDialectForProbeTests 自钉方言（AGENTS §一·4 模板）。
 //
 // fileproc 包本身零 DB 依赖（只读 env），本批的锁也不碰库；但 `config.Default()` 会把
