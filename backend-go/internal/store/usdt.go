@@ -12,6 +12,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 	"translator/internal/db"
+	"translator/internal/observability"
 )
 
 // ErrUSTXHashUsed 该链上交易已关联其它订单（payments.tx_hash 唯一约束防线）。
@@ -286,8 +288,18 @@ func paymentAddrValid(chain string) bool {
 }
 
 // FindPendingUSDTOrderByDeposit 按入账精确金额匹配待结算 USDT 订单：
-// 同链、金额=应收（含尾数）、未过期、订单 pending。多命中（唯一索引理论排除）返回 nil+告警标记串。
-func (s *Store) FindPendingUSDTOrderByDeposit(chain string, amountMicro int64) (*USDTOrderMeta, bool /*ambiguous*/) {
+// 同链、金额=应收（含尾数）、未过期、订单 pending。多命中（唯一索引理论排除）返回 ambiguous=true。
+// ★ (54) 第三条返回值＝**查询本身失败**（旧形态把它折叠成 (nil,false)＝"没有单"，与真无命中同形）：
+//
+//	调用方拿不到 err 时会把这笔钱留在未匹配池里静默等 72h，最后以「from 打错金额，请人工裁决退款」
+//	的**误导文案**冒头——库里其实有那一单，只是这一次没查出来。现在 err 非空即"结论未知"，
+//	调用方必须原样保留入账、下轮重评，并且不许把"未知"写成"无单"。
+//
+// ★ 同批把 rows.Scan 失败从 `continue`（＝丢一行）改成**直接判 ambiguous**：
+//
+//	旧写法会让"库里其实有 2 行、第 2 行解析失败"降级成 1 行 ⇒ `len(found)==1` 自动入账**打到别的单上**，
+//	而 usdt_ambiguous 告警反而不响——这是把"读不全"当"读得清"，方向必须反过来。
+func (s *Store) FindPendingUSDTOrderByDeposit(chain string, amountMicro int64) (*USDTOrderMeta, bool /*ambiguous*/, error) {
 	d := db.CurrentDialect()
 	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := db.Query(s.db, d,
@@ -298,7 +310,7 @@ func (s *Store) FindPendingUSDTOrderByDeposit(chain string, amountMicro int64) (
 		chain, amountMicro, now)
 	if err != nil {
 		log.Printf("[usdt] 匹配查询失败: %v", err)
-		return nil, false
+		return nil, false, err
 	}
 	defer rows.Close()
 	var found []*USDTOrderMeta
@@ -306,17 +318,59 @@ func (s *Store) FindPendingUSDTOrderByDeposit(chain string, amountMicro int64) (
 		m := &USDTOrderMeta{}
 		if err := rows.Scan(&m.OrderID, &m.TenantID, &m.Chain, &m.ToAddr, &m.AmountMicro, &m.TailMicro, &m.RateFen,
 			&m.ExpiresAt, &m.ClientTxHash, &m.MatchedTxHash, &m.DeclaredAt, &m.CreatedAt); err != nil {
-			continue
+			// ★ (54)：读不全＝不结论，绝不"丢掉这行继续数"（丢行会把双命中伪装成唯一命中）
+			observability.Error(context.Background(), "USDT 匹配行解析失败（按歧义处理，不入账）", "err", err.Error())
+			return nil, true, nil
 		}
 		found = append(found, m)
 	}
+	if err := rows.Err(); err != nil {
+		// 迭代中途断流同样按"读不全"处理，理由与 Scan 一致
+		observability.Error(context.Background(), "USDT 匹配结果迭代中断（按歧义处理，不入账）", "err", err.Error())
+		return nil, true, nil
+	}
 	if len(found) == 1 {
-		return found[0], false
+		return found[0], false, nil
 	}
 	if len(found) > 1 {
-		return nil, true // 多命中：宁可人工裁决，不自动入账
+		return nil, true, nil // 多命中：宁可人工裁决，不自动入账
 	}
-	return nil, false
+	return nil, false, nil
+}
+
+// ListUnmatchedDepositsForChain 未匹配入账（**按链取**，供 reconciler 逐链二次匹配）。
+// ★ (54) 为什么要新加这一条而不是复用 ListUnmatchedDeposits(200)＋调用方 `if d.Chain != chain`：
+//
+//	旧形态是全链共用一个 `ORDER BY id ASC LIMIT 200` 的窗口，然后在 Go 里按链筛——
+//	孤儿积压一旦超过 200 行，最旧那 200 行被反复评估，**新到的钱永远进不了匹配**，
+//	且零错误零日志（表现是"客户转了账但一直不入账"，排障会从链上端点开始找，根因却在池子窗口）。
+//	按链各开一个窗口后，一条链的孤儿不再挤掉另一条链的新入账。
+func (s *Store) ListUnmatchedDepositsForChain(chain string, limit int) []*USDTDeposit {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		`SELECT id, chain, tx_hash, log_index, from_addr, amount_micro, block_no, newest_block_no, matched_order_id, COALESCE(seen_at,'')
+		 FROM usdt_deposits WHERE matched_order_id=0 AND amount_micro>0 AND chain=? ORDER BY id ASC LIMIT ?`, chain, limit)
+	if err != nil {
+		observability.Error(context.Background(), "USDT 未匹配入账（按链）读取失败", "chain", chain, "err", err.Error())
+		return nil
+	}
+	defer rows.Close()
+	var out []*USDTDeposit
+	for rows.Next() {
+		var x USDTDeposit
+		if err := rows.Scan(&x.ID, &x.Chain, &x.TxHash, &x.LogIndex, &x.FromAddr, &x.AmountMicro,
+			&x.BlockNo, &x.NewestBlockNo, &x.MatchedTid, &x.SeenAt); err != nil {
+			// ⚠️ 这一处 Scan 失败**刻意**保持 continue，与上面 FindPendingUSDTOrderByDeposit 的
+			//	"读不全即不结论"方向相反——两条腿的失败后果不对称：这边少读一行＝这笔钱留在池里
+			//	**下轮再评**（只是晚一轮，钱不会动）；那边少读一行＝双命中被数成单命中，会把钱
+			//	**自动入到别的单上**。判据取向按"错的代价"定，不按"写法统一"定。
+			continue
+		}
+		out = append(out, &x)
+	}
+	return out
 }
 
 // ListUnmatchedDeposits 未匹配入账（供 reconciler 二次匹配与孤儿告警）。
