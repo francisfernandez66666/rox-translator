@@ -12,7 +12,7 @@
 >    不给其余三条补恒真判据——为了"这一条也要有绿灯"去补一条恒真判据＝给未验证发证。
 > ③ **#29 装配读数（07:3x CST 现网实测）**：`deploy/install_probe_timer_20261010.sh --apply --selftest` 一条命令走完
 >    上传→**六件逐文件 sha256 与仓库等值**→服务器侧干跑→落位（两份脚本＋两只 unit＋工作目录＋样张
->    **24,101,554 B／32 页**，属主 `translator:translator` 0644）→`enabled/active`（下次触发 Sun 2026-10-11 05:24:58 CST）
+>    **24,101,554 B／32 页**，属主 `translator:translator` 0644）→`enabled/active`（下次触发 **2026-10-11 05:2x**——`OnCalendar=*-*-* 05:20:00` 加 `RandomizedDelaySec=300`，落点在 05:20:00–05:25:00 之间**随机**（装配当时读 05:24:58、10-10 08:1x 现读 05:23:58，两个读数都正常，别把秒当承诺）；`Persistent=true` ⇒ 错过时点会在下次开机补跑一次）
 >    →**人工拨一次真跑 128 s**：预检 `preflight_rc=0 fail=0 pass=20`、探针 `extract_leg=OK 3.361s／apply_leg=OK 55.335s`、
 >    `probe_result=ok`。⇒ 这只闹钟从 10-01 写下那天起**第一次响**；装配临时树 `/root/wave9_probe` 用完即清（根分区 39%）。
 >    ★ 幂等自证＝装完再干跑一次报"四件齐备，无需改动"退 0，不是"再看一遍注释里的四步"。
@@ -221,7 +221,7 @@
 - **未测·卡在哪**：真实客户单（现网 0 行 `user_tasks`）、**`user_tasks` 真件走派发时的"降级次数"计数**（探针件是恒等映射，不经模型、不进这条计数）、`go test -race` 的 PG 方言覆盖（矩阵承担，预检段只跑 SQLite）、临时机互通（两侧出口都被过滤：本机 `223.74.149.151`、seoul 出口 `43.108.86.140`，10-01 04:0x 两侧 22／28022 各实测 CLOSED）。
 - **本轮由"未测"转为"已测"的两条**：① 到期回归 timer 的自灭行为＝**04:10:05 实证**（journal 实读 `Removed .../timers.target.wants/translator-dispatch-expiry.timer` ⇒ `disabled`／`inactive`），已 `reenable`＋`start` 恢复成 `NextElapse=10-02 04:10`，待决策 ① 据此改写；② 补翻拒绝率线上读数＝**04:07–04:08 三轮复问采到**（采用 1／拒 1，`reason=line_count`），待决策 ⑤ 据此改写；同窗另抓出 canned 缓存里三条坏形态 ⇒ 新增待决策 ⑥（品牌名「能言」直投、chips 尾粘词、`credits充值` 残渣、ko 整段中文）。
 - **有脚本·无调度**：`backend-go/cmd/fpdprobe`（本轮才第一次真用，靠人跑）与 `scripts/dispatch_preflight.sh`（G5 全往返）都**没有定时器**——派发闸开着而这两条腿没人定期拨，就还是"从没人证明它真跑过"的老形态。要么挂日检 cron＋失败告警，要么明确接受"排障时才跑"。
-〔✅ **已于 2026-10-10 07:3x 闭合（第 9 波 #29）**：两份 unit＋日检脚本在现网装成并**真响过一次**（人工拨 128 秒，`preflight_rc=0`／`fail=0 pass=20`、真机两腿 `extract_leg=OK 3.361s`／`apply_leg=OK 55.335s`、`probe_result=ok`），下次自动响＝Sun 2026-10-11 05:24:58 CST。装配与读数落点口径见《部署指南》**十五段**，执行账见《修改文档》**§20.7 ④**。〕
+〔✅ **已于 2026-10-10 07:3x 闭合（第 9 波 #29）**：两份 unit＋日检脚本在现网装成并**真响过一次**（人工拨 128 秒，`preflight_rc=0`／`fail=0 pass=20`、真机两腿 `extract_leg=OK 3.361s`／`apply_leg=OK 55.335s`、`probe_result=ok`），下次自动响＝**2026-10-11 05:2x**——`OnCalendar=*-*-* 05:20:00` 加 `RandomizedDelaySec=300`，落点在 05:20:00–05:25:00 之间**随机**（装配当时读 05:24:58、10-10 08:1x 现读 05:23:58，两个读数都正常，别把秒当承诺）；`Persistent=true` ⇒ 错过时点会在下次开机补跑一次。装配与读数落点口径见《部署指南》**十五段**，执行账见《修改文档》**§20.7 ④**。〕
 
 **测试残骸处置账（本批，三处分别清、各留复核读数）**：**（新增第三处＝挂件探针会话，04:12–04:14 执行）**`/opt/ai-assist/data/assist.db` 里本批留下的 **21 条会话按 sid 点名删**：先 `cp -a` 备份 → `/root/assist.db.bak.probe095x_20261001_041259`（217,088 B、`chmod 600`），再删 04:0x 复问的 9 条（3 轮 × 3 会话，含被冷却污染那一轮）＋ 04:00–04:01 那 12 条 greeting-only 会话（`msg_count=0`、每条只有 1 行欢迎词，时间戳与本机 curl 节拍一一对上），复核读数＝sessions **34 → 13**、messages **92 → 53**、逐条 sid 计数全 0，剩余分布 `09-16|3 09-17|2 09-19|3 09-21|1 09-22|2 09-25|2` ＝〇-AE 那份「13 个会话一行未动」的账**原样成立**；服务器 `/tmp/probe_095x.py` 与两份输出删除（`ls /tmp | grep -c probe_095x`＝**0**），两份输出先归档到 `发布前E2E_UAT_20260926/证据/1001_08AF_真机往返/现网复问_run{1,2}_*.out`。主站删 `/tmp/fpdprobe/`（24 MB 件＋产物）、`/root/fpdprobe/`（探针旧副本与 `make_probe_pdf.py`／`audit_page_heuristic.py`，两份脚本已先归档）、`/root/fpdprobe.new`、`/root/bx.err`、`/opt/translator/bin/fpdprobe.new`；体验机 `/opt/fpdispatch/w/` 会话目录清空（`ls | wc -l`＝**0**）。**保留**＝`/opt/translator/bin/fpdprobe`（常设排障工具）与各时间戳 `translator-server.bak.20261001_03*`（回滚位）；本机闸门与往返证据先归档再删，落 `发布前E2E_UAT_20260926/证据/1001_08AF_闸门账/`（31 件，含首轮被阻日志）与 `.../1001_08AF_真机往返/`（4 件，含 32 页产物与探针读数）——证据目录由 `push_code_only.sh` 的 `:(exclude)*/证据/*` 挡住，**不外推**。磁盘：主站 39%／体验机 15%。
 
