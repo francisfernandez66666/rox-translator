@@ -138,7 +138,9 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
   })
 
   it('③ 缩翻勾选后把 max_length 透传给文本翻译（文件入口移除后控件不失义）', () => {
-    renderWindow()
+    const { container } = renderWindow()
+    // ★ 决策⑩（2026-10-10）：空态整卡收起，工具条不在可达树——先点入口条展开再操作
+    fireEvent.click(container.querySelector('.cw-dialog')!)
     const box = screen.getByRole('checkbox')
     fireEvent.click(box)
     const num = document.querySelector('input[type="number"]') as HTMLInputElement
@@ -173,6 +175,8 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
   //   真实像素高度由 pixel_uat P2b 的运行时等值锁承担（jsdom 无布局，量不到高度）。
   it('⑤ 输入区单卡单工具条：语种/模式/缩翻/主按钮全在 .cw-toolbar 同一排，无独立语种行', () => {
     const { container } = renderWindow()
+    // ★ 决策⑩：空态收起档下先展开，工具条归属断言才有靶子（收起态是另一条锁，见 dialog 测试）
+    fireEvent.click(container.querySelector('.cw-dialog')!)
     const composer = container.querySelector('.cw-composer')!
     const toolbar = container.querySelector('.cw-toolbar')!
     // 输入卡里只有两层：textarea 与工具条（工具条必须是 composer 的子节点，不能再浮在卡外）

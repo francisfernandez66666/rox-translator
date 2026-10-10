@@ -46,6 +46,20 @@ describe('前台外壳布局锁（#7 汉堡退役）', () => {
     expect(cw).not.toContain('calc(100vh - 39px)')
     expect(cw).toContain('flex: 1')
   })
+
+  // ★ 2026-10-10 批3（§七 #14）：S 档（≤640）移动壳三件套接入——源码侧互斥锁。
+  // 桌面顶栏与移动三件套必须按 isMobile 互斥渲染（运行时互斥由 e2e/mobile_uat
+  // 的「.app-header 必须整块不渲染」承担；本锁保证不依赖服务也能红）。
+  it('移动壳三件套在位，且与桌面顶栏按 isMobile 互斥渲染', () => {
+    expect(app).toContain('lc-statusbar')
+    expect(app).toContain('lc-mob-topbar')
+    expect(app).toContain('lc-tabbar')
+    // 互斥的两半都要在：S 档顶栏 !isMobile 门禁、三件套 isMobile 门禁
+    expect(app).toMatch(/!isMobile && <header className="app-header"/)
+    expect(app).toMatch(/\{isMobile && \(/)
+    // 判档必须走 matchMedia(≤640)，不许换成别的启发式（换档位先同步 §1.7 断点表）
+    expect(app).toContain("matchMedia('(max-width: 640px)')")
+  })
 })
 
 // ★ F-48（〇-U 批 I-5 2026-09-26）：窄屏余额徽标的**静态机制锁**。

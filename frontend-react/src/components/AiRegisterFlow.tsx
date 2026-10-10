@@ -789,7 +789,7 @@ const CSS_AR = `
 /* ★ 比例按演示稿（demo-register-ai-motion.html 的 .phone）：390 宽竖版卡、
    高 min(780, 100dvh-32)、圆角 28、居中 —— 不是全屏接管（2026-09-18 用户裁定） */
 .ar-panel{width:390px;max-width:100%;height:min(780px,calc(100dvh - 32px));min-height:520px;display:flex;flex-direction:column;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:28px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);animation:lc-mo-pop var(--lc-mo-enter) var(--lc-mo-out) both;--lc-mo-origin:50% 92%;}
-@media (max-width:480px){
+@media (max-width:640px){ /* ★ 批3 断点归一：480 → 640（S 档上缘） */
   .ar-root{padding:0;background:var(--lc-bg);}
   .ar-panel{width:100%;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none;}
 }
@@ -853,7 +853,7 @@ const CSS_AR = `
 .ar-otp{flex:1;min-width:0;width:100%;height:46px;border-radius:10px;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);color:var(--lc-text);text-align:center;font-family:var(--lc-font-latin);font-size:18px;font-weight:600;
   transition:border-color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out);}
 /* 窄屏：发送按钮让出整行，六格拿满宽度（390 下格子能到 ~44px，否则只有 24px 太挤） */
-@media (max-width: 480px){
+@media (max-width: 640px){ /* ★ 批3 断点归一：480 → 640（S 档上缘） */
   .ar-otp-row{flex-wrap:wrap;}
   .ar-otp-cells{flex:1 1 100%;}
   .ar-otp-row > .lc-btn{flex:1 1 100%;justify-content:center;}

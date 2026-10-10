@@ -391,9 +391,12 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		t.RejectSource = store.RejectSourceSystem
 		// ★ #40②（2026-09-21）：状态 + 失败通知同事务落库（旧实现两条独立写且忽略错误，
 		//   会出现「工单已判失败但无人收到通知」）；写失败必须大声记录，不再 `_ =` 吞掉。
+		// ★ 2026-10-10 批次 ⑬：标题走 failureNotifyTitle 兜底——前端建单时标题留空会把
+		//   「未命名工单」i18n 兜底词当真标题入库，失败通知出现「翻译工单失败：未命名工单」；
+		//   现在标题空白时改用工单号（不清洗存量库行）。
 		notify := &store.Notification{
 			UserID: t.CreatedBy,
-			Title:  fmt.Sprintf("翻译工单失败：%s", t.Title),
+			Title:  failureNotifyTitle(t),
 			// ★ F-42-a：正文改取 t.RejectReason（欠费型已由上面归一为用户可读文案，
 			//   旧写法直贴 runErr.Error() 会在欠费单上显示裸「余额不足」/「context canceled」）
 			Body:    fmt.Sprintf("工单号 %s 失败原因：%s", t.TicketNo, t.RejectReason),
@@ -468,6 +471,17 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	// ★ Webhook 完成回调（OpenAPI 轮询之外的推送通道）：带 task_id 与 token 消耗
 	s.dispatchCompletedWebhook(ctx, t)
 	return nil
+}
+
+// failureNotifyTitle 工单失败通知标题（★ 2026-10-10 批次 ⑬）：
+// 标题去空白后非空用原标题；空白（含「未命名工单」i18n 兜底词当真标题入库的形态、
+// 以及纯空白串）改用工单号兜底，产出「翻译工单失败：T20261010132330UEM」形态。
+// 只影响新生成的失败通知，不清洗存量库行。
+func failureNotifyTitle(t *store.Ticket) string {
+	if v := strings.TrimSpace(t.Title); v != "" {
+		return fmt.Sprintf("翻译工单失败：%s", v)
+	}
+	return fmt.Sprintf("翻译工单失败：%s", t.TicketNo)
 }
 
 // chargeTokens 工单级「实收计费 token」回填：读取 ctx 收集器里**扣费现场**记下的实收合计。

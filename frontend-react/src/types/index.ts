@@ -61,13 +61,16 @@ export interface ChatResponse {
 export interface ProgressEvent {
   // 事件类型：progress 进度 / done 完成 / error 错误 / delta token 级增量（D20）
   // segment_done|segment_final|segments_sealed=文件翻译逐段上屏事件（★B3，方案 A2）
-  type: 'progress' | 'done' | 'error' | 'delta' | 'segment_done' | 'segment_final' | 'segments_sealed'
+  // warning=慢预警帧（★ 决策⑪②：deadline 前 ~15s 发出，前端出「继续等待/转工单」）
+  type: 'progress' | 'done' | 'error' | 'delta' | 'segment_done' | 'segment_final' | 'segments_sealed' | 'warning'
   step?: string      // 当前步骤文案
   done?: number      // 已完成数量
   total?: number     // 总数量
   percent?: number   // 进度百分比
   result?: ChatResponse // 完成时返回的最终结果
   error?: string     // 错误信息
+  reason?: string    // ★ 决策⑪②：warning 帧的档名（当前仅 'slow'）
+  seconds_left?: number // ★ 决策⑪②：warning 帧距 deadline 的剩余秒数
  // —— 以下三个字段为流式改造新增：error_code 供 UI 精准分流（充值 / 次日再试），
  //    lang + text 由 api/translate.ts 的 consumeSSEStream 透传给 onDelta，
  //    hooks/useChat 再按目标语言过滤、逐字回灌到助手气泡（D20）——
@@ -119,6 +122,9 @@ export interface ChatMessage {
   //   done 落定即弃（切下载卡）、停止清空、中断保留但标记非交付物；与 draft 同属展示层临时态，不落盘。
   segments?: Record<string, FileSegBucket>
   segmentsAborted?: boolean
+  // ★ 决策⑪②（2026-10-10）：后端 deadline 前 ~15s 发出的慢预警帧标记。
+  //   展示层临时态（同 draft）：done/error/停止即清，不落盘。
+  slowWarning?: boolean
   timestamp: number       // 消息时间戳（毫秒）
   progress?: {
     step: string    // 当前进度步骤文案

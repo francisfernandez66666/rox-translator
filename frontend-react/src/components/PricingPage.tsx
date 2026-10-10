@@ -153,8 +153,8 @@ const PRICING_CSS = `
 .lc-prc-meta{font-size:13px;color:var(--lc-text-2)}
 .lc-prc-price{font-size:22px;font-weight:700;line-height:1.15;font-family:var(--lc-font-latin)}
 /* ★ #75 外币报价时的人民币原价辅助行：明显弱于主价，客户视线在本币价上 */
-.lc-prc-cny{font-size:14px;color:var(--lc-text-5);line-height:1.4}
-.lc-prc-period{font-size:13px;color:var(--lc-text-5)}
+.lc-prc-cny{font-size:14px;color:var(--lc-text-3);line-height:1.4}
+.lc-prc-period{font-size:13px;color:var(--lc-text-3)}
 .lc-prc-badge{align-self:flex-start;margin-top:6px;padding:3px 8px;font-size:12px;font-weight:500;line-height:1.4;color:#000;background:var(--lc-fill-white);border-radius:var(--lc-r-bar);transition:filter var(--lc-mo-release) var(--lc-mo-out)}
 /* 徽标即入口：hover 提亮一档给"可按"反馈，视觉重量不变 */
 .lc-prc-badge:hover{filter:brightness(1.15)}
@@ -170,7 +170,7 @@ const PRICING_CSS = `
   .lc-prc-links{gap:16px}
   .lc-prc-panel{margin:12px 16px 0;padding:24px 20px 26px}
 }
-@media (max-width:620px){
+@media (max-width:640px){ /* ★ 批3 断点归一：620 → 640 */
   .lc-prc-nav{height:auto;flex-wrap:wrap;padding:12px 16px}
   .lc-prc-links{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:12px 16px}
   .lc-prc-title{font-size:24px}

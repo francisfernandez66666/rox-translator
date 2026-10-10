@@ -56,15 +56,18 @@ var docsRenderer = goldmark.New(
 // ★ 2026-09-22 全站 UI 还原批：本页原先是「Google 蓝 #1a73e8 + indigo 标题 + 浅底代码块」的
 // 独立浅底主题——它由后端直出、不在前端构建产物里，前端令牌闸门扫不到，属还原盲区
 // （与 /docs/*、assist 管理台同一类问题）。现按 §1.1 令牌改纯黑底，链接取主文字档而非蓝。
-// ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O，本面令牌块随 tokens.css 同步——
-// 描边族回交付灰阶档（line #464C58 / pill #424956 / card-line #3A404C），面档回交付值
-// #0E1014 面板 / #16181C 浮面；描边宽度回交付档 1.2px（单边分隔线 1px）。
+// ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O，本面令牌块随 tokens.css 同步回交付档
+// （描边宽度 1.2px、单边分隔线 1px——该宽度档本批未动）。
+// ★ 2026-10-10 清晰度改造批1：令牌随 tokens.css 同步换新档（真值 = UI-ANNOTATIONS §1.1/§1.6）——
+// 面抬档（#14171C 面板 / #1E2228 浮面 / #0B0D10 内嵌）、文字重排（#B9BFC6/#98A0A9）、
+// 描边重标定（line #565E6B / pill #4E5560 / card-line #4A515C）。
 // 逐字一致性由 public_ui_test.go 的等值锁 + 旧灰档负向锁兜住，改这里必须同时改 tokens.css。
+// 改直出面字节必须换 translator-server 二进制（AGENTS §一·5）。
 const openAPIDocsCSS = `
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
-  --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-bg:#000000;--lc-panel:#14171C;--lc-surface:#1E2228;--lc-inset:#0B0D10;
+  --lc-text:#E7E9EA;--lc-text-2:#B9BFC6;--lc-text-3:#98A0A9;
+  --lc-line:#565E6B;--lc-pill:#4E5560;--lc-card-line:#4A515C;
   --lc-white:#FFFFFF;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}

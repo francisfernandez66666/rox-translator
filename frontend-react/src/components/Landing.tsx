@@ -1555,7 +1555,7 @@ const LANDING_CSS = `
 .lc-fd-packet.go{animation:fd-travel .8s ease-in-out infinite}
 @keyframes fd-travel{0%{left:0;opacity:0}15%{opacity:1}85%{opacity:1}100%{left:100%;opacity:0}}
 /* 中央引擎环：品牌主角。径向渐变底盘 + 虚线外环 + 双脉冲 + 品牌脉动 */
-.lc-fd-eng{position:relative;flex:none;width:96px;height:96px;display:flex;align-items:center;justify-content:center;border-radius:50%;border:1.5px solid var(--lc-border-pill);background:radial-gradient(closest-side,#16181c,var(--lc-bg) 78%);color:var(--lc-text-2);transition:border-color .4s,color .4s,box-shadow .4s}
+.lc-fd-eng{position:relative;flex:none;width:96px;height:96px;display:flex;align-items:center;justify-content:center;border-radius:50%;border:1.5px solid var(--lc-border-pill);background:radial-gradient(closest-side,var(--lc-raised),var(--lc-bg) 78%);color:var(--lc-text-2);transition:border-color .4s,color .4s,box-shadow .4s}
 .lc-fd-brand{position:relative;z-index:2;font-size:14.5px;font-weight:800;letter-spacing:.3px;color:var(--lc-text-1);opacity:.62;transition:opacity .4s,text-shadow .4s,transform .4s}
 .lc-fd-dash{position:absolute;inset:-9px;border-radius:50%;border:1.5px dashed var(--lc-border-pill);opacity:.55;transition:opacity .4s,border-color .4s}
 .lc-fd-pulse{position:absolute;left:50%;top:50%;width:96px;height:96px;margin:-48px 0 0 -48px;border-radius:50%;border:1.5px solid var(--lc-text-1);opacity:0;pointer-events:none}
@@ -1766,7 +1766,7 @@ const LANDING_CSS = `
 .lc-code{border:1.2px solid var(--lc-border-card);border-radius:16px;overflow:hidden;background:var(--lc-deep)}
 .lc-code-bar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 18px;border-bottom:1px solid var(--lc-border-faint);font-family:var(--lc-font-mono);font-size:14px;letter-spacing:.02em;color:var(--lc-text-3)}
 /* 复制按钮与小号胶囊按钮同形（28 高/8 圆角）：按钮语汇总只有一档尺寸，不新开 */
-.lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.lc-code-copy{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-btn-secondary);font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)} /* ★ 批2：#C8CCD1 野值收编 */
 .lc-code-copy:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .lc-code-copy svg{display:block}
 /* white-space:pre：curl 的反斜杠续行是内容的一部分，折行会把它变成一条读不懂的长句；窄屏靠横向滚动 */
@@ -1960,8 +1960,8 @@ const LANDING_CSS = `
   .lc-step-arrow{transform:rotate(90deg);padding-inline-start:28px} /* 箭头旋转并左缩进到卡的内边距线上 */
   .lc-nav-links{display:none}
 }
-/* 620px：手机档，只收留白与换行，不再改结构 */
-@media (max-width:620px){
+/* 640px（★ 批3 断点归一 620→640）：手机档，只收留白与换行，不再改结构 */
+@media (max-width:640px){
   .lc-mkt-nav{padding:0 16px;gap:16px}
   .lc-hero{padding:36px 16px}
   .lc-hero-ctas{flex-wrap:wrap} /* 两颗按钮允许换行：宁可上下叠，也不把文案压到 12px */
@@ -2066,7 +2066,7 @@ const LANDING_CSS = `
 /* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
 .hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:12px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
 /* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
-.hd-sl.done{color:#8A9099}.hd-sl.done i{color:#C8CCD1}
+.hd-sl.done{color:var(--lc-text-3)}.hd-sl.done i{color:var(--lc-text-btn-secondary)} /* ★ 批2：#8A9099/#C8CCD1 野值收编 */
 .hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}
 /* 数字"上钩"只在 armed 之后允许：没点亮就播会和下面 .armed 的入场节拍（.20/.29/.38s）抢跑 */
 .hd-steps.armed .hd-sl.cur i{animation:hdNumHook .4s cubic-bezier(.16,1,.3,1)}
@@ -2213,7 +2213,7 @@ const LANDING_CSS = `
 .hd-rsub{font-size:14px;color:var(--lc-text-4);transition:color .55s ease;white-space:nowrap}
 .hd-rsub.lit{color:var(--lc-text-2)}
 /* 右侧"复制"是真实按钮：点击把定稿译文写入剪贴板并短暂显示"已复制"（font 继承自 .hd-rhead 语境） */
-.hd-dlbtn{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:#C8CCD1;font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)}
+.hd-dlbtn{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border:1.2px solid var(--lc-border-pill);border-radius:8px;background:none;color:var(--lc-text-btn-secondary);font:500 14px/1 var(--lc-font);cursor:pointer;transition:border-color var(--lc-mo-release) var(--lc-mo-out),color var(--lc-mo-release) var(--lc-mo-out)} /* ★ 批2：#C8CCD1 野值收编 */
 .hd-dlbtn:hover{border-color:var(--lc-border-done);color:var(--lc-text-1)}
 .hd-dlbtn svg{display:block}
 /* display:block 消掉行内 SVG 的基线下沉：图标与 12px 文案要在 28px 高的胶囊里精确居中 */
@@ -2237,7 +2237,7 @@ const LANDING_CSS = `
 /* 12%~88% 恒定 .8：中段不衰减，光带经过文字时亮度稳定，才像"一道审校灯"而不是反光 */
 
 /* 演示卡窄屏：术语行折两行（第一行 序号+中文，第二行 箭头+初译 正解） */
-@media (max-width:620px){
+@media (max-width:640px){ /* ★ 批3 断点归一：620 → 640 */
   /* 左右内边距 32→16：窄屏先把标题栏与内容区的留白让出来，卡片宽度全给文字 */
   .hd-bar{padding:0 16px}
   .hd-name em{display:none}

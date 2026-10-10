@@ -16,6 +16,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/gate"
+	"translator/internal/observability"
 	"translator/internal/tenant"
 )
 
@@ -422,6 +423,24 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 	// 整改 R1：文本主翻译路径统一走约束闸门 + 语言文化闸门（pro 模式可带反馈重翻）
 	gateWarnings := e.applyOutputGates(ctx, cleanText, allTr, !fast)
 
+	// ★ 14.3 输出纯度收尾（2026-10-10）：剥离译文中「全角括号原词复述」——提示词层
+	//   已加约束（translateInstruction / ReviewTranslation），此处是兜底腿。判据见
+	//   StripParenEcho（整括号逐字复述 + 数字序列不变，词级匹配会误杀标识符）。
+	//   日志走 observability.Warn 而非 log.Printf（棘轮闸门：internal 基线只减不增）。
+	for lc, tr := range allTr {
+		if strings.TrimSpace(tr) == "" {
+			continue
+		}
+		clean, reason := StripParenEcho(tr, cleanText)
+		if reason == "" {
+			continue
+		}
+		allTr[lc] = clean
+		recordPurityAction(lc, reason)
+		observability.Warn(ctx, "译文全角括号复述原词，已按纯度判据处理",
+			"lang", lc, "reason", reason, "sample", clipRunes(tr, 80))
+	}
+
 	langNames := map[string]string{}
 	for lc := range allTr {
 		langNames[lc] = config.LangNames[lc]
@@ -430,16 +449,27 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		langNames[lc] = n
 	}
 
-	// 构建 reply
-	var sb strings.Builder
-	sb.WriteString("📝 「" + cleanText + "」翻译结果：\n\n")
+	// 构建 reply（★ 14.3/14.4 输出净化，2026-10-10）：回复体只保留译文本体——
+	//   「📝 「原文」翻译结果：」「📊 模式：…」「⚡ …积分」三段全部撤出内容。
+	//   原文走结构化字段 Data.SourceText（前端「查看原文」消费），模式走 Data.Mode
+	//   （前端徽标渲染），积分走 PointsUsed / points_used 报文（前端气泡底部元信息行）。
+	//   口径锁：upstream_failure_test.go 仍断言 Reply 不含「翻译结果：」，方向一致。
 	order := kbTarget
 	order = append(order, directOther...)
+	var bodyLines []string
 	for _, lc := range order {
-		if v, ok := allTr[lc]; ok && v != "" {
-			sb.WriteString(fmt.Sprintf("  %s：%s 🤖\n", langNames[lc], v))
+		if v, ok := allTr[lc]; ok && strings.TrimSpace(v) != "" {
+			if len(order) == 1 {
+				// 单目标语：只给译文本体，不带语言名前缀
+				bodyLines = append(bodyLines, v)
+			} else {
+				// 多目标语：每行「语言名：译文」，不再带 🤖 尾缀
+				bodyLines = append(bodyLines, fmt.Sprintf("%s：%s", langNames[lc], v))
+			}
 		}
 	}
+	var sb strings.Builder
+	sb.WriteString(strings.Join(bodyLines, "\n"))
 
 	modelCount := 0
 	for _, src := range allSrc {
@@ -466,20 +496,13 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 	}
 	// ★ 模式标注（前台徽标与 OpenAPI 出参用）——文案收敛到 ModeBadgeLabel 一处常量（F-50②）
 	mode += ModeBadgeLabel(fast)
-	sb.WriteString("\n📊 模式：" + mode)
 
-	// ★ 2026-09-19 积分口径 / ★ F-50①（〇-U 批 I-4）：这里曾是
-	//   `fmt.Sprintf("\n⚡ 本次翻译消耗 token：%d", tokensUsed)`，而本函数返回的字符串会被
-	//   当作 res.Reply 逐字渲染进客户的气泡（前端 useChat 原样展示）——
-	//   AGENTS §一·5 钉的是「计费口径统一积分、**公开接口零 token 裸值**」，
-	//   既有闸门只扫结构化字段，扫不到拼在文案里的数字，于是口径被自家穿透。
-	//   现在页脚按积分出，且取的是**实收**口径（扣费现场累计，F-49①），与报文 points_used 同值。
+	// ★ 2026-09-19 积分口径 / ★ F-50①（〇-U 批 I-4）：积分不再拼进 Reply 文案
+	//   （14.4 复制净化：复制按钮只取结构化 translations），仅保留结构化出参——
+	//   取**实收**口径（扣费现场累计，F-49①），与报文 points_used 同值。
 	tp, tc := e.UsageTokens(ctx)
 	rawTokens := tp + tc // 仅供内部计量字段（json:"-"），不进任何对外文案
 	billed := e.UsageDisplayTokens(ctx)
-	if billed > 0 {
-		sb.WriteString(fmt.Sprintf("\n⚡ 本次翻译消耗 %d 积分", e.PointsOfTokens(billed)))
-	}
 
 	if len(gateWarnings) > 0 {
 		sb.WriteString("\n\n⚠️ 质量校验提示：\n" + strings.Join(gateWarnings, "\n"))

@@ -134,7 +134,7 @@ export default function SdkP() {
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: 18 }}>{c.icon}</span>
               <b>{t('sdk.name.' + c.key)}</b>
-              <code style={{ fontSize: 14, background: '#0E1014', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
+              <code style={{ fontSize: 14, background: 'var(--lc-panel)', padding: '1px 6px', borderRadius: 4 }}>{c.pkg}</code>
               <Badge>v{ver}</Badge>
             </div>
             {cmd && (
@@ -150,8 +150,8 @@ export default function SdkP() {
                 <a href={`/sdk/${file}`} style={{ fontSize: 15 }}>{tpl(c.key === 'python' ? 'sdk.downloadPython' : 'sdk.downloadTs', { name: file })}</a>
               </div>
             )}
-            {/* SDK 卡里的 code/pre 底取面板面 #0E1014（= --lc-panel，★ 〇-P 交付值），随全站面档走 */}
-            <pre style={{ fontSize: 14, background:'#0E1014', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
+            {/* SDK 卡里的 code/pre 底取面板面（= --lc-panel，★ 2026-10-10 新档 #14171C），随全站面档走 */}
+            <pre style={{ fontSize: 14, background:'var(--lc-panel)', padding:'8px 10px', borderRadius: 6, overflowX:'auto', margin: 0, whiteSpace:'pre'}}>{c.code}</pre>
           </div>
         )
       })}

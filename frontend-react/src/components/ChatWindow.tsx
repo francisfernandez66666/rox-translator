@@ -40,6 +40,8 @@ import ModeToggle from '@/components/ModeToggle'
 import { intlLocale, fmtDateTime } from '../lib/format'
 // ★ F-52②（批 I-8）：「文本过长」本地闸（上限由本页 loadBalance 从 /api/me/package 喂养）
 import { setChatMaxChars } from '../lib/chatLimit'
+// ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
+import { slowVerdict } from '../lib/slowEstimate'
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 // floor + Math.max(0,…) 是必要的：本函数喂的是「≈句数」这类折算值（balance_sentences_approx、
@@ -53,7 +55,19 @@ function fmtNum(n: number): string {
 // 卡片规格集中成常量而不是散进 JSX 内联：内联字面值正是 #68 闸门要收口的形态，
 // 走令牌后描边档位由 theme.css §十 统一调，页面不需要跟着改。
 const CARD: React.CSSProperties = {
-  background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 14,
+  background: 'var(--lc-panel)', border: '1.2px solid var(--lc-border-card)', borderRadius: 14,
+}
+
+// ★ 决策⑩（2026-10-10）：对话框高度记忆键（带 lc- 前缀的站点约定）。存的是像素值，
+//   0/缺键＝默认档 min(70vh,640px)；范围钳在 320px–90vh（与 CSS 的 min/max-height 同档）。
+const CW_DIALOG_H_KEY = 'lc-cw-dialog-h'
+// 默认高度档的 JS 侧读数（拖拽起点用；渲染仍走 CSS 的 min(70vh,640px)，两处同口径）
+function cwDefaultDialogH(): number {
+  return Math.min(Math.round(window.innerHeight * 0.7), 640)
+}
+// 高度钳制纯函数：拖拽与会话恢复共用同一条 320px–90vh 档（低于下限＝输入区被压没，高于上限＝又回到占满整屏）
+function cwClampDialogH(h: number): number {
+  return Math.max(320, Math.min(Math.round(window.innerHeight * 0.9), h))
 }
 
 // 停止生成图标（langcross 无等价，按组件库线性风格内联方块）
@@ -91,9 +105,20 @@ export default function ChatWindow() {
   const [condenseOn, setCondenseOn] = useState(false)
   const [condenseMax, setCondenseMax] = useState(200)
   // ★ F7：输入预估（防抖 600ms）/ 会话搜索 / 导出
-  const [estimate, setEstimate] = useState<{ min: number; max: number; s: number; low: boolean } | null>(null)
+  // ★ 决策⑪①：qd=后端排队深度代理值（llm_queue_depth），参与三档预检
+  const [estimate, setEstimate] = useState<{ min: number; max: number; s: number; low: boolean; qd?: number } | null>(null)
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
+
+  // ★ 决策⑩（2026-10-10）：对话框高度（像素，0=默认档 min(70vh,640px)，记忆到 localStorage）
+  const [dialogH, setDialogH] = useState<number>(() => {
+    try { return parseInt(localStorage.getItem(CW_DIALOG_H_KEY) || '0', 10) || 0 } catch { return 0 }
+  })
+  // 拖拽闭包里要读最新高度，state 异步更新会读到旧值——旁挂 ref 同步
+  const dialogHRef = useRef(dialogH)
+  function setDialogHeight(h: number) { dialogHRef.current = h; setDialogH(h) }
+  // ★ 决策⑩：空态最小化闩——一旦展开过就保持展开（输入清空后又弹回收起是打扰，不是智能）
+  const [expandedLatch, setExpandedLatch] = useState(false)
 
   // ★ 余额 / 用量（2026-09-19 全积分口径：API 出参即积分，前端零换算）
   const [balance, setBalance] = useState<{ points: number; approx: number } | null>(null)
@@ -185,7 +210,7 @@ export default function ChatWindow() {
     const timer = setTimeout(async () => {
       const r = await estimateTranslation(text, chat.selectedLangs, mode)
       if (!alive || !r) return
-      setEstimate({ min: r.points_min, max: r.points_max, s: r.cost_sentences_approx ?? 0, low: r.points_balance < r.points_max })
+      setEstimate({ min: r.points_min, max: r.points_max, s: r.cost_sentences_approx ?? 0, low: r.points_balance < r.points_max, qd: r.llm_queue_depth })
     }, 600)
     return () => { alive = false; clearTimeout(timer) }
   }, [input, chat.selectedLangs, mode])
@@ -247,12 +272,51 @@ export default function ChatWindow() {
     toast({ title: t2('chat.stopTokenNote'), tone: 'success' })
   }
 
+  // ---- ★ 决策⑩：顶缘拖拽调高 / 双击回默认 ----
+  // 拖拽用 mousedown + window 级 mousemove/mouseup（而非 pointer capture）：jsdom 可直接
+  // fireEvent 模拟三步序列，触屏端走默认行为不劫持。方向＝向上拖变高（delta 取负）。
+  function startDrag(e: React.MouseEvent) {
+    e.preventDefault()
+    const startY = e.clientY
+    // 钳制交给 cwClampDialogH（320px–90vh 与 CSS 同档），这里只取起点
+    const startH = dialogHRef.current > 0 ? dialogHRef.current : cwDefaultDialogH()
+    const onMove = (ev: MouseEvent) => {
+      setDialogHeight(cwClampDialogH(startH + (startY - ev.clientY)))
+    }
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      try { localStorage.setItem(CW_DIALOG_H_KEY, String(dialogHRef.current)) } catch { /* 存储满静默 */ }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  // 双击手柄：回默认档并清除记忆（下次进来重新按默认档开）
+  function resetHeight() {
+    setDialogHeight(0)
+    try { localStorage.removeItem(CW_DIALOG_H_KEY) } catch { /* ignore */ }
+  }
+
+  // ★ 决策⑩：空态整卡收起为单行入口条。口径＝决策⑩拍板档：**空输入且无会话**才整卡收；
+  //   有会话时只收输入框（历史可见性优先，不做整卡最小化）。搜索条与错误提示在场时也不收，
+  //   否则会把用户正要看的东西藏进收起态里。
+  const hasSession = chat.messages.length > 0 || chat.isLoading
+  const collapsed = !expandedLatch && input.trim() === '' && !hasSession && !searchOpen && !chat.errorMessage
+  // 点击入口条展开并聚焦输入框（latch 置位后不再自动收起）
+  function expandFromEntry() {
+    setExpandedLatch(true)
+    setTimeout(() => inputRef.current?.focus(), 0)
+  }
+
   // ---- 发送 ----
   // 目标语言取聊天全局 selectedLangs（不在输入框里重复选）；源文先 trim 后再判空，
   // 但发送的是 rawText——已 trim，避免把纯空白当一次有效翻译请求计费
   async function handleSend() {
     const rawText = input.trim()
     if (!rawText) return
+    // ★ 决策⑪①「宁误拦」：预检判 reject（预计超 90s 时限）直接不发送——
+    //   发出去大概率白等 90s 收一个 chat_timeout；工单链路是这段文本的正解。
+    if (slowV === 'reject') { toast({ title: t2('chat.slowReject'), tone: 'warn' }); return }
     // 合并后文件入口不存在，进行中的翻译是唯一并发源：保留「忙」提示口径
     if (chat.isLoading) { toast({ title: t2('chat.busy'), tone: 'warn' }); return }
     setInput('')
@@ -264,6 +328,9 @@ export default function ChatWindow() {
   }
 
   const canSend = input.trim().length > 0
+  // ★ 决策⑪①：发起前三档预检（宁误拦：排队深度未知走保守兜底，见 lib/slowEstimate 文件头）。
+  //   ok=放行；slow=琥珀横幅提示可转工单（不拦发送）；reject=拦发送＋工单入口。
+  const slowV = canSend ? slowVerdict(input.trim().length, mode, estimate?.qd) : 'ok'
   // F7：会话内搜索过滤（空串 = 全量）
   const shownMessages = searchQ.trim()
     ? chat.messages.filter((m) => (m.content || '').toLowerCase().includes(searchQ.trim().toLowerCase()))
@@ -329,8 +396,27 @@ export default function ChatWindow() {
         </div>
       )}
 
-      {/* ★ #36 合并对话框：flex:1 吃满剩余整屏，内部三段式（框头 / 滚动区 / 框脚） */}
-      <div className="cw-dialog" style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)' }}>
+      {/* ★ #36 合并对话框：内部三段式（框头 / 滚动区 / 框脚）。
+          ★ 决策⑩（2026-10-10）：高度从 flex:1 吃满改为固定档 min(70vh,640px)（CSS），
+          顶缘手柄可拖 320px–90vh、双击回默认、高度记 localStorage（lc-cw-dialog-h）；
+          空输入且无会话时整卡收成单行入口条（cw-collapsed：框头/滚动区/工具条隐藏，
+          只留输入行，点击展开——收起是 CSS 档不是卸载，DOM 归属口径与测试锁不冲突）。 */}
+      <div
+        className={`cw-dialog${collapsed ? ' cw-collapsed' : ''}`}
+        style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)', ...(dialogH > 0 && !collapsed ? { height: cwClampDialogH(dialogH) } : {}) }}
+        onClick={collapsed ? expandFromEntry : undefined}
+      >
+        {/* ★ 决策⑩：顶缘拖拽手柄（6px 命中带，cursor:row-resize；双击回默认档） */}
+        <div
+          className="cw-resize-handle"
+          data-testid="cw-resize-handle"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t('chat.resizeHandle')}
+          title={t('chat.resizeHandle')}
+          onMouseDown={startDrag}
+          onDoubleClick={resetHeight}
+        />
         {/* 框头：会话标题 + 工具（搜索 / 导出 / 清空）。★ 〇-LK：「原文/自动检测」标签
             跟着输入框挪到了底部 composer，框头只留会话级操作——顶部是历史，底部是输入。 */}
         <div className="cw-dialog-head">
@@ -396,7 +482,7 @@ export default function ChatWindow() {
               aria-label={t('chat.placeholder')}
               data-testid="translate-input"
               value={input}
-              onChange={(e) => { setInput(e.target.value); autoResize() }}
+              onChange={(e) => { setInput(e.target.value); if (e.target.value.trim()) setExpandedLatch(true); autoResize() }}
               placeholder={t('chat.placeholder')}
               rows={1}
               style={{ width: '100%', background: 'transparent', border: '0' }}
@@ -431,10 +517,22 @@ export default function ChatWindow() {
               {chat.isLoading ? (
                 <Button variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
               ) : (
-                <Button variant="primary" size="sm" disabled={!canSend} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
+                <Button variant="primary" size="sm" disabled={!canSend || slowV === 'reject'} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
               )}
             </div>
           </div>
+          {/* ★ 决策⑪①：发起前三档预检横幅（slow=明示较慢；reject=已拦发送）。琥珀档同离线横幅；
+              工单入口整页跳 /tickets——工作台页面无路由上下文依赖（测试可桩 location.assign）。 */}
+          {slowV !== 'ok' && (
+            <div className="cw-slow-est" data-testid="slow-estimate" role="status"
+                 style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 13, color: '#D29922' }}>
+              <span style={{ flex: 1, minWidth: 200 }}>{slowV === 'reject' ? t2('chat.slowReject') : t2('chat.slowEstimate')}</span>
+              <button type="button" data-testid="slow-to-ticket" onClick={() => { window.location.assign('/tickets') }}
+                      style={{ border: 'none', background: 'none', color: '#D29922', fontSize: 13, textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>
+                {t2('chat.slowToTicket')}
+              </button>
+            </div>
+          )}
           {!!chat.errorMessage && (
             <div style={{ color: '#F85149', fontSize: 15 }}>{chat.errorMessage}</div>
           )}
@@ -455,7 +553,22 @@ export default function ChatWindow() {
 // 焦点环单独写 :focus-visible：纯黑底上默认 UA 焦点样式几乎看不见，必须自绘 outline。
 const CW_CSS = `
 .cw-root{box-sizing:border-box}
-.cw-dialog{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px}
+/* ★ 决策⑩（2026-10-10）：高度口径从 flex:1 吃满改为固定默认档 min(70vh,640px)，
+   可拖范围由 min-height:320px / max-height:90vh 承担（拖拽时 JS 写内联 height，
+   同一条 320–90vh 钳制，两处口径一致）。 */
+.cw-dialog{display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px;height:min(70vh,640px);min-height:320px;max-height:90vh}
+/* ★ 决策⑩：顶缘拖拽手柄——6px 命中带贴住卡片顶缘，hover 时给出可拖暗示 */
+.cw-resize-handle{flex:0 0 6px;cursor:row-resize;background:transparent}
+.cw-resize-handle:hover{background:var(--lc-border-faint)}
+/* ★ 决策⑩：空态整卡收成单行入口条——收起是 CSS 档（display:none）而非卸载，
+   DOM 归属与既有结构锁不冲突；cursor:text 提示「点一下就能打字」。 */
+.cw-dialog.cw-collapsed{height:auto;min-height:0;cursor:text}
+.cw-dialog.cw-collapsed .cw-resize-handle,
+.cw-dialog.cw-collapsed .cw-dialog-head,
+.cw-dialog.cw-collapsed .cw-dialog-body,
+.cw-dialog.cw-collapsed .cw-toolbar{display:none}
+/* ★ 决策⑪①：发起前预检横幅（slow/reject 共用，语义色由内联琥珀承担） */
+.cw-slow-est{padding:0 2px}
 .cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--lc-border-faint);flex-wrap:wrap}
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}

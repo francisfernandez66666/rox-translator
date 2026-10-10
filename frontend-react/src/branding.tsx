@@ -164,7 +164,7 @@ html .lc-auth-bg.lc-brand-login{display:flex;overflow:hidden;padding:0;}
 .lc-brand-login__pane{position:relative;z-index:1;flex:1 1 0;min-width:0;align-self:stretch;overflow:hidden;}
 .lc-brand-login__pane--form{display:flex;align-items:center;justify-content:center;background:rgba(231,233,234,0.06);}
 .lc-brand-login__card{position:absolute;z-index:2;left:clamp(min(var(--lc-brand-half-w,200px),50%),var(--lc-brand-x,50%),max(50%,calc(100% - var(--lc-brand-half-w,200px))));top:clamp(min(var(--lc-brand-half-h,220px),50%),var(--lc-brand-y,50%),max(50%,calc(100% - var(--lc-brand-half-h,220px))));margin-left:calc(0px - var(--lc-brand-half-w,200px));margin-top:calc(0px - var(--lc-brand-half-h,220px));max-width:calc(100% - 32px);}
-@media (max-width:860px){
+@media (max-width:900px){ /* ★ 批3 断点归一：860 → 900（M 档上缘 641-900） */
   .lc-brand-login--split .lc-brand-login__pane--bg{display:none;}
   .lc-brand-login--split .lc-brand-login__pane--form{background:#000000;}
 }
@@ -344,13 +344,13 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
     const palette: Record<string, string> = {
       '--bubble-user-bg': 'rgba(231,233,234,0.06)',
       '--bubble-user-border': '#FFFFFF',
-      '--bubble-ai-bg': '#0E1014',
+      '--bubble-ai-bg': '#14171C', /* ★ 2026-10-10 收口：面板档随 §1.1 新真值（0E1014 已入禁列） */
       '--bubble-ai-border': '#FFFFFF',
-      '--bg': '#0E1014',
-      '--panel': '#0E1014',
+      '--bg': '#14171C',
+      '--panel': '#14171C',
       '--text': '#E7E9EA',
       '--border': '#FFFFFF',
-      '--muted': '#71767B',
+      '--muted': '#98A0A9', /* ★ 批2：旧 text-3 野值 #71767B 对齐 §1.1 新档（历史 Vue 挂点，无现行消费方） */
       '--msg-out-bg': '#E7E9EA',
       '--msg-out-color': '#000000',
     }

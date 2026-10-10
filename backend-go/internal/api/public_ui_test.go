@@ -52,22 +52,25 @@ func TestPublicDocPageMonochromeTruth(t *testing.T) {
 				}
 			}
 			// ② 面/文字/描边三族令牌逐字相等（缺一个就说明有人改写了令牌声明）
-			//    ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）：撤销 〇-O，面回交付值、
-			//    描边三档回 §1.1 灰阶。前端等价锁见 readability.test.ts 的 〇-P 段。
+			//    ★ 2026-10-10 清晰度批1（§十五②③拍板）：五档文字重排＋面色台阶卡片侧抬档＋
+			//    描边七档重标定；直出页与前端 tokens.css 同步换档。前端等价锁见 readability.test.ts。
 			for _, want := range []string{
-				"--lc-bg:#000000", "--lc-panel:#0E1014", "--lc-surface:#16181C", "--lc-foot:#050607",
-				"--lc-text:#E7E9EA", "--lc-text-2:#9AA0AA", "--lc-text-4:#536471",
-				"--lc-line:#464C58", "--lc-card-line:#3A404C", "--lc-white:#FFFFFF",
+				"--lc-bg:#000000", "--lc-panel:#14171C", "--lc-surface:#1E2228", "--lc-foot:#050607",
+				"--lc-text:#E7E9EA", "--lc-text-2:#B9BFC6", "--lc-text-4:#7B838E",
+				"--lc-line:#565E6B", "--lc-card-line:#4A515C", "--lc-white:#FFFFFF",
 			} {
 				if !strings.Contains(html, want) {
 					t.Errorf("缺少 §1.1 真值令牌声明 %s", want)
 				}
 			}
-			// ②b 〇-O 的遗留档**按声明整体**负向清零（只比对 `--x:#hex` 这种成对写法，
+			// ②b 旧档**按声明整体**负向清零（只比对 `--x:#hex` 这种成对写法，
 			//     不去 substring 扫十六进制——源码里的「旧档作废」说明注释同样会被扫到，那是假红）。
 			for _, banned := range []string{
 				"--lc-line:#FFFFFF", "--lc-pill:#FFFFFF", "--lc-card-line:#FFFFFF",
 				"--lc-panel:#121417", "--lc-surface:#1A1D21",
+				// ★ 2026-10-10 起 〇-P 旧档同入负向：面板/浮面/文字/描边旧值写回即红
+				"--lc-panel:#0E1014", "--lc-surface:#16181C", "--lc-text-2:#9AA0AA", "--lc-text-4:#536471",
+				"--lc-line:#464C58", "--lc-card-line:#3A404C",
 			} {
 				if strings.Contains(html, banned) {
 					t.Errorf("〇-O 的遗留档 %s 复活（框线应走交付灰阶、面应回交付值）", banned)

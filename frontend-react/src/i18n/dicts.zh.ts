@@ -605,6 +605,8 @@ export const baseZh: Record<string,string> = {
   'msg.showSrc': '查看原文',
   'msg.copy': '复制译文',
  'msg.copied': '已复制 ',
+  // ★ 14.4（2026-10-10）：气泡底部 meta 行的积分展示（与反馈入口同排，不进 content）
+  'msg.pointsUsed': '本次消耗 {n} 积分',
   'app.loading': '加载中…',
   'app.personalPlan': '个人版',
   'chat.customGroup': '更多语言',

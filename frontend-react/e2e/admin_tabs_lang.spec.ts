@@ -61,6 +61,10 @@ test.describe('后台 Tab 合并 + 语言多选去重', () => {
   test('T3 聊天语言多选：选中即入 chip，下拉无重复展示位', async ({ page }) => {
     await login(page, 'uatuser_a', 'uatpass123');
     await page.goto('/');
+    // ★ 决策⑩（2026-10-10）：新会话空输入时整卡收成单行入口条（.cw-collapsed 把工具条
+    //   display:none），语言多选触发器在工具条里——先填入文本把卡片展开，再点触发器。
+    //   （首轮 UAT 实测：直接 click 撞「element is not visible」15s 超时，即此形态。）
+    await page.locator('.cw-dialog-foot textarea').fill('语言多选展开文本');
     const trigger = page.getByTestId('lang-multi-trigger');
     await trigger.click();
     const panel = page.getByTestId('lang-multi-panel');

@@ -94,5 +94,8 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 		"sufficient":               !s.Bill.Enabled() || tokens > 0,
 		"activated":                activated,
 		"hint":                     hint,
+		// ★ 决策⑪①（2026-10-10）：LLM 排队深度代理值（饱和代理，口径见 llmQueueDepth 注释）。
+		//   前端 slowEstimate 用它参与「字符数 × 模式 × 排队深度」三档预检；字段缺失时前端按保守档兜底。
+		"llm_queue_depth": s.llmQueueDepth(),
 	})
 }

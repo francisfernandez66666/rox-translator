@@ -415,7 +415,7 @@ export function OrgP() {
         <div style={{ minWidth: 280, flex: '1 1 320px' }}>
           <div
             onClick={() => selectOrg(0)}
-            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? 'var(--lc-raised, #16181C)' : 'var(--lc-inset, #0A0B0D)', border: '1.2px solid var(--lc-border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+            style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', background: selectedOrg === 0 ? 'var(--lc-raised)' : 'var(--lc-inset)', border: '1.2px solid var(--lc-border-card)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
           >
             <span> {rootOrgName}（{isPlatformView || isSuper ? t('org.typePlatform') : t('org.typeRoot')}）</span>
             {myLevel >= 3 && (

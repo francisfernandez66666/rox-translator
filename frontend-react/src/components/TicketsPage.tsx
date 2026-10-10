@@ -442,7 +442,10 @@ export default function TicketsPage() {
         // 校验不通过直接 return，靠 finally 复位 creating——否则按钮会永久停在「提交中」置灰态
         if (!text.trim()) return
         r = await ticketCreate({
-          title: title.trim() || t('tk.defaultTitle'), // 标题留空时给一个 i18n 缺省名，工单列表不至于空白
+          // ★ ⑬（2026-10-10 批3 前端半）：建单不再伪造缺省标题——空标题就传空串（:454 文件模式
+          //   早已是纯 trim 口径，两路对齐）；「看起来的工单名」由列表渲染层的显示兜底负责，
+          //   数据库里存什么就是什么（后端半：工单号回填由后端代理负责，不在本仓）。
+          title: title.trim(),
           source_text: text,
           target_langs: langsJoined,
           mode: qualityMode,
@@ -593,16 +596,16 @@ export default function TicketsPage() {
           <textarea className="lc-textarea" data-testid="tk-source" rows={4} value={text} onChange={(e) => setText(e.target.value)} aria-label={t('tk.textPlaceholder')} placeholder={t('tk.textPlaceholder')} style={{ width: '100%', minHeight: 110, maxHeight: 360, resize: 'vertical' }} />
         ) : (
           <>
-              {/* 拖放区/文件片的面取面板面 #0E1014（= --lc-panel，★ 〇-P 交付值），框线一律走令牌 */}
+              {/* 拖放区/文件片的面取面板面（= --lc-panel，★ 2026-10-10 新档 #14171C），框线一律走令牌 */}
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
-                style={{ border: '1.2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: '#0E1014' }}>
+                style={{ border: '1.2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: 'var(--lc-panel)' }}>
                 <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
               <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 14 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, alignItems: 'center' }}>
                   {files.map((f, idx) => (
-                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#0E1014', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
+                  <div key={f.name + f.size} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'var(--lc-panel)', border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: '3px 10px', fontSize: 14, maxWidth: 320 }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
                       <span style={{ color: 'var(--lc-text-3)', fontSize: 13.5 }}>{fmtKB(f.size)}</span>
                     <Link tone="danger" onClick={() => removeFileAt(idx)} aria-label={`${t('common.delete')}: ${f.name}`}><Icon n="close" /></Link>
@@ -653,13 +656,15 @@ export default function TicketsPage() {
           <Button size="sm" variant="secondary" onClick={load} aria-label={t('common.refresh')}><Icon n="refresh" /></Button>
         </div>
         <DataTable<Ticket>
+          className="tk-table" /* ★ 批3：S 档表格转卡片的钩子类（CSS_TK 的 @media 分支消费） */
           rowKey={(row) => String(row.id)}
           rows={tickets}
           columns={[
             { key: 'ticket_no', title: t('tk.colNo'), width: 170, mono: true,
               render: (row) => <code>{row.ticket_no || row.id}</code> },
             { key: 'title', title: t('users.colName'), width: 220,
-              render: (row) => <span title={row.title}>{row.title}</span> },
+              // ★ ⑬ 显示兜底：库里空标题（改造后允许）在列表里回落到 i18n 缺省名，列表不留白
+              render: (row) => <span title={row.title}>{row.title || t('tk.defaultTitle')}</span> },
             { key: 'status', title: t('users.colStatus'), width: 110,
               render: (row) => <span>{statusLabel(row.status)}</span> },
             // ★ 改造 5：质检徽标列（error/warning 计数 + 质检存疑），无质检数据不渲染
@@ -750,7 +755,7 @@ export default function TicketsPage() {
               <div key={st.id} className={`st-${st.status}`} style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 14, padding: '3px 0' }}>
                 <span style={{ flex: 1, color: 'var(--lc-text-2)' }}>{stepName(st.step)}</span>
                 <span style={{ fontSize: 13, padding: '1px 6px', borderRadius: 4,
-                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : '#16181C',
+                  background: st.status === 'success' ? 'rgba(231,233,234,0.10)' : st.status === 'running' ? 'rgba(231,233,234,0.16)' : st.status === 'error' ? 'rgba(229,72,77,0.10)' : 'var(--lc-raised)',
                   color: st.status === 'success' ? 'var(--lc-text-1)' : st.status === 'running' ? 'var(--lc-text-2)' : st.status === 'error' ? 'var(--lc-danger)' : 'var(--lc-text-3)' }}>{st.status}</span>
                 {st.error && <span style={{ color: 'var(--lc-danger)', fontSize: 13 }}><Icon n="alert" /> {st.error}</span>}
               </div>
@@ -855,14 +860,39 @@ const CSS_TK = `
 .tk-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:1200}
 /* 面板自身滚动（max-height 86vh）+ 内部步骤区二次滚动是刻意的两层：
    标题与进度条留在原位不动，只有长内容区滚，质检明细展开时也不会把标题顶出视口 */
-.tk-dialog{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
+.tk-dialog{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;box-shadow:var(--lc-panel-highlight),var(--lc-el-2);max-width:calc(100vw - 32px);max-height:86vh;overflow:auto}
 /* 面板自身是 tabIndex=-1 的程序化焦点位（读屏在此朗读 aria-labelledby 标题），
    不是可交互控件：给它画焦点环只会糊一整圈边框，视觉噪声且与卡片描边混淆 */
 .tk-dialog:focus{outline:none}
-.tk-dialog__title{padding:18px 24px 0;font-size:18px;font-weight:600;color:var(--lc-text)}
+/* ★ 批2 六档字阶：弹窗标题＝区块标题 17/650（原 18/600 旧档作废） */
+.tk-dialog__title{padding:18px 24px 0;font-size:17px;font-weight:650;color:var(--lc-text)}
 .tk-dialog__body{padding:14px 24px 6px}
 .tk-dialog__actions{display:flex;justify-content:flex-end;gap:10px;padding:12px 24px 20px}
 .tk-progress{height:8px;border-radius:999px;background:var(--lc-inset);overflow:hidden}
 /* transition .3s：轮询是 3s 一跳，补一段缓动让百分比看起来在平滑推进而不是硬跳 */
 .tk-progress__bar{height:100%;background:var(--lc-text-1);border-radius:999px;transition:width .3s}
+
+/* ★ 批3 表格转卡片（§6.2d，S 档 ≤640）：工单表不再横向滚动，改纵向记录卡——
+   首屏三行：标题(15/600/text-1 单行省略)+状态徽标同排右对齐 / 工单号 / 日期+操作；
+   质检、语种列随卡折叠展示；完整字段仍在「详情」弹窗（每卡恒有详情钮）。
+   网格显式定 row/column：不依赖 DOM 顺序，空态行（td colSpan 内联 display:table-cell）
+   落到 row2 也不破版。注入时机晚于 components.css，同特异度下覆盖其通用 .lc-table 卡片规则。 */
+@media (max-width: 640px){
+  .tk-table thead{display:none}
+  .tk-table tbody{display:block}
+  .tk-table tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:12px 14px;border-top:1px solid var(--lc-border-card)}
+  .tk-table tr:first-child{border-top:0}
+  .tk-table td{display:block;height:auto;padding:3px 0;border-top:0;white-space:normal;overflow:visible;text-align:start}
+  /* 第2格=标题：单行省略 + 六档字阶「记录名 15/600/text-1」；第3格=状态：同排右对齐 */
+  .tk-table td:nth-child(2){grid-column:1;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:600;color:var(--lc-text)}
+  .tk-table td:nth-child(3){grid-column:2;grid-row:1;justify-self:end;text-align:end;font-size:13px}
+  /* 第1格=工单号：meta 档 */
+  .tk-table td:nth-child(1){grid-column:1 / -1;grid-row:2;font-size:13px;color:var(--lc-text-3)}
+  .tk-table td:nth-child(4){grid-column:1 / -1;grid-row:3}
+  .tk-table td:nth-child(5){grid-column:1 / -1;grid-row:4;font-size:13px;color:var(--lc-text-3)}
+  .tk-table td:nth-child(6){grid-column:1 / -1;grid-row:5;font-size:13px;color:var(--lc-text-3)}
+  /* 第7格=操作列：行尾主行动作组，纵向铺开不换行挤压 */
+  .tk-table td:nth-child(7){grid-column:1 / -1;grid-row:6;padding-top:6px}
+  .tk-table td:nth-child(7) > div{flex-wrap:wrap;gap:6px 12px}
+}
 `

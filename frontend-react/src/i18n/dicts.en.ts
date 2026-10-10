@@ -602,6 +602,8 @@ export const baseEn: Record<string,string> = {
   'msg.showSrc': 'Show source',
   'msg.copy': 'Copy translation',
  'msg.copied': 'Copied ',
+  // ★ 14.4 (2026-10-10): points meta row at bubble bottom (same row as feedback entry, never inside content)
+  'msg.pointsUsed': 'This translation used {n} points',
   'app.loading': 'Loading…',
   'app.personalPlan': 'Personal plan',
   'chat.customGroup': 'More',

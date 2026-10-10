@@ -49,7 +49,7 @@ export default function SiteFooter() {
         // 顶缘一条常规分隔线档（--npz-line：★ 〇-P 起为交付灰阶 #464C58）
         borderTop: '1px solid var(--npz-line)',
         background: '#050607',
-        color: '#536471',
+        color: 'var(--lc-text-4)', /* ★ 批2：野值 #536471 收编 → text-4 档（页脚 meta/装饰说明专用档） */
         fontSize: 15,
         display: 'flex',
         flexWrap: 'wrap',

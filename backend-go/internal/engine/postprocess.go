@@ -565,6 +565,70 @@ func PostProcessTranslation(text, langCode string) string {
 	return strings.TrimSpace(text)
 }
 
+// ============ 14.3 输出语言纯度：全角括号原词复述剥离 ============
+// 背景：模型偶发在译文里以全角括号附注原词（如「按钮（button）」）。提示词层已加
+// 「不得以括号附注原词」约束（engine.go translateInstruction / ReviewTranslation），
+// 此处是收尾兜底腿。判据刻意取**整括号逐字复述**（inner 原样出现在原文中）而非
+// 词级匹配——词级会把 bootGate/API 等正常圆括号标识符误杀。数字序列必须一致
+// （digitSeqRe 与 review_purity.go 同一把尺），防止剥掉带编号的真注释。
+//
+// 返回：(清洗后译文, 动作档名)。档名是对外排障契约，钉死在单测里：
+//   - "paren_echo_stripped"：至少剥掉了一个复述括号；
+//   - "paren_strip_failed"：候选括号存在但剥完全空（宁保留原文也不交空串）；
+//   - ""：无可剥或原文本就干净。
+//
+// reason 供调用方走 recordPurityAction / observability.Warn，本函数自身不落日志
+// （保持纯函数语义，与 stripTrailingForeignResidual 同款分工）。
+func StripParenEcho(translation, source string) (string, string) {
+	inner := strings.TrimSpace(translation)
+	if inner == "" || strings.TrimSpace(source) == "" {
+		return translation, ""
+	}
+	// 全角括号对；不含嵌套（嵌套场景极罕见，且剥一层后迭代会自然处理外层）。
+	parenRe := regexp.MustCompile(`（[^（）]*）`)
+	cur := translation
+	strippedAny := false
+	for {
+		found := false
+		for _, m := range parenRe.FindAllString(cur, -1) {
+			content := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(m, "（"), "）"))
+			if content == "" {
+				continue // 空括号由既有 stripEmptyPlaceholderBrackets 腿管，不在此重复
+			}
+			// 判据一：整括号内容逐字出现在原文（whole-verbatim，非词级）。
+			if !strings.Contains(source, content) {
+				continue
+			}
+			// 判据二：剥掉这一对括号后数字序列不变（防误剥「步骤（1）（2）」类真注释）。
+			after := strings.Replace(cur, m, "", 1)
+			if digitSeqOf(cur) != digitSeqOf(after) {
+				continue
+			}
+			cur = strings.TrimSpace(after)
+			strippedAny = true
+			found = true
+			break // 换用新文本重扫，避免 FindAllString 基于旧串
+		}
+		if !found {
+			break
+		}
+	}
+	if !strippedAny {
+		return translation, ""
+	}
+	if strings.TrimSpace(cur) == "" {
+		// 剥完为空＝整个译文只是原文复述：宁可保留原文也不交空串。
+		return translation, "paren_strip_failed"
+	}
+	return cur, "paren_echo_stripped"
+}
+
+// digitSeqOf 抽出全部数字序列并以 "|" 连接，用于剥括号前后的数字一致性比对
+// （与 review_purity.go 的 digitSeqRe 同一把正则，保证口径统一）。
+func digitSeqOf(s string) string {
+	return strings.Join(digitSeqRe.FindAllString(s, -1), "|")
+}
+
 // brandReplace 品牌替换：极石汽车（Jishi/Jieshi/Jixi 等拼音变体）→ ROX。
 // 兼容模型常见的直译拼音写法，避免品牌名被音译成 jieshi/jixi 等未命中知识库。
 func brandReplace(text string) string {

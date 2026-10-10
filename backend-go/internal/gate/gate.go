@@ -89,20 +89,17 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 		res.Pass = false
 	}
 
-	// 4. 数字保持
-	srcNums := reNumbers.FindAllString(source, -1)
-	trNums := reNumbers.FindAllString(tr, -1)
-	missing := false
-	for _, n := range srcNums {
-		if !contains(trNums, n) {
-			missing = true
-			break
-		}
-	}
-	pass = !missing
-	res.Checks = append(res.Checks, Check{"数字保持", pass, ""})
-	if !pass {
+	// 4. 数字保持（★ 2026-10-10 批次 ⑫ 归一化比对）：旧判据是字符串精确等值，
+	//    千分位（1,000 vs 1000）、数量词换算（1.5 million vs 150万）、中文数字写法
+	//    （3 steps vs 三步）全部误判死——现网实证工单 T20261010132330UEM 重译 8 次后失败。
+	//    现改为 missingNumbers 归一化比对（数值等值＋数量词乘子＋中文数字单向认领），
+	//    判死时 Detail 列出源文有、译文找不到的数字清单；通过时 Detail 保持空串。
+	//    检查项名称仍为「数字保持」（对外可见文案，不改名；orchestrator 按此名走短重试）。
+	if missingNums := missingNumbers(source, tr); len(missingNums) > 0 {
 		res.Pass = false
+		res.Checks = append(res.Checks, Check{CheckNumberKeep, false, "缺失: " + strings.Join(missingNums, ", ")})
+	} else {
+		res.Checks = append(res.Checks, Check{CheckNumberKeep, true, ""})
 	}
 
 	// 5. 长度合理（不严重压缩）
@@ -166,7 +163,6 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 	return res
 }
 
-// contains 判断字符串列表中是否包含指定值（数字保持校验辅助）
 // ForceTerms 术语强制替换（H1）：源文命中术语但译文未含规定译法时，
 // 若译文残留源术语字面（未翻译直通，如中文术语出现在英文译文中），直接以 KB 规定译法覆写——
 // 零成本命中 100% 遵循；无法确定性覆写的（译文用了第三种写法）返回原文，交由调用方走重翻闭环。
@@ -193,16 +189,6 @@ func ForceTerms(source, translation string, terms []TermRequirement) (string, in
 		}
 	}
 	return tr, fixed
-}
-
-// contains 判断 v 是否存在于 list 中。
-func contains(list []string, v string) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // isFillerWordOnly 判断译文是否仅为无意义填充词（模型幻觉输出）。

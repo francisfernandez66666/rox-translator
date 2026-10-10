@@ -1075,8 +1075,10 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	if langName == "" {
 		langName = targetLang
 	}
+	// ★ 14.3 纯度约束（2026-10-10）：审校提示词与初翻腿（purityInstructionNote）同一句
+	//   口径——禁止复述原文、禁止括号附注原词，避免审校把初翻已剥掉的复述又改回来。
 	prompt := fmt.Sprintf(
-		"你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s",
+		"你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s",
 		langName, culture, source, translation, contractNoteZh())
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
@@ -1142,7 +1144,18 @@ func srcName(code string) string {
 // 内容（按语言组合分桶，等效一次冷启动，一次性成本可接受；F-15 已有同形先例）。
 // 「双十一→11.11」这类词条级译法不走本函数（写死通用指令表达不了），交行业包术语层数据驱动。
 func translateInstruction(source, target, uiLang string) string {
-	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang)
+	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang) + purityInstructionNote(uiLang)
+}
+
+// purityInstructionNote 输出语言纯度指令尾注（★ 14.3，2026-10-10）：禁止以括号或
+// 任何形式在译文中附注原词、禁止复述原文。与审校腿（ReviewTranslation 提示词）
+// 同一句口径——本批是**收敛措辞**不是新增第二口径（review_purity.go 已有同形判据）。
+// 同 F-15 先例：改指令内容会让 B4 缓存前缀换一次桶（等效一次冷启动，一次性成本可接受）。
+func purityInstructionNote(uiLang string) string {
+	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
+		return " Do not reproduce the source text, and do not annotate original words in parentheses or in any other form."
+	}
+	return "。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。"
 }
 
 // currencyInstructionNote 货币保真指令尾注（按界面语言中英双语，与 translateInstruction 同口径）。

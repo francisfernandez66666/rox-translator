@@ -30,8 +30,8 @@ const shot = (p: Page, name: string) => p.screenshot({ path: `artifacts/${name}.
 
 // WCAG 对比度实计算：把 getComputedStyle 返回的 rgb()/rgba() 前景色对工作台卡面求比值
 // （口径与 src/styles/readability.test.ts 一致），供「弱文字不得偏暗」类断言使用。
-// ★ 〇-P（2026-09-23）撤销 〇-O：默认卡面回到交付值 #0E1014；调用点一律显式传实际底色的，不受默认值影响。
-function contrastOnCard(fg: string, bg = '#0E1014'): number {
+// ★ 批1（2026-10-10）令牌重校准：默认卡面 = 新面板档 #14171C；调用点一律显式传实际底色的，不受默认值影响。
+function contrastOnCard(fg: string, bg = '#14171C'): number {
   const parse = (s: string): [number, number, number] => {
     const m = s.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
     if (!m) throw new Error(`无法解析颜色：${s}`);
@@ -96,6 +96,12 @@ test.describe('像素级 UAT', () => {
   //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
   //      单测拦「CSS 里被改回去」，本处拦「运行时内联样式/换肤把值盖掉」。
   test('P2b 工作台合并对话框结构（消息在上、输入贴底单卡单排）+ 字阶/灰阶按交付真值', async ({ page }) => {
+    // ★ 决策⑪①（2026-10-10）：慢预检横幅按输入长度+模式三档出没——默认档 pro（5 段流水线）
+    //   在排队深度未知（兜底 2）下**任何输入**都 ≥60s ⇒ 横幅恒在、框脚恒多 28px，
+    //   109 档在 pro 默认态不可达。本锁量的是「无横幅」的**结构态**几何，故先钉 fast 档
+    //   （9 字输入 fast 档 ≈42s < 45 ⇒ 无横幅）；横幅本体另有 data-testid=slow-estimate
+    //   与 lib/slowEstimate 单测覆盖，不混进这条结构锁。
+    await page.addInitScript(() => localStorage.setItem('translate_mode', 'fast'));
     await login(page);
     await page.goto('/');
     // 结构锁走 class（.cw-dialog*）而非文案：文案受 i18n 与措辞调整影响，
@@ -106,6 +112,10 @@ test.describe('像素级 UAT', () => {
     //   上一版这里锁的是「输入框在滚动区内」，滚动区第一位就是输入框——
     //   用户看后判「你们家对话框是放顶部的啊」，故本锁连同下面的几何锁一起改向。
     await expect(dialog.locator('.cw-dialog-foot textarea')).toBeVisible();
+    // ★ 决策⑩（2026-10-10）：空会话空输入时整卡收成单行入口条（.cw-collapsed 把框身/
+    //   工具条 display:none）——本锁量的是**展开态**，先填入文本把卡片展开再量。
+    //   （首轮 UAT 实测：body 48 次轮询恒 hidden 即收起态，非 CSS 回退。）
+    await dialog.locator('.cw-dialog-foot textarea').fill('像素结构锁展开文本');
     expect(await dialog.locator('.cw-dialog-body textarea').count(), '输入框不得回到消息流里').toBe(0);
     await expect(dialog.locator('.cw-dialog-body')).toBeVisible();
     // 几何锁（运行时实测，防「DOM 顺序对但 CSS 把它顶回上面」）。
@@ -194,8 +204,10 @@ test.describe('像素级 UAT', () => {
     if (bubbleFs >= 0) expect(bubbleFs, `气泡字号 ${bubbleFs}px ≠ 〇-N 后档 16px`).toBe(16);
     // 弱说明文字：颜色必须落在真值灰阶集合内（提亮批自造的 #878D95/#7A828E/#9AA2AF 一律红灯），
     // 并顺手核对该灰阶对页面底 #000000 的实际比值是否等于真值口径（≥4:1，图形/弱文字档）。
+    // ★ 批1（2026-10-10）令牌重校准：文字灰阶整体换代（UI-ANNOTATIONS §1.1）——
+    //   text-2 #B9BFC6 · text-3 #98A0A9 · text-4 #7B838E · disabled #6A7079；旧档 #9AA0AA/#71767B/#8A9099/#536471 作废。
     const welcomeColor = await dialog.locator('.cw-welcome').evaluate((el) => getComputedStyle(el).color);
-    const TRUTH_RGB = ['#E7E9EA', '#9AA0AA', '#71767B', '#8A9099', '#536471']
+    const TRUTH_RGB = ['#E7E9EA', '#B9BFC6', '#98A0A9', '#7B838E', '#6A7079']
       .map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)).join(','));
     const welcomeRgb = (welcomeColor.match(/\d+(\s*,\s*\d+){2}/) || [''])[0].replace(/\s/g, '');
     expect(TRUTH_RGB, `弱文字色不在真值灰阶内：${welcomeColor}`).toContain(welcomeRgb);
@@ -238,10 +250,13 @@ test.describe('像素级 UAT', () => {
       const v = [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
       return `rgb(${v[0]}, ${v[1]}, ${v[2]})`;
     };
-    // 交付灰阶框档（§1.1 border-1…7），运行时实测必须落在这一族里
-    const BORDER_GRAY = ['#8B939F', '#6E7683', '#5A6270', '#464C58', '#424956', '#3A404C', '#2A2F3A'].map(rgb);
-    // 交付面色台阶档（probe 里把 computed backgroundColor 转回 hex 再比，避免 rgb/hex 两套写法混着比）
-    const FACE_STEPS = ['#0E1014', '#16181C', '#0A0B0D', '#000000', '#050607'];
+    // 交付灰阶框档（§1.1 描边七档），运行时实测必须落在这一族里。
+    // ★ 2026-10-10 清晰度改造批1 重标定：七档整体上提一档（#9AA2AE…#3F454F），
+    //   〇-P 旧档（#8B939F…#2A2F3A）转为遗留档——写回旧值即被 readability.test.ts 负向锁判红。
+    const BORDER_GRAY = ['#9AA2AE', '#7F8794', '#6C7481', '#565E6B', '#4E5560', '#4A515C', '#3F454F'].map(rgb);
+    // 交付面色台阶档（probe 里把 computed backgroundColor 转回 hex 再比，避免 rgb/hex 两套写法混着比）。
+    // ★ 2026-10-10 批1：面板/浮面抬档（#14171C/#1E2228），内嵌/页脚/底档不动。
+    const FACE_STEPS = ['#14171C', '#1E2228', '#0B0D10', '#000000', '#050607'];
     // 量一个元素：边框色/宽 + 背景（背景写成 hex 便于与台阶档直接等值比对）。
     // ⚠️ probe/hex 必须定义在 evaluate 回调**内部**：回调是在浏览器进程里执行的，
     // 引用 Node 侧闭包会直接 ReferenceError（首版就是这么写，P2d 恒红而非假绿）。
@@ -288,7 +303,7 @@ test.describe('像素级 UAT', () => {
     // 1.2px 源码等值由 `readability.test.ts` A 段（令牌等值）与 G/H/I 段负向清零承担；
     // 本锁的射程 = 运行时内联覆写：抬回 2px（〇-N 旧档）或框被抹成 0px 都在此判红。
     expect(wb.dialog.bw[0], `对话框边宽 ${wb.dialog.bw[0]} ≠ 〇-P 交付档 1.2px 的取整等值 1px（2px/0px 一律视为回退）`).toBe('1px');
-    expect(wb.dialog.bg, `对话框面 ${wb.dialog.bg} ≠ 交付面板档 #0E1014`).toBe('#0E1014');
+    expect(wb.dialog.bg, `对话框面 ${wb.dialog.bg} ≠ 交付面板档 #14171C（2026-10-10 批1 抬档）`).toBe('#14171C');
     // 语种钮是「有框才谈档」：它当前确实带胶囊边，但真不画框也不算跑偏
     if (parseFloat(wb.chip.bw[0]) > 0) {
       expect(BORDER_GRAY, `语种钮边 ${wb.chip.bc[0]} 不在交付灰阶档上`).toContain(wb.chip.bc[0]);
@@ -529,11 +544,12 @@ test.describe('像素级 UAT', () => {
     expect(docBtnBg, '/docs/terms 管理后台按钮 ≠ 交付真值白底 #FFFFFF').toBe('rgb(255, 255, 255)');
     const docCard = page.locator('.card').first();
     const docCardBg = await docCard.evaluate((el) => getComputedStyle(el).backgroundColor);
-    // ★ 〇-P（2026-09-23）：撤销 〇-O，直出页面板回交付 #0E1014、框线回灰阶 #3A404C
-    //   ——两处都得实测，因为 public.go 的令牌块是手抄的第二套真值，源码里改对了、抄漏了都可能。
-    expect(docCardBg, '/docs/terms 内容面板 ≠ 交付面板档 #0E1014').toBe('rgb(14, 16, 20)');
+    // ★ 2026-10-10 清晰度改造批1：public.go 手抄真值已随 tokens 重标定——面板回 #14171C、
+    //   框线 #4A515C（card-line 档）。两处都得实测，因为 public.go 的令牌块是手抄的第二套真值，
+    //   源码里改对了、抄漏了都可能。
+    expect(docCardBg, '/docs/terms 内容面板 ≠ 交付面板档 #14171C（2026-10-10 批1 抬档）').toBe('rgb(20, 23, 28)');
     const docCardLine = await docCard.evaluate((el) => getComputedStyle(el).borderTopColor);
-    expect(docCardLine, '/docs/terms 内容面板描边 ≠ 交付卡片档 #3A404C').toBe('rgb(58, 64, 76)');
+    expect(docCardLine, '/docs/terms 内容面板描边 ≠ 交付卡片档 #4A515C').toBe('rgb(74, 81, 92)');
   });
 
   // P6b 主投白底件运行时必须是纯白（2026-09-22 白色填充还原批新增）

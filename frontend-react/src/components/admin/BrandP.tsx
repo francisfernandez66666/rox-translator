@@ -365,7 +365,7 @@ export default function BrandP() {
                           {/* 左侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'var(--lc-panel)', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -379,7 +379,7 @@ export default function BrandP() {
                           {/* 右侧：登录表单容器（可拖拽调整卡片位置） */}
                           <div ref={splitFormRef} style={{ flex: 1, position:'relative', background:'rgba(231,233,234,0.06)', overflow:'hidden'}}>
                             <div onMouseDown={(e) => { e.preventDefault(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: splitFormRef.current } }}
-                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
+                              style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 120, height: 80, background:'var(--lc-panel)', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.2)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}>
                               {t('brand.cardPreview')}
                             </div>
                           </div>
@@ -404,7 +404,7 @@ export default function BrandP() {
                       {/* 可拖拽的登录卡片预览 */}
                       <div
                         onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); cardDragRef.current = { startX: e.clientX, startY: e.clientY, x0: loginCardPos.x, y0: loginCardPos.y, el: bgPreviewRef.current } }}
-                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'#0E1014', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}
+                        style={{ position:'absolute', left: `${loginCardPos.x}%`, top: `${loginCardPos.y}%`, transform:'translate(-50%,-50%)', width: 140, height: 90, background:'var(--lc-panel)', borderRadius: 8, boxShadow:'0 6px 20px rgba(0,0,0,.25)', display:'flex', alignItems:'center', justifyContent:'center', fontSize: 13, color:'var(--lc-text-3)', cursor:'move'}}
                       >
                         {t('brand.cardPreview')}
                       </div>
