@@ -83,6 +83,21 @@ ok()   { printf '  ✔ %s\n' "$1"; }
 warn() { printf '  ⚠️ %s\n' "$1"; }
 bad()  { printf '  FAIL %s\n' "$1"; RC=1; }
 
+# sysd <is-enabled|is-active> <unit> —— systemd 状态读数的**唯一**取法。
+# 为什么要专门包一层（10-10 现网首跑实测抓到的，不是洁癖）：unit 不存在时
+# `systemctl is-enabled X` **既**往 stdout 打 "not-found"、**又**退非 0，于是
+# `$(... || echo '<未装>')` 会把两个值一起收进变量，读数行被劈成三行；
+# 而在**落位那一档判据**里（timer 装没装才决定要不要重跑），多出来的换行会让
+# `[ "$en" = enabled ]` 之外的一切字符串比较都变得难以核对。
+# 空值统一回落 `<未读>`——**绝不回落成空串**（空串在下面的等值判据里既不像"没装"
+# 也不像"装好了"，等于把"读不到"写成"没读到东西所以不算数"，同 §一·12「就绪判据不许吃零值」）。
+sysd() {
+  local v
+  v=$(systemctl "$1" "$2" 2>/dev/null) || true
+  [ -n "$v" ] || v='<未读>'
+  printf '%s' "$v"
+}
+
 # ---------------------------------------------------------------- 档位现读
 # 样张的两个门槛必须跟**现役配置**一致，否则"装了个不够档的件"＝闹钟天天判红。
 # 口径：env 文件里显式配了就用它，没配才用代码默认（20MiB／30 页）——
@@ -203,8 +218,12 @@ fi
 
 # ---------------------------------------------------------------- ⑤ 现状读数（提示项，不拦）
 if command -v systemctl >/dev/null 2>&1 && [ -z "$ROOT_OVERRIDE" ]; then
-  en=$(systemctl is-enabled "$TIMER_NAME" 2>/dev/null || echo '<未装>')
-  ac=$(systemctl is-active "$TIMER_NAME" 2>/dev/null || echo '<未装>')
+  # ★ 读数一律走 sysd()，不许写回 `$(systemctl is-enabled X || echo '<未装>')`：
+  #   unit 不存在时 systemctl **既**打印 "not-found"**又**退非 0 ⇒ 命令替换把两个值一起收进来，
+  #   "闹钟现状"这行被劈成三行（10-10 现网首跑实测就是这个形态）。判据本身没被带偏
+  #  （带换行的值永远不等于 enabled），但排障的人第一眼会以为脚本坏了——读数面的诚实也算诚实。
+  en=$(sysd is-enabled "$TIMER_NAME")
+  ac=$(sysd is-active "$TIMER_NAME")
   say "闹钟现状：is-enabled=$en is-active=$ac"
   [ -x "$FPDPROBE_PATH_DEFAULT" ] && ok "fpdprobe 在位：$FPDPROBE_PATH_DEFAULT" \
     || say "  待办：$FPDPROBE_PATH_DEFAULT <不在位> ⇒ 探针那一腿会记 reason=probe_binary_missing（它属**发版链**产物，本脚本不代编译：本机 GOOS=linux go build -o … ./cmd/fpdprobe 再随二进制一同落位）"
@@ -299,7 +318,7 @@ fi
 if [ "$can_enable" = 1 ]; then
   # enable **且** --now：旧账里这条特意点过"别只 enable 不 --now"——只 enable 的单元
   # 在下一个日历点前不装填，读数面上看像"装好了"，实际 still 一次没跑。
-  systemctl enable --now "$TIMER_NAME" && ok "闹钟已启用：$(systemctl is-enabled "$TIMER_NAME" 2>/dev/null)/$(systemctl is-active "$TIMER_NAME" 2>/dev/null)" \
+  systemctl enable --now "$TIMER_NAME" && ok "闹钟已启用：$(sysd is-enabled "$TIMER_NAME")/$(sysd is-active "$TIMER_NAME")" \
     || { bad "systemctl enable --now $TIMER_NAME 失败"; RC=2; }
   say ""
   say "自检（别等明天 05:20）：systemctl start translator-dispatch-probe.service"
