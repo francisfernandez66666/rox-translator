@@ -69,6 +69,12 @@ const token = (css: string, name: string) => {
   const m = css.match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]{6})`))
   return m ? m[1].toUpperCase() : ''
 }
+// 取 `--令牌: var(--目标)` 的别名指向（★ 2026-10-10 批2 起 --npz-*/--adm-* 从字面量层改为
+// var 别名直指 tokens.css 新令牌；别名层指向错档＝后台 187 处引用跟着错，必须单独钉）。
+const varToken = (css: string, name: string) => {
+  const m = stripComments(css).match(new RegExp(`${name}:\\s*(var\\(--[a-z0-9-]+\\))`))
+  return m ? m[1] : ''
+}
 // 取某条规则声明块里的第一个 font-size（用于「选择器 → 档位」等值断言）。
 function fontSizeOf(css: string, selector: string) {
   const body = stripComments(css)
@@ -84,30 +90,31 @@ function fontSizeOf(css: string, selector: string) {
 }
 
 // ---- A) 令牌真值表：值取自 UI-ANNOTATIONS §1.1（面/文字/描边三族）与交付包 tokens.css ----
-// ★ 2026-09-23 〇-N：字阶 +2px（本批保留，见 I 段）；描边 2px 已随 〇-P 作废。
-// ★ 2026-09-23 〇-P（用户后令「严格按 UI 交付稿来」）：撤销 〇-O 的「全部框线纯白 + 面色 +8」——
-//   · 描边七档回到交付灰阶（按对 #000 的对比度定档，见下方真值表）；
-//   · 面色回到交付值：#000000 页面底 / #0A0B0D 内嵌 / #0E1014 面板 / #16181C 浮面；
-//   · 描边宽度回到交付档：全边框 1.2px、单边分隔线 1px（见 I 段）。
-//   两边都是**等值锁**：〇-O 的纯白框与 #121417/#1A1D21 复活会红灯。
+// ★ 2026-09-23 〇-P（用户后令「严格按 UI 交付稿来」）：撤销 〇-O 的「全部框线纯白 + 面色 +8」。
+// ★ 2026-10-10 清晰度改造批1（用户拍板 §十五②③）：五档文字整体重排 + 面色台阶卡片侧抬档
+//   + 描边七档重标定 + 新增 L4 浮层高亮／禁用档／次按钮文字档（换算与对比度列见 §1.1 新块）。
+//   旧值整批入 D 段禁列（BANNED_HEX_LEGACY），任何一处旧档复活即红。
 const TRUTH_TOKENS: [string, string][] = [
   ['--lc-bg', '#000000'],
   ['--lc-deep', '#050607'],
-  ['--lc-inset', '#0A0B0D'],
-  ['--lc-panel', '#0E1014'],
-  ['--lc-raised', '#16181C'],
+  ['--lc-inset', '#0B0D10'],
+  ['--lc-panel', '#14171C'],
+  ['--lc-raised', '#1E2228'],
+  ['--lc-overlay', '#262B32'],         // §1.1 新增 L4：浮层高亮（下拉选中行 / hover 行）
   ['--lc-text', '#E7E9EA'],
-  ['--lc-text-2', '#9AA0AA'],
-  ['--lc-text-3', '#71767B'],
-  ['--lc-text-4', '#536471'],
-  ['--lc-text-5', '#8A9099'],
-  ['--lc-border-strong', '#8B939F'],   // 6.0:1 对话外框 / 强调物件边界
-  ['--lc-border-done', '#6E7683'],     // 4.7:1 完成态 / 次按钮 hover 边
-  ['--lc-border-input', '#5A6270'],    // 3.9:1 输入边 / 起点块
-  ['--lc-border-faint', '#464C58'],    // 3.2:1 常规分隔 / 量尺轨道
-  ['--lc-border-pill', '#424956'],     // 3.0:1 语种胶囊 / 次按钮描边
-  ['--lc-border-card', '#3A404C'],     // 2.5:1 卡片常规边
-  ['--lc-border-card-dim', '#2A2F3A'], // 骨架屏 / 空状态卡边
+  ['--lc-text-2', '#B9BFC6'],
+  ['--lc-text-3', '#98A0A9'],
+  ['--lc-text-4', '#7B838E'],
+  ['--lc-text-5', '#98A0A9'],          // （废弃档，并入 text-3；定义保留兜存量引用，§1.1）
+  ['--lc-disabled', '#6A7079'],        // §1.1 新表：真禁用态
+  ['--lc-text-btn-secondary', '#D4D9DF'], // §1.1 新表：次按钮文字（收编 #C8CCD1 野值）
+  ['--lc-border-strong', '#9AA2AE'],   // 6.97:1 对话外框 / 焦点环（与 --lc-focus 同源）
+  ['--lc-border-done', '#7F8794'],     // 4.96:1 完成态 / 次按钮 hover 边
+  ['--lc-border-input', '#6C7481'],    // 3.81:1 输入边（过非文本 3:1）
+  ['--lc-border-faint', '#565E6B'],    // 2.74:1 常规分隔线
+  ['--lc-border-pill', '#4E5560'],     // 2.39:1 语种胶囊 / 次按钮描边
+  ['--lc-border-card', '#4A515C'],     // 2.24:1 卡片常规边（配 §1.6 投影 --lc-el-1）
+  ['--lc-border-card-dim', '#3F454F'], // 骨架屏 / 空状态卡边
   ['--lc-danger', '#E5484D'],
   ['--lc-warn', '#D29922'],
   ['--lc-success', '#E7E9EA'], // 正向=白（第 11 轮废止绿），交付包口径
@@ -119,16 +126,17 @@ describe('A 令牌真值等值锁（UI-ANNOTATIONS §1.1 / 交付包 tokens.css�
       expect(got, 'tokens.css 里该令牌缺失或不是 6 位字面量').toBe(want)
     })
   }
-  // 页面级令牌（theme.css 自有一层，供未走组件库的历史页面引用）同样钉真值：
-  // --npz-* / --adm-* 是**字面量层**而不是 var 别名，所以必须与 tokens.css 逐字同步，
-  // 否则「前台组件走 --npz-line、后台组件走 --lc-border-*」会出现半白半灰的割裂描边。
-  it('theme.css --npz-text-2 / --npz-line / --adm-line 回到真值档', () => {
-    expect(token(THEME_CSS, '--npz-text-2')).toBe('#9AA0AA')
-    expect(token(THEME_CSS, '--npz-line')).toBe('#464C58')      // 〇-P：回到交付灰阶档
-    expect(token(THEME_CSS, '--adm-line')).toBe('#464C58')
-    expect(token(THEME_CSS, '--npz-surface')).toBe(token(KIT_TOKENS, '--lc-panel'))
-    expect(token(THEME_CSS, '--npz-surface-2')).toBe(token(KIT_TOKENS, '--lc-raised'))
-    expect(token(THEME_CSS, '--adm-card')).toBe(token(KIT_TOKENS, '--lc-panel'))
+  // 页面级令牌（theme.css 自有一层，供未走组件库的历史页面引用）：
+  // ★ 2026-10-10 批2 起 --npz-* / --adm-* 从字面量层改为 var 别名直指 tokens.css 新令牌
+  //   （约 187 处后台引用一次换肤），别名指向错档（如 npz-line 指到 card 档）会在此红灯。
+  it('theme.css --npz-* / --adm-* 别名直指 tokens.css 新真值档', () => {
+    expect(varToken(THEME_CSS, '--npz-text-2')).toBe('var(--lc-text-2)')
+    expect(varToken(THEME_CSS, '--npz-line')).toBe('var(--lc-border-faint)')
+    expect(varToken(THEME_CSS, '--adm-line')).toBe('var(--lc-border-faint)')
+    expect(varToken(THEME_CSS, '--npz-surface')).toBe('var(--lc-panel)')
+    expect(varToken(THEME_CSS, '--npz-surface-2')).toBe('var(--lc-raised)')
+    expect(varToken(THEME_CSS, '--adm-card')).toBe('var(--lc-panel)')
+    expect(varToken(THEME_CSS, '--adm-soft')).toBe('var(--lc-inset)')
   })
   // 语义绿/蓝永久废止：交付包把「正向」收敛为白，任何 #3FB950/#2f47f5 复活都会立刻红灯。
   it('组件库与页面层不复活语义绿/语义蓝', () => {
@@ -193,6 +201,27 @@ describe('C 工作台顶栏按 §2.2 真值', () => {
     expect(Number(m![2]), `Tab 字号 ${m![2]}px ≠ 〇-N 后档 15px`).toBe(15)
     expect(Number(m![1]), '胶囊档必须是全圆角 999，8px 方角属旧覆写层残留').toBe(999)
   })
+  // ★ 2026-10-10 批3（§七 #4 增补条款）：S 档（≤640）顶栏整体让位移动壳三件套，
+  // 高度档由三枚令牌承担——源码侧与 pixel/mobile e2e 的运行时读数同一把尺。
+  it('移动壳三件套高度令牌（statusbar 44 / mob-topbar 52 / tabbar 62 / 距底 20）', () => {
+    const t = (name: string) => {
+      const m = KIT_TOKENS.match(new RegExp(`${name}:\\s*(\\d+)px`))
+      expect(m, `tokens.css 缺 ${name} 的 px 字面值`).toBeTruthy()
+      return Number(m![1])
+    }
+    expect(t('--lc-statusbar-h'), '状态栏高 ≠ §1.7 档 44').toBe(44)
+    expect(t('--lc-mob-topbar-h'), '移动顶栏高 ≠ §1.7 档 52').toBe(52)
+    expect(t('--lc-tabbar-h'), '底部胶囊高 ≠ §1.7 档 62').toBe(62)
+    expect(t('--lc-tabbar-bottom'), '胶囊距屏底 ≠ §1.7 档 20').toBe(20)
+  })
+  it('mobile.css 顶栏换行档必须 height:auto（旧固定 38px + flex-wrap 裁切形态负向清零）', () => {
+    const m = stripComments(MOBILE_CSS).match(/\.app-header\s*\{([^}]*)\}/)
+    expect(m, 'mobile.css 的 .app-header 规则丢失').toBeTruthy()
+    const decl = m![1].replace(/\s+/g, ' ')
+    expect(decl, '换行场景 height:38px 会裁掉第二行（批3 止血点）').toContain('height: auto')
+    // 负向只打「height 本体」：min-height/max-height 合法（min-height:38px 是换行保底），别用子串误伤
+    expect(decl.replace(/ /g, '')).not.toMatch(/(?<![-a-z])height:38px/)
+  })
 })
 
 // ---- D) 提亮/浅色遗留字面值清零（历次批次自造的蓝调灰与浅色底，全站不得再出现）----
@@ -202,6 +231,11 @@ const BANNED_HEX = [
   '1F2228', '202329', '191D24', '17171C', '26282E', 'B6BBC3', '5F6B7A', '6A717A', '889', 'CDD',
   'fdecea', 'c5221f', 'fff6e0', 'b26a00', 'fff1f0', 'b45309', 'f0c674', 'c66900', 'ad6800',
   'e8f0fe', 'f5f6f8', 'e34d59', 'd45656', '546470', 'c0392b', '666C74', '5F656D', '141B2D', '525C70',
+  // ★ 2026-10-10 清晰度批1 被替换的旧 §1.1 真值整批入列（§七 #5）：文字五档旧值＋描边七档旧值＋
+  //   〇-P 面色台阶旧值＋ #C8CCD1/#8A9099 野值。任何一处旧档在 src 内复活即红。
+  '9AA0AA', '71767B', '536471', '4A4F55', '8A9099', 'C8CCD1',
+  '8B939F', '6E7683', '5A6270', '464C58', '424956', '3A404C', '2A2F3A',
+  '0E1014', '16181C', '0A0B0D',
 ]
 describe('D 提亮/蓝调遗留字面值清零', () => {
   const offenders: string[] = []
@@ -240,11 +274,23 @@ describe('E 登录后界面禁写死次级灰', () => {
   for (const f of walkSrc('src')) {
     if (EXEMPT.test(f) || f.endsWith('.css')) continue
     stripComments(read(f)).split('\n').forEach((l, i) => {
-      if (/color:\s*['"]?#(9AA0AA|71767B|8A9099)/i.test(l)) offenders.push(`${f}:${i + 1} ${l.trim().slice(0, 60)}`)
+      if (/color:\s*['"]?#(9AA0AA|71767B|8A9099|536471|4A4F55|C8CCD1)/i.test(l)) offenders.push(`${f}:${i + 1} ${l.trim().slice(0, 60)}`)
     })
   }
   it('次级灰一律 var(--lc-text-*)，改一处全站跟随', () => {
     expect(offenders, '请改为语义令牌：\n' + offenders.join('\n')).toEqual([])
+  })
+  // ★ 2026-10-10 清晰度批（§七 #6 增补条款 / §五.2 第 1 条）：text-4（#7B838E，4.83:1）
+  // 只许用在 placeholder/装饰说明/骨架屏三类位置 ⇒ 登录后 tsx 里 `color: var(--lc-text-4)`
+  // 的出现次数是**只减不增的棘轮**（现状 10 处，2026-10-10 清点）。抬这条上限＝给低对比
+  // 文字开新口子，必须先把用途改到 text-3 及以上再来动锁。
+  it('text-4 用量棘轮（tsx 射程 ≤10，只许减不许增）', () => {
+    let n = 0
+    for (const f of walkSrc('src')) {
+      if (EXEMPT.test(f) || !f.endsWith('.tsx')) continue
+      n += (stripComments(read(f)).match(/color:\s*['"]?var\(--lc-text-4\)/g) || []).length
+    }
+    expect(n, `text-4 用量 ${n} 处超棘轮上限（要加先改用途档，要挪先下调本锁）`).toBeLessThanOrEqual(10)
   })
 })
 
@@ -259,7 +305,7 @@ describe('E 登录后界面禁写死次级灰', () => {
 //     components.css 的 .lc-checkbox:checked::after；
 //   · 实心白填充件的同色描边（主按钮边跟着白底走，用 --lc-fill-white）——不算框线档；
 //   · var(--token, #兜底) 的兜底值不算写死（沿用旧口径）。
-const BORDER_HEX_ALLOW = /^(8B939F|6E7683|5A6270|464C58|424956|3A404C|2A2F3A|F85149|E5484D|D29922|402323|000000)$/i
+const BORDER_HEX_ALLOW = /^(9AA2AE|7F8794|6C7481|565E6B|4E5560|4A515C|3F454F|F85149|E5484D|D29922|402323|000000)$/i
 // ★ 〇-P 起 #FFFFFF 不再作框线（〇-O 的遗留），出现在描边位即算复活。
 // 例外：--lc-fill-white 是实心白填充档，主按钮描边跟着填充走白属正常，按行内容放行。
 const RETIRED_BORDER_WHITE = ['FFFFFF']
@@ -300,17 +346,19 @@ describe('F 描边字面值必须落在交付灰阶七档（〇-P 等值锁）',
     // 前者是 `--x: var(--y)` 不含 hex，后者已被 stripComments 剥掉。
     expect(hits, '〇-O 的纯白框线复活：\n' + hits.join('\n')).toEqual([])
   })
-  it('面色台阶等值（#0E1014 面板 / #16181C 浮面，〇-O 的 +8 档不复活）', () => {
-    expect(token(KIT_TOKENS, '--lc-panel')).toBe('#0E1014')
-    expect(token(KIT_TOKENS, '--lc-raised')).toBe('#16181C')
-    expect(token(KIT_TOKENS, '--lc-inset')).toBe('#0A0B0D')
-    expect(token(THEME_CSS, '--npz-surface')).toBe('#0E1014')
-    expect(token(THEME_CSS, '--npz-surface-2')).toBe('#16181C')
-    expect(token(THEME_CSS, '--adm-card')).toBe('#0E1014')
-    expect(token(THEME_CSS, '--adm-soft')).toBe('#0A0B0D')
+  it('面色台阶等值（#14171C 面板 / #1E2228 浮面 / #262B32 高亮，〇-P 旧档与 〇-O 的 +8 档都不复活）', () => {
+    expect(token(KIT_TOKENS, '--lc-panel')).toBe('#14171C')
+    expect(token(KIT_TOKENS, '--lc-raised')).toBe('#1E2228')
+    expect(token(KIT_TOKENS, '--lc-inset')).toBe('#0B0D10')
+    expect(token(KIT_TOKENS, '--lc-overlay')).toBe('#262B32')
+    expect(varToken(THEME_CSS, '--npz-surface')).toBe('var(--lc-panel)')
+    expect(varToken(THEME_CSS, '--npz-surface-2')).toBe('var(--lc-raised)')
+    expect(varToken(THEME_CSS, '--adm-card')).toBe('var(--lc-panel)')
+    expect(varToken(THEME_CSS, '--adm-soft')).toBe('var(--lc-inset)')
     const body = stripComments(KIT_TOKENS) + stripComments(THEME_CSS)
-    for (const old of ['121417', '1A1D21']) {
-      expect(body.toUpperCase().includes('#' + old), `〇-O 的 +8 面档 #${old} 复活`).toBe(false)
+    // 负向：〇-O 的 +8 档（121417/1A1D21）与 〇-P 旧台阶（0E1014/16181C/0A0B0D）都不得复活
+    for (const old of ['121417', '1A1D21', '0E1014', '16181C', '0A0B0D']) {
+      expect(body.toUpperCase().includes('#' + old), `旧面档 #${old} 复活`).toBe(false)
     }
   })
 })
@@ -342,8 +390,10 @@ function bgsOf(src: string, selector: string): string[] {
   }
   return out
 }
-// 纯白判据：#FFFFFF 字面量，或 var(--lc-fill-white)（含带兜底值的写法）。
-const isPureWhite = (v: string) => /^(#FFFFFF|var\(--lc-fill-white(,[^)]*)?\))$/i.test(v.replace(/\s+/g, ''))
+// 纯白判据：#FFFFFF 字面量，或 var(--lc-fill-white)／var(--lc-invert-bg)（含带兜底值的写法）。
+// ★ 2026-10-10 批2：主 CTA 走 §1.6 反相强调档 --lc-invert-bg（值同 = #FFFFFF，G 段白色两档
+//   不许混用的口径不变——invert-bg 必须复用纯白，不许拿 #E7E9EA 做整块填充）。
+const isPureWhite = (v: string) => /^(#FFFFFF|var\(--lc-(fill-white|invert-bg)(,[^)]*)?\))$/i.test(v.replace(/\s+/g, ''))
 
 // 逐点等值表：每一点都由截图取证支撑，新增白底实心件时同步往这里加一行。
 const WHITE_FILL_SITES: [string, string][] = [
@@ -422,13 +472,14 @@ describe('H 扩展插件面（popup + 划词注入样式）单色真值', () => 
         .filter((h) => EXT_BANNED_HEX.includes(h))
       expect(hits, `${name} 出现旧扩展主题色：\n${hits.join(', ')}`).toEqual([])
     })
-    it(`${name} 取 §1.1 令牌真值`, () => {
-      // ★ 〇-P：扩展面同步回交付灰阶框 + 面回 #0E1014（这两页是独立打包物，前端令牌改了对它无效）
-      expect(code).toContain('#0E1014')
-      expect(code, `${name} 描边档未回灰阶（〇-O 纯白复活）`).toMatch(/--lc-(line|card-line):\s*#(464C58|3A404C)/i)
-      expect(code.toUpperCase()).not.toMatch(/--lc-(line|card-line):\s*#FFFFFF/)
-      expect(code.toUpperCase(), `〇-O 的 +8 面档 #121417 复活`).not.toContain('#121417')
-      // 描边粗细：〇-P 回交付档（全边框 1.2px / 单边 1px），〇-N 的 2px 已作废
+    it(`${name} 取 §1.1 令牌真值（2026-10-10 新档）`, () => {
+      // ★ 2026-10-10 批1：扩展面随 §1.1 新真值同步（面板 #14171C / 卡片边 #4A515C / 分隔边 #565E6B）
+      expect(code).toContain('#14171C')
+      expect(code, `${name} 描边档未落新灰阶七档`).toMatch(/--lc-(line|card-line):\s*#(565E6B|4A515C)/i)
+      // 旧档负向：〇-P 灰阶与 〇-O 纯白框都不许复活
+      expect(code.toUpperCase(), '〇-P 旧描边档复活').not.toMatch(/--LC-(LINE|CARD-LINE):\s*#(464C58|3A404C|FFFFFF)/)
+      expect(code.toUpperCase(), `旧面档 #0E1014/#16181C 复活`).not.toMatch(/#(0E1014|16181C)/)
+      // 描边粗细：交付档 1.2px 不变（〇-N 的 2px 已作废）
       expect(code, `${name} 未见交付档 1.2px 描边`).toMatch(/border[^;{]*1\.2px/)
       expect(code, `${name} 〇-N 的 2px 粗描边复活`).not.toMatch(/border[^;{]*\s2px\s+(?:solid|dashed|dotted)/)
     })

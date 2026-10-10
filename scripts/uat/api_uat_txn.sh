@@ -2565,7 +2565,10 @@ ck T59-openapi-mode-badge '快速模式' "$R"
 CHAT59BODY='{"message":"页脚口径测试文本F50","options":{"mode":"fast","target_langs":["en"]}}'
 RC=$(post "$H59" "$CHAT59BODY" /api/chat)
 ck T59-chat-ok '"reply"' "$RC"
-ck T59-chat-footer-points '本次翻译消耗 [0-9]+ 积分' "$RC"
+# ★ 决策⑪（2026-10-10 清晰度批）：回复体收敛为只含译文本体，旧「⚡ 本次翻译消耗 N 积分」
+#   页脚撤销，积分改走顶层结构化出参 points_used（TextTranslateResult.PointsUsed，
+#   HandleText 以 PointsOfTokens(billed) 现算）。本断言随之从「文案含积分句」重钉为「结构化积分字段在位」。
+ck T59-chat-footer-points '"points_used":[0-9]' "$RC"
 printf '%s' "$RC" | grep -qE 'token[:：][[:space:]]*[0-9]' && { FAIL=$((FAIL+1)); echo "FAIL|T59-chat-no-token-raw"; } || { PASS=$((PASS+1)); echo "PASS|T59-chat-no-token-raw"; }
 # 快速模式的徽标文案不得声称走了专业流水线（F-50②：文案收敛到 ModeBadgeLabel 一处，两侧不许各写一份）
 printf '%s' "$RC" | grep -qE '专业校对模式' && { FAIL=$((FAIL+1)); echo "FAIL|T59-chat-badge-not-pro(快速模式回显了专业流水线文案)"; } || { PASS=$((PASS+1)); echo "PASS|T59-chat-badge-not-pro"; }

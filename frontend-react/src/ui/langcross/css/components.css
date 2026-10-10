@@ -32,20 +32,25 @@
   border-radius: var(--lc-r-ctl);
   padding: var(--lc-btn-pad-y) var(--lc-btn-pad-x);
   font-family: inherit;
-  font-size: 16px;
-  font-weight: 500;
+  /* ★ 清晰度批2（2026-10-10）六档字阶：按钮 14/600（UI-ANNOTATIONS §1.2 新表），
+     不再吃全局 16px 正文基准——层级改由尺寸+字重承担，颜色只管可读性 */
+  font-size: 14px;
+  font-weight: 600;
   line-height: 1;
   cursor: pointer;
   transition: background-color .16s ease, color .16s ease, border-color .16s ease, transform .08s ease;
 }
 .lc-btn:active:not(:disabled) { transform: scale(0.98); }
-.lc-btn:focus-visible { outline: 2px solid var(--lc-border-strong); outline-offset: 2px; }
+/* ★ 批2：焦点环全站唯一口径 = --lc-focus（§1.6），不再各写一档描边色 */
+.lc-btn:focus-visible { outline: 2px solid var(--lc-focus); outline-offset: 2px; }
 .lc-btn:disabled { cursor: not-allowed; }
 
-.lc-btn--primary { background: #FFFFFF; color: #000000; }
+/* ★ 批2：主 CTA＝反相强调（§1.6 反相白档），每屏唯一；不再写死 #FFFFFF 字面值 */
+.lc-btn--primary { background: var(--lc-invert-bg); color: var(--lc-invert-fg); }
 .lc-btn--primary:hover:not(:disabled) { background: #F2F3F4; }
 
-.lc-btn--secondary { background: transparent; color: #C8CCD1; border-color: var(--lc-border-pill); }
+/* ★ 批2：次按钮文字收编 #C8CCD1 野值 → --lc-text-btn-secondary 档（§1.1 新表） */
+.lc-btn--secondary { background: transparent; color: var(--lc-text-btn-secondary); border-color: var(--lc-border-pill); }
 .lc-btn--secondary:hover:not(:disabled) { color: var(--lc-text); border-color: var(--lc-border-done); }
 
 .lc-btn--danger { background: var(--lc-red); color: #FFFFFF; }
@@ -59,7 +64,8 @@
 
 /* ---------- 输入 ---------- */
 .lc-field { display: flex; flex-direction: column; gap: 6px; }
-.lc-field__label { font-size: 14px; font-weight: 500; color: var(--lc-text-2); }
+/* ★ 批2 六档字阶：表单标签 14/600/text-2（原 14/500） */
+.lc-field__label { font-size: 14px; font-weight: 600; color: var(--lc-text-2); }
 
 .lc-input {
   width: 100%;
@@ -101,7 +107,8 @@
   cursor: pointer;
 }
 .lc-input-affix:hover { color: var(--lc-text); }
-.lc-input-affix:focus-visible { outline: 2px solid var(--lc-border-input); outline-offset: 2px; }
+/* ★ 批2：焦点环全站唯一口径 = --lc-focus（§1.6） */
+.lc-input-affix:focus-visible { outline: 2px solid var(--lc-focus); outline-offset: 2px; }
 .lc-input:disabled { color: var(--lc-disabled); border-color: var(--lc-border-faint); cursor: not-allowed; }
 .lc-input--error, .lc-input--error:focus { border-color: var(--lc-danger); }
 
@@ -130,10 +137,10 @@
   border: 1.2px solid var(--lc-border-pill);
   border-radius: 999px;
   background: transparent;
-  color: #C8CCD1;
+  color: var(--lc-text-btn-secondary);
   font-family: var(--lc-font-latin);
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
 }
 .lc-select:hover { border-color: var(--lc-border-done); }
@@ -185,7 +192,8 @@
   background: var(--lc-text-2);
   transition: transform .18s ease, background-color .18s ease;
 }
-.lc-switch:checked { background: var(--lc-success); }
+/* ★ 批2：开关选中＝反相白（§1.6），不再用 --lc-success（＝正文色）表达"选中" */
+.lc-switch:checked { background: var(--lc-invert-bg); }
 .lc-switch:checked::after { transform: translateX(16px); background: #000000; }
 .lc-switch:disabled { opacity: .5; cursor: not-allowed; }
 
@@ -256,7 +264,8 @@
   border: 1.2px solid var(--lc-border-card);
   border-radius: var(--lc-r-toast);
   background: var(--lc-raised);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套（§1.6）：Toast 用浮层最高档投影 --lc-el-3 */
+  box-shadow: var(--lc-el-3);
   animation: lc-toast-in .22s cubic-bezier(.2, .8, .2, 1);
 }
 @keyframes lc-toast-in {
@@ -270,7 +279,7 @@
 .lc-overlay {
   position: fixed;
   inset: 0;
-  background: var(--lc-overlay);
+  background: var(--lc-mask); /* ★ 2026-10-10 收口：--lc-overlay 已被 §1.1 L4 高亮档征用，遮罩迁 --lc-mask */
   display: grid;
   place-items: center;
   z-index: 900;
@@ -286,7 +295,8 @@
   border: 1.2px solid var(--lc-border-card);
   border-radius: var(--lc-r-modal);
   background: var(--lc-panel);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套（§1.6）：Dialog/Drawer 用中档投影 --lc-el-2 */
+  box-shadow: var(--lc-el-2);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -295,7 +305,8 @@
   --lc-mo-origin: 50% 40%;
 }
 .lc-dialog--danger { border-color: var(--lc-border-danger-edge); }
-.lc-dialog__title { font-size: 18px; font-weight: 600; color: var(--lc-text); }
+/* ★ 批2 六档字阶：区块标题 17/650/text-1（弹窗标题即卡内一级标题） */
+.lc-dialog__title { font-size: 17px; font-weight: 650; color: var(--lc-text); }
 .lc-dialog__body { font-size: 15px; line-height: 22px; color: var(--lc-text-2); }
 .lc-dialog__actions { display: flex; justify-content: flex-end; gap: 10px; }
 .lc-dialog__actions .lc-btn { padding: 8px 16px; font-size: 15px; }
@@ -304,7 +315,7 @@
 .lc-drawer-viewport {
   position: fixed;
   inset: 0;
-  background: var(--lc-overlay);
+  background: var(--lc-mask); /* ★ 2026-10-10 收口：--lc-overlay 已被 §1.1 L4 高亮档征用，遮罩迁 --lc-mask */
   display: flex;
   justify-content: flex-end;
   z-index: 900;
@@ -317,7 +328,8 @@
   padding: 20px;
   border-inline-start: 1px solid var(--lc-border-card);
   background: var(--lc-panel);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套：抽屉（Drawer 亦浮层族）用 --lc-el-2 */
+  box-shadow: var(--lc-el-2);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -329,7 +341,8 @@
   to   { transform: none; opacity: 1; }
 }
 .lc-drawer__head { display: flex; align-items: center; gap: 12px; }
-.lc-drawer__title { flex: 1; font-size: 17px; font-weight: 600; color: var(--lc-text); }
+/* ★ 批2 六档字阶：抽屉标题＝区块标题 17/650 */
+.lc-drawer__title { flex: 1; font-size: 17px; font-weight: 650; color: var(--lc-text); }
 
 /* ---------- 上下文菜单：220 / 末项删除红字 + 上方 1px 分隔 ---------- */
 .lc-menu {
@@ -339,7 +352,8 @@
   border: 1.2px solid var(--lc-border-card);
   border-radius: var(--lc-r-toast);
   background: var(--lc-raised);
-  box-shadow: var(--lc-panel-highlight), 0 12px 32px rgba(0, 0, 0, .5);
+  /* ★ 批2 分层三件套：菜单用 --lc-el-3（替换散写的 0 12px 32px 手搓阴影） */
+  box-shadow: var(--lc-el-3);
   display: flex;
   flex-direction: column;
   z-index: 950;
@@ -443,12 +457,14 @@
   text-align: start;
   font-family: inherit;
   font-size: 15px;
-  color: #C3C8D1;
+  /* ★ 批2：野值 #C3C8D1 收编 → --lc-text-2 档（§1.1 新表） */
+  color: var(--lc-text-2);
   cursor: pointer;
   transition: background-color .14s ease, color .14s ease;
 }
 .lc-side-item:hover { background: rgba(255, 255, 255, .04); color: var(--lc-text); }
-.lc-side-item--active, .lc-side-item--active:hover { background: var(--lc-raised); color: var(--lc-success); }
+/* ★ 批2：侧栏当前项 = 白底黑字反相胶囊（§1.6），不再用 --lc-success */
+.lc-side-item--active, .lc-side-item--active:hover { background: var(--lc-invert-bg); color: var(--lc-invert-fg); }
 .lc-side-item__icon { flex: none; width: 16px; text-align: center; font-size: 15px; }
 .lc-sidebar__foot { padding-top: 12px; }
 .lc-side-lang {
@@ -532,8 +548,10 @@
 
 /* ---------- 页头：标题 + 描述 + 右侧动作 ---------- */
 .lc-page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.lc-page-head__title { font-size: 20px; font-weight: 600; color: var(--lc-text); line-height: 28px; }
-.lc-page-head__desc { margin-top: 4px; font-size: 15px; color: var(--lc-text-2); }
+/* ★ 批2 六档字阶：页面标题 21/700/text-1（原 20/600——只比正文大 5px 的旧档作废） */
+.lc-page-head__title { font-size: 21px; font-weight: 700; color: var(--lc-text); line-height: 30px; }
+/* ★ 批3 宽屏收口：正文长文本限 68ch 由 XL 段统一接管；描述色保持 text-2（要读的句子最低 text-3） */
+.lc-page-head__desc { margin-top: 4px; font-size: 15px; color: var(--lc-text-2); max-width: 68ch; }
 .lc-page-head__actions { flex: none; display: flex; align-items: center; gap: 10px; }
 
 /* ---------- 工具栏：筛选行（输入/下拉/按钮） ---------- */
@@ -558,17 +576,19 @@
   padding: 14px 16px;
   border-radius: var(--lc-r-ctl);
   background: var(--lc-raised);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套（§1.6）：卡片级容器给 --lc-el-1（不给列表行，低端安卓合成成本） */
+  box-shadow: var(--lc-el-1);
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 .lc-stat__head { display: flex; align-items: center; justify-content: space-between; min-height: 22px; }
-.lc-stat__value { font-size: 20px; font-weight: 700; color: var(--lc-text); font-family: var(--lc-font-latin); line-height: 26px; }
+/* ★ 批2 六档字阶：关键数值 26/700 + 等宽数字（tabular-nums），标签压到 14/600——统计卡自己跳出来 */
+.lc-stat__value { font-size: 26px; font-weight: 700; color: var(--lc-text); font-family: var(--lc-font-latin); line-height: 32px; font-variant-numeric: tabular-nums; }
 .lc-stat__value--success { color: var(--lc-success); }
 .lc-stat__value--danger { color: var(--lc-danger); }
 .lc-stat__value--warn { color: var(--lc-warn); }
-.lc-stat__label { font-size: 14px; color: var(--lc-text-2); }
+.lc-stat__label { font-size: 14px; font-weight: 600; color: var(--lc-text-2); }
 
 /* ---------- 页签：文字 + 2px 白色下划线 ---------- */
 .lc-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--lc-border-card); margin-bottom: 20px; }
@@ -583,15 +603,15 @@
   cursor: pointer;
 }
 .lc-tab:hover { color: var(--lc-text); }
-.lc-tab--active, .lc-tab--active:hover { color: var(--lc-success); font-weight: 500; }
+/* ★ 批2：活跃 Tab = 2px 白下划线 + text-1（§1.6），不再用 --lc-success 表达选中 */
+.lc-tab--active, .lc-tab--active:hover { color: var(--lc-text); font-weight: 600; }
 .lc-tab--active::after {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
+  inset-inline: 0;
   bottom: -1px;
   height: 2px;
-  background: var(--lc-success);
+  background: var(--lc-invert-bg);
 }
 
 /* ---------- 选择 chip：近7天 / 近30天 / 近90天 ---------- */
@@ -607,18 +627,19 @@
   transition: color .14s ease, border-color .14s ease;
 }
 .lc-chip:hover { color: var(--lc-text); }
-.lc-chip--active, .lc-chip--active:hover { color: var(--lc-success); border-color: var(--lc-border-pill); }
+.lc-chip--active, .lc-chip--active:hover { color: var(--lc-text); border-color: var(--lc-border-done); }
 
 /* ---------- 数据表：容器边框 + 表头浮面 + 行分隔 ---------- */
 .lc-table-wrap { border: 1.2px solid var(--lc-border-card); border-radius: var(--lc-r-ctl); overflow: hidden; }
 .lc-table { width: 100%; border-collapse: collapse; font-size: 15px; }
+/* ★ 批2 六档字阶：表头 14/600/text-2 */
 .lc-table th {
   padding: 0 14px;
   height: 40px;
   background: var(--lc-raised);
   text-align: start;
   font-size: 14px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--lc-text-2);
   white-space: nowrap;
 }
@@ -635,7 +656,8 @@
 .lc-table tbody tr:hover { background: rgba(255, 255, 255, .025); }
 .lc-table td--mono, .lc-table .lc-table__mono { font-family: var(--lc-font-mono); font-size: 14px; color: var(--lc-text-2); }
 .lc-table td--dim { color: var(--lc-text-2); }
-.lc-table__empty { padding: 40px 0; text-align: center; font-size: 15px; color: var(--lc-text-4); }
+/* ★ 批2 六档字阶：空态说明属 meta 档 14/text-4（占位/装饰说明专用档） */
+.lc-table__empty { padding: 40px 0; text-align: center; font-size: 14px; color: var(--lc-text-4); }
 
 /* ---------- 文字链接（表格操作列） ---------- */
 .lc-link {
@@ -670,7 +692,8 @@
   border: 1.2px solid var(--lc-border-card);
   border-radius: var(--lc-r-modal);
   background: var(--lc-panel);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套：卡片级容器给 --lc-el-1（保留顶缘高光） */
+  box-shadow: var(--lc-panel-highlight), var(--lc-el-1);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -762,7 +785,8 @@
 }
 .lc-tabbar {
   position: sticky;
-  bottom: var(--lc-tabbar-bottom);
+  /* ★ 批3：底部安全区——刘海屏/手势条 home indicator 让位（§1.7） */
+  bottom: calc(var(--lc-tabbar-bottom) + env(safe-area-inset-bottom, 0px));
   margin-top: auto;
   align-self: center;
   z-index: 20;
@@ -790,7 +814,8 @@
   border: 0;
   cursor: pointer;
 }
-.lc-tabbar__item--active { background: var(--lc-success); color: #000; font-weight: 600; }
+/* ★ 批2：TabBar 选中项 = 白底黑字反相胶囊（§1.6），不再用 --lc-success */
+.lc-tabbar__item--active { background: var(--lc-invert-bg); color: var(--lc-invert-fg); font-weight: 600; }
 .lc-tabbar__icon { font-size: 17px; line-height: 1; }
 .lc-mcard {
   display: flex;
@@ -800,14 +825,16 @@
   border-radius: var(--lc-r-card);
   background: var(--lc-panel);
   border: 1.2px solid var(--lc-border-card-dim);
-  box-shadow: var(--lc-panel-highlight);
+  /* ★ 批2 分层三件套：移动卡片也走 --lc-el-1（统一"卡浮于面"的深度语言） */
+  box-shadow: var(--lc-panel-highlight), var(--lc-el-1);
 }
 .lc-mcard--row { flex-direction: row; align-items: center; justify-content: space-between; }
 .lc-mcard__head { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .lc-mcard__dot { width: 7px; height: 7px; border-radius: 4px; flex: none; }
 .lc-mcard__title { font-size: 15px; font-weight: 500; color: var(--lc-text); min-width: 0; }
 .lc-mcard__title--dim { color: var(--lc-text-2); }
-.lc-mcard__meta { font-size: 13px; color: var(--lc-text-4); font-family: var(--lc-font-latin); }
+/* ★ 批2 六档字阶：meta 档 13/text-3（text-4 只留给占位/装饰说明） */
+.lc-mcard__meta { font-size: 13px; color: var(--lc-text-3); font-family: var(--lc-font-latin); }
 .lc-mcard__info { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .lc-mcard__body { font-size: 14px; color: var(--lc-text-2); line-height: 1.6; }
 .lc-mcard__chevron { font-size: 18px; color: var(--lc-text-4); flex: none; }
@@ -822,9 +849,12 @@
   border-radius: var(--lc-r-card);
   background: var(--lc-panel);
   border: 1.2px solid var(--lc-border-card-dim);
+  /* ★ 批2 分层三件套：统计小卡同走 --lc-el-1 */
+  box-shadow: var(--lc-el-1);
 }
-.lc-mstat__label { font-size: 14px; color: var(--lc-text-3); }
-.lc-mstat__value { font-size: 22px; font-weight: 700; color: var(--lc-text); font-family: var(--lc-font-latin); }
+.lc-mstat__label { font-size: 14px; font-weight: 600; color: var(--lc-text-2); }
+/* ★ 批2 六档字阶：关键数值 26/700 + 等宽数字 */
+.lc-mstat__value { font-size: 26px; font-weight: 700; color: var(--lc-text); font-family: var(--lc-font-latin); font-variant-numeric: tabular-nums; }
 .lc-mstat__delta { font-size: 13px; font-weight: 500; font-family: var(--lc-font-latin); }
 .lc-mstat__delta--up { color: var(--lc-success); }
 .lc-mstat__delta--warn { color: var(--lc-warn); }
@@ -865,7 +895,7 @@
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: var(--lc-overlay);
+  background: var(--lc-mask); /* ★ 2026-10-10 收口：--lc-overlay 已被 §1.1 L4 高亮档征用，遮罩迁 --lc-mask */
 }
 @media (max-width: 900px) {
   /* 后台侧栏转抽屉：默认滑出，加 .lc-sidebar--open 拉回 */
@@ -885,7 +915,8 @@
   .lc-topbar-cluster { flex: 1; overflow-x: auto; scrollbar-width: none; }
   .lc-content { padding: 24px 16px; }
 }
-@media (max-width: 620px) {
+/* ★ 批3 断点归一：620 → 640（四档 S≤640 / M641-900 / L901-1439 / XL≥1440，§1.7） */
+@media (max-width: 640px) {
   .lc-page-head { flex-direction: column; align-items: stretch; gap: 12px; }
   .lc-page-head__actions { flex-wrap: wrap; }
   .lc-toolbar { gap: 6px; }
@@ -895,4 +926,47 @@
   .lc-table-wrap { overflow-x: auto; }
   .lc-dialog { width: calc(100vw - 32px); }
   .lc-drawer { width: calc(100vw - 32px); }
+
+  /* ★ 批3 表格转卡片（§6.2d）：S 档通用兜底——.lc-table 退化为纵向记录卡。
+     列头改由 td 自带 data-label 属性驱动（td::before 显示）；未携带 data-label
+     的列不显示列头文本，页面侧可在自己的样式里按 nth-child 微调。
+     注意：空态行由 DataTable 内联 display:table-cell 渲染，天然保持单元格形态。 */
+  .lc-table { font-size: 15px; }
+  .lc-table thead { display: none; }
+  .lc-table, .lc-table tbody, .lc-table tr, .lc-table td { display: block; width: 100%; }
+  .lc-table tr {
+    padding: 10px 12px;
+    border-top: 1px solid var(--lc-border-card);
+  }
+  .lc-table tr:first-child { border-top: 0; }
+  .lc-table td {
+    height: auto;
+    padding: 4px 0;
+    border-top: 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    white-space: normal;
+    text-align: end;
+  }
+  /* 有 data-label 的单元格：左侧列头 13/text-3，右侧值 */
+  .lc-table td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    font-size: 13px;
+    color: var(--lc-text-3);
+    text-align: start;
+  }
+  .lc-table td[data-label] { text-align: end; }
+}
+
+/* ★ 批3 宽屏收口（§6.2e）：XL ≥1440 才启用 1180 定宽居中，前台/管理台同一把尺；
+     表格首列吸边用逻辑属性 inset-inline-start（RTL 安全，无 left/right 硬编码） */
+@media (min-width: 1440px) {
+  .lc-content { max-width: 1180px; margin-inline: auto; }
+  .lc-table th:first-child,
+  .lc-table td:first-child { position: sticky; inset-inline-start: 0; }
+  .lc-table td:first-child { background: var(--lc-bg); }
+  .lc-dialog__body { max-width: 68ch; }
 }

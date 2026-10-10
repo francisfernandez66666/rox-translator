@@ -48,15 +48,29 @@ func TestAssistAdminMonochromeTruth(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		// ★ 〇-P（2026-09-23 用户后令「严格按 UI 交付稿来」）：撤销 〇-O，面回交付值、
-		// 描边族（line/card-line/pill/input-line/done）回交付灰阶；文字色逐字未动。
-		"--bg:#000000", "--panel:#0E1014", "--surface:#16181C", "--inset:#0A0B0D",
-		"--txt:#E7E9EA", "--sub:#9AA0AA", "--weak:#71767B",
-		"--line:#464C58", "--card-line:#3A404C", "--pill:#424956",
+		// ★ 2026-10-10 清晰度批（批1 令牌层第④渲染面）：面板族上抬为「黑底可分层」新台阶
+		// （panel #14171C / surface #1E2228 / inset #0B0D10），文字提亮两档（sub #B9BFC6 /
+		// weak #98A0A9），描边族同批上调（line #565E6B / card-line #4A515C / pill #4E5560 /
+		// input-line #6C7481 / done #7F8794）。真值表与 frontend tokens.css 同批（UI-ANNOTATIONS
+		// §1.1 新档），与 public.go 直出页（public_ui_test.go）同一族口径。
+		"--bg:#000000", "--panel:#14171C", "--surface:#1E2228", "--inset:#0B0D10",
+		"--txt:#E7E9EA", "--sub:#B9BFC6", "--weak:#98A0A9",
+		"--line:#565E6B", "--card-line:#4A515C", "--pill:#4E5560",
+		"--input-line:#6C7481", "--done:#7F8794",
 		"--white:#FFFFFF", "--warn:#D29922", "--danger:#E5484D",
 	} {
 		if !strings.Contains(code, want) {
 			t.Errorf("缺少 §1.1 令牌声明 %s", want)
+		}
+	}
+	// 本批之前的旧档不得复活（等值锁的负向腿：正向钉新值＋旧值清零，缺一即单向锁退化为漂移许可）。
+	for _, banned := range []string{
+		"--panel:#0E1014", "--surface:#16181C", "--inset:#0A0B0D",
+		"--sub:#9AA0AA", "--weak:#71767B",
+		"--line:#464C58", "--card-line:#3A404C", "--pill:#424956",
+	} {
+		if strings.Contains(code, banned) {
+			t.Errorf("清晰度批之前的旧档 %s 复活（§1.1 新台阶已取代）", banned)
 		}
 	}
 	// 〇-O 的遗留档不得复活（按成对声明比对，理由同 public_ui_test.go 的 retiredLegacy00O）

@@ -133,6 +133,31 @@ func sseHeartbeat(w http.ResponseWriter, flusher http.Flusher, mu *sync.Mutex, e
 
 // ============ 流式文本翻译 ============
 
+// ★ 决策⑪②（2026-10-10）：SSE 超时与预警参数提为包级变量，仅为单测可注入短
+//
+//	deadline（生产路径恒走默认值 90s/15s）。chatStreamTimeout 是 F-29 批 D 定下的
+//	请求级 deadline；chatStreamWarnBefore 是「到点前 N 秒发 warning 慢帧」的提前量。
+var (
+	chatStreamTimeout    = 90 * time.Second
+	chatStreamWarnBefore = 15 * time.Second
+)
+
+// llmQueueDepth 决策⑪①：前端「长文本预检」所需的 LLM 排队深度代理值。
+// 语义口径（须与前端 slowEstimate 的注释同文）：llm.Client 的 inflight 计数**包含
+// embedding 调用**，且并发信号量（infra/concurrency）不暴露等待数——真实排队深度
+// 不可低成本测得。故取「饱和代理」：并发上限 = DefaultChatConcurrent(2) + 交互保留槽(1)，
+// inflight 超出上限的部分视为「在排队」。宁误拦：代理值偏低时前端按保守档兜底。
+func (s *Server) llmQueueDepth() int64 {
+	if s.Engine == nil || s.Engine.LLM == nil {
+		return 0
+	}
+	capTotal := int64(llm.DefaultChatConcurrent + 1)
+	if n := s.Engine.LLM.Inflight(); n > capTotal {
+		return n - capTotal
+	}
+	return 0
+}
+
 // chatMaxChars ★ F-29 后端半（2026-09-25 批 D）：单次对话字符上限（运营策略键 chat_max_chars，
 // 默认 5,000 字符，按 rune 计——中文一字一符，与缺陷实测口径一致）。
 // 键缺失/非法（非数字或 ≤0）回退默认：宁可保守拒绝，也不让误配置把护栏拆成放行（524 复发）。
@@ -257,8 +282,33 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	//   长跑请求由 Cloudflare ~100s 先掐（用户看到 524 HTML 错误页）。本侧在 90s 到点
 	//   主动终止管线并出结构化 error 帧（留 10s 余量给帧写出与代理透传）；
 	//   只包 runCtx，客户端断开（r.Context cancel）的既有取消语义不变。
-	runCtx, runCancel := context.WithTimeout(ctx, 90*time.Second)
+	runCtx, runCancel := context.WithTimeout(ctx, chatStreamTimeout)
 	defer runCancel()
+	// ★ 决策⑪②（2026-10-10）：deadline 前 N 秒发一帧 warning 慢预警——前端据此给
+	//   「继续等待 / 转工单」两按钮（到点行为不变，仍按 F-29 出 chat_timeout error 帧）。
+	//   定时器 goroutine 只竞争 sseMu 写锁，不碰任何引擎状态；runCtx 到点/取消即退出。
+	if warnDelay := chatStreamTimeout - chatStreamWarnBefore; warnDelay > 0 {
+		warnTimer := time.NewTimer(warnDelay)
+		go func() {
+			defer warnTimer.Stop()
+			select {
+			case <-warnTimer.C:
+				if runCtx.Err() != nil {
+					return // 已超时或已取消：预警无意义（紧随其后就是 error 帧）
+				}
+				sseMu.Lock()
+				fmt.Fprint(w, sseEvent("warning", map[string]interface{}{
+					"reason":       "slow",
+					"seconds_left": int(chatStreamWarnBefore / time.Second),
+				}))
+				if flusher != nil {
+					flusher.Flush()
+				}
+				sseMu.Unlock()
+			case <-runCtx.Done():
+			}
+		}()
+	}
 	res := s.Engine.HandleText(runCtx, req.Message, req.Options, prog)
 	// ★ P3 补齐（2026-09-22，E2E TF2 抓到）：即时翻译 SSE 收尾前同步冲刷计量缓冲。
 	//   此前本路径全程不 Flush（非流式 /api/chat、文件流、账单接口都有），用量只进内存

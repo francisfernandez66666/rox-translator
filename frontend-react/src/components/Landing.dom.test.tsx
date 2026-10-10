@@ -8,7 +8,7 @@
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup } from '@testing-library/react'
+import { render, cleanup, fireEvent } from '@testing-library/react'
 import { setLang, t } from '@/i18n'
 
 // LeadForm 挂载即调 registerConfig（Turnstile 探测）：整体替换 '@/api'，
@@ -110,10 +110,19 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', { 
   })
 
   it('⑦ 顶部导航挂 LangSelect（12 语种切换入口对访客可见）', () => {
+    // ★ 判据翻转（用户拍板⑦，非回归）：触发钮固定词「语言」（app.langBtn），自称名只在菜单选中项
     render(<Landing />)
     const btn = document.querySelector('header .lang-sel-btn') as HTMLElement
     expect(btn).toBeTruthy()
-    expect(btn.textContent).toContain('简体中文') // 当前语种自称
+    expect(btn.textContent).toContain(t('app.langBtn')) // 固定词「语言」
+    expect(btn.textContent).not.toContain('简体中文') // 自称名不许回占触发钮
+    // title 悬停腿保留当前语种信息
+    expect(btn.getAttribute('title')).toBe('简体中文')
+    // 展开菜单：选中项（is-cur）携带自称名「简体中文」
+    fireEvent.click(btn)
+    const cur = document.querySelector('.lang-sel-menu .lang-sel-item.is-cur') as HTMLElement
+    expect(cur).toBeTruthy()
+    expect(cur.textContent).toContain('简体中文')
   })
 
   it('⑧ 俄语界面落地页：land.* 词条直接出俄语（★ 2026-09-20 全站十语种后不再走英文回退）', () => {

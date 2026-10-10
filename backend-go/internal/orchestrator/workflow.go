@@ -552,8 +552,18 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 			p.Gate = g
 			reason := fmt.Sprintf("Gate 校验失败 [%s]: %s", lc, firstFail(g.Checks))
 			p.GateHints[lc] = reason
-			if attempt >= maxRetry {
-				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)
+			// ★ 数字类失败短重试（★ 2026-10-10 批次 ⑫，现网实证工单 T20261010132330UEM）：
+			//   本次失败 Checks 命中「数字保持」时，该语言本轮重译上限压到 2 次——数字类失败
+			//   要么重译立刻改对、要么是模型对数字形态系统性失能，8 轮只是白烧钱；
+			//   其余检查项失败仍走 gate_retry_max。上限取 min(2, gate_retry_max)：
+			//   运营把 gate_retry_max 配得更小（如 1）时尊重更小值，保证「已自动重译 N 次」
+			//   文案如实反映该轮实际用的上限。
+			roundMax := maxRetry
+			if gateNumberFail(g.Checks) && roundMax > gateNumberRetryMax {
+				roundMax = gateNumberRetryMax
+			}
+			if attempt >= roundMax {
+				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, roundMax)
 			}
 			feedback := gateRetranslateFeedback(g.Checks)
 			rev := w.retranslateWithKB(ctx, t, lc, cursor, feedback, termRows)
@@ -626,6 +636,23 @@ func (w *Workflow) gateRetryMax() int {
 		return w.Store.ConfigInt("gate_retry_max", 8)
 	}
 	return 8
+}
+
+// gateNumberRetryMax 数字类失败（「数字保持」未过）的短重译上限：2 次。
+// 现网实证（工单 T20261010132330UEM）：数字形态换算类失败重译 8 轮全部同样死法，
+// 纯烧钱不解决问题；2 次已足够覆盖「模型偶发写错」的正常抖动。
+const gateNumberRetryMax = 2
+
+// gateNumberFail 判断本次硬闸失败项里是否有「数字保持」未过（数字类失败识别，
+// 供 runGate 对该语言本轮压短重译上限）。检查项名引用 gate.CheckNumberKeep 常量，
+// 与 gate 包的对外文案同源，避免两处字面量漂移。
+func gateNumberFail(checks []gate.Check) bool {
+	for _, c := range checks {
+		if !c.Pass && c.Name == gate.CheckNumberKeep {
+			return true
+		}
+	}
+	return false
 }
 
 // retranslateWithKB 附 KB 提示重译单语言译文（硬闸护栏核心）。
@@ -772,10 +799,14 @@ func (w *Workflow) loadPayload(t *store.Ticket) *ticketPayload {
 }
 
 // firstFail 返回校验列表中的首个失败项描述。
-// 参数：checks=Gate 校验项列表；返回首个失败项的 "名称: 详情"。
+// 参数：checks=Gate 校验项列表；返回首个失败项的 "名称: 详情"；
+// Detail 为空时只出名称（旧形态无条件拼 ": " 会产出「数字保持: 」这类悬挂冒号）。
 func firstFail(checks []gate.Check) string {
 	for _, c := range checks {
 		if !c.Pass {
+			if c.Detail == "" {
+				return c.Name
+			}
 			return c.Name + ": " + c.Detail
 		}
 	}

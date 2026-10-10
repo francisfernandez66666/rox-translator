@@ -270,7 +270,7 @@ const COMPARE_CSS = `
   .lc-cmp-links{gap:16px}
   .lc-cmp-panel{margin:12px 16px 0;padding:24px 20px 26px}
 }
-@media (max-width:620px){
+@media (max-width:640px){ /* ★ 批3 断点归一：620 → 640 */
   .lc-cmp-nav{height:auto;flex-wrap:wrap;padding:12px 16px}
   .lc-cmp-links{width:100%;justify-content:flex-start;flex-wrap:wrap;gap:12px 16px}
   .lc-cmp-title{font-size:24px}

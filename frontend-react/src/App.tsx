@@ -124,12 +124,14 @@ import { Badge, Button, Icon } from '@/ui/langcross/src'
 // 路由懒加载时展示；onBeat 只在冷启动闸门（会话恢复）传入，用于「演满 3 个语种再放行」
 // 用普通函数而非 React.memo：它只在 Suspense 解析期短暂挂载，没有可优化的重复渲染路径。
 // 标题走模块级 gt（而非 useT）：占位通常只活几百毫秒，不值得为它订阅语言变更。
-function PageLoading({ label = gt('app.loading'), onBeat }: { label?: string; onBeat?: (done: number) => void } = {}) {
+function PageLoading({ label = gt('app.loading'), onBeat, loop = true }: { label?: string; onBeat?: (done: number) => void; loop?: boolean } = {}) {
   return (
     // flex:1 + minHeight:100dvh 同时给：外层是 flex 列时用 100dvh 撑住；
     // dvh（非 vh）是为了移动端地址栏收起/展开时不把动效顶偏。
     <div style={{ flex: 1, minHeight: '100dvh', width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-      <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} />
+      {/* loop 透传：带闸门的调用点（冷启动/会话恢复）传 busy——内容就绪即停在终帧，
+          还在加载就继续播；不带闸门的 Suspense 兜底保持缺省 true（解析完成即卸载）。 */}
+      <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} loop={loop} />
     </div>
   )
 }
@@ -150,6 +152,24 @@ function FrontShell() {
   const [ctxNoEmail, setCtxNoEmail] = useState(false)
   const [isPersonal, setIsPersonal] = useState(true)
   const [kbUploadOpen, setKbUploadOpen] = useState(false)
+  // ★ 批3 移动壳（2026-10-10，UI-ANNOTATIONS §1.7）：S 档（≤640）顶栏由「桌面 app-header」
+  //   整体切换为移动三件套（.lc-statusbar + .lc-mob-topbar + .lc-tabbar），桌面顶栏与三件套
+  //   永不同屏。断点取值与 components.css/mobile.css 的四档归一口径（S≤640）一致。
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 640px)').matches)
+  // 移动状态栏时间：30s 轮询即可（分钟级显示，无需每秒重渲染）
+  const [clock, setClock] = useState(() => new Date())
+  // 移动端余额数值：桌面顶栏是 gtpl 组装的文字胶囊，移动第二信息带拆成「标签 + 数值」两档
+  const [pkgPoints, setPkgPoints] = useState<number | null>(null)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)')
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  useEffect(() => {
+    const id = setInterval(() => setClock(new Date()), 30000)
+    return () => clearInterval(id)
+  }, [])
   // ★ 2026-09-24 〇-S（#7）：menuOpen（汉堡抽屉开关）随抽屉一并退役，自助入口改走 AccountMenu 下拉
   // ★ 2026-09-22 载入闸门：后端探活撤销后，占位仍留到 WordSwap 演满 3 个语种拍次
   // 闸门放在 FrontShell 这一层：它只替换 .app-main 里的路由出口，顶栏照常渲染
@@ -169,12 +189,16 @@ function FrontShell() {
     try {
       const p = await myPackage() as unknown as { success?: boolean; points_balance?: number; balance_sentences_approx?: number }
       if (p.success && typeof p.points_balance === 'number') {
+        // ★ 批3：移动第二信息带的裸数值先归零——平台上下文无计费余额；
+        //   普通上下文在下方 setPkgPoints(p.points_balance) 立即重设（同一同步块，无中间渲染）。
+        setPkgPoints(null)
         // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端固定回 0；
         //   照此渲染会得到「余额 0 积分」胶囊并被 points_balance<=0 点亮「余额不足」横幅。
         //   守卫放前端、不动后端出参（tid<=0 回 0 的语义是对的），判据见 isPlatformBillingContext。
         if (isPlatformBillingContext(user.role)) { setPkgLine(''); setDepleted(false); return }
         const nf = new Intl.NumberFormat(intlLocale()) // ★ 〇-Q：按**界面语种**（原为浏览器默认，切语种后数字不跟）
         setPkgLine(gtpl('app.pkgLineFmt', { points: nf.format(p.points_balance), approx: nf.format(p.balance_sentences_approx ?? 0) }))
+        setPkgPoints(p.points_balance) // ★ 批3：移动第二信息带的裸数值（桌面顶栏胶囊不消费它）
         setDepleted(p.points_balance <= 0) // ★ E11：billing_stopped 顶部横幅信号
       }
     } catch { /* ignore */ } // 拉不到就保持上一次的积分行，不打断工作台
@@ -223,6 +247,15 @@ function FrontShell() {
     if (path !== target) navigate(target)
   }
 
+  // ★ 批3 移动壳派生值（仅 S 档消费）：状态栏时间 / 余额数值 / 顶栏标题 / 底部 Tab 激活键。
+  //   激活键：/my→「我的」，其余沿用桌面 tab 推导（editor 移动端无独立 Tab，不高亮任何项）。
+  const clockText = `${String(clock.getHours()).padStart(2, '0')}:${String(clock.getMinutes()).padStart(2, '0')}`
+  const pointsText = pkgPoints === null ? '' : new Intl.NumberFormat(intlLocale()).format(pkgPoints)
+  const mobTitle = path.startsWith('/my') ? t('ss.myAccount')
+    : tab === 'tickets' ? t('app.tabTickets')
+    : tab === 'editor' ? t('app.tabEditor') : t('app.tabWorkbench')
+  const mobActive = path.startsWith('/my') ? 'my' : tab === 'editor' ? '' : tab
+
   return (
     // 最外层这层 Suspense 主要兜顶栏的懒加载件（Bell / AccountMenu / SiteFooter）；
     // 页面级懒加载另有 .app-main 里的内层 Suspense，两层各管一段，互不顶掉。
@@ -253,10 +286,12 @@ function FrontShell() {
         .ss-copy{display:flex;align-items:center;gap:8px}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
-        .ss-stat b{display:block;font-size:20px;color:#E7E9EA}
+        /* ★ 批2 六档字阶：关键数值 26/700 + 等宽数字（原 20px 旧档作废，UI-ANNOTATIONS §1.2） */
+        .ss-stat b{display:block;font-size:26px;font-weight:700;color:var(--lc-text);font-variant-numeric:tabular-nums}
         .ss-table{width:100%;border-collapse:collapse}
         .ss-table th,.ss-table td{border:1.2px solid var(--lc-border-faint);padding:6px 8px;text-align:start}
-        .ss-table th{background:var(--npz-surface-2);color:#E7E9EA}
+        /* ★ 批2 六档字阶：表头 14/600/text-2（原正文字色提为表头是档语义错位） */
+        .ss-table th{background:var(--npz-surface-2);color:var(--lc-text-2);font-size:14px;font-weight:600}
         /* ★ 2026-09-24 〇-S（#7）：.ss-drawer-nav/.ss-drawer-item 随汉堡抽屉退役 */
         .ss-quick{display:flex;flex-wrap:wrap;gap:8px}
         .ss-loading{display:flex;justify-content:center;padding:40px}
@@ -270,10 +305,52 @@ function FrontShell() {
         .app-tab:hover{color:var(--lc-text)}
         .app-tab--on{background:var(--lc-raised);color:var(--lc-text)}
       `}</style>
+      {/* ★ 批3 移动壳（S 档 ≤640，UI-ANNOTATIONS §1.7）：状态栏(44) + 顶栏(52) + 第二信息带。
+          与桌面顶栏互斥渲染（永不同屏）；底部胶囊 TabBar 在外壳列尾（SiteFooter 之后）。
+          组件类名复用 ui/langcross/src/Mobile.tsx 同款 lc-*（样式唯一份在 components.css）。
+          Tab 四项 i18n 全部复用既有键：翻译=app.tabWorkbench / 工单=app.tabTickets /
+          知识库=kb.topbarUpload（点按拉起 KbUploadDialog，移动端无独立知识库路由）/
+          我的=ss.myAccount。 */}
+      {isMobile && (
+        <>
+          <div className="lc-statusbar">
+            <span>{clockText}</span>
+            <span className="lc-statusbar__glyph">
+              <Icon n="brand" size={12} style={{ verticalAlign: '-2px', marginInlineEnd: 4 }} />
+              {branding.brandName || t('app.title')}
+            </span>
+          </div>
+          <div className="lc-mob-topbar">
+            <span className="lc-mob-topbar__title">{mobTitle}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Bell />
+              <LangSelect align="right" />
+              <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')}
+                           selfNav={(p) => navigate(p)} showInvites={isPersonal} />
+            </div>
+          </div>
+          {/* 第二信息带：身份（租户/个人版）+ 余额（标签 13/text-3 · 数值 text-1/600 等宽数字）。
+              桌面顶栏的余额胶囊（pkgLine 文字版）不再在 S 档重复出现。
+              ★ .lc-mob-band：S 档余额口径的稳定锚点类——mobile_uat 的 F-48 锁按它判定
+              （旧锚点 .app-header .pkg-line-tag 在 S 档结构性不存在＝顶栏不渲染）。 */}
+          <div className="lc-mob-band" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                        padding: '6px 16px', borderBottom: '1px solid var(--lc-border-faint)' }}>
+            <span style={{ fontSize: 13, color: 'var(--lc-text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {tenantTag || t('app.personalPlan')}
+            </span>
+            {!!pointsText && (
+              <span style={{ flex: 'none', fontSize: 15, fontWeight: 600, color: 'var(--lc-text-1)', fontVariantNumeric: 'tabular-nums' }}>
+                {t('app.navBilling')} · {pointsText}
+              </span>
+            )}
+          </div>
+        </>
+      )}
       {/* 顶栏：导航抽屉入口 / 品牌 / 三个工作台 Tab / 租户身份 / 余额徽标 / 上传口 /
           Bell / 主题 / 语言 / 账号菜单。原生 button + .ss-ghost-btn / .app-tab 成钮，
-          图标一律 <Icon/>（文字按钮仍保留 i18n 取词，零 emoji）。 */}
-      <header className="app-header">
+          图标一律 <Icon/>（文字按钮仍保留 i18n 取词，零 emoji）。
+          ★ 批3：S 档整个顶栏让位给上方移动三件套（桌面顶栏与移动壳永不同屏）。 */}
+      {!isMobile && <header className="app-header">
         {/* ★ 2026-09-24 〇-S（#7）：左侧「更多」汉堡钮退役——用户拍板「右侧不是汉堡是下拉，
             套餐/余额/账号并入右上角下拉、页脚回页脚位置」。抽屉四项自助入口迁 AccountMenu
             （selfNav 传入即露出），SiteFooter 移到外壳列尾部常驻，本行不再有任何钮。
@@ -324,7 +401,7 @@ function FrontShell() {
             邀请有礼仅个人用户可见（与 /invites 路由守卫同口径） */}
         <AccountMenu showAdminConsole={roleLevelSafe(user?.role) >= 2} onGotoAdmin={() => navigate('/admin')}
                      selfNav={(p) => navigate(p)} showInvites={isPersonal} />
-      </header>
+      </header>}
 
       {/* ★ E11：余额耗尽（billing_stopped 口径）常驻横幅——旧版仅深藏于自助面板
           ★ 2026-09-16 整改：旧版一律跳 /packages（只读页）——租户管理员及以上直跳
@@ -356,7 +433,7 @@ function FrontShell() {
           // 这里与 Root 的 restoreGate 是两个独立闸门实例：各自持有 played/need，也各自挂一份
           // WordSwap 从第一拍数起，只有各自真的见过 loading 才会补拍（不会互相借用对方的拍数）
           <div className="loading-screen" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20 }}>
-            <WordSwap className="ws--lg" ariaLabel={t('app.starting')} onBeat={bootGate.onBeat} />
+            <WordSwap className="ws--lg" ariaLabel={t('app.starting')} onBeat={bootGate.onBeat} loop={bootGate.busy} />
             <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
@@ -390,6 +467,40 @@ function FrontShell() {
           SiteFooter 自带 marginTop:auto，内容不足一屏时也贴列底不半途悬着。
           懒加载件由最外层 Suspense（PageLoading 兜底）接管，首帧不会闪挂。 */}
       <SiteFooter />
+
+      {/* ★ 批3 移动壳第三件：底部胶囊 TabBar（S 档专属）。
+          ★ 2026-10-10 收口实测修正（mobile_uat 抓到距底 644.5px）：本件必须挂在**外壳列尾**
+          （SiteFooter 之后、外壳 flex 列的最后）——此前插在顶栏信息带与 app-main 之间，
+          它的「天然位置」永远在视口上部，而 position:sticky(bottom:20px) 只拦「会滚出视口」
+          的情况、对天然就在视口内的元素不挪窝 ⇒ 胶囊悬在余额带下方 640+px 处。
+          挪到列尾后：外壳高 100dvh 恒不滚（长页滚动在 .app-main 内滚），列尾即视口底，
+          sticky 的 bottom:calc(20px + safe-area) 把胶囊再抬离底沿 20px（刘海屏让位同一条生效）。
+          marginTop 走内联 12px 而不是 components.css 的 margin-top:auto：SiteFooter 自带
+          marginTop:auto，两个 auto 会把富余空间对半分、页脚悬在半空；收死 12px 让页脚的
+          auto 独占富余空间，胶囊恒贴列尾。 */}
+      {isMobile && (
+        <nav className="lc-tabbar" style={{ flex: 'none', marginTop: 12 }} aria-label="main tabs">
+          <button className={'lc-tabbar__item' + (mobActive === 'workbench' ? ' lc-tabbar__item--active' : '')}
+                  onClick={() => switchTab('workbench')}>
+            <Icon n="chat" size={17} className="lc-tabbar__icon" />
+            <span>{t('app.tabWorkbench')}</span>
+          </button>
+          <button className={'lc-tabbar__item' + (mobActive === 'tickets' ? ' lc-tabbar__item--active' : '')}
+                  onClick={() => switchTab('tickets')}>
+            <Icon n="clipboard" size={17} className="lc-tabbar__icon" />
+            <span>{t('app.tabTickets')}</span>
+          </button>
+          <button className="lc-tabbar__item" onClick={() => setKbUploadOpen(true)}>
+            <Icon n="upload" size={17} className="lc-tabbar__icon" />
+            <span>{t('kb.topbarUpload')}</span>
+          </button>
+          <button className={'lc-tabbar__item' + (mobActive === 'my' ? ' lc-tabbar__item--active' : '')}
+                  onClick={() => { if (path !== '/my') navigate('/my') }}>
+            <Icon n="user" size={17} className="lc-tabbar__icon" />
+            <span>{t('ss.myAccount')}</span>
+          </button>
+        </nav>
+      )}
 
       {/* KbUploadDialog 是本项目自有弹窗，受控属性仍是历史的 visible（LangCross Drawer 才改叫 open） */}
       {canUploadKb && <KbUploadDialog visible={kbUploadOpen} onClose={() => setKbUploadOpen(false)} />}
@@ -427,7 +538,7 @@ function Root() {
   if (restoreGate.busy) {
     // 闸门期间必须在所有分支判定之前直接 return：这帧 user 还没回来，
     // 往下走会被当成未登录渲染出登录页，会话恢复成功后再翻回工作台（闪一次登录页）
-    return <PageLoading onBeat={restoreGate.onBeat} />
+    return <PageLoading onBeat={restoreGate.onBeat} loop={restoreGate.busy} />
   }
   // 未登录分诊：营销门面（/pricing、/）直出内容页，其余路径一律落到登录页
   if (!user) {

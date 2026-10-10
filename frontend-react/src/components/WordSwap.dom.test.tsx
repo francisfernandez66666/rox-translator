@@ -1,8 +1,8 @@
 // ============ WordSwap.dom.test.tsx · 职责说明 ============
-// ★ D2 #24 加载动效组件断言：验证「错词打字→红线划掉→正词辉光定版」循环演出，
+// ★ D2 #24 加载动效组件断言：验证「错词打字→红线划掉→正词辉光定版」演出，
 // prefers-reduced-motion 命中时直接落终态（错词红线 + 正词全显、不逐帧演），
-// 以及 ★ 用户追加需求「多语言循环播放」：缺省词对覆盖 12 界面语种、运行时确实
-// 轮到第二语种（RU）拍且语种标签前置刷新。
+// 以及多语言词表：缺省词对覆盖 12 界面语种、运行时确实轮到第二语种（RU）拍。
+// ★ 2026-10-10 用户令「动效改1次显示」：演出从无限轮播改为**只演一轮、终帧定版**（⑩）。
 // 节拍为真实定时器（单拍约 3s），waitFor 超时相应放宽。
 // ★ 2026-09-22 追加需求「加载动效要久一点、至少读完三个语言再载入」的三条锁：
 //  ⑥ WordSwap 每演完一拍（正词定版停留结束）回传累计拍数；
@@ -165,4 +165,47 @@ describe('WordSwap 载入闸门（★ 2026-09-22「至少读完三个语言再�
     expect(DEFAULT_PAIRS.length).toBeGreaterThanOrEqual(MIN_READ_BEATS)
     expect(new Set(DEFAULT_PAIRS.map((p) => p.tag)).size).toBeGreaterThanOrEqual(MIN_READ_BEATS)
   })
+
+  // ★ 2026-10-10 用户令（口径两段式）：**最短完整演示一轮**；内容就绪（loop=false）后
+  // 不打断正在演的拍、演满一轮即停在当前拍终帧。本条是行为锁（不是源码 grep）：
+  // 两拍演完后**持续停住**——旧轮播形态在 +2.5s 时必然已擦除终帧、回到 EN 拍重打，
+  // 三类读数（标签/错词/拍数）任一变化都当场红。
+  it('⑩ loop=false（内容就绪）：最短演满一轮后停在终帧，不再循环、不再计数', async () => {
+    const onBeat = vi.fn()
+    const { container } = render(<WordSwap pairs={PAIRS2} onBeat={onBeat} loop={false} />)
+    const tagEl = container.querySelector<HTMLElement>('[data-ws="tag"]')!
+    const wEl = container.querySelector<HTMLElement>('[data-ws="w"]')!
+    const wtEl = container.querySelector<HTMLElement>('[data-ws="wt"]')!
+    const rEl = container.querySelector<HTMLElement>('[data-ws="r"]')!
+    // 两拍演完（打字+划线+定版 ≈7s）：终帧 = RU 拍 + 辉光定版 + 红线划掉态保留
+    await waitFor(() => expect(onBeat).toHaveBeenCalledWith(2), { timeout: 12000 })
+    expect(tagEl.textContent).toBe('RU')
+    expect(wtEl.textContent).toBe('сравнение')
+    expect(rEl.textContent).toBe('бенчмарк')
+    expect(rEl.classList.contains('lock')).toBe(true)
+    expect(wEl.classList.contains('struck')).toBe(true)
+    // 终帧必须停住：旧无限轮播在这个窗口里已擦除并回到 EN 拍
+    await new Promise((r) => setTimeout(r, 2500))
+    expect(tagEl.textContent, '旧轮播复活：就绪后终帧又回到 EN 拍').toBe('RU')
+    expect(wtEl.textContent, '旧轮播复活：就绪后终帧被擦除重打').toBe('сравнение')
+    expect(rEl.textContent, '旧轮播复活：就绪后正词被清空').toBe('бенчмарк')
+    expect(onBeat.mock.calls.length, '只演一轮：不许出现第三次计数').toBe(2)
+  }, 20000)
+
+  // 口径的另一半：**还在加载就继续播**——loop=true 时一轮演完必须擦除进入下一轮
+  // （终帧冻结形态会把长加载位演成静止画面，正是本批要修的另一面）。
+  it('⑪ loop=true（仍在加载）：一轮演完继续轮播（同拍重新演出、计数继续累加）', async () => {
+    const onBeat = vi.fn()
+    const { container } = render(<WordSwap pairs={PAIRS} onBeat={onBeat} loop={true} />)
+    const wtEl = container.querySelector<HTMLElement>('[data-ws="wt"]')!
+    const wEl = container.querySelector<HTMLElement>('[data-ws="w"]')!
+    await waitFor(() => expect(onBeat).toHaveBeenCalledWith(1), { timeout: 8000 })
+    // 第一轮演完（单拍词对）：loop=true ⇒ 擦除 → 第二轮同一拍重新演出
+    await waitFor(() => expect(onBeat).toHaveBeenCalledWith(2), { timeout: 8000 })
+    expect(onBeat.mock.calls.map((c) => c[0])).toEqual([1, 2])
+    // 第二轮真的在重新打字（不是终帧冻结）：错词重新打满并再次挂上红线
+    // （struck 在打满 220ms 停留后才挂，waitFor 抓打满瞬间会撞上这个间隙，故两步都 waitFor）
+    await waitFor(() => expect(wtEl.textContent).toBe('compare'), { timeout: 5000 })
+    await waitFor(() => expect(wEl.classList.contains('struck')).toBe(true), { timeout: 3000 })
+  }, 20000)
 })

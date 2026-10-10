@@ -115,9 +115,9 @@ const SegRow = memo(function SegRow({ s, editedText, status, note, matcher, opts
         border: '1.2px solid var(--lc-border-card)',
         borderRadius: 8,
         marginBottom: 12,
-        // 未通过态取面板面字面值 #0E1014（与 tokens.css --lc-panel 同值，★ 〇-P 交付值）；
+        // 未通过态取面板面令牌 --lc-panel（★ 批2：字面值 #0E1014 收编，随 tokens.css 新档走）；
         // 通过/判错两态仍走半透明白/红叠加，不占台阶档。
-        background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : '#0E1014',
+        background: status === 'approved' ? 'rgba(231,233,234,0.06)' : status === 'rejected' ? 'rgba(229,72,77,0.10)' : 'var(--lc-panel)',
       }}
     >
       <div>

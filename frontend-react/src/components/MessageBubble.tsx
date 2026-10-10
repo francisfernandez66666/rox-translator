@@ -12,6 +12,7 @@ import { API_BASE, getAuthToken, handleUnauthorized } from '@/api'
 import type { ChatMessage } from '@/types'
 import { t, tpl, useLang } from '@/i18n'
 import { renderMarkdown } from '@/lib/markdown' // ★ F11：渲染纯函数抽提至 lib/markdown
+import { fmtPoints } from '@/utils/points' // ★ 14.4（2026-10-10）：气泡底部 meta 行的积分展示
 import { SkillBadge } from './SkillBadge'
 // ★ D2 #24：进行态加载动效（划掉错词→亮起正词），与 App 加载页/落地页共用同一实现
 import WordSwap from './WordSwap'
@@ -78,6 +79,10 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   // 移动端标记（窗口宽度 ≤ 768px）；typeof window 兜底：SSR/单测环境无 window，初值不能直接读
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈
+  // ★ 决策⑪②（2026-10-10）：慢预警横幅的「继续等待」本地消隐态——用户点了继续等就
+  //   不再反复打扰；「转工单」整页跳工单页（MessageBubble 不在 Router 深处取导航，
+  //   位置变更走 location.assign，测试环境可桩掉）。
+  const [slowDismissed, setSlowDismissed] = useState(false)
   const isAssistant = message.role === 'assistant'
   const isUser = message.role === 'user'
 
@@ -213,6 +218,16 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   }, [message.data])
   const hasTranslations = transRows.length > 0
 
+  // ★ 14.4 复制净化（2026-10-10）：复制按钮只取译文本体，不再复制 message.content
+  //   （后端已不再往 content 拼 📝 原文/📊 模式/⚡ 积分，但复制口径吃结构化字段才是
+  //   根治——多目标语按「语言名：译文」逐行拼，单目标语直接给那一句，粘贴即可用）。
+  //   无结构化译文（普通问答/旧会话）回落 message.content，行为同旧版。
+  const copyText = useMemo(() => {
+    if (!hasTranslations) return message.content || ''
+    if (transRows.length === 1) return transRows[0].v
+    return transRows.map(({ name, v }) => `${name}：${v}`).join('\n')
+  }, [hasTranslations, transRows, message.content])
+
   // 匹配模式徽章：结构化字段优先 + 兼容旧中文文案（★ §4.2-4 质量债批）
   // WHY：旧判定纯靠 `mode.includes('精确命中')` 等中文串，后端 engine 里 res.Mode 是人读描述串，
   //   改文案即静默退化为默认态；且实测后端语义命中下发的是「语义命中」，旧代码写死匹配「语义高相似」
@@ -276,6 +291,30 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
         {/* 技能徽章 */}
         {isAssistant && message.skill && (
           <div className="bubble-badge"><SkillBadge skill={message.skill} /></div>
+        )}
+
+        {/* ★ 决策⑪②（2026-10-10）：慢预警横幅——后端 deadline 前 ~15s 发 warning 帧，
+            useChat 置 message.slowWarning。仅在流式进行态（草稿/量尺在渲染）时出现，
+            done/error/停止时随 slowWarning 清除；「继续等待」本地消隐，到点行为不变
+            （仍按后端 chat_timeout error 帧收尾）。琥珀档与离线横幅同源，不用红色——
+            这是「还来得及选」的提示，不是「已经失败」的告警。 */}
+        {isAssistant && message.slowWarning && !slowDismissed && (showDraft || showProgress) && (
+          <div className="msg-slow-warn" data-testid="slow-warning" role="status"
+               style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 14,
+                        color: '#D29922', background: 'rgba(210,153,34,0.10)', border: '1px solid rgba(210,153,34,0.32)',
+                        borderRadius: 'var(--lc-r-ctl, 8px)', padding: '6px 10px', marginBottom: 8 }}>
+            <span style={{ flex: 1, minWidth: 160 }}>{t('chat.slowWarning')}</span>
+            <button type="button" data-testid="slow-keep-wait" onClick={() => setSlowDismissed(true)}
+                    style={{ border: '1.2px solid var(--lc-border-pill)', background: 'none', borderRadius: 'var(--lc-r-ctl, 8px)',
+                             color: 'var(--lc-text-2)', fontSize: 13, padding: '2px 10px', cursor: 'pointer' }}>
+              {t('chat.slowKeepWait')}
+            </button>
+            <button type="button" data-testid="slow-to-ticket" onClick={() => { window.location.assign('/tickets') }}
+                    style={{ border: 'none', background: 'none', color: '#D29922', fontSize: 13,
+                             textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>
+              {t('chat.slowToTicket')}
+            </button>
+          </div>
         )}
 
         {/* ★ B1 初译草稿区（流式双态主呈现）：逐语言草稿行 + 阶段徽章 + 细进度条。
@@ -367,14 +406,14 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                       return (
                         <span key={nm} style={{
                           fontSize: 14, lineHeight: '16px', letterSpacing: '.02em',
-                          color: cur ? '#E7E9EA' : lit ? '#C8CCD1' : '#3F444B',
+                          color: cur ? 'var(--lc-text)' : lit ? 'var(--lc-text-btn-secondary)' : 'var(--lc-text-4)',
                           display: 'inline-flex', alignItems: 'baseline', gap: 6,
                           transition: 'color .5s ease',
                         }}>
                           <i style={{
                             fontStyle: 'normal', fontFamily: '"Inter","SF Pro Text",Arial,sans-serif',
                             fontSize: 12, fontWeight: 600,
-                            color: cur ? '#FFFFFF' : lit ? '#C8CCD1' : '#33383F',
+                            color: cur ? 'var(--lc-text)' : lit ? 'var(--lc-text-btn-secondary)' : 'var(--lc-text-4)',
                             transition: 'color .5s ease',
                           }}>{String(i + 1).padStart(2, '0')}</i>
                           {nm}
@@ -425,12 +464,17 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                 )}
               </div>
             ))}
-            {/* 反馈入口：仅对翻译结果 */}
+            {/* 反馈入口 + ★ 14.4 meta 行（2026-10-10）：模式与积分移出 content 后落在这里——
+                小字灰档（var(--lc-text-3)），与反馈入口同排；积分只在确实扣了点时出现 */}
             <div className="msg-feedback-row">
               <button type="button" className="msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}
                       style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}>
                  {t('fb.entry')}
               </button>
+              <span className="msg-meta" data-testid="msg-meta" style={{ fontSize: 12, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>
+                {modeBadge?.label}
+                {!!message.points_used && ` · ${tpl('msg.pointsUsed', { n: fmtPoints(message.points_used) })}`}
+              </span>
             </div>
           </div>
         )}
@@ -438,8 +482,8 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
         {/* 普通文本（Markdown） */}
         {showMarkdown && <div dir="auto" className="bubble-text" dangerouslySetInnerHTML={{ __html: html }} />}
 
-        {/* ★ F7：双语对照（折叠显示原文）+ 一键复制译文 */}
-        {isAssistant && (source || message.content) && (
+        {/* ★ F7：双语对照（折叠显示原文）+ 一键复制译文（★ 14.4：复制只带译文本体） */}
+        {isAssistant && (source || copyText) && (
           <div className="msg-srcbar" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
             {!!source && (
               <details>
@@ -447,9 +491,10 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                 <div dir="auto" style={{ fontSize: 14, color: 'var(--lc-text-4)', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
               </details>
             )}
-            {!!message.content && (
-              <button type="button" aria-label={t('msg.copy')} style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}
-                      onClick={() => { void navigator.clipboard?.writeText(message.content || ''); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
+            {!!copyText && (
+              <button type="button" aria-label={t('msg.copy')} data-testid="copy-translation"
+                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}
+                      onClick={() => { void navigator.clipboard?.writeText(copyText); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
                 {copied ? t('msg.copied') : t('msg.copy')}
               </button>
             )}

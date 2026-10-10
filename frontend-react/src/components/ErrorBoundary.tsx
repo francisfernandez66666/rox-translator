@@ -67,7 +67,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div style={{ fontSize: 48 }}><Icon n="alert" /></div>
           <h2 style={{ margin: 0, fontSize: 20, color: 'var(--lc-text-1, #E7E9EA)' }}>{t('common.pageError')}</h2>
           {/* 直接把 error.message 摊出来：这页已经不会有人二次操作，信息多一点比美观重要 */}
-          <p style={{ margin: 0, fontSize: 16, color: 'var(--lc-text-3, #9AA0AA)', maxWidth: 480 }}>
+          <p style={{ margin: 0, fontSize: 16, color: 'var(--lc-text-3, #98A0A9)', maxWidth: 480 }}>
             {this.state.error?.message || t('common.unknownError')}
           </p>
           <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
@@ -86,7 +86,7 @@ export default class ErrorBoundary extends Component<Props, State> {
               // 硬跳转（不是 navigate）：整页重载才能顺带丢掉可能已经脏掉的 store / 模块级单例状态
               onClick={() => { window.location.href = '/' }}
               style={{
-                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-pill, #424956)',
+                padding: '8px 24px', borderRadius: 6, border: '1.2px solid var(--lc-border-pill)',
                 background: 'transparent', color: 'var(--lc-text-1, #E7E9EA)', fontSize: 16, cursor: 'pointer',
               }}
             >

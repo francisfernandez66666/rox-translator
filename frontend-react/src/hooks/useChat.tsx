@@ -301,6 +301,10 @@ function createChatStore(msgsKey: string) {
         }, abort.signal, (lang, delta) => {
           rawByLang[lang] = (rawByLang[lang] ?? '') + delta
           scheduleFlush()
+        }, () => {
+          // ★ 决策⑪②：deadline 前 ~15s 的慢预警帧——在气泡上挂「继续等待/转工单」横幅。
+          //   只置标记，不清进度：流还在走，量尺/草稿照常渲染。
+          get().patchMsg(assistantId, { slowWarning: true })
         })
         streamClosed = true
         // ★ 修复（2026-09-22）：旧实现整包 `{ ...res }` 把后端 ChatResponse 的 `reply`
@@ -317,12 +321,15 @@ function createChatStore(msgsKey: string) {
           points_used: res.points_used,
           progress: undefined,
           draft: undefined,
+          slowWarning: undefined, // ★ 决策⑪②：done 即终态，慢预警横幅一并撤下
         })
         // ★ F-11：done 即本条已完成扣点（points_used 落进气泡的同时各处余额行已过期），
         // debounce 2s 后经枢纽广播，顶栏积分行与工作台余额条一起重拉 myPackage。
         schedulePkgRefresh()
       } catch (e) {
         streamClosed = true
+        // ★ 决策⑪②：错误收尾同样撤下慢预警横幅（error 帧本身已带超时文案）
+        get().patchMsg(assistantId, { slowWarning: undefined })
         h6HandleErr(get(), assistantId, e)
         // ★ F-48（批 I-5）：错误/中断同样是流终态——后端按实际用量实时计费（ChargeUsageRealtime），
         // 流在中途被掐断时那部分积分已经扣掉；旧实现只在 done 分支刷新，余额条会停在扣费前的值。
@@ -344,8 +351,8 @@ function createChatStore(msgsKey: string) {
           if (next[i].role === 'assistant') {
             // ★ B3：停止同 done/error 收尾口径——逐段实时行与 draft 一并清空（半途中断的段落不是交付物；
             //   #36 后即时翻译无文件流，此清理对历史会话中残留的 segments 字段同样生效）
-            if (!next[i].content) next[i] = { ...next[i], content: gt('chat.stopped'), progress: undefined, draft: undefined, segments: undefined }
-            else next[i] = { ...next[i], progress: undefined, draft: undefined, segments: undefined }
+            if (!next[i].content) next[i] = { ...next[i], content: gt('chat.stopped'), progress: undefined, draft: undefined, segments: undefined, slowWarning: undefined }
+            else next[i] = { ...next[i], progress: undefined, draft: undefined, segments: undefined, slowWarning: undefined }
             break
           }
         }

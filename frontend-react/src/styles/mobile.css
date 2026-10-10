@@ -19,8 +19,12 @@
 /* ============ ≤900px（平板竖屏 / 窄窗） ============ */
 @media (max-width: 900px) {
 
-  /* ---- 前台头部：允许换行，收窄内边距 ---- */
-  .app-header { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; }
+  /* ---- 前台头部：允许换行，收窄内边距 ----
+     ★ 批3 顶栏止血（2026-10-10）：`height:38px`（theme.css 桌面档）在换行场景下
+     让第二行元素被裁/与首行重叠——高度写死却允许 flex-wrap 是自相矛盾的口径。
+     M 档（641-900）改 min-height：内容多高栏就多高；S 档（≤640）整个顶栏被
+     FrontShell 移动壳（.lc-statusbar + .lc-mob-topbar + .lc-tabbar）取代。 */
+  .app-header { flex-wrap: wrap; row-gap: 6px; padding: 8px 12px; height: auto; min-height: 38px; }
   .app-header .brand { font-size: 17px; }
   /* ★ F-48（批 I-5 2026-09-26）：余额徽标**不再窄屏隐藏**。旧写法 `display:none` 把「我还剩多少
      积分」这个唯一常驻口径在手机上整块抹掉（用户得翻进「套餐/账单」二级页才看得到），

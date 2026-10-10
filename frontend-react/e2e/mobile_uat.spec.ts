@@ -80,54 +80,96 @@ test('移动端后台：侧边栏转抽屉（汉堡唤起/遮罩关闭/无溢出
   await page.screenshot({ path: 'artifacts/mobile-admin.png' });
 });
 
-// 移动端工作台核对：输入栏可见、页面无水平溢出（验证 .chat-input-row 换行生效）
-// ＋ ★ F-48（批 I-5 2026-09-26）：窄屏顶栏余额徽标必须**可见**——旧 mobile.css 写
-//   `.app-header .pkg-line-tag { display:none }`，把「我还剩多少积分」这个唯一常驻余额口径
-//   在手机上整块抹掉（用户得翻进「套餐/账单」二级页），与「余额条不刷新」叠成同一件事。
-//   现行口径：显示 + 单行省略号，且长文案不得撑破 390px 视口。
-test('移动端工作台：输入栏可换行、无横向溢出、余额徽标窄屏仍可见', async ({ page }) => {
-  // ★ 09-27 复跑红账（O-9 × F-48 交界）：本用例原以超管 admin 登录测余额徽标，但 O-9（批 I-10）
-  //   已把「平台计费上下文」（超管未切入任何租户，isPlatformBillingContext）的余额胶囊置空——
-  //   后端该上下文固定回 0，照渲染就是假「余额 0 积分」+ 误亮「余额不足」横幅。
-  //   徽标可见性的真载体是**租户计费用户**，故本用例登录 uatuser_a（与 pixel/translate_flow 同口径）。
+// 移动端工作台核对：★ 批3（2026-10-10）S 档（≤640）前台外壳换成「移动三件套」——
+//   .lc-statusbar(44) + .lc-mob-topbar(52) + 底部胶囊 .lc-tabbar，桌面顶栏 .app-header
+//   在 S 档**整块不渲染**（互斥，永不同屏）。因此本用例的形态锁全部按新载体重钉：
+//   ① 三件套存在且高度=令牌档（--lc-statusbar-h 44 / --lc-mob-topbar-h 52，等值锁）；
+//   ② 顶栏子元素无纵向重叠（每个孩子的 rect 必须落在顶栏盒内——mobile.css 旧
+//      `height:38px`+flex-wrap 自相矛盾导致第二行被裁/重叠，就是这条锁要抓的形态）；
+//   ③ 底部 TabBar 四钮触点 ≥44px（§1.7 触点档）；
+//   ④ F-48 余额可见性锁迁到新载体 .lc-mob-band（旧锚点 .app-header .pkg-line-tag 在
+//      S 档结构性不存在——沿用旧锚点会让这条锁永远等一个不会出现的元素而假红）。
+test('移动端工作台：三件套形态锁＋顶栏无纵向重叠＋TabBar 触点≥44＋余额带可见', async ({ page }) => {
+  // 登录口径沿用 O-9 复跑账：余额载体的真用户是**租户计费用户**（超管平台上下文余额恒空），
+  // 故用 uatuser_a（与 pixel/translate_flow 同口径）。
   await login(page, 'home', process.env.UAT_USER || 'uatuser_a', process.env.UAT_PASS || 'uatpass123');
-  await page.waitForSelector('.cw-dialog, .app-header', { timeout: 30000 });
+  await page.waitForSelector('.lc-mob-topbar', { timeout: 30000 });
   await page.waitForTimeout(1500);
+
+  // ---- ① 三件套存在＋高度等值（44/52，与 tokens.css --lc-statusbar-h/--lc-mob-topbar-h 逐像素对表）----
+  const statusbar = page.locator('.lc-statusbar');
+  const topbar = page.locator('.lc-mob-topbar');
+  const tabbar = page.locator('.lc-tabbar');
+  await expect(statusbar, 'S 档必须渲染状态栏').toBeVisible();
+  await expect(topbar, 'S 档必须渲染移动顶栏').toBeVisible();
+  await expect(tabbar, 'S 档必须渲染底部胶囊 TabBar').toBeVisible();
+  const sbH = await statusbar.evaluate((el) => el.getBoundingClientRect().height);
+  const tbH = await topbar.evaluate((el) => el.getBoundingClientRect().height);
+  expect(sbH, '状态栏高 ≠ --lc-statusbar-h(44)').toBeCloseTo(44, 0);
+  expect(tbH, '移动顶栏高 ≠ --lc-mob-topbar-h(52)').toBeCloseTo(52, 0);
+
+  // ---- 互斥锁：S 档桌面顶栏不得同屏渲染（出现＝媒体查询/useState 判档被破坏）----
+  expect(await page.locator('.app-header').count(), 'S 档 .app-header 必须整块不渲染（移动壳互斥）').toBe(0);
+
+  // ---- ② 顶栏子元素无纵向重叠/被裁：每个孩子的 rect 落在顶栏盒内（±0.5px 取整余量）----
+  const overlap = await topbar.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const bad: string[] = [];
+    for (const child of Array.from(el.children)) {
+      const r = child.getBoundingClientRect();
+      if (r.height === 0) continue; // display:none 的孩子不参与
+      if (r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5) {
+        bad.push(`${child.className || child.tagName} top=${r.top.toFixed(1)} bottom=${r.bottom.toFixed(1)} 盒=${box.top.toFixed(1)}~${box.bottom.toFixed(1)}`);
+      }
+    }
+    return bad;
+  });
+  expect(overlap, `顶栏子元素越出顶栏盒（旧 height:38px+flex-wrap 裁切形态复活）：\n${overlap.join('\n')}`).toEqual([]);
+
+  // ---- ③ 底部 TabBar 触点 ≥44px（§1.7）：四个钮逐一量 ----
+  const items = page.locator('.lc-tabbar .lc-tabbar__item');
+  expect(await items.count(), 'TabBar 应有四个入口（翻译/工单/知识库/我的）').toBe(4);
+  for (let i = 0; i < 4; i++) {
+    const b = await items.nth(i).boundingBox();
+    expect(b, `TabBar 第 ${i + 1} 钮未渲染`).not.toBeNull();
+    expect(b!.height, `TabBar 第 ${i + 1} 钮触点高 <44`).toBeGreaterThanOrEqual(44);
+    expect(b!.width, `TabBar 第 ${i + 1} 钮触点宽 <44`).toBeGreaterThanOrEqual(44);
+  }
+  // 胶囊整体必须钉在视口底部（距屏底 ≈ --lc-tabbar-bottom 20px，安全区 env 头less=0）
+  const tabBox = await tabbar.boundingBox();
+  const vpH = page.viewportSize()?.height ?? 844;
+  const gapToBottom = vpH - (tabBox!.y + tabBox!.height);
+  expect(gapToBottom, 'TabBar 未钉在视口底（距底应 ≈20px 档）').toBeLessThanOrEqual(26);
+
+  // ---- ④ 水平溢出（原锁保留）----
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
   console.log('工作台水平溢出:', overflow);
   expect(overflow).toBe(false);
   // 输入栏存在（★ 2026-09-18 UI 迁移：原生 textarea 挂 LangCross 皮肤类 .lc-textarea，旧 .chat-inputbar 已废弃）
   await expect(page.locator('.lc-textarea')).toBeVisible();
 
-  // ---- F-48② 余额徽标可见性锁（真机视口，非源码 grep）----
-  const pkgTag = page.locator('.app-header .pkg-line-tag');
-  // 徽标只在 myPackage 拉到数值后才渲染，故用 poll 等它出现（不盲等固定毫秒）
-  // ★ 09-27 复跑红账：首轮冷实例要叠「冷启动载入闸门 ≈9s + 首次资源全冷读」的税，15s 窗会被
-  //   吃掉（本轮首跑红、retry 秒过＝同一形态）；窗口与上方页面等待同尺取 30s。
-  //   锁语义不变：仍然必须真渲染、真可见，只是把「载入完毕」的判定推迟到闸门预算之外。
-  await expect.poll(() => pkgTag.count(), { message: '顶栏余额徽标未渲染：余额接口没回数值？', timeout: 30000 }).toBe(1);
-  await expect(pkgTag, '★ F-48：窄屏不得再 display:none 掉余额徽标').toBeVisible();
-  const tagStyle = await pkgTag.evaluate((el) => {
-    const cs = getComputedStyle(el);
-    return { display: cs.display, overflow: cs.overflowX, textOverflow: cs.textOverflow, nowrap: cs.whiteSpace === 'nowrap' };
-  });
-  console.log('余额徽标计算样式:', tagStyle);
-  expect(tagStyle.display, 'display:none/contents 即旧缺陷复活').not.toBe('none');
-  // 省略号三件套：overflow:hidden + text-overflow:ellipsis + nowrap（缺一项长文案就撑破视口）
-  expect(tagStyle.overflow, 'overflow 必须 hidden，否则 ellipsis 不生效').toBe('hidden');
-  expect(tagStyle.textOverflow, 'text-overflow 必须是 ellipsis').toBe('ellipsis');
-  expect(tagStyle.nowrap, 'white-space 必须 nowrap（换行会把页眉撑高）').toBe(true);
-  const box = await pkgTag.boundingBox();
-  expect(box, '徽标未渲染').not.toBeNull();
-  const vp = page.viewportSize();
-  expect(box!.width, `徽标宽度不得超过视口（${vp?.width}px）`)
-    .toBeLessThanOrEqual((vp?.width ?? 390) + 0.5);
-  // 徽标必须在视口内（右边界不越界＝真的被截断而不是溢出到屏外）
-  expect(box!.x + box!.width, '徽标右边界越出视口').toBeLessThanOrEqual((vp?.width ?? 390) + 0.5);
-  // 溢出复查一次：徽标显示后不应引入横向滚动
+  // ---- F-48② 余额可见性锁（载体已迁 S 档第二信息带 .lc-mob-band）----
+  const band = page.locator('.lc-mob-band');
+  // 余额数值在 myPackage 拉到后才渲染，poll 等内容出现（窗口与载入闸门预算同尺取 30s）
+  await expect
+    .poll(() => band.textContent(), { message: 'S 档余额带未出数值：myPackage 没回？', timeout: 30000 })
+    .toMatch(/·\s*\S/);
+  await expect(band, '★ F-48：S 档余额口径必须可见（.lc-mob-band）').toBeVisible();
+  const bandBox = await band.boundingBox();
+  const vpW = page.viewportSize()?.width ?? 390;
+  expect(bandBox!.x + bandBox!.width, '余额带右边界越出视口').toBeLessThanOrEqual(vpW + 0.5);
+  // 余额数值必须是等宽数字档（fontVariantNumeric:tabular-nums，批3 规格）
+  const numEl = band.locator('span').last();
+  const numStyle = await numEl.evaluate((el) => ({
+    variant: getComputedStyle(el).fontVariantNumeric,
+    visible: getComputedStyle(el).display !== 'none',
+  }));
+  expect(numStyle.visible, '余额数值元素不可见').toBe(true);
+  expect(numStyle.variant).toContain('tabular-nums');
+  // 溢出复查一次：余额带显示后不应引入横向滚动
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
-      { message: '余额徽标显示后不得引入横向溢出', timeout: 8000 })
+      { message: '余额带显示后不得引入横向溢出', timeout: 8000 })
       .toBe(false);
   await page.screenshot({ path: 'artifacts/mobile-workbench.png' });
 });
@@ -139,7 +181,9 @@ test('移动端全站页面无横向溢出巡检', async ({ page }) => {
   //   显式抬高本用例超时到 90s，消除边界性 flaky（非产品缺陷，纯测试稳定性）。
   test.setTimeout(90000);
   await login(page, 'home');
-  await page.waitForSelector('.app-header', { timeout: 30000 });
+  // ★ 批3（2026-10-10）：S 档（≤640）桌面顶栏 .app-header 整块不渲染（与移动壳互斥），
+  //   旧锚点会永远等一个不会出现的元素而假红；巡检只等移动顶栏就位即可。
+  await page.waitForSelector('.lc-mob-topbar', { timeout: 30000 });
   await page.waitForTimeout(1000);
   const routes = ['/billing', '/invites', '/packages', '/my', '/tickets', '/editor'];
   for (const r of routes) {

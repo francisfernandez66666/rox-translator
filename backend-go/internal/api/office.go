@@ -85,13 +85,16 @@ const officeTaskPaneHTML = `<!DOCTYPE html>
    独立浅底主题。本页由后端直出、不在前端构建产物里，前端令牌闸门扫不到（与 /docs/*、/openapi/docs、
    assist 管理台同一类盲区）。现按 UI-ANNOTATIONS §1.1 令牌走纯黑底，主按钮＝白底黑字实心件
    （交付真值 .lc-btn--primary{background:#FFFFFF}），次按钮走描边档；绿色成功态废止（全站无蓝无绿）。
-   ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O。描边族回交付灰阶档
-   （line #464C58 / pill #424956 / card-line #3A404C），面档回交付值 #0E1014 / #16181C，
-   描边宽度回交付档 1.2px（单边 1px），与 tokens.css 逐字同源（闸门见 public_ui_test.go）。 */
+   ★ 2026-09-23 〇-P 用户后令「严格按 UI 交付稿来」：撤销 〇-O。描边族回交付灰阶档、描边宽度回
+   交付档 1.2px（单边 1px，该宽度档本批未动），与 tokens.css 逐字同源（闸门见 public_ui_test.go）。
+   ★ 2026-10-10 清晰度改造批1：令牌随 tokens.css 同步换新档（真值 = UI-ANNOTATIONS §1.1/§1.6）——
+   面抬档（#14171C 面板 / #1E2228 浮面 / #0B0D10 内嵌）、文字重排（#B9BFC6/#98A0A9）、
+   描边重标定（line #565E6B / pill #4E5560 / card-line #4A515C）。
+   改直出面字节必须换 translator-server 二进制（AGENTS §一·5）。 */
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;
-  --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;--lc-white:#FFFFFF;
+  --lc-bg:#000000;--lc-panel:#14171C;--lc-surface:#1E2228;--lc-inset:#0B0D10;
+  --lc-text:#E7E9EA;--lc-text-2:#B9BFC6;--lc-text-3:#98A0A9;
+  --lc-line:#565E6B;--lc-pill:#4E5560;--lc-card-line:#4A515C;--lc-white:#FFFFFF;
   --lc-danger:#E5484D;
 }
 *{box-sizing:border-box}

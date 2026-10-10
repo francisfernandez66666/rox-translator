@@ -12,7 +12,8 @@
 // 实现：直接由后端渲染内嵌 HTML（与 SPA 无关，public 无需登录），
 //
 //	文案中英双语内联；页面外壳按 UI-ANNOTATIONS §3.1-05 公开页骨架走
-//	X/Grok 单色纯黑体系（#000 底 / #0E1014 面板 / #E7E9EA 主文字 / 白底黑字主按钮），
+//	X/Grok 单色纯黑体系（#000 底 / #14171C 面板 / #E7E9EA 主文字 / 白底黑字主按钮；
+//	2026-10-10 清晰度改造批1 随 tokens.css 换新档，真值 = UI-ANNOTATIONS §1.1/§1.6），
 //	与前端 tokens.css 同一批真值，历史蓝靛浅底主题已于 2026-09-22 全站还原批废止。
 //
 // ========================================
@@ -77,13 +78,16 @@ func (s *Server) handlePublicPrivacy(w http.ResponseWriter, r *http.Request) {
 // （--brand #2b3ee8、渐变头、#f4f6fa 底），与交付 UI 完全脱节——交付口径是
 // X/Grok 单色纯黑体系、全站无蓝无绿（UI-ANNOTATIONS §1.1 与 §3.1-05 公开页骨架）。
 // 现按 §3.1-05 逐档对齐：页面底 #000000、导航品牌 15/Bold/#FFFFFF、
-// 导航项 12/Medium/#9AA0AA（当前页 #FFFFFF）、管理后台=白底黑字按钮、
-// 内容面板 #0E1014 + 1.2px 灰阶 #3A404C + r14 + 顶缘受光、页脚面 #050607 文字 #536471。
+// 导航项 12/Medium/#B9BFC6（当前页 #FFFFFF）、管理后台=白底黑字按钮、
+// 内容面板 #14171C + 1.2px 灰阶 #4A515C + r14 + 顶缘受光、页脚面 #050607 文字 #7B838E。
+// ★ 2026-10-10 清晰度改造批1：令牌随 tokens.css 同步换新档（真值 = UI-ANNOTATIONS §1.1/§1.6）——
+// 文字五档重排（#B9BFC6/#98A0A9/#7B838E）、面色抬档（#14171C 面板）、描边七档重标定（#565E6B line 档）。
+// 改直出面字节必须换 translator-server 二进制（AGENTS §一·5）。
 // ★ 〇-N（2026-09-23）用户后令「字号 +2px、线框加粗、不改颜色」：本面的字阶与描边已整体抬档，
 // 颜色仍取 §1.1 字面值。旧档细描边不得复活——public_ui_test.go ④ 段按 served HTML 负向清零。
 // active 传当前页 key（pricing/terms/sla/privacy），用于点亮导航活跃档。
 func publicLayout(title, body, active string) string {
-	// 导航四项按 §3.1-05 的顺序与文案；当前页挂 .on 走 #FFFFFF 活跃档，其余 #9AA0AA。
+	// 导航四项按 §3.1-05 的顺序与文案；当前页挂 .on 走 #FFFFFF 活跃档，其余 #B9BFC6。
 	nav := docNavLink(active, "pricing", "/pricing", "定价 Pricing") +
 		docNavLink(active, "terms", "/docs/terms", "用户协议 Terms") +
 		docNavLink(active, "sla", "/docs/sla", "SLA") +
@@ -94,13 +98,14 @@ func publicLayout(title, body, active string) string {
 <style>
 /* 令牌取自 UI-ANNOTATIONS §1.1（面/文字/描边三族），与前端 tokens.css 同名同值；
    本页是后端直出的静态 HTML，拿不到前端样式表，只能把同一批真值再声明一遍。
-   ★ 2026-09-23 〇-P：回退交付档（撤销 〇-O）。面回交付值（#000 底 / #0A0B0D 内嵌 /
-   #0E1014 面板 / #16181C 浮面），描边回灰阶档（line #464C58 / pill #424956 / card-line #3A404C）
+   ★ 2026-10-10 清晰度改造批1：随 tokens.css 同步换新档（真值 = §1.1「2026-10-10 清晰度改造后档说明」）。
+   面抬档（#000 底 / #0B0D10 内嵌 / #14171C 面板 / #1E2228 浮面），
+   描边重标定（line #565E6B / pill #4E5560 / card-line #4A515C）
    ——与 tokens.css 必须逐字一致，否则「直出页灰框、SPA 白框」各说各话。 */
 :root{
-  --lc-bg:#000000;--lc-panel:#0E1014;--lc-surface:#16181C;--lc-inset:#0A0B0D;--lc-foot:#050607;
-  --lc-text:#E7E9EA;--lc-text-2:#9AA0AA;--lc-text-3:#71767B;--lc-text-4:#536471;
-  --lc-line:#464C58;--lc-pill:#424956;--lc-card-line:#3A404C;
+  --lc-bg:#000000;--lc-panel:#14171C;--lc-surface:#1E2228;--lc-inset:#0B0D10;--lc-foot:#050607;
+  --lc-text:#E7E9EA;--lc-text-2:#B9BFC6;--lc-text-3:#98A0A9;--lc-text-4:#7B838E;
+  --lc-line:#565E6B;--lc-pill:#4E5560;--lc-card-line:#4A515C;
   --lc-white:#FFFFFF;--lc-warn:#D29922;--lc-danger:#E5484D;
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -150,7 +155,7 @@ table{display:block;overflow-x:auto;font-size:15px}
 </body></html>`
 }
 
-// docNavLink 单个导航项：active==key 时输出 .on（导航活跃档 #FFFFFF，其余 #9AA0AA）。
+// docNavLink 单个导航项：active==key 时输出 .on（导航活跃档 #FFFFFF，其余 #B9BFC6）。
 func docNavLink(active, key, href, label string) string {
 	if active == key {
 		return `<a class="on" href="` + href + `">` + label + `</a>`

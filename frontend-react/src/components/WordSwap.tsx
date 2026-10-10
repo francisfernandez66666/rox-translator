@@ -11,6 +11,9 @@
 //   单拍定版停留从 900 回到 1150（一拍含打字/划线约 2.7~3.1s），并新增 useWordSwapGate 载入闸门：
 //   加载态撤销后仍占位到本组件演满 MIN_READ_BEATS(=3) 拍才放行，顺带给首屏前后端
 //   调用留出时间。演出本身仍不走 React state，闸门只消费 onBeat 回传的累计拍数。
+// ★ 2026-10-10 用户令（口径两段式）：加载动效**最短完整演示一轮**——内容就绪前照常轮播，
+//   就绪后不打断正在演的拍、最短演满一轮，然后停在当前拍终帧不再继续。
+//   载入闸门口径不变（缺省 12 拍 ≥ MIN_READ_BEATS 3）。
 // 当前接入点：App 冷启（会话恢复/后端探活）、路由懒加载、聊天草稿流（.draft-*）、
 // 文件逐段上屏（.file-segs）、工单「执行进度」弹窗（.tk-prog-ws）。
 // 演出方式与 HeroDemo 同源：不走 React state，逐字直写 textContent + 类名切换，
@@ -88,20 +91,28 @@ export function useWordSwapGate(loading: boolean, minBeats = MIN_READ_BEATS) {
   return { busy: loading || played < need, onBeat }
 }
 
-/** WordSwap · 职责说明：循环演出「语种标签→错词打字→红线划掉→正词辉光定版→擦除重来」
+/** WordSwap · 职责说明：演出「语种标签→错词打字→红线划掉→正词辉光定版→擦除重来」
  *  的多语言加载动效；size=lg 用于全屏加载位，默认行内小档；
  *  onBeat 每演完一拍（正词定版停留结束、擦除之前）回传累计拍数，供载入闸门判定；
+ *  loop=「内容还在准备」的实时信号（缺省 true）：true＝加载中，一轮演完擦除继续轮播；
+ *  false＝内容已就绪——**最短完整演完一轮**（不打断正在演的拍），之后停在当前拍终帧
+ *  （定版+辉光+红线保留，不擦除）。轮到第 ≥2 轮时 loop 翻 false，当前拍演完即停。
  *  纯装饰节点，无障碍口径由外层 aria-label 承担 */
-function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat }: {
+function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat, loop = true }: {
   pairs?: WordSwapPair[]
   className?: string
   ariaLabel?: string
   onBeat?: (done: number) => void
+  loop?: boolean
 }) {
   const rootRef = useRef<HTMLSpanElement>(null)
   // 回调走 ref：父组件重渲染换函数引用时不重启动画循环（effect deps 仍只看 pairs）
   const beatRef = useRef(onBeat)
   beatRef.current = onBeat
+  // loop 同走 ref：就绪/加载是运行期翻转载荷，翻转只应影响「下一拍还演不演」，
+  // 不许把整条演出链重启（restart 会从 EN 拍从头数，用户刚读过的拍全部重放）
+  const loopRef = useRef(loop)
+  loopRef.current = loop
 
   useEffect(() => {
     const root = rootRef.current
@@ -146,12 +157,14 @@ function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat }: 
 
     const play = async () => {
       const g = ++gen // 本次演出的身份证号：后续所有分支只认这个 g
-      // while 条件是唯一的循环出口——gen 变化后这一层自然不再进下一轮，
-      // 不必也不能 clearTimeout：链上任意一次 await 醒来都会先比对 gen 再落 DOM。
-      // 卸载场景下旧链握着的是已脱离文档的节点引用，晚一步的写入不可见；
-      // 每拍开头那次标签赋值前面没有 gen 检查，所以旧链最多多写「一个标签」就必然撞上下一个检查点。
-      while (g === gen) {
-        for (const p of pairs) {
+      // ★ 2026-10-10 用户令（口径两段式）：**最短完整演示一轮**；一轮内不打断（用户令原文
+      //   「最短演示一次」）；一轮演完后按 loopRef 决定去留——内容就绪（loop=false）停在当前
+      //   拍终帧（定版保留、不擦除），还在加载（loop=true）擦除继续轮播。
+      //   第 ≥2 轮里 loop 翻 false 的，当前拍演完即停（没必要把整轮演完）。
+      // 卸载/重挂场景靠 gen 检查点自灭：链上任意一次 await 醒来先比对 gen 再落 DOM。
+      for (let pass = 0; g === gen; pass++) {
+        for (let pi = 0; pi < pairs.length && g === gen; pi++) {
+          const p = pairs[pi]
           // 语种标签先落位再打词；RTL 语种（阿）本拍文字节点切 dir=rtl，下一拍复位
           tagEl.textContent = p.tag
           wtEl.dir = p.rtl ? 'rtl' : 'ltr'
@@ -172,7 +185,12 @@ function WordSwap({ pairs = DEFAULT_PAIRS, className = '', ariaLabel, onBeat }: 
           if (g !== gen) return
           // 正词已完整展示并停留到位＝这一拍「读得完」，此时才向闸门计数
           beatRef.current?.(++played)
-          // 擦除回到空白，进入下一拍
+          // 停演判定（在计数之后、擦除之前）：第一轮必须演满（最短演示一次的保证）；
+          // 之后每个拍边界都问一次 loopRef——就绪即停在当前拍终帧，不再擦除。
+          const moreInPass = pi < pairs.length - 1
+          const keepGoing = pass === 0 ? (moreInPass || loopRef.current) : loopRef.current
+          if (!keepGoing) return
+          // 擦除回到空白，进入下一拍/下一轮
           rEl.classList.remove('glow', 'lock')
           rEl.textContent = ''
           wEl.classList.remove('struck')

@@ -161,6 +161,17 @@ export const zh: Record<string, string> = {
   // ★ F-53（2026-09-26 〇-U 批 I-8）：敏感词拒译的前端文案。后端 error_code=sensitive_blocked
   //   时按本键取词（12 语种全量），取不到回落后端那句人话——旧形态是把裸键名 direct 进气泡。
   'chat.sensitiveBlocked': '该内容包含敏感信息，已停止翻译。请调整后重试，或提交翻译工单由人工处理。',
+  // ★ 决策⑩（2026-10-10）：顶缘拖拽手柄的读屏/悬浮说明
+  'chat.resizeHandle': '拖拽调整对话框高度，双击恢复默认高度',
+  // ★ 决策⑪①（2026-10-10）：发起前三档预检（宁误拦）——slow 档明示较慢、reject 档拦发送，
+  //   两者都带「转翻译工单」入口（chat.slowToTicket）
+  'chat.slowEstimate': '当前文本预计较慢，建议转翻译工单处理',
+  'chat.slowReject': '文本较长，预计超出即时翻译时限，请转翻译工单处理',
+  'chat.slowToTicket': '转翻译工单',
+  // ★ 决策⑪②（2026-10-10）：流式慢预警横幅（deadline 前 ~15s 的 warning 帧）——
+  //   「继续等待」本地消隐，「转工单」跳工单页；到点行为不变（仍按超时帧收尾）
+  'chat.slowWarning': '翻译耗时较长，可能即将超时，您可以继续等待或转翻译工单。',
+  'chat.slowKeepWait': '继续等待',
 
   'chat.assistSendFail': '这条没发出去（网络/服务异常），再试一次？',
   'chat.assistClose': '收起',
@@ -332,6 +343,15 @@ export const en: Record<string, string> = {
   //   （locales.core.test.ts 会按占位符集合逐键比对，缺一即红灯）。
   'chat.textTooLong': 'Text is too long ({count} characters; the per-message limit is {max}). Please create a translation ticket for long texts.',
   'chat.sensitiveBlocked': 'This content contains sensitive terms, so translation was stopped. Please revise it, or submit a translation ticket.',
+  // ★ 决策⑩（2026-10-10）：顶缘拖拽手柄的读屏/悬浮说明
+  'chat.resizeHandle': 'Drag to resize the dialog; double-click to reset the height',
+  // ★ 决策⑪①（2026-10-10）：发起前三档预检（宁误拦）——slow 档明示较慢、reject 档拦发送
+  'chat.slowEstimate': 'This text may take a while to translate. A translation ticket is recommended.',
+  'chat.slowReject': 'This text is too long for instant translation. Please create a translation ticket.',
+  'chat.slowToTicket': 'Translation ticket',
+  // ★ 决策⑪②（2026-10-10）：流式慢预警横幅（deadline 前 ~15s 的 warning 帧）
+  'chat.slowWarning': 'This translation is taking a long time and may time out. You can keep waiting or switch to a translation ticket.',
+  'chat.slowKeepWait': 'Keep waiting',
 
   'chat.assistSendFail': 'This message failed to send (network/service error). Try again?',
   'chat.assistClose': 'Collapse',

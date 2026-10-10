@@ -44,6 +44,7 @@ export async function consumeSSEStream(
   errorMessage = apiMsg('tr.translateErr', '翻译出错'),
   onDelta?: (lang: string, text: string) => void, // ★ D20：token 级流式增量
   onSegment?: (event: FileSegmentEvent) => void,  // ★ B3：文件翻译逐段事件
+  onWarning?: (secondsLeft: number) => void,      // ★ 决策⑪②：慢预警帧（deadline 前 ~15s）
 ): Promise<ChatResponse> {
   const decoder = new TextDecoder()
   let buffer = ''
@@ -82,6 +83,10 @@ export async function consumeSSEStream(
             })
           } else if (event.type === 'segments_sealed') {
             if (onSegment) onSegment({ kind: 'segments_sealed', lang: event.lang || '' })
+          } else if (event.type === 'warning') {
+            // ★ 决策⑪②：慢预警帧——后端在 deadline 前 ~15s 发出；不参与最终结果，
+            //   只回调给调用方（useChat 据此在气泡上挂「继续等待/转工单」）。
+            if (onWarning) onWarning(event.seconds_left ?? 0)
           } else if (event.type === 'done') {
             finalResult = event.result || null
           } else if (event.type === 'error') {
@@ -113,6 +118,7 @@ export async function chatStream(
   onProgress?: (event: ProgressEvent) => void,
   signal?: AbortSignal,
   onDelta?: (lang: string, text: string) => void, // ★ D20
+  onWarning?: (secondsLeft: number) => void,      // ★ 决策⑪②：慢预警帧透传
 ): Promise<ChatResponse> {
   const body = JSON.stringify({ message, skill: skill || '', options: options || {} })
   // ★ §4.2-2 正当豁免：SSE 流式通道必须裸用 fetch——request() 封装会把整份响应 response.json()
@@ -150,7 +156,7 @@ export async function chatStream(
   const reader = response.body?.getReader()
   if (!reader) throw new Error(apiMsg('tr.streamReadFail', '无法读取流式响应'))
 
-  return consumeSSEStream(reader, onProgress, apiMsg('tr.translateErr', '翻译出错'), onDelta)
+  return consumeSSEStream(reader, onProgress, apiMsg('tr.translateErr', '翻译出错'), onDelta, undefined, onWarning)
 }
 
 /** 健康检查（10 秒超时：后端挂起时快速判定离线，不无限等待） */
@@ -166,6 +172,9 @@ export interface EstimateResp {
   sufficient: boolean
   activated?: boolean
   hint?: string
+  // ★ 决策⑪①（2026-10-10）：LLM 排队深度代理值（饱和代理，口径见后端 stream.go
+  //   llmQueueDepth 注释）。参与前端 slowVerdict 三档预检；字段缺失时前端按保守档兜底。
+  llm_queue_depth?: number
 }
 // 翻译前预估积分消耗与余额（失败静默返回 null，不打断输入）
 export async function estimateTranslation(text: string, targetLangs: string[], mode = 'pro'): Promise<EstimateResp | null> {
