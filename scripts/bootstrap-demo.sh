@@ -373,7 +373,13 @@ ${DEMO_DOMAIN} {
 
 	handle /assets/* {
 		root * ${DEMO_DIR}/web
-		header Cache-Control "public, max-age=31536000, immutable"
+		# ★ 2026-10-12 CF 404 钉缓存事故修法：长缓存只在**磁盘上真有这个文件**时发。
+		#   旧形态无条件发，于是任何一次探到不存在的哈希名都会连 404 一起被边缘缓存钉一年。
+		#   ⚠️ v2.9.1 **没有** `http.matchers.status`（`status 200` 在 adapt 期直接报
+		#      module not registered），所以只能用 file 档判存在性；隔离实例现读：
+		#      200 仍带 immutable＋br＋Vary，404 **不带任何 cache-control** ⇒ CF 默认不缓存它。
+		@asset file {http.request.uri.path}
+		header @asset Cache-Control "public, max-age=31536000, immutable"
 		# ★ 2026-10-12 慢链路批②：与主站 translator.conf 同口径的**预压缩侧车**直出
 		#   （发版机跑 `node scripts/precompress_dist.mjs` 生成 `.br`/`.gz`，随 dist 一起 tar 上来）。
 		#   ⚠️ 这一段的**事实源是本脚本**：线上 /etc/caddy/translator-demo.conf 由它生成，
@@ -385,6 +391,15 @@ ${DEMO_DOMAIN} {
 		file_server {
 			precompressed br gzip
 		}
+	}
+	# ★ 2026-10-12 CF 404 钉缓存事故修法（第二条腿）：/assets/* 的**错误响应**一律 no-store。
+	#   源站对不存在的哈希名原本回「无任何 cache-control」，Cloudflare 仍按默认档把它钉住
+	#   （实测 4 小时 cf-cache-status: HIT）；显式 no-store 才能让边缘彻底不缓存一次 404。
+	#   隔离实例现读对照：加这一段前后，/ 与 /assets/<存在件> 与死上游 502 的响应一字不差，
+	#   只有 /assets/<不存在件> 多出 `Cache-Control: no-store` ⇒ 射程仅限这一族错误页。
+	handle_errors {
+		@asseterr path /assets/*
+		header @asseterr Cache-Control "no-store"
 	}
 
 	# ★ SPA/首页托管改走演示后端 handleSPA：由后端按访问域名（rox-test → 租户1 ROX）
