@@ -89,6 +89,10 @@ log "启动双实例 :${A_PORT} / :${B_PORT}（共享 ${MDB}）..."
 #     A/B 两侧继续用 env 档，是为了让 M2–M4 的射程干净落在「跨实例余额可见性」上，
 #     **不再是**因为「刷新做不到所以只能靠 env 兜」。
 COMMON_ENV=(ADMIN_INIT_PASSWORD=Admin@1234 JWT_SECRET="$JWT_SECRET_VAL" DB_DRIVER=postgres DB_DSN="$DB_DSN" USER_DATA_DIR="$WORK/udata"
+  # ★ 2026-10-11（慢 SQL 批 P2⑤）：本段档位注入（上面 121–128 行）走 dbcfg **外部裸写**，
+  #   TTL 缓存档下 ≤5 秒才现形；钉 0 档＝夹具确定性（与 run_uat.sh 同口径，生产不配）。
+  #   llmsource 热加载腿读的是 ConfigsByKeys（刻意不进该缓存），M5 段射程不受影响。
+  SYSTEM_CONFIG_CACHE_TTL_SEC=0
   SILICONFLOW_API_KEY=sk-mock ONLINE_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1" ONLINE_MODEL=mock-mt
   EMBED_API_KEY=sk-mock EMBED_API_BASE="http://127.0.0.1:${MOCK_PORT}/v1")
 # ★ 2026-09-26（步骤 6 清理测试数据时踩出）：USER_DATA_DIR 必须钉进 $WORK，与 run_uat.sh 的

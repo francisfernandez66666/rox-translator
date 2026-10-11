@@ -183,7 +183,11 @@ func (s *Store) SetPayConfigField(key, raw string) error {
 // 白名单校验在调用方（SetPayConfigField）已做完，这里只负责执行。
 func (s *Store) deletePayConfigKey(key string) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM system_config WHERE key=?", key)
-	return err
+	if err != nil {
+		return err
+	}
+	s.dropConfigCache(key) // 裸 DELETE 成功后必须失效：否则「清空」在 ≤5 秒内仍读成「已配置」（P2⑤ 补腿）
+	return nil
 }
 
 // GetPayChannelConfig 读取支付渠道配置快照（敏感项解密）。

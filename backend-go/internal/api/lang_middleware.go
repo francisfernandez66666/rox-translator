@@ -72,6 +72,11 @@ func (lw *langWriter) decide() {
 // Header 透传真实响应头集合（内层中间件/Handler 的 Header().Set 直接落在真实 map 上）。
 func (lw *langWriter) Header() http.Header { return lw.real.Header() }
 
+// Unwrap 把真实 ResponseWriter 暴露给 http.NewResponseController（★ 2026-10-11 慢 SQL 批 P1④）。
+// 英文请求的 w 是 langWriter(statusWriter(真实))，SSE 豁免腿要走完这两层才够到底；
+// 缺任何一层 Unwrap，SetWriteDeadline 都只会拿到 ErrNotSupported 而界面上毫无痕迹。
+func (lw *langWriter) Unwrap() http.ResponseWriter { return lw.real }
+
 // WriteHeader 记录状态码；直通模式下立即转发，缓冲模式下扣住到 finish 再发。
 func (lw *langWriter) WriteHeader(code int) {
 	if lw.status == 0 {

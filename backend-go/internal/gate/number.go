@@ -45,6 +45,8 @@ const cnNumChars = "零〇一二两三四五六七八九十百千万点"
 // 直接对多字节 UTF-8 字符串做下标索引会切出半个字符。
 const cnDigits = "零一二三四五六七八九"
 
+// cnDigitRunes cnDigits 的 rune 展开（启动期一次），供中文数字读写两侧按**下标=数值**安全取值，
+// 避免任何调用方再对多字节字符串做字节下标索引（半个字符事故的唯一机械防线）。
 var cnDigitRunes = []rune(cnDigits)
 
 // reThousandSep 千分位形态：数字 + （逗号或空格）+ 恰好 3 位数字 + 后面不再是数字。

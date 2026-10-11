@@ -65,6 +65,11 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
+// Unwrap 把真实 ResponseWriter 暴露给 http.NewResponseController（★ 2026-10-11 慢 SQL 批 P1④）。
+// 没有这一条，SSE 豁免腿（清写超时）顺着包装器找底层会拿到 ErrNotSupported，
+// 「把 WriteTimeout 摘掉」这个动作会**静默失败**——超时照样掐流，比不设还糟。
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 // withAccessLog 结构化访问日志中间件：包裹下一层 Handler 并输出 JSON 日志。
 // 参数 next: 下一层 Handler。返回: 包装后的 Handler。
 func (s *Server) withAccessLog(next http.Handler) http.Handler {

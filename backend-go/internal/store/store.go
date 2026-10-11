@@ -33,6 +33,13 @@ type Store struct {
 	iam *iam.Store // 用户/组织数据访问层（独立子模块）
 
 	mu sync.Mutex // 互斥锁：保护并发写操作（SQLite 单写者模型）
+
+	// sysCfgMu/sysCfgCache：system_config 的进程内 TTL 缓存（★ 2026-10-11 慢 SQL 批 P2⑤）。
+	// 挂在 Store 上而不是包级全局，是「换库即视为失效」这条尺子的**构造性保证**——
+	// 测试换假库、进程换库都是换 Store 实例，旧缓存天然随实例丢弃，不需要任何第二套失效协议。
+	// 判据/口径见 systemconfig.go 的 GetConfig/SetConfig。
+	sysCfgMu    sync.Mutex
+	sysCfgCache map[string]sysCfgCacheEntry
 }
 
 // New 创建 Store 并确保全部表存在（幂等迁移）。
@@ -470,6 +477,13 @@ func (s *Store) migrate() error {
 			created_at TEXT,
 			updated_at TEXT
 		)`,
+		// ★ 2026-10-11 慢 SQL 批 P2：worker 取活腿的索引（现网取证 4.2 次/秒全表扫）。
+		// queue.DirectQueue.Reserve 的判据是 `status='queued' OR (status='running' AND leased_at<=?)`，
+		// (status, leased_at) 复合索引让两个 OR 分支都走索引探测（SQLite 双分支 index scan、PG BitmapOr），
+		// **不用部分索引**：部分索引的 WHERE 谓词不许带参数（leased_at<=? 是运行时常量），
+		// 且规划器对 OR 谓词的蕴含匹配在两种方言里都不牢靠——普通复合索引是唯一两边都稳的形态。
+		// 幂等口径：CREATE INDEX IF NOT EXISTS 与本迁移清单里既有条目（idx_packages_code）同形，老库启动自动补。
+		`CREATE INDEX IF NOT EXISTS idx_jobs_status_leased ON jobs(status, leased_at)`,
 		// ---------- translation_edits 对照编辑器（逐段编辑/通过/驳回批注） ----------
 		`CREATE TABLE IF NOT EXISTS translation_edits (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
