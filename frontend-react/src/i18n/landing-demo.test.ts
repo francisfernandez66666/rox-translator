@@ -10,12 +10,21 @@
 // 运行：npx vitest run src/i18n/landing-demo.test.ts
 // ============================================================================
 // @vitest-environment node
-import { describe, expect, it } from 'vitest'
-import { demoSrcLang, translateIn, type Lang } from './index'
+import { describe, expect, it, beforeAll } from 'vitest'
+import { demoSrcLang, translateIn, ensureLocale, type Lang } from './index'
 
+// 被测语种全集（与 i18n 的 LANG_OPTIONS 同口径，12 语种逐条判示例卡文案）
 const LANGS: Lang[] = [
   'zh', 'en', 'ru', 'fr', 'ar', 'es', 'pt', 'de', 'ja', 'ko', 'th', 'zh_hant',
 ]
+// ★ 2026-10-11 懒加载配套：translateIn 现在按语种取词典，未到手时安静回落 en／zh。
+//   本文件正是"逐语种核对母语形态"的锁（demoTag 的方向、非 CJK 零汉字），
+//   不先取到手就会拿英文回落当俄语判据（zh_hant 那条 'ZH → EN' 直接假红，
+//   其余各条则一律假绿）。等一次 ensureLocale 全部到手再判。
+beforeAll(async () => {
+  await Promise.all(LANGS.map((l) => ensureLocale(l)))
+})
+// 示例卡上屏的五个键（原文语种标签 + 终稿标签 + 三个术语行），逐键 × 逐语种核对
 const DEMO_KEYS = [
   'land.demoSrc', 'land.demoFinal', 'land.demoTerm1', 'land.demoTerm2', 'land.demoTerm3',
 ] as const

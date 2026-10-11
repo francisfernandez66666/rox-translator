@@ -31,6 +31,19 @@ FRONTEND_SIZE=$(wc -c < /tmp/frontend-dist.tar.gz | tr -d ' ')
 echo "  Backend: ${BACKEND_SIZE} bytes"
 echo "  Frontend: ${FRONTEND_SIZE} bytes"
 
+# --- 前端包内容自检（★ 2026-10-12 慢链路批②：预压缩侧车必须随包上线）---
+# 为什么在这一刻验包：Caddy 在没有 `.br` 侧车时**静默发原文**——界面照常、构建照常绿、
+# 服务照常起，"省下的 15–20% 字节没上线"这件事在现网没有任何症状。
+# 唯一能在**换源之前**抓住它的时刻就是包本身，所以这道判据必须落在上传之前而不是发版之后。
+# ★ 判据本体不写在这里，薄委托到 scripts/check_frontend_tar.sh（四档 T1 侧车／T2 脏文件／
+#   T3 入口体积／T4 语种 chunk）。理由同 AGENTS §一·11 那把尺子：手工换源那条路径（《部署指南》§五
+#   的 tar→web.new→两步 mv，演示站与租户块本来就不在本脚本射程里）必须能调**同一条**判据，
+#   写两份迟早长出一严一松。
+bash "$REPO_ROOT/scripts/check_frontend_tar.sh" /tmp/frontend-dist.tar.gz || {
+  echo "ERROR: 前端包自检未通过 ⇒ 禁止上传（详见上面 BAD 行与它给的修法）"
+  exit 1
+}
+
 # --- 上传 ---
 echo ""
 echo "=== [2/5] 上传到服务器 ==="

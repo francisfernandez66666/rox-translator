@@ -9,13 +9,14 @@
 // 运行：npx vitest run src/lib/usdtPromise.test.ts
 // ============================================================================
 // @vitest-environment node
-import { describe, expect, it, afterEach } from 'vitest'
-import { ALL_KEYS, setLang, t, type Lang } from '@/i18n'
+import { describe, expect, it, beforeAll, afterEach } from 'vitest'
+import { ALL_KEYS, setLang, t, ensureLocale, type Lang } from '@/i18n'
 import { usdtCheckoutKey, usdtPromiseIsLive } from './usdtPromise'
 
 const LIVE_KEY = 'billing.usdtCheckoutHint'
 const MANUAL_KEY = 'billing.usdtCheckoutManual'
 
+// 被测语种全集：USDT 收银台承诺文案必须逐语种各判一次，不许有语种漏出「自动入账」
 const LANGS: Lang[] = ['zh', 'en', 'zh_hant', 'ja', 'ko', 'ru', 'fr', 'de', 'es', 'pt', 'ar', 'th']
 
 // 「自动入账」这层意思在各语种的正/负向特征词（只用来判"有没有在承诺自动"，不做全文等值）。
@@ -38,6 +39,15 @@ const AUTO_MARKS: Record<string, string[]> = {
 }
 
 afterEach(() => setLang('zh'))
+
+// ★ 2026-10-11 懒加载配套：十份语种词典改按语种 dynamic import 后，
+//   本文件的判据是"逐语种读词典值再判特征词"，词典未到手时 t() 会安静地回落到**英文**——
+//   于是 ③ 那条"降级档不得含自动承诺"会在英文形态上重复判十二次（射程钝化），
+//   而 ja/zh_hant 那几档的特征词根本不会出现 → 假绿/假红都 possible。
+//   正确做法：用例开始前把要用的语种全部到手（ensureLocale 幂等，重复调用不会重拨）。
+beforeAll(async () => {
+  await Promise.all(LANGS.map((l) => ensureLocale(l)))
+})
 
 describe('⑮ 收银台承诺判据', () => {
   it('只有字面 true 才允许承诺自动入账（缺字段/假值/字符串一律降级）', () => {

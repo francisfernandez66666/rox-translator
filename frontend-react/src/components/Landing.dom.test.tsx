@@ -9,7 +9,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
-import { setLang, t } from '@/i18n'
+import { setLang, t, ensureLocale } from '@/i18n'
 
 // LeadForm 挂载即调 registerConfig（Turnstile 探测）：整体替换 '@/api'，
 // 与 LeadForm.dom.test.tsx 同口径，测试不碰真网络
@@ -125,7 +125,10 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', { 
     expect(cur.textContent).toContain('简体中文')
   })
 
-  it('⑧ 俄语界面落地页：land.* 词条直接出俄语（★ 2026-09-20 全站十语种后不再走英文回退）', () => {
+  it('⑧ 俄语界面落地页：land.* 词条直接出俄语（★ 2026-09-20 全站十语种后不再走英文回退）', async () => {
+    // ★ 2026-10-11 懒加载配套：ru 词典现在是独立 chunk，未到手时 t() 会**安静地**回落英文，
+    //   那正好是本条要抓的形态——所以必须先把它取到手，再断言"出俄语、不出英文"。
+    await ensureLocale('ru')
     setLang('ru')
     render(<Landing />)
     // LANDING_CSS 以 <style> 注入，其中文注释会混进 textContent——先摘掉样式节点再取可见文本

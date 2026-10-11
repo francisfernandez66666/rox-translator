@@ -7,8 +7,8 @@
 // 运行：npx vitest run src/i18n/locales.core.test.ts
 // ============================================================================
 // @vitest-environment node
-import { describe, expect, it, afterEach, vi } from 'vitest'
-import { ALL_KEYS, setLang, getLang, t, type Lang } from './index'
+import { describe, expect, it, beforeAll, afterEach, vi } from 'vitest'
+import { ALL_KEYS, setLang, getLang, t, ensureLocale, type Lang } from './index'
 import { dict as ru } from './locales/ru'
 import { dict as fr } from './locales/fr'
 import { dict as ar } from './locales/ar'
@@ -20,20 +20,33 @@ import { dict as ko } from './locales/ko'
 import { dict as th } from './locales/th'
 import { dict as zhHant } from './locales/zh-hant'
 
+// ALL_KEYS 的集合形态：负向判据「词典里不许有 ALL_KEYS 之外的越界键」按这个 Set 做等值
 const ALLK = new Set(ALL_KEYS)
 // 英文源值（占位符一致性基准）：index 未导出合并词典，切到 en 逐键取词
 setLang('en')
+// 逐键取英文现值，作为「其他语种占位符集合必须与英文一致」的基准表
 const EN: Record<string, string> = Object.fromEntries(ALL_KEYS.map((k) => [k, t(k)]))
 
 // 非 CJK 语种：值中若还有汉字即判漏译（ja/ko/zh_hant 本身含 CJK/谚文，天然豁免）
 const CJK_BAN: Array<[Lang, Record<string, string>]> = [
   ['ru', ru], ['fr', fr], ['ar', ar], ['es', es], ['pt', pt], ['de', de], ['th', th],
 ]
+// 十二语种 × 该语种直接 import 的词典对象：逐键覆盖/占位符/漏译三条判据的全量靶子
 const ALL: Array<[Lang, Record<string, string>]> = [...CJK_BAN, ['ja', ja], ['ko', ko], ['zh_hant', zhHant]]
 
+// 占位符提取（排序后拼接成串）：两侧同函数同口径，杜绝「键在、{x} 却变了」这类漏译
 const toks = (s: string) => (s.match(/\{[A-Za-z0-9_]+\}/g) || []).sort().join(',')
 
 afterEach(() => setLang('zh'))
+
+// ★ 2026-10-11 懒加载配套：十份 locales/*.ts 不再静态合并进 index，改按语种 dynamic import。
+//   键集/占位符/漏译那些判据读的是**直接 import 的模块对象**，与懒加载无关，照旧有效；
+//   但"切语种即生效"这一条读的是 t()（走 index 的运行时词典），词典没到手就只会拿到英文回退，
+//   于是那条等值锁恒差一档＝假红，而"回退链"那两条会退化成"英文对英文"＝假绿。
+//   所以进用例前先把十语种全部到手——ensureLocale 幂等且并发只拨一次（lazyLocale.test.ts C3 锁的就是它）。
+beforeAll(async () => {
+  await Promise.all(ALL.map(([lang]) => ensureLocale(lang)))
+})
 
 describe('locales 全量词典覆盖（★ 2026-09-20 全站十语种）', () => {
   for (const [lang, dict] of ALL) {

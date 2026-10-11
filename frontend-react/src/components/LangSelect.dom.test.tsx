@@ -11,10 +11,17 @@
 // 运行：npx vitest run src/components/LangSelect.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach } from 'vitest'
 import { render, cleanup, fireEvent } from '@testing-library/react'
-import { LANG_OPTIONS, setLang, translateIn, type Lang } from '@/i18n'
+import { LANG_OPTIONS, setLang, translateIn, ensureLocale, type Lang } from '@/i18n'
 import { LangSelect } from './LangSelect'
+
+// ★ 2026-10-11 懒加载配套：本文件的判据是「界面文字 == 该语种词典的 app.langBtn」，两侧都取自
+//   同一份运行时词典 ⇒ 词典未到手时两边**同时**回落到英文，等值锁照样绿（典型空转）。
+//   先把十二语种全部到手，这条锁才真的在判「触发钮随界面语言本地化」。
+beforeAll(async () => {
+  await Promise.all(LANG_OPTIONS.map((o) => ensureLocale(o.code as Lang)))
+})
 
 afterEach(() => {
   cleanup()

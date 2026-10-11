@@ -26,11 +26,19 @@ interface NoticeItem {
   created_at: string
 }
 
+// 浮层一页的条数：与后端默认档（store.NotificationPageDefault＝20）同值，也是浮层高度放得下的上限。
+// ★ 2026-10-11 跨境链路瓶颈批：这个数以前只在**渲染侧**起作用（后端吐 100 条、这里 slice(0,20)），
+// 传输照旧付整包；现在它同时是**请求参数**，链路上真的只走一页。
+const BELL_PAGE = 20
+
 // 默认导出组件：通知铃铛，负责未读轮询、下拉列表与已读操作（等价 Vue Bell.vue）
 export default function Bell() {
   const [unread, setUnread] = useState(0)
   const [items, setItems] = useState<NoticeItem[]>([])
   const [open, setOpen] = useState(false)
+  // 分页状态：hasMore 决定「更多」按钮在不在，loadingMore 只用来把按钮按成一发即锁（防连点打两页）
+  const [hasMore, setHasMore] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   // ★ F-11 顺手项（批G 2026-09-25）：open 的同步镜像——refresh 经它现读展开态，
   // 于是 refresh 引用不再随 open 翻转而更换（旧版靠 open 进 deps 重建 refresh，
   // 才连带产生「toggle 里调的是旧闭包」的 stale-refresh，见 toggle 注释）
@@ -44,11 +52,36 @@ export default function Bell() {
   //（见下方 toggle 的 stale-refresh 说明）。deps 为空 ⇒ 引用终生稳定，不连带重启 30s 轮询。
   const loadList = useCallback(async () => {
     try {
-      const r = await notifications()
-      // 后端一次最多回 100 条且无分页参数，这里再截到 20：浮层高 420px 也放不下更多，纯粹是自我上限
-      if (r.success) setItems(((r as unknown as { notifications?: NoticeItem[] }).notifications || []).slice(0, 20))
+      const r = await notifications(BELL_PAGE, 0)
+      // ★ 2026-10-11 分页批：旧形态在这里 `slice(0, 20)` 截渲染——那是"后端吐 100、前端只看 20"的补丁，
+      // 传输整包照付。现在请求本身就只取一页，`slice` 失去存在理由，一并撤掉（留着会让人以为后端还在整档吐）。
+      if (r.success) {
+        const box = r as unknown as { notifications?: NoticeItem[]; has_more?: boolean }
+        setItems(box.notifications || [])
+        setHasMore(box.has_more === true)
+      }
     } catch { /* 忽略 */ } // 同 refresh：拉不到就保持上一次的列表，不打断操作
   }, [])
+
+  // ★ 2026-10-11 分页批新增：追加下一页。offset 取"当前已到手条数"——后端列表按 id DESC 稳定排序，
+  // 顺序追加不会重复或漏条；中途若有新通知落库，最坏是这一页边界挪一位，下一次展开或 30s 轮询重拉第一页即修正
+  //（铃铛是旁路信息，不为这一格新鲜度多打一次 COUNT 查询——那正是本批要省的那类往返）。
+  const loadMore = useCallback(async () => {
+    setLoadingMore(true)
+    try {
+      const r = await notifications(BELL_PAGE, items.length)
+      if (r.success) {
+        const box = r as unknown as { notifications?: NoticeItem[]; has_more?: boolean }
+        const more = box.notifications || []
+        // 用函数式更新而不是 ` [...items, ...more]`：本回调的 items 是**这一页请求发出前**的快照，
+        // 期间若有别的写回（如 markRead 触发的 refresh）已经改过列表，直接拼会把那份改动抹掉
+        setItems((prev) => [...prev, ...more])
+        // 空页＝到底了：后端 has_more 用「本页取满」近似判断，取到 0 条时必须收口，否则按钮永远在
+        setHasMore(more.length > 0 && box.has_more === true)
+      }
+    } catch { /* 忽略 */ } // 拉不到就维持"还能翻"这一乐观档：下一次点击重试，不收按钮
+    finally { setLoadingMore(false) }
+  }, [items.length])
 
   // 刷新未读数；下拉展开时（openRef 现读）同步拉取最近 20 条通知列表
   // 列表只在展开时才请求：收起状态下 30s 轮询只多打一个轻量的 unread 接口，省掉一次列表查询。
@@ -158,6 +191,13 @@ export default function Bell() {
               <div style={{ fontSize: 13, color: 'var(--lc-text-4)', marginTop: 2 }}>{fmtTime(n.created_at)}</div>
             </div>
           ))}
+          {/* ★ 2026-10-11 分页批：仍有下一页才出这颗「更多」。文案复用既有键 app.more（更多／More），
+              不为一个词新开键——新键必须 12 份全量词典同步（AGENTS §一·5 的 i18n 口径），代价与收益不成比。 */}
+          {hasMore && (
+            <button type="button" className="bell-more" disabled={loadingMore} onClick={() => void loadMore()}>
+              {t('app.more')}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -177,7 +217,8 @@ const BELL_CSS = `
 .bell-count{position:absolute;top:-1px;inset-inline-end:-1px}
 /* 浮层 z-index:60 只在顶栏这个层叠上下文（.app-header 为 sticky + z-index:20，见 theme.css）
    内部比大小——够盖住下方页面内容，但对外盖不过页面级模态遮罩（如工单页 .tk-overlay 的 1200）。
-   宽 340 + max-height 420 的固定盒：条目在 refresh 里已截到 20 条，靠自身 overflow-y 滚动，不做虚拟列表。 */
+   宽 340 + max-height 420 的固定盒：一页就是 BELL_PAGE（20）条、由后端分页给到，靠自身 overflow-y 滚动，
+   不做虚拟列表；要看第 21 条以后点底部「更多」追加下一页。 */
 .bell-panel{position:absolute;top:calc(100% + 8px);inset-inline-end:0;z-index:60;width:340px;max-height:420px;overflow-y:auto;
   padding:8px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-modal);
   box-shadow:var(--lc-panel-highlight)}
@@ -187,4 +228,10 @@ const BELL_CSS = `
 .bell-item{padding:8px 6px;border-bottom:1px solid var(--lc-border-faint);cursor:pointer}
 .bell-item:last-child{border-bottom:0}
 .bell-item:hover{background:var(--lc-raised)}
+/* 「更多」按钮（★ 2026-10-11 分页批）：样式沿用 .bell-readall 那一族弱文字档，独占一行居中；
+   disabled 只降透明度不改字号——按下去要看得见"这一下生效了"，不能整颗消失让人以为点空 */
+.bell-more{display:block;width:100%;margin-top:6px;padding:6px 0;background:none;border:0;
+  color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);border-radius:var(--lc-r-bar)}
+.bell-more:hover{color:var(--lc-text);text-decoration:underline}
+.bell-more:disabled{opacity:.5;cursor:default;text-decoration:none}
 `
