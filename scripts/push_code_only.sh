@@ -30,6 +30,12 @@
 #     〇-U 收口时把 `发布前E2E_UAT_20260926/` 整目录（含 证据/）提交到了本地 autosales，
 #     本批干跑实测：旧口径只排 .md/.pdf，17 个证据二进制被当成「代码文件」列进待推清单，
 #     故把它们并入排除口径。口令留档 .txt 本就靠「未跟踪」留在本地，不依赖这条。）
+#   - `UI清晰度改进_*`（★ 2026-10-11 慢SQL批同族第二踩：清晰度批收口把 shots/ 截图 15 张、
+#     ui_对照稿_登录后页面.html 与计划稿 .md 一起提交进了**本地 autosales 的「仅本地」文档提交**
+#     （488069f/5ea7c4b）。md 被第一条排掉，png/html 却因不叫 `前端及UI相关/` 被判成「代码」进待推清单。
+#     判据与〇-V一致：内部界面截图属取证材料，不是代码交付物。
+#     ⚠️ 本脚本的排除口径是**目录名单**制，每出现一个新的「把取证资产提交进本地分支」的批次目录，
+#     就要在这里补一条——干跑清单里任何非 backend/frontend/sdk/extension/scripts 路径都要停下来过目。）
 #   - 根目录 `*.png` / `*.svg` / `*.drawio` / `*.zip` 之外的流程图产物一律按目录排；
 #     注：`frontend-react/public/extensions/*.zip` 是**代码交付物**（插件安装包），不排除。
 #
@@ -63,6 +69,7 @@ EXCL=(
   ':(exclude)*.pdf'
   ':(exclude)发布前E2E_UAT_*'
   ':(exclude)*/证据/*'
+  ':(exclude)UI清晰度改进_*'
 )
 
 # ★ 负向自锁（把上面那次事故钉进代码，任何 git 调用之前先过这道闸）：
@@ -105,7 +112,7 @@ if [ -z "$CHANGED" ]; then
 fi
 echo "==> 将推送的代码文件（$(printf '%s\n' "$CHANGED" | wc -l | tr -d ' ') 个）："
 printf '%s\n' "$CHANGED" | sed 's/^/   /' | head -60
-if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
+if printf '%s\n' "$CHANGED" | grep -qE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/|^UI清晰度改进_'; then
   echo "❌ 清单里混进了文档路径，排除口径失效，停手。" >&2; exit 1
 fi
 if [ "$APPLY" = "0" ]; then
@@ -147,7 +154,7 @@ if [ -n "$MISSING" ]; then
 fi
 
 PUSHED_FILES=$(git show --name-only --pretty=format: HEAD | sed '/^$/d')
-if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/'; then
+if printf '%s\n' "$PUSHED_FILES" | grep -qiE '\.md$|^前端及UI相关/|^产品手册/|\.pdf$|^发布前E2E_UAT_|/证据/|^UI清晰度改进_'; then
   echo "❌ 二次校验：纯代码提交里仍有文档路径，已停在本地未推。" >&2
   printf '%s\n' "$PUSHED_FILES" | grep -iE '\.md$|^前端及UI相关/' | head
   git checkout -q "$BR"; exit 1
