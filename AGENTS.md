@@ -166,6 +166,22 @@
   生产管线与术语基准见项目记忆「多语言批次」。lang→en→zh 回退链仅作全新键未同步时的临时兜底，
   不视为正常状态。
   语言切换唯一入口 `LangSelect`（禁再造 toggle 按钮），语种名统一 `langLabel()` 取中/英。
+- **十份新语种词典按语种懒加载，入口包只背 zh/en**（★ 2026-10-12 慢链路批①立为硬约定）：
+  `src/i18n/index.ts` 的 `localeLoaders` 是**唯一**的词典装载点，每条必须是**字面量** dynamic import
+  （Vite 靠静态分析这串字面量切 chunk——写成 `import('./locales/' + lang)` 会退化成整目录隐式引用，
+  懒加载当场不存在）。**禁止**再把任何 `locales/<code>.ts` 静态 import 回本文件：那十份 ALL_KEYS 全量词典
+  （源 2.1 MB）就是入口包的最大单一来源（改造前实测入口 raw 2,633 kB／gzip 442 kB，改造后 605,065 B）。
+  三条配套口径：
+  ① **所有取词点必须经 `dictFor(lang)`**——未到手的新语种它回**空对象**，让既有 `||` 链自然落到 en→zh；
+     直接 `dicts[lang][key]` 在词典未到时对 undefined 取下标＝整站白屏（本项唯一硬风险，锁＝`lazyLocale.dom.test.tsx`）；
+  ② `ensureLocale()` 幂等、同语种并发复用同一 promise、**失败不写状态**（既不落 `loadedLocales` 也不留 `inflight`，
+     所以下一次调用重拨）——把一次网络抖动钉成"这个语种永远翻不了"是不可接受的；
+  ③ **英文一闪是设计不是缺陷**：chunk 到手前那一两帧走回退链，到手后 `emit()` 触发重渲染换回母语；
+     中文访客没有这一帧（zh 就在入口包里）。将来若有人把它做成"阻塞首屏去等 chunk"，代价是十语种访客各多一次串行等待。
+  ⚠️ 体积退化**有机械哨兵**两处：换源前 `scripts/check_frontend_tar.sh` T3（入口 raw ≤ 1,200,000 B）＋ T4（语种 chunk ≥10 份），
+  换源后 `deploy/postdeploy_20261012.sh` C 段（两站入口体积/份数与**本机 dist 现读值**等值）。
+  判据刻意用**体积与文件数**而不是"抓一段泰文来 grep"：chunk 名带 hash、入口里本来也可能有零星非 ASCII 文案，
+  字符类判据射程不稳；而"改回静态 import"在体积上是从 605 KB 跳回 2.6 MB，是结构性变化，一眼可判。
 - **首访语言自动检测**（★ 2026-09-20）：无有效 `app_lang` 时按浏览器语言选语种（中文系分简/繁，
   命中语种表用该语种，其余回落 en）。测试必须钉底：vitest 在 `vitest.setup.ts` 预置 `app_lang=zh`、
   Playwright 在 `playwright.config.ts` 钉 `locale:'zh-CN'`，中文断言用例再自行覆盖，否则随机翻红。
@@ -234,7 +250,59 @@
   **只改 `extension/` 源码而不重打包 = 线上仍是旧包**；`.sha256` 记的是「固定顺序 name+NUL+bytes+NUL 归一」的
   **内容指纹**而非 zip 字节哈希（zip 内含 mtime，同源码两次打包字节不同），比对排障按这个口径，
   漂移由 `build_extension.sh --check` 与 `src/extensionPackage.test.ts` 拦。
-  **SDK 交付物与扩展同为「随源发布」通道**（★ 2026-09-25 〇-T）：改动落在 `sdk/python` / `sdk/typescript`
+- ★★ **静态资源预压缩侧车属「交付包层」，不是构建层**（★ 2026-10-12 慢链路批②）：
+  `scripts/precompress_dist.mjs` 给 dist 里每个文本资产出 `.br`(brotli q11)／`.gz`(gzip 9) 两份**侧车**，
+  由 Caddy `file_server { precompressed br gzip }` 直出（§一·5 第 5 面之外的**第 6 类盲区**：它不在源码里，
+  在**包里的文件**里）。三条硬口径：
+  ① **顺序只有一种**：`vite build` → `precompress_dist.mjs` → `--check` → tar → `check_frontend_tar.sh` → 上传。
+     build 整目录重写 dist＝把侧车抹掉（**包括 `run_uat.sh` 那次"源码比 dist 新就重建"**），所以预压缩不可能是 build 的上游；
+     反过来"决策不写进 `npm run build`"是刻意的——侧车只对**交付**有意义，本地 dev／后端直出都不经 Caddy。
+  ② **Caddy 没有侧车时静默发原文**：无日志、无报错、界面照常、构建照常绿 ⇒
+     "省下的 15–20% 字节没上线"在现网**没有任何症状**（同 §一·12／§一·13 那一族「有自动降级的链路，产物能打开不算验收」）。
+     ⇒ 唯一能在推上线之前抓住它的地方就是**包本身**，所以换源前自检四腿（T1 侧车／T2 macOS 脏文件／T3 入口体积／T4 chunk 份数）
+     必须是**两条发版路径共用的一把尺子**：`deploy/deploy_to_production.sh` 走**薄委托**
+     `bash scripts/check_frontend_tar.sh`，§五 手工链跑同一个脚本——**禁止**再在其中一处内联第二份判据
+     （两份判据迟早打架，同 §一·5 报价单一事实源那条）。
+  ③ `--check` 与 `check_frontend_tar.sh` 的判据都**现算**（现读入口名、现算 sha、现数体积），不写死数字；
+     「侧车比原文大就不落盘」是这条链唯一的体积安全阀（Caddy 照发不误，隔离实例实测 14 B 原文发出 220 B 的 `.br`）。
+  ⚠️ 语法坑：`precompressed` 必须写在 `file_server {` **块内单独一行**，与 `{` 同行在 adapt 期直接报错。
+  ⚠️ 演示站那份 conf 的**事实源是 `scripts/bootstrap-demo.sh`**（只改线上那份，下次 bootstrap 就写回旧形态）。
+  ⚠️ **动 Caddy 只 `validate` + `systemctl reload`**；`caddy stop/start/restart/run` 这些子命令打的是同一个
+  `127.0.0.1:2019` 管理面，会把**全站**停掉（2026-10-12 00:30 一次"只读探针"里带 `caddy stop` 停了 4 分半）。
+- ★ **`/assets/*` 的长缓存只在「磁盘上真有这个文件」时才发，错误响应一律 `no-store`**
+  （★ 2026-10-12 慢链路批④：现网把自己钉死一年的事故修法，与批② 同属「交付包层」的第 7 类盲区——
+  它不在源码、不在 dist 文件里，在**CDN 边缘缓存**里， origin／单测／`deploy_check.sh` 全看不见）：
+  旧形态在 `handle /assets/*` 里**无条件**发
+  `Cache-Control: public, max-age=31536000, immutable`，于是**换源之前**任何一次探"下一个哈希文件名存不存在"
+  的探针，都会把那个还不存在的名字的 **404 一起钉进边缘缓存一年**（实测读数：`cf-cache-status: HIT`、
+  `age` 6494→7247 s 还在涨），首页已经指向新名字、访客却一律撞那个被钉住的 404——
+  而源站本地、dist、前端测试全绿，这是本仓最典型的「有症状的地方不在任何闸门射程内」。四条硬口径：
+  ① 长缓存放进存在性匹配器：`@asset file {http.request.uri.path}` ＋ `header @asset Cache-Control "…immutable"`，
+     **禁止**再无条件发（哈希名本身已足够 immutable，条件化不损失任何命中）；
+  ② `/assets/*` 的错误响应必须在站点级 `handle_errors` 里显式 `no-store`
+     （`@asseterr path /assets/*` ＋ `header @asseterr Cache-Control "no-store"`）。
+     ⚠️ **「源站不发 cache-control」不等于「不缓存」**：实测 404 不带任何头时 Cloudflare 仍自己补
+     `cache-control: max-age=14400` 并 HIT 四小时；只有显式 `no-store` 才翻成 `cf-cache-status: BYPASS`。
+     ⚠️ **v2.9.1 没有 `http.matchers.status`**（`module not registered`），`header not @asset …` 能 validate 却
+     **静默什么都不做**，`not { matcher asset }`／`@x not @asset` 直接 adapt 失败——想按状态码条件化是走不通的，
+     只能走 `handle_errors`；
+  ③ 三份配置一起改：`deploy/caddy/translator.conf`、`deploy/caddy/translator-tenant.conf`、
+     事实源 `scripts/bootstrap-demo.sh`，线上那两份**原地逐条 patch**（带 `.bak.<TS>`）不许整份覆盖；
+  ④ **换源前禁止任何探针去打"还没上线的哈希文件名"**（公网侧尤其）；现网已经被钉死的旧名，
+     唯一不需要 CF token 的出路是 `CACHE_BUST=<tag> npx vite build`（`vite.config.ts` 的 `entryFileNames`
+     只在设了它时才加前缀，换一个新入口名绕开毒 URL）——**日常发版不许设**，它会把哈希名污染成固定前缀。
+  闸门＝`backend-go/internal/fileproc/caddy_asset_cache_gate_test.go`（L1 无条件 immutable 必须为 0／
+  L2 存在性匹配器在位／L3 `handle_errors` 里的 `no-store` 腿在位／L4 射程＝三份文件全扫且范围非空，
+  另配 9 枚反证＝三份 × 各摘一条腿，含"把整个 `handle_errors` 块删掉"）。
+- **列表类公开接口的分页与空值形态**（★ 2026-10-12 慢链路批③）：默认档＋上限一律收在 store 常量
+  （`NotificationPageDefault=20`／`NotificationPageMax=100`），api 层只做**镜像同档**的 `effectivePageLimit`
+  （出栈的 `limit` 必须是**真正生效的那一档**，不是回显入参），脏参数（非数字／负数／超上限）**折回档位不报错**。
+  ★ **空页在 HTTP 层必须归一成 `[]`**：Go 侧零行是 nil slice ⇒ JSON 出 `null`；改造前只有"一条都没有的用户"走到那一档，
+  分页之后**任何越界/尾页都恒为空页**，于是每个消费方（前端、管理台、SDK、手写脚本）都要各判一次 null。
+  方向是**放宽**不是改形状（老客户端字段形态一字不动，新字段可忽略）。
+  ⚠️ 该响应体走 `writeJSON(map[string]interface{})` ⇒ **键按字母序**（`has_more,limit,notifications,offset,success`），
+  任何"跨键顺序"的正则**结构性恒红**，判据一条只问一个键。
+- **SDK 交付物与扩展同为「随源发布」通道**（★ 2026-09-25 〇-T）：改动落在 `sdk/python` / `sdk/typescript`
   **必须 `bash scripts/build_sdk.sh` 重打托管产物**（whl/sdist/tgz + latest 别名 + `.sha256` + `manifest.json`
   落 `frontend-react/public/sdk/`，随前端 dist 换源即上线，`/sdk/*` 静态直出、不动后端二进制）；
   **只改 SDK 源码而不重打包 = 线上仍是旧包**。漂移由 `build_sdk.sh --check` 与
@@ -609,6 +677,8 @@ bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 
 #   不静默跳过（「PyMuPDF 认不认这个字体」除真构造 Font 外没有第二条路，跳过＝绿灯无效）。
 #   CI 走 pip install，本机装在 ~/.venvs/langcross-fileproc —— run_uat.sh 已自动发现并导出 FILEPROC_PYTHON_BIN；
 #   两处都没有时**只许补依赖，不许放宽或跳过该用例**（旧表现是整条 PG 矩阵在竞态预检段中止，后三段一行没跑）。
+node scripts/precompress_dist.mjs --check         # ★ 2026-10-12 慢链路批②：预压缩侧车闸门（缺失／比原文大／内容与当前文件不符 ⇒ ABORT=2）；**必须在 vite build 之后**跑，build 会抹掉侧车
+bash scripts/check_frontend_tar.sh                 # ★ 同批：换源前对**打包件**自检四腿（侧车在位／macOS 脏文件=0／入口体积上限／语种 chunk 份数）；`deploy_to_production.sh` 与《部署指南》§五 手工链共用这一把尺子
 bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门（★ 2026-09-25 〇-T：动过 sdk/ 却没重打 public/sdk/ 时红灯；e2e/sdk_download.spec.ts 同口径）
 ```
 
@@ -747,6 +817,20 @@ bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门
   的写路径共 5 处，每一处都要在**落库成功之后**显式失效对应键（先落库、后碰进程侧，同 §一·3 写侧纪律；
   回滚/失败分支**禁止**失效）。首发全量 `-race` 红 10 条就是这一族：测试里"清空后仍读回旧值／汇率应重锚 got 旧值"。
   失效函数只许一个入口（`dropConfigCache`），否则下一处写点又会漏钩。
+  ★ **这一条现已由静态闸机械保证**（2026-10-11 补，2026-10-12 补第十二枚，
+  `backend-go/internal/store/systemconfig_writepoint_gate_test.go`
+  按源码现算裸写点全集，落盘扫描与十二枚反证喂同一个判据函数）：W1 现算全集＋下限（抓"字面量锚漂了、整段静默失明"）、
+  W2 逐点分派并**点名函数**（"本函数与调用方都没挂钩"＝新增裸写忘挂钩当场红）、
+  W3 委托豁免＝事务助手头上必须有 `cache-hook:caller` 标记行**且**其直接调用方真挂钩（带标记却没人调＝死码豁免也算红）、
+  W4 `internal/store` 之外出现写 `system_config` 的 SQL 即红、W5 现读派生清单 `rebaseValueHolders` 逐条断"表名≠配置表"
+  （动态表名是字面量锚唯一够不到的缝）、W6 失效必须**晚于**该写点且**逐对判**（循环内的写要落在同一个 `ForStmt` 体内，
+  失败分支与 `tx.Commit()` 之前不许出现失效——W2 只问"有没有钩"，对这三族完全无感）、
+  W7 钩子废的必须是同一个键（任一侧是变量／切片展开 ⇒ 刻意不硬猜等值）。
+  ⚠️ W4 那条"包外"判据按 **import path（包归属）** 分类，**不是** `internal/store/` 这种目录前缀——
+  两者差别由第十二枚 M12 钉住（把写点搬进 `internal/store/sub/`：同一目录树、不同包，必须归到包外那一侧并红）；
+  分类器若退回前缀判，M12 会红错一条腿（"搬目录就逃出射程"正是包搬迁那条出路要显式堵死的原因）。
+  ⚠️ 两处口径别搞混：台账那句「共 5 处」数的是**挂钩点**，物理写点是 **8 处**（1 setter ＋ 5 处本函数挂钩 ＋ 2 处委托给调用方）；
+  本闸只守 ① 的"写点必须挂钩"，② 的夹具 kill-switch 与 ③ 的竞态预算仍是文字纪律，闸门看不见那两层。
   ② **测试夹具的"写完下一个请求即读到"契约要靠钉 kill-switch，不许 sleep 等过期**——UAT 脚本经
   `dblib.sh dbcfg`／裸 `dbq` 是 **psql/sqlite3 库外进程写**，进程内失效腿物理上钩不到；
   `run_uat.sh` 与 `multi_instance_e2e.sh` 的 uat-server 一律注入 `SYSTEM_CONFIG_CACHE_TTL_SEC=0`
