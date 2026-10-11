@@ -1788,4 +1788,8 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 - **闸门终账**：-race 二轮 45 包 0 FAIL；PG 矩阵 A/B 137/0、T 816/0、FE 0；multi_instance 33/0；assist_uat 157/0；扩展/SDK --check 双绿；注释闸双 0。
 - **推送**：代码 `08b3d8f`＋推送闸门修正 `0a6c02d`（排除口径补 `UI清晰度改进_*` 取证目录）→ 远端 `ebbf2d4`，零 .md、逐文件等价 0 差异。
 - **部署口径**：translator-server 必换（两站）；assist 不换（go list -deps 实测不含被改包）；前端零改动。详见《部署指南》§十六、
+- **已上线（2026-10-11 10:47 CST）**：两站 `translator-server` `ff97aa30…`→**`f502c570…`**（同件、逐字符相同），assist 与 dist 未动；
+  §十 接线验收全绿（内网 15/15×2、公网 9/9×2、品牌与租户域冒烟全绿含反向对照、assist llm=3 红=0、jobs 索引两库落位、`/metrics` counter 递增而昂贵段走 10s 快照）；
+  `/api/health` 首探 3.2 s（冷启按设计同步拨一次）→ 其后 **0.3 ms**。回滚点＝两站 `.bak.20261011_104734`。
+- **顺带闭环旧账**：派发探针闹钟 `translator-dispatch-probe.timer` **10-11 05:24 自动响第一次**（preflight 20/0、extract 3.327 s、apply 55.469 s、`probe_result=ok`）⇒ 〇-AR 第 9 波剩余项只剩「有没有真实客户件走派发」。
   台账全账见 `UI清晰度改进_20261010/修改计划_登录后页面清晰度_20261010.md` §十八。
