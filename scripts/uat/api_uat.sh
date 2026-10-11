@@ -464,7 +464,113 @@ echo "INFO|subscribe|$SUB"
 ck A14-me-package '"success":true' "$(curl -s "$B/api/me/package" -H "$H1")"
 
 # ---------- A15 通知 / 反馈 ----------
-ck A15-notifications '"success":true' "$(curl -s "$B/api/notifications" -H "$H1")"
+# ★★ 2026-10-12 跨境链路瓶颈批③：`/api/notifications` 从"一次吐 100 条"改成"默认 20 条＋offset 翻页"。
+#   旧的那一条 `ck A15-notifications '"success":true'` 属于 §三「假成功不会让闸门红，只会让闸门钝」
+#   点名的形态——**只看信封**：这一版把响应里加了 limit／offset／has_more 三个新字段、把默认档改成 20，
+#   而那条断言一个字都没动就能继续绿；换句话说它对本次改动**零射程**。所以这一段整块重写成
+#   十二条正向/负向锁（外加探针行的造与删），编号 1)~8) 见下。
+#
+#   前置纪律（三条，缺一条下面的判据就是空转）：
+#   ① **必须先造够一页的量**：uatuser_a 平时一条通知都没有，"默认 20 条""第二页换了窗口"
+#      "has_more=true" 在空列表上全部无法判别（正例拿不到、负例恒真）。这里造 25 条**带明确标记**的探针行，
+#      比默认档 20 多，才让"截断"这件事真的发生。
+#   ② 造行走 `dbq`（双方言）而不是调产品接口——工单完成链太重，且那会把别的缺陷扯进来。
+#   ③ 探针行**用完即删**（按 title 前缀精确删，不带 LIMIT：§一·4 那条 DELETE…LIMIT 在 SQLite 驱动直接语法错），
+#      并且只删自己造的标记行，绝不动 demo_% 受保护账号与其他批次留下的工单/日扫通知。
+#   ⚠️ 排序判据问的是 **id 单调**而不是 created_at：`ListNotifications` 的 ORDER BY 就是 id DESC，
+#      25 条在同一秒灌进去时 created_at 完全相同，拿时间戳判顺序会随机翻红（本套件栽过一次同类）。
+UID_A=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1")
+NOTIF_PROBE_MARK="UAT分页探针"
+for i in $(seq 1 25); do
+  dbq "INSERT INTO notifications (user_id,title,body,ref_type,ref_id,read_at,created_at) VALUES ($UID_A,'${NOTIF_PROBE_MARK}$i','占位正文','uat_probe',0,'','2026-10-12T00:00:00Z')" >/dev/null
+done
+NOTIF_TOTAL=$(dbq "SELECT COUNT(*) FROM notifications WHERE user_id=$UID_A")
+N1=$(curl -s "$B/api/notifications" -H "$H1")
+ck A15-notifications '"success":true' "$N1"
+# 1) 新契约三字段必须**同时**在位（缺一个就是老响应形态，前端翻页拿不到游标）。
+#    ⚠️ 三条分开判、不写成一条 `limit.*offset.*has_more` 的顺序正则：writeJSON 对 map 序列化时
+#    **键按字典序**出（has_more→limit→notifications→offset→success），按"代码里写的顺序"拼正则
+#    会在结构完全正确的响应上恒红（本批写这段时真踩过一次，判据是错的、产品是对的）。
+ck A15-notif-has-more-key '"has_more":' "$N1"
+ck A15-notif-limit-key '"limit":' "$N1"
+ck A15-notif-offset-key '"offset":' "$N1"
+# 2) 默认档＝20（不是 100 也不是 0）；这一条是本次改动的本体
+DEF_LEN=$(echo "$N1" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("notifications") or []))' 2>/dev/null || echo ERR)
+ck A15-notif-default-20 '^20$' "$DEF_LEN"
+echo "INFO|A15-notif-default-20|got=$DEF_LEN total_in_db=$NOTIF_TOTAL"
+# 3) 还有下一页（探针行 25 条 > 一页 20 条；库里有历史行时也成立）
+ck A15-notif-has-more-true '"has_more":true' "$N1"
+# 4) 脏参收口：limit=1000 必须**折回 100**，而不是照收 1000、也不是报错
+NCLAMP=$(curl -s "$B/api/notifications?limit=1000" -H "$H1")
+ck A15-notif-clamp-100 '"limit":100[,}]' "$NCLAMP"
+#    ↑ 上一条是正向锁；这一条是配套的**负向锁**（不许原样回显 1000）。ck 只能判"该出现"，
+#      "不许出现"必须走 if/then 手工计分，否则写成 ck 就是一条**恒红**的假判据（本批写完自查抓到）。
+#      两条配套才叫"钳制真的发生了"，而不是"响应里恰好没有 1000"。
+if echo "$NCLAMP" | grep -qE '"limit":1000'; then
+  FAIL=$((FAIL+1)); echo "FAIL|A15-notif-clamp-not-1000|limit=1000 原样回显 ⇒ 单页上限没钳，一次能把整张表拉进一个响应"
+else
+  PASS=$((PASS+1)); echo "PASS|A15-notif-clamp-not-1000"
+fi
+# 5) 翻页真的换了窗口：第一页首条 id ≠ 第二页首条 id，且第二页条数＝总数-20。
+#    页间判据要拿**读数**比，不能拿正则比 JSON（id 是数据算出来的，写不出锚点），
+#    所以沿用本套件 A13-audit-scoped 同一形态：python 出值 → shell 做等值 → 自己计 PASS/FAIL。
+P1ID=$(echo "$N1" | python3 -c 'import sys,json;l=json.load(sys.stdin).get("notifications") or [];print(l[0]["id"] if l else "NONE")' 2>/dev/null || echo ERR)
+P2=$(curl -s "$B/api/notifications?limit=20&offset=20" -H "$H1")
+P2ID=$(echo "$P2" | python3 -c 'import sys,json;l=json.load(sys.stdin).get("notifications") or [];print(l[0]["id"] if l else "NONE")' 2>/dev/null || echo ERR)
+P2_LEN=$(echo "$P2" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("notifications") or []))' 2>/dev/null || echo ERR)
+if echo "$P1ID" | grep -qE '^[0-9]+$' && echo "$P2ID" | grep -qE '^[0-9]+$' && [ "$P1ID" != "$P2ID" ] && [ "$P2_LEN" = "$((NOTIF_TOTAL-20))" ]; then
+  PASS=$((PASS+1)); echo "PASS|A15-notif-page2-shifts"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A15-notif-page2-shifts|want[两页首条 id 不同 且 第二页条数=$((NOTIF_TOTAL-20))]|got[p1=$P1ID p2=$P2ID p2_len=$P2_LEN total=$NOTIF_TOTAL]"
+fi
+# 6) 越界 offset＝空**数组**＋has_more=false（不是 null、不是 500：脏参数不许打成错误页）。
+#    键序是字典序、两键不相邻，所以拆开各判一次（同 1) 那条纪律）。
+#    "出 [] 不出 null"在 Go 侧另有专项单测（api/notifications_page_test.go 的
+#    TestNotificationsPageEmptyPageIsArray——那边必须直读原始响应体，因为反序列化后 null 与 [] 同形、判据失去射程）。
+OV=$(curl -s "$B/api/notifications?offset=99999" -H "$H1")
+ck A15-notif-overflow-empty '"notifications":\[\]' "$OV"
+ck A15-notif-overflow-no-more '"has_more":false' "$OV"
+if echo "$OV" | grep -qE '"notifications":null'; then
+  FAIL=$((FAIL+1)); echo "FAIL|A15-notif-overflow-not-null|空页出 null ⇒ 非 JS 客户端解引用即崩（列表键的对外契约是数组）"
+else
+  PASS=$((PASS+1)); echo "PASS|A15-notif-overflow-not-null"
+fi
+# 7) 顺序判据：第一页 id 必须严格递减（ORDER BY id DESC 的对外契约；乱序＝offset 拼错/索引改动）
+ORDER=$(echo "$N1" | python3 -c 'import sys,json;l=[x["id"] for x in (json.load(sys.stdin).get("notifications") or [])];print("OK" if l==sorted(l,reverse=True) and len(l)>1 else "BAD")' 2>/dev/null || echo BAD)
+ck A15-notif-order-desc '^OK$' "$ORDER"
+# 8) 老键名兼容：notifications 这个键**不许改名**（前端 listMyNotifications 与老客户端都吃它）
+ck A15-notif-legacy-key '"notifications":' "$N1"
+# —— 清探针行（放最后；只按本轮打的标记删，不碰任何其他批次留下的站内信）——
+dbq "DELETE FROM notifications WHERE user_id=$UID_A AND title LIKE '${NOTIF_PROBE_MARK}%'" >/dev/null
+AFTER=$(dbq "SELECT COUNT(*) FROM notifications WHERE user_id=$UID_A")
+# ★★ 这一条 2026-10-12 首跑即红，红在**判据自己写反**（不是清理没跑）：
+#   旧形态 `ck A15-notif-probe-cleaned "^$AFTER$" "$NOTIF_TOTAL"` 把"删完之后"当正则、把"删之前"当被检值，
+#   于是它实际在问「删之前的 25 是不是等于 0」——**结构性必红**（AFTER 当时恰为 0，清理是好的）。
+#   现在拆成两条各问一件事，两条都有判别力：
+#   ① 标记行必须清零（探针自己有没有留残骸——留了就是往测试库注脏，下一轮 25→50 级联翻红）；
+#   ② 非标记行一行不许少（DELETE 的 WHERE 被写宽了会在这儿现形，而不是等下一批人发现通知没了）。
+DELETED=$(dbq "SELECT COUNT(*) FROM notifications WHERE user_id=$UID_A AND title LIKE '${NOTIF_PROBE_MARK}%'")
+ck A15-notif-probe-cleaned '^0$' "$DELETED"
+LEFT_EXPECT=$((NOTIF_TOTAL-25))
+if [ "$AFTER" = "$LEFT_EXPECT" ]; then
+  PASS=$((PASS+1)); echo "PASS|A15-notif-other-rows-untouched"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A15-notif-other-rows-untouched|want[删完剩 $LEFT_EXPECT 条（本轮插了 25 条标记行）]|got[before=$NOTIF_TOTAL after=$AFTER]"
+fi
+echo "INFO|A15-notif-probe-cleaned|before=$NOTIF_TOTAL after=$AFTER mark_left=$DELETED"
+# —— 反证口径（本段判据有没有射程，改动时手工验一次，不随套件跑）——
+#   R-A 把 store 的 NotificationPageDefault 从 20 改回 100 ⇒ 2) 红（长度不是 20）且 3) 红（25 条一页装完，has_more=false）；
+#   R-B 把 NotificationPageMax 从 100 抬到 1000 ⇒ 4) 两条一起红（正向取不到 100、负向抓到 1000）；
+#   R-C 把 api 层响应里的 has_more 字段抹掉 ⇒ 1) 与 6) 红；
+#   R-D 把 ORDER BY id DESC 改成 ASC ⇒ 7) 红（25 条探针行足够让它不是"单元素恒有序"的假绿——
+#        这条就是 §三 那条"单句靶子会被 fail-soft 掩护"的同族：**靶子必须多元素**）。
+#   R-E 把 api 层 `if list == nil` 那步空页收敛摘掉 ⇒ 6) 的正向锁（[]）与负向锁（不许 null）一起红；
+#        这一条是**本批产品侧的改动**（分页让"空页"从罕见形态变成常规尾页，Go 的 nil 切片刻出来是
+#        `"notifications":null`，非 JS 客户端解引用即崩），不只是测试判据。
+#   R-F 把清理那条 DELETE 的 `AND title LIKE '标记%'` 条件抹掉（＝整用户清空）⇒ ①`…-probe-cleaned` **仍然绿**
+#        （表都空了，标记行当然为 0），只有 ②`…-other-rows-untouched` 红 ⇒ 这两条腿射程不同，
+#        缺第二条就等于"探针顺手把别人的通知也删了"没人看见（本段首跑红过的那条正是被写反的 ①，
+#        修好后必须让"删多了"这一族有独立的抓法，不能靠同一条断言同时管两件事）。
 ck A15-feedback '"success":true' "$(curl -s $B/api/feedback -H "$H1" -H "$J" -d '{"content":"UAT反馈：界面很赞","contact":"uat@a.com"}')"
 ck A15-feedback-list-admin '"success":true' "$(curl -s "$B/api/feedback/list" -H "$AH")"
 

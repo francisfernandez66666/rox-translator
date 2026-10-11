@@ -176,9 +176,17 @@ export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?:
   setTimeout(() => URL.revokeObjectURL(url2), 5000)
 }
 
-/** 获取我的站内信列表 */
-export async function notifications(): Promise<AdminResp> {
-  return bizResp(() => request('/api/notifications', { headers: authHeaders() }))
+/**
+ * 获取我的站内信列表（分页）。
+ * ★ 2026-10-11 跨境链路瓶颈批：后端旧形态一次吐 100 条、无分页参数，浮层只渲染 20 条却被迫下载整包；
+ * 现在默认档就是 20 条，翻页由调用方给 offset。**参数都可选**——不传就是默认档，老调用点零改动即可跑。
+ */
+export async function notifications(limit?: number, offset?: number): Promise<AdminResp> {
+  const qs = new URLSearchParams()
+  if (limit && limit > 0) qs.set('limit', String(limit))
+  if (offset && offset > 0) qs.set('offset', String(offset))
+  const tail = qs.toString() ? `?${qs.toString()}` : ''
+  return bizResp(() => request(`/api/notifications${tail}`, { headers: authHeaders() }))
 }
 
 /** 获取未读通知数量 */

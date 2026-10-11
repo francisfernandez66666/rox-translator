@@ -374,7 +374,17 @@ ${DEMO_DOMAIN} {
 	handle /assets/* {
 		root * ${DEMO_DIR}/web
 		header Cache-Control "public, max-age=31536000, immutable"
-		file_server
+		# ★ 2026-10-12 慢链路批②：与主站 translator.conf 同口径的**预压缩侧车**直出
+		#   （发版机跑 `node scripts/precompress_dist.mjs` 生成 `.br`/`.gz`，随 dist 一起 tar 上来）。
+		#   ⚠️ 这一段的**事实源是本脚本**：线上 /etc/caddy/translator-demo.conf 由它生成，
+		#   只改线上那一份不改这里，下次 bootstrap 一跑就写回无预压缩的旧形态（同 AGENTS §一·5
+		#   「仓库与线上两套实现」那一族）。
+		#   ⚠️ 语法：`precompressed` 只能在 `file_server {` **块内单独一行**；与 `{` 同行 adapt 直接报错。
+		#   ⚠️ 判据现读：`curl -H 'Accept-Encoding: br' -sI <演示域>/assets/<入口件>` 必须回
+		#      `content-encoding: br`——侧车不在时 Caddy **静默发原文**，界面照常，只有这一眼读数能发现。
+		file_server {
+			precompressed br gzip
+		}
 	}
 
 	# ★ SPA/首页托管改走演示后端 handleSPA：由后端按访问域名（rox-test → 租户1 ROX）

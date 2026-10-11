@@ -5,7 +5,9 @@
 // 2026-09-17/18：新增 panels/auth（登录/注册/AI 接管引导）面板并纳入合并；
 // 同期全站词条去除 emoji 前缀（改由 LangCross <Icon/> 渲染），本合并逻辑不变。
 // ★ #23（2026-09-19）：Lang 从 zh|en 扩到 12 语种（zh/en/ru/fr/ar/es/pt/de/ja/ko/th/zh_hant）。
-// ★ #32（2026-09-20 全站十语种）：locales/*.ts 十份词典升级为 ALL_KEYS 全量口径（2532 键逐键覆盖），
+// ★ #32（2026-09-20 全站十语种）：locales/*.ts 十份词典升级为 ALL_KEYS 全量口径（09-20 建库 2532 键；
+//   此后随批次增长，★ 2026-10-06 实测 3033 键——**键数没有固定基准**，逐键覆盖由 locales.core.test.ts
+//   以 ALL_KEYS 动态长度为判据，红/绿只看键集差集，不许把任何数字写进判据）。
 //   历史 CORE_KEYS 核心集口径已并入全量（CORE_KEYS 仅作键集前缀工具保留）。
 //   取词回退链 lang→en→zh 仍在，但正常情况下不再触发——仅词典缺键或全新面板键未同步时兜底。
 // =============================================
@@ -55,17 +57,8 @@ import * as pCoupons from './panels/coupons'
 import * as pAssist from './panels/assist'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
-// ★ #23：新语种部分词典（locales/<code>.ts）——只覆盖核心集键，其余走 lang→en→zh 回退链
-import { dict as locRu } from './locales/ru'
-import { dict as locFr } from './locales/fr'
-import { dict as locAr } from './locales/ar'
-import { dict as locEs } from './locales/es'
-import { dict as locPt } from './locales/pt'
-import { dict as locDe } from './locales/de'
-import { dict as locJa } from './locales/ja'
-import { dict as locKo } from './locales/ko'
-import { dict as locTh } from './locales/th'
-import { dict as locZhHant } from './locales/zh-hant'
+// ★ #23：新语种部分词典（locales/<code>.ts）——★ 2026-10-11 性能批改为**按语种懒加载**，
+// 见下方 localeLoaders；这里不再有静态 import（静态引入＝十份全量词典全打进进入口包）。
 // ★ 〇-Q（2026-09-23）：语种 → 文字系统 / BCP47 / 动效档位的单点真值（applyDir 与样式档位共用）
 import { isRTL, BCP47_BY_LANG } from './script'
 
@@ -129,16 +122,71 @@ export const CORE_KEYS: ReadonlyArray<string> = Object.keys(en).filter((k) => CO
 // locales.core.test.ts 的全量闸门以此为基准——新增面板键而某语种没跟上即红灯
 export const ALL_KEYS: ReadonlyArray<string> = Object.keys(en).sort()
 
-// 新语种部分词典：键空间是核心集（CORE_PREFIXES 命中键），locales 测试逐语种守护
-const locales: Partial<Record<Lang, Dict>> = {
-  ru: locRu, fr: locFr, ar: locAr, es: locEs, pt: locPt,
-  de: locDe, ja: locJa, ko: locKo, th: locTh, zh_hant: locZhHant,
+// ---- 新语种词典：按当前语种懒加载（★ 2026-10-11 跨境链路瓶颈批）----
+// 为什么改：十份 locales/*.ts 是 **ALL_KEYS 全量词典**（源 2.1 MB、打进 dist 后 gzip 约 440 KB），
+// 过去静态 import 进本文件 ⇒ 无论访客用哪种语言，入口 JS 都要把**十一份**词典全下完。
+// 实测入口包 2.63 MB／gzip 442 KB，而大陆→Cloudflare 免费版→美西边缘这条链塌到 KB/s，
+// 「刷新页面动效加载十几秒」的分子就是它——这是入口体积的最大单一来源。
+// 现在入口只含 zh/en 全量＋面板词典；其余语种在「当前语种确定」时各取自己那一份 chunk。
+//
+// ★ 代价（必须知晓，别再当成缺陷回查）：目标语种 chunk 到手前的那一两帧走
+//   lang→en→zh 回退链，于是非中文访客会先看到**英文**界面、chunk 落地后 emit() 触发重渲染换成母语。
+//   这是懒加载的固有形态，不是回归；对中文访客完全没有这一帧（zh 就在入口包里）。
+//   也因此本文件里**所有**取词点都必须经 dictFor()——旧形态 `dicts[lang][key]` 在词典未到手时
+//   会对 undefined 取下标直接 TypeError，把整站白屏（这是本次改造唯一的硬风险，锁见 lazyLocale.test.ts）。
+type LocaleLoader = () => Promise<Dict>
+// localeLoaders 语种 → 动态加载器。每个 loader 必须写成**字面量** dynamic import：
+// Vite 靠静态分析这一串字面量切 chunk，写成 `import('./locales/' + lang)` 会退化成整目录隐式引用。
+const localeLoaders: Partial<Record<Lang, LocaleLoader>> = {
+  ru: () => import('./locales/ru').then((m) => m.dict),
+  fr: () => import('./locales/fr').then((m) => m.dict),
+  ar: () => import('./locales/ar').then((m) => m.dict),
+  es: () => import('./locales/es').then((m) => m.dict),
+  pt: () => import('./locales/pt').then((m) => m.dict),
+  de: () => import('./locales/de').then((m) => m.dict),
+  ja: () => import('./locales/ja').then((m) => m.dict),
+  ko: () => import('./locales/ko').then((m) => m.dict),
+  th: () => import('./locales/th').then((m) => m.dict),
+  zh_hant: () => import('./locales/zh-hant').then((m) => m.dict),
+}
+// loadedLocales 已到手的全量词典（该语种没在表里＝还没加载，取词按回退链走 en/zh）
+const loadedLocales: Partial<Record<Lang, Dict>> = {}
+// inflightLocales 同一语种的并发请求复用同一个 promise：LangSelect 展开、setLang、
+// 模块初始化三处可能同时要 ru，不该发出三次网络请求（chunk 有 HTTP 缓存，但重复的
+// fetch  promise 各自还会触发一次 emit／重渲染）。
+const inflightLocales = new Map<Lang, Promise<void>>()
+
+/**
+ * ensureLocale 确保某语种词典到手（zh/en 恒立即完成——它们就在入口包里）。
+ * 幂等且可并发；**失败不写状态**（既不落 loadedLocales 也不留 inflight），
+ * 所以下一次调用会重新拨——把一次网络抖动钉成"这个语种永远翻不了"是不可接受的。
+ */
+export function ensureLocale(lang: Lang): Promise<void> {
+  const loader = localeLoaders[lang]
+  if (!loader || loadedLocales[lang]) return Promise.resolve()
+  const flying = inflightLocales.get(lang)
+  if (flying) return flying
+  const p = loader()
+    .then((d) => {
+      loadedLocales[lang] = d
+      emit() // 词典到手＝出栈形态变了，让所有订阅组件重渲染（英文一闪 → 母语）
+    })
+    .catch(() => { /* 静默：界面继续走 en/zh 回退链，下一次 ensureLocale 重试 */ })
+    .finally(() => { inflightLocales.delete(lang) })
+  inflightLocales.set(lang, p)
+  return p
 }
 
-// dicts 按语言索引的词典集合，取词时按当前语言定位；
-// ★ 回退链在 t() 里做（lang→en→zh），此处只登记各语种已有的部分词典
-// （zh/en 全量词典写在展开位之前会触发 TS 重复键告警，统一用一次断言收口）
-const dicts = { zh, en, ...locales } as Record<Lang, Dict>
+// dictFor 取某语种的词典本体；未到手的新语种回**空对象**（调用方的 || 链自然落到 en→zh）。
+// 这一层是懒加载的全部风险所在：绝不允许返回 undefined 再让调用方取下标。
+function dictFor(lang: Lang): Dict {
+  if (lang === 'zh') return zh
+  if (lang === 'en') return en
+  return loadedLocales[lang] || {}
+}
+
+// 新语种部分词典：键空间是**全量 ALL_KEYS**（★ 2026-09-20 全站十语种），locales 测试逐语种守护；
+// ★ 2026-10-11 起这些词典不再静态合并进 dicts，改由上方 localeLoaders 按语种懒加载（取词一律经 dictFor）。
 
 // ---- 极简外部语言 store ----
 // ★ 2026-09-20 外国人可读（用户反馈④）：首次访问（localStorage 无 app_lang）不再
@@ -185,12 +233,18 @@ const listeners = new Set<() => void>()
 // emit 通知所有语言订阅者执行回调
 function emit() { listeners.forEach((l) => l()) }
 
+// ★ 2026-10-11 懒加载的启动腿：模块一被评估就去取**当前语种**那一份词典（不必等用户操作），
+// 否则首屏要一直停在英文回退态、直到有人调用才动。写在 listeners/emit 之后，
+// 是为了让 .then 里的 emit() 一定看得到已初始化的订阅集合（同一轮微任务里模块评估已跑完）。
+void ensureLocale(currentLang)
+
 // 设置当前语言并持久化到 localStorage，触发订阅者重渲染
 export function setLang(l: Lang) {
   currentLang = l
   applyDir(l)
   try { localStorage.setItem('app_lang', l) } catch { /* ignore */ }
-  emit()
+  emit() // 先按当前已到手词典重渲染（未到手时这一帧走 en/zh 回退，见 dictFor 上方代价说明）
+  void ensureLocale(l) // 再确保该语种词典；到手后 ensureLocale 内部会再 emit() 一次换成母语
 }
 
 // getLang 读取当前语言（非 Hook，供命令式场景与测试断言使用）
@@ -219,7 +273,8 @@ export function useLang(): Lang {
 /** t 纯函数取词（非响应式；组件内请配合 useLang 使用以获得切换刷新） */
 /** 文案取词：key → 当前语言文本；★ #23 回退链 lang→en→zh，未翻键不露裸 key */
 export function t(key: string): string {
-  return dicts[currentLang][key] || en[key] || zh[key] || key
+  // ★ 2026-10-11 懒加载：取词典一律经 dictFor（旧写法 dicts[currentLang][key] 在词典未到手时会崩）
+  return dictFor(currentLang)[key] || en[key] || zh[key] || key
 }
 
 /**
@@ -229,7 +284,7 @@ export function t(key: string): string {
  * 把 `chat.sensitiveBlocked` 这样的键名显示出来，与本轮缺陷「界面露 sensitive_blocked 裸码」同形态。
  */
 export function textOr(key: string, fallback = ''): string {
-  return dicts[currentLang][key] || en[key] || zh[key] || fallback
+  return dictFor(currentLang)[key] || en[key] || zh[key] || fallback
 }
 
 /**
@@ -247,7 +302,9 @@ export function tplOr(key: string, vars: Record<string, string | number> = {}, f
  *  ★ 〇-Q 修正：落地页演示卡英语 UI 下源=英、定稿=中（EN→ZH），与其余语种「母语→EN」镜像；
  *  演示源句/术语按 srcLang 取词，必须绕过当前 UI 语种。此前 22:45 误折回 'zh'（变成 ZH→EN）已翻正。 */
 export function translateIn(lang: Lang, key: string): string {
-  return dicts[lang][key] || en[key] || zh[key] || key
+  // ★ 2026-10-11 懒加载：同 t()，词典未到手时回空对象 → 自然落到 en/zh 那一档。
+  //   落地页演示卡因此在 chunk 到达前显示英文对照，到手后随 emit() 换成母语（调用方无需改）。
+  return dictFor(lang)[key] || en[key] || zh[key] || key
 }
 
 /**

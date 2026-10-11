@@ -15,7 +15,8 @@
 //	W2 逐点分派：本函数体内没有失效调用 ⇒ 判红并**点名函数**（抓"新增裸写不挂钩"＝本闸存在的理由）。
 //	W3 委托豁免＝源码注释里必须有 `cache-hook:caller` 标记，且**调用方真挂钩**；标记函数没有直接调用方也算红
 //	   （抓"把豁免写成无条件放行"与"死码豁免"）。
-//	W4 跨包负向锁：`internal/store/` 之外出现写 `system_config` 的 SQL 即红（缓存钩子物理上只在 store 里）。
+//	W4 跨包负向锁：`internal/store` 包之外出现写 `system_config` 的 SQL 即红（缓存钩子物理上只在 store 里）。
+//	   归属按**包**判（目录前缀 ∧ package 子句，见 sysCfgPartition），所以"把写点搬进 store 目录树下的子包"不是出路。
 //	W5 动态表名的那条缝：`scaleColumnTx` 把表名当参数拼 SQL，函数体里没有字面量 ⇒ 现读派生清单
 //	   `rebaseValueHolders` 逐条断"表名≠配置表"（这是 ast 字面量锚唯一够不到的形态）。
 //	W6 失效必须在落库**之后**，且**逐对判**：W2 只问"有没有钩"，对"先碰缓存后落库""回滚分支里失效"
@@ -23,7 +24,7 @@
 //	W7 钩子要钩对**键**：挂了钩、废的是另一个键（缓存照样陈旧、闸一声不响）。只在"两侧都能确定是字面量或
 //	   具名常量"时判；任一侧是变量／切片展开 ⇒ 刻意不硬猜等值（猜了就是逼人改坏代码的脆锁）。
 //
-// ★ 反证矩阵（十一枚，逐枚见 TestSysCfgWritePointGateMutations；每枚必须只红在自己那一腿）：
+// ★ 反证矩阵（十二枚，逐枚见 TestSysCfgWritePointGateMutations；每枚必须只红在自己那一腿）：
 //
 //	M1 摘掉 SetFxRates 的失效行 → W2｜M2 把 PruneScrapeLedger 的失效调用改名 → W2（抓改名式破坏）
 //	M3 新增一处不挂钩的裸写文件 → W2｜M4 剥掉 rebasePointsMintedConfig 的标记行 → W3
@@ -32,6 +33,8 @@
 //	M9 把循环体里的失效行挪出循环 → W6（**反证锁本身写法**的那枚：只比"首写早于末失效"会跟着绿）
 //	M10 把失效参数换成另一个常量键 → W7｜M11 往"包外"那一侧塞一份裸写 → W4（负向腿的存在理由：
 //	   现仓 store 之外零写点，没有这一枚就分不清"真的没有"与"枚举压根没扫到外面"）
+//	M12 把写点放进 internal/store/sub/（同目录树、不同包）→ W4（这枚打的是**路由判据**：
+//	   按目录前缀归属会让它红在 W2，而 W2 的文案叫开发者补 dropConfigCache——sub 包拿不到那个非导出方法）
 //
 // 变异一律喂**内存里的源码副本**（`go test` 期间就地改源＝结果不可信那条），磁盘文件一字不动。
 // 本文件只读源码文本、不开库、不碰 config.C ⇒ 无需按 §一·4 自钉方言（反而不给邻居留方言泄漏口）。
@@ -53,6 +56,8 @@ import (
 	"testing"
 )
 
+// 本闸的四个锚点常量：全部从**被守那一侧的真实标识符**取，禁止在这里造第二套名字。
+// 改名式破坏（把 dropConfigCache 换成别的）由 M2 那枚反证抓。
 const (
 	sysCfgTable         = "system_config"      // 被守的 KV 表
 	sysCfgHookFn        = "dropConfigCache"    // 唯一的缓存失效入口
@@ -72,6 +77,7 @@ type sysCfgFinding struct {
 // sysCfgHookKind 一个裸写点的归类（四档，W2 判据只看 Unhooked）。
 type sysCfgHookKind int
 
+// 四档归类（顺序即语义：setter 自翻 → 本函数挂钩 → 委托调用方 → 没挂钩）。
 const (
 	kindSetter    sysCfgHookKind = iota // setter 本体：落库成功后自己把新值翻进缓存 ⇒ 合法
 	kindSameFunc                        // 本函数体内有失效调用
@@ -79,6 +85,7 @@ const (
 	kindUnhooked                        // 哪儿都没有 ⇒ 判红
 )
 
+// String 出**读数档名**（测试日志与 W1/W2 的点名文案里出现的就是这几个词，属对外排障契约，改名要同步改期望值）。
 func (k sysCfgHookKind) String() string {
 	switch k {
 	case kindSetter:
@@ -408,8 +415,11 @@ type sysCfgWalker struct {
 	n    int // 循环编号自增器
 }
 
+// line 把 ast 节点换回**源码行号**（W6 的顺序判据按行号比先后，注释与空行不参与计算）。
 func (w *sysCfgWalker) line(n ast.Node) int { return w.fset.Position(n.Pos()).Line }
 
+// stmt 走一条语句：记录它落在第几个循环体（loop＝0 表示不在任何循环内）、是否处于失败/回滚分支（fail）。
+// 这两份上下文是 W6 的核心：钩子必须与写点**同层**且**晚于**它，挪出循环或放进失败分支都算违规。
 func (w *sysCfgWalker) stmt(st ast.Stmt, loop int, fail bool) {
 	switch s := st.(type) {
 	case *ast.BlockStmt:
@@ -490,11 +500,13 @@ func (w *sysCfgWalker) stmt(st ast.Stmt, loop int, fail bool) {
 	}
 }
 
+// newLoop 发一个**循环编号**：写点与失效调用必须拿到同一个编号才算"在同一个循环体内"（M9 抓的就是编号丢失）。
 func (w *sysCfgWalker) newLoop() int {
 	w.n++
 	return w.n
 }
 
+// condText 把条件表达式还原成文本（喂给 sysCfgIsFailCond 判"这是不是失败/回滚分支"）。
 func (w *sysCfgWalker) condText(cond ast.Expr) string {
 	if cond == nil {
 		return ""
@@ -645,6 +657,8 @@ func sysCfgLiteralText(e ast.Expr) string {
 	return strings.Join(parts, " ")
 }
 
+// sysCfgUnquote 取字面量的**值**：先走 strconv.Unquote 拿转义语义，失败（原始串等）再裸剥引号/反引号。
+// 表名与键名两侧都过它，锚才不会比歪。
 func sysCfgUnquote(raw string) string {
 	if v, err := strconv.Unquote(raw); err == nil {
 		return v
@@ -652,6 +666,8 @@ func sysCfgUnquote(raw string) string {
 	return strings.Trim(raw, `"'`+"`")
 }
 
+// sysCfgIsCacheSelector 认出形如 `s.sysCfgCache` 的选择器（缓存字段本身，不是失效函数调用）。
+// 它服务 setter 那一档：`SetConfig` 是**直接写缓存值**而不是调 dropConfigCache，W2 靠这个特征把它认成合法自翻。
 func sysCfgIsCacheSelector(e ast.Expr) bool {
 	sel, ok := e.(*ast.SelectorExpr)
 	return ok && sel.Sel != nil && sel.Sel.Name == sysCfgCacheField
@@ -666,6 +682,9 @@ func sysCfgIsFailCond(cond string) bool {
 	return strings.Contains(cond, "!= nil") && strings.Contains(strings.ToLower(cond), "err")
 }
 
+// sysCfgKeysIntersect W7 的等值判据本体：**两侧键集有交集即算钩对了键**（写点一次清多把、钩子按分片各清一把都合法），
+// 完全不相交才是"挂了钩、废的是另一个键"。两侧键集只在"都是字面量或具名常量"时才成立，
+// 任一侧 known=false ⇒ 由调用方豁免，不硬猜。
 func sysCfgKeysIntersect(a, b []string) bool {
 	for _, x := range a {
 		for _, y := range b {
@@ -756,7 +775,8 @@ func sysCfgOccurrencesIn(files map[string]string) (int, string) {
 			continue
 		}
 		total += len(f.writes)
-		names = append(names, f.name+"×"+strconv.Itoa(len(f.writes)))
+		// 点名到**文件**：这条腿的红是"该回哪一处去改"的唯一定位线索，只报函数名在跨包场景下不够（同名方法两处）
+		names = append(names, filepath.Base(f.file)+":"+f.name+"×"+strconv.Itoa(len(f.writes)))
 	}
 	sort.Strings(names)
 	return total, strings.Join(names, "、")
@@ -801,6 +821,8 @@ func sysCfgHolderTables(files map[string]string) ([]string, bool) {
 	return tables, found
 }
 
+// sysCfgPointNames 把写点清单压成 `文件名:函数名[归类]` 的有序串（同一函数多处写点只点一次名）。
+// 它是 W1 那条"低于下限"红项里唯一的定位线索，所以必须带文件名——只报函数名在跨文件同名方法下不够用。
 func sysCfgPointNames(pts []sysCfgWritePoint) string {
 	seen := map[string]bool{}
 	var names []string
@@ -816,14 +838,12 @@ func sysCfgPointNames(pts []sysCfgWritePoint) string {
 	return strings.Join(names, "、")
 }
 
-// sysCfgStoreFilesFromDisk 从包目录向上找模块根（go.mod），返回：
-// store 包全部非测试文件（按包枚举，不是目录 glob ⇒ 将来搬家到 internal/store/sub 也还在射程内），
-// 以及其余全部非测试包里**文本含 system_config** 的文件（W4 的预筛，判据仍然是 ast）。
+// sysCfgStoreFilesFromDisk 从包目录向上找模块根（go.mod），把全部非测试 .go 收进一张表后交给
+// sysCfgPartition 按**包**归属，返回 store 包全部非测试文件与其余包里**文本含 system_config** 的文件（W4 的预筛，判据仍是 ast）。
 func sysCfgStoreFilesFromDisk(t *testing.T) (storeFiles, outsideFiles map[string]string) {
 	t.Helper()
 	root := sysCfgModuleRoot(t)
-	storeFiles = map[string]string{}
-	outsideFiles = map[string]string{}
+	all := map[string]string{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -842,28 +862,74 @@ func sysCfgStoreFilesFromDisk(t *testing.T) (storeFiles, outsideFiles map[string
 		if rerr != nil {
 			return nil
 		}
-		rel = filepath.ToSlash(rel)
 		src, rerr := os.ReadFile(path)
 		if rerr != nil {
 			return nil
 		}
-		if strings.HasPrefix(rel, "internal"+string(filepath.Separator)+"store"+string(filepath.Separator)) ||
-			strings.HasPrefix(rel, "internal/store/") {
-			storeFiles[rel] = string(src)
-			return nil
-		}
-		if strings.Contains(string(src), sysCfgTable) {
-			outsideFiles[rel] = string(src)
-		}
+		all[filepath.ToSlash(rel)] = string(src)
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("枚举模块源码失败（%s）：%v", root, err)
 	}
+	storeFiles, outsideFiles = sysCfgPartition(all)
 	if len(storeFiles) < 30 {
 		t.Fatalf("store 包只读到 %d 个非测试文件，枚举源本身不可信（模块根=%s）", len(storeFiles), root)
 	}
 	return storeFiles, outsideFiles
+}
+
+// 包归属判据的两把锚（W4 用它分「包内／包外」）：
+// 口径必须是 **import path 意义上的包**，不是目录前缀——把写点搬进 internal/store/sub/ 仍是另一个包，
+// 按目录前缀判会把它误归包内（第十二枚反证 M12 钉的就是这一族）。
+const (
+	sysCfgStoreDir = "internal/store/"
+	sysCfgStorePkg = "store"
+)
+
+// sysCfgPartition 是本闸唯一的路由判据：**目录前缀 ∧ package 子句**两条同时成立才算"被守的那一个包"。
+// 为什么不能只看目录前缀：`internal/store/sub/` 是**另一个包**，它物理上拿不到非导出的 `dropConfigCache`，
+// 把它的写点归到 store 那一侧只会让它红在 W2（"本函数与调用方都没挂钩"）——那条文案是在叫开发者
+// "去补一次失效调用"，而他在那一个包里**根本补不出来**；正确的归处是包外那一侧（W4），文案直接写明
+// "缓存失效腿只在 internal/store 里，包外裸写必须走 SetConfig"。
+// 现况实测：`internal/store/` 今天**没有子目录**（120 个文件全是 `package store`），这一层是防"将来搬家"，
+// 反证＝M12（把假文件放在 `internal/store/sub/`，必须落到包外那一侧并红在 W4；分类器若退回前缀判＝红错一腿）。
+func sysCfgPartition(all map[string]string) (storeFiles, outsideFiles map[string]string) {
+	storeFiles = map[string]string{}
+	outsideFiles = map[string]string{}
+	for rel, src := range all {
+		if sysCfgInStorePackage(rel, src) {
+			storeFiles[rel] = src
+			continue
+		}
+		if strings.Contains(src, sysCfgTable) { // 包外预筛：不含表名的文件与本闸无关，不必都塞进 ast
+			outsideFiles[rel] = src
+		}
+	}
+	return storeFiles, outsideFiles
+}
+
+// sysCfgInStorePackage 按**包**（import path）认归属，不认目录形状。
+func sysCfgInStorePackage(rel, src string) bool {
+	if !strings.HasPrefix(rel, sysCfgStoreDir) {
+		return false
+	}
+	pkg, ok := sysCfgPackageClause(src)
+	if !ok {
+		// 连 package 子句都读不出来＝这压根不是一份 Go 源，别把它当写点归进被守那一侧（判据空转比假红更坏）
+		return false
+	}
+	return pkg == sysCfgStorePkg
+}
+
+// sysCfgPackageClause 只解析 package 那一行（PackageClauseOnly，不做类型检查，亚毫秒）。
+func sysCfgPackageClause(src string) (string, bool) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "gate.go", src, parser.PackageClauseOnly)
+	if err != nil || file == nil || file.Name == nil {
+		return "", false
+	}
+	return file.Name.Name, true
 }
 
 // sysCfgModuleRoot 从当前工作目录向上找 go.mod（`go test` 的 cwd 就是包目录）。
@@ -925,6 +991,8 @@ func sysCfgMutateCount(t *testing.T, files map[string]string, path, from, to str
 	return out
 }
 
+// sysCfgLegs 把发现清单摊成「腿名|消息」的稳定可读形态，供反证逐条点名比对
+// （判据级断言不能代替守卫级，所以这里只出读数，实际分派仍走守卫入口那一次调用）。
 func sysCfgLegs(findings []sysCfgFinding) []string {
 	var legs []string
 	for _, f := range findings {
@@ -991,7 +1059,7 @@ func TestSysCfgWritePointGateMutations(t *testing.T) {
 	cases := []struct {
 		name    string
 		files   map[string]string
-		outside map[string]string // 非 nil 才让 W4 的跨包负向腿参与判定（M11 专用）
+		outside map[string]string // 非 nil 才让 W4 的跨包负向腿参与判定（M11／M12 用）
 		wantLeg string
 		wantHas string // 红项文案里必须出现的点名串
 	}{
@@ -1060,6 +1128,14 @@ func (s *Server) GateMutationOutside(key, value string) error {
 `},
 			wantLeg: "W4", wantHas: "store 包之外",
 		},
+		{
+			// 这一枚测的是**分类器**，不是判据：方案 §4.4 承诺"包搬家不是出路"，靠的就是按包归属这一层，
+			// 而 M11 那枚假文件在 `internal/api`（前缀判与包判结果相同），对分类器本身完全无感。
+			name:    "M12·写点搬进 internal/store/sub（同目录树、不同包）⇒ 必须归到包外那一侧",
+			files:   storeFiles,
+			outside: sysCfgMutateSubPackage(t, storeFiles),
+			wantLeg: "W4", wantHas: "gate_mutation_sub.go",
+		},
 	}
 
 	for _, c := range cases {
@@ -1104,6 +1180,50 @@ func (s *Store) GateMutationWriter(key string) error {
 }
 `
 	return out
+}
+
+// sysCfgMutateSubPackage 给 M12 用：验的是**分类器**而不是判据。
+// 假文件放在 `internal/store/sub/`（同目录树、不同包），必须被路由到**包外那一侧**，
+// 于是红在 W4（"包外裸写＝无人失效"，文案指向走 SetConfig）；
+// 若路由退回「只看目录前缀」，它会被当成 store 内的写点，红在 W2 且文案叫开发者
+// 「去本函数补一次 dropConfigCache」——而 `sub` 包**物理上拿不到**那个非导出方法，
+// 这一枚抓的就是"锁把人指去一条走不通的路"。
+// 这里先直接对分区判据取证（不经闸门），是因为分类器错了的时候，闸门仍可能因为**别的原因**红在 W4/W2，
+// 那一红对本枚的点名串恰好不含假文件名，测试会红在"没找到期望文案"，把归因推给判据而不是路由。
+func sysCfgMutateSubPackage(t *testing.T, storeFiles map[string]string) map[string]string {
+	t.Helper()
+	const fake = "internal/store/sub/gate_mutation_sub.go"
+
+	all := make(map[string]string, len(storeFiles)+1)
+	for k, v := range storeFiles {
+		all[k] = v
+	}
+	all[fake] = `package sub
+
+// GateMutationSub 反证 M12 专用（只在内存里存在，磁盘上没有这个目录）。
+// 这一包的写法就是本闸要拦的形态：裸 DELETE 之后没有任何失效腿可挂（dropConfigCache 非导出）。
+func GateMutationSub(dbi any, key string) error {
+	_, err := db.Exec(dbi, db.CurrentDialect(), "DELETE FROM system_config WHERE key=?", key)
+	return err
+}
+`
+
+	in, outside := sysCfgPartition(all)
+	if _, ok := outside[fake]; !ok {
+		t.Fatalf("路由把 %s 判进了 store 包那一侧＝按目录前缀认归属（本枚抓的就是这一层）；"+
+			"那样的话它会红在 W2，而 W2 的文案叫开发者去补一次 dropConfigCache——sub 包拿不到那个非导出方法", fake)
+	}
+	if len(in[fake]) != 0 {
+		t.Fatalf("同一份文件同时出现在两侧＝分区判据自相矛盾（%s）", fake)
+	}
+	// 正对照：真 store 文件必须仍在被守那一侧，否则"假文件被甩到包外"可能只是因为两侧都空
+	if _, ok := in["internal/store/billing.go"]; !ok {
+		t.Fatalf("分区把真 store 文件也判到包外去了（正对照缺失，此时 outside 里出现假文件不说明任何事）")
+	}
+	if len(in) != len(storeFiles) {
+		t.Fatalf("分区后 store 侧文件数从 %d 变成 %d＝路由改动了既有归属", len(storeFiles), len(in))
+	}
+	return outside
 }
 
 // sysCfgMutateOrder 给 M8 用：把 SetFxRates 的失效整句**挪到**裸 DELETE 之前，并删掉原来那一行
