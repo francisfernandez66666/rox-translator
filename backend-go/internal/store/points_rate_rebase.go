@@ -241,6 +241,10 @@ func scaleColumnTx(tx *sql.Tx, d db.Dialect, table, column string) (int64, error
 // 旧 token → 旧汇率回读成积分面值（四舍五入）→ ×新汇率重铸 token。
 // 参数：tx=事务；d=方言；key=配置键。键缺失或值非正整数即跳过：本迁移之前
 // EnsureBillingDefaults 已补过种子，此处读不到只可能是人工删键，不属于补发射程。
+//
+// cache-hook:caller 本函数只在事务内裸写 system_config，缓存失效由调用方在提交成功后做
+// （★ 2026-10-11 静态闸 `systemconfig_writepoint_gate_test.go` W3 认这一行；删掉它当场判红。
+// 调用方唯一＝PointsRateRebase，其 `dropConfigCache` 排在 `tx.Commit()` 之后，闸会反查。）
 func rebasePointsMintedConfig(tx *sql.Tx, d db.Dialect, key string) error {
 	oldTokens, perr := strconv.ParseInt(strings.TrimSpace(readConfigTxLiteral(tx, d, key)), 10, 64)
 	if perr != nil || oldTokens <= 0 {
@@ -363,6 +367,10 @@ func readConfigTxLiteral(tx *sql.Tx, d db.Dialect, key string) string {
 }
 
 // upsertConfigTx 事务内写配置（与 SetConfig 同一 ON CONFLICT 语义，供补发链在事务里落键值）。
+//
+// cache-hook:caller 本函数只在事务内裸写 system_config，缓存失效由调用方在提交成功后做
+// （★ 2026-10-11 静态闸 W3：三处调用点（尺子重锚／汇率翻写／审计摘要）全在 PointsRateRebase 内，
+// 那一个函数在 `tx.Commit()` 成功之后统一 `dropConfigCache`；调用方若被挪进没挂钩的函数即判红。）
 func upsertConfigTx(tx *sql.Tx, d db.Dialect, key, value string) error {
 	_, err := db.Exec(tx, d,
 		"INSERT INTO system_config (key, value, updated_at) VALUES (?,?,?) "+
