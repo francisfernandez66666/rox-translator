@@ -571,8 +571,12 @@ func (s *Server) routesOpenAPI() {
 // ★ withLang 放最外层：它缓存的是最终写出的响应体，必须包住内层所有中间件与业务
 //
 //	handler 的写入才能统一改写 message 字段（非英文请求直接透传，零开销）。
+//
+// ★ withAuthMemo 在 withLang 之外侧：ctx 只能由内向外传，放最外层保证内层每一层
+//
+//	（require* → authUser）都摸得到同一份请求级缓存（★ 2026-10-11 慢 SQL 批 P1①）。
 func (s *Server) Handler() http.Handler {
-	return s.withLang(s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux))))))))
+	return s.withAuthMemo(s.withLang(s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))))))
 }
 
 // apiVersionKey ctx 存取键：当前请求命中的 API 版本（默认 v1）。
@@ -763,9 +767,51 @@ func (s *Server) corsAllowed(origin string) bool {
 	return false
 }
 
+// authMemoKey / authMemo：请求级鉴权缓存（★ 2026-10-11 慢 SQL 批 P1①）。
+// 现网取证：一个后台页面请求里 authUser 被 require* 与 handler 各自再问一遍，
+// users 表虽小（14 行）但每问都是一条真 SELECT + PG 往返；同一请求内 token/claims 不变，
+// 第二次以后的读库没有任何新增信息 ⇒ 缓存到 ctx，一请求一查。
+// 射程只有一条：仅本请求内复用（跨请求绝不共享——TokenVersion/状态的撤销语义要求
+// 每个新请求都重新见库，这里缓存的粒度恰好是"请求"而不是"时间窗"，不需要失效策略）。
+type authMemoKey struct{}
+
+// authMemo 单请求的鉴权 memo 容器（判据与射程见上一段；mu 罩 done/user 两个字段，
+// 同请求并发 goroutine 走同一 memo 时不产生并发 map/字段写）。
+type authMemo struct {
+	mu   sync.Mutex
+	done bool
+	user *store.User
+}
+
+// withAuthMemo 给每个请求挂一只空的鉴权缓存容器（放在 Handler() 最外层，见那里的注释）。
+func (s *Server) withAuthMemo(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), authMemoKey{}, &authMemo{})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // authUser 从请求提取当前用户（JWT 校验）。未登录或 Token 无效返回 nil。
 // 参数 r: HTTP 请求。返回: 当前登录用户对象（*store.User）或 nil。
+// ★ 同请求第二次起命中 authMemo（返回同一指针）；ctx 里没有容器（测试直调/非 Handler 入口）
+// 则每次现查——正确性不依赖容器存在。
 func (s *Server) authUser(r *http.Request) *store.User {
+	m, _ := r.Context().Value(authMemoKey{}).(*authMemo)
+	if m == nil {
+		return s.authUserUncached(r)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.done {
+		return m.user
+	}
+	m.user = s.authUserUncached(r)
+	m.done = true
+	return m.user
+}
+
+// authUserUncached 鉴权本体（每请求至多跑一次）：token 校验 → 用户存在性 → 状态 → B2 版本。
+func (s *Server) authUserUncached(r *http.Request) *store.User {
 	// 平台存储未初始化无法查用户
 	if s.Store == nil {
 		return nil

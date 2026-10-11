@@ -92,6 +92,13 @@ func engineErrorPayload(errStr, reply string) map[string]interface{} {
 
 // sseHeaders 设置 SSE 响应头（text/event-stream 及禁用缓冲/代理缓冲）。
 // 参数 w: HTTP 响应写入器。无返回。
+//
+// ★ 2026-10-11 慢 SQL 批 P1④：这里同时是「写超时豁免」的咽喉——整站 http.Server
+// 现在带 WriteTimeout 兜底（防挂死连接钉住 fd），而 SSE 的生命周期以小时计、
+// 且自带 chatStreamTimeout 级别的请求级 deadline，绝不能再被全局写超时掐。
+// 走 http.NewResponseController 把本请求写超时清成"无限"；包装器两层都配了 Unwrap
+// （statusWriter/langWriter），够得着真实 response。测试里的 ResponseRecorder
+// 拿不到 ErrNotSupported 之外的语义，失败一律吞掉——这不是正确性路径，是豁免路径。
 func sseHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -99,6 +106,7 @@ func sseHeaders(w http.ResponseWriter) {
 	// 禁用 Nginx 等反向代理的缓冲，保证事件实时推送
 	h.Set("X-Accel-Buffering", "no")
 	h.Set("Connection", "keep-alive")
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 }
 
 // sseHeartbeat 周期写 SSE 注释帧（`: ping`）作心跳（2026-09-16 P2 整改）：

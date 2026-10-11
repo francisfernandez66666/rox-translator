@@ -88,27 +88,18 @@ func openSQLite(dsn string) (*sql.DB, error) {
 
 // openPostgres 打开 PostgreSQL 数据库连接并应用连接池与可选扩展初始化。
 // 参数：cfg 提供 DSN、连接池参数及是否启用 pgvector 扩展。
-//   - 连接池：MaxOpenConns 默认 20，MaxIdleConns/ConnMaxLifetime 仅当 >0 时设置；
+//   - 连接池：MaxOpenConns 默认 20；MaxIdleConns 缺省兜底 10（不越过 MaxOpen）、
+//     ConnMaxLifetime 缺省兜底 30 分钟（★ 2026-10-11 慢 SQL 批 P1③，仅 postgres，见函数体注释）；
 //   - EnablePgvector 为 true 时执行 CREATE EXTENSION IF NOT EXISTS vector，失败仅告警不影响其余功能；
 //   - 最后执行 Ping 探活，失败返回带上下文的错误。
 //
 // 返回打开且已验证的 *sql.DB，失败返回错误。
 func openPostgres(cfg Config) (*sql.DB, error) {
-	maxOpen := cfg.MaxOpenConns
-	if maxOpen <= 0 {
-		maxOpen = 20
-	}
 	conn, err := sql.Open(DriverPostgres, cfg.DSN)
 	if err != nil {
 		return nil, err
 	}
-	conn.SetMaxOpenConns(maxOpen)
-	if cfg.MaxIdleConns > 0 {
-		conn.SetMaxIdleConns(cfg.MaxIdleConns)
-	}
-	if cfg.ConnMaxLifetimeMinutes > 0 {
-		conn.SetConnMaxLifetime(time.Duration(cfg.ConnMaxLifetimeMinutes) * time.Minute)
-	}
+	applyPoolDefaults(conn, cfg)
 	if cfg.EnablePgvector {
 		// pgvector 仅 KB 向量检索依赖；缺失不影响其余功能（如未安装扩展）。
 		if _, err := conn.Exec("CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
@@ -119,4 +110,57 @@ func openPostgres(cfg Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("db: postgres 连接探活失败: %w", err)
 	}
 	return conn, nil
+}
+
+// ★★ 连接池兜底默认（2026-10-11 慢 SQL 批 P1③）——**只此一把尺子**：
+//
+//	旧形态 env 不配就"什么都不设"，实际落进 Go 的出厂档（MaxIdleConns=2、ConnMaxLifetime=无限）。
+//	现网取证的形态与之吻合：突发流量后连接反复"建-拆-建"（2 个 idle 撑不住 20 的开），
+//	而长寿连接永不回收，中间层（NAT/防火墙）静默掐掉的半死连接要等下一次取用才现形。
+//	≤0 一律按"没配"走代码默认（env > 数据库配置 > 代码默认的三级优先级不变，
+//	调用方传进来的 cfg 已含前两级）；显式配了值的语义一字不变。
+//	**只动 postgres**——SQLite（含 :memory: 共享缓存）的连接寿命会连带销毁内存库本体，
+//	openSQLite 绝不许引用这三档（等值锁见 pool_defaults_test.go 的反证段）。
+const (
+	poolDefaultMaxOpenConns = 20
+	poolDefaultMaxIdleConns = 10
+	poolDefaultConnLifeMin  = 30
+)
+
+// poolSettings 解析出最终三档（maxIdle 永不越过 maxOpen——超出没有行为收益，
+// 但会让"配了 100 idle / 20 open"这种运维读数在排障时骗人）。
+func poolSettings(cfg Config) (maxOpen, maxIdle int, lifeMin int) {
+	maxOpen = cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = poolDefaultMaxOpenConns
+	}
+	maxIdle = cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = poolDefaultMaxIdleConns
+	}
+	if maxIdle > maxOpen {
+		maxIdle = maxOpen
+	}
+	lifeMin = cfg.ConnMaxLifetimeMinutes
+	if lifeMin <= 0 {
+		lifeMin = poolDefaultConnLifeMin
+	}
+	return maxOpen, maxIdle, lifeMin
+}
+
+// poolApplier 是 *sql.DB 的最小 setter 面：单测用假 setter 记参，**守卫真跑的这七个字**
+// （只测 poolSettings 属于"判据级代替不了守卫级"，AGENTS §三 那条形态）。
+type poolApplier interface {
+	SetMaxOpenConns(int)
+	SetMaxIdleConns(int)
+	SetConnMaxLifetime(time.Duration)
+}
+
+// applyPoolDefaults 把 poolSettings 的三项档位真正施加到连接池（openPostgres 唯一调用点）。
+// 参数 ap=连接池 setter（测试注假 setter 记参），cfg=当前配置；无返回。
+func applyPoolDefaults(ap poolApplier, cfg Config) {
+	maxOpen, maxIdle, lifeMin := poolSettings(cfg)
+	ap.SetMaxOpenConns(maxOpen)
+	ap.SetMaxIdleConns(maxIdle)
+	ap.SetConnMaxLifetime(time.Duration(lifeMin) * time.Minute)
 }

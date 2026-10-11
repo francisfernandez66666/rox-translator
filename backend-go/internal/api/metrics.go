@@ -16,6 +16,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,6 +50,26 @@ type Metrics struct {
 	durRing  [4096]float64
 	durPos   int
 	durCount int
+
+	// ★ 慢 SQL 批 P2⑥（2026-10-11）：昂贵段（ReadMemStats＋平台规模 DB 读）的 TTL 快照。
+	// 取证形态：Prometheus 抓取间隔若被配成秒级，每次抓取都付一次 runtime.ReadMemStats（STW）
+	// 加一轮租户/余额/KB/jobs 现查——旧实现还把余额腿写成**每租户一次 EnsureBalance+SELECT**
+	// （N+1 且在只读观测面上做 INSERT，抓取器把主库当写库打）。
+	// 取向：这些全是 gauge，观测语义允许 ≤TTL 的滞后；counter 腿（HTTP/翻译/token）保持实时。
+	scaleMu      sync.Mutex
+	scaleText    string
+	scaleExpires time.Time
+}
+
+// metricsScaleTTL 昂贵段快照窗口（METRICS_SCALE_TTL_SEC，默认 10s，0=每次都现算的排障档）。
+// 判据口径与 probeTTL/sysConfigCacheTTL 一致：非法/负数回落默认，不引入第二套编码。
+func metricsScaleTTL() time.Duration {
+	if v := os.Getenv("METRICS_SCALE_TTL_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 10 * time.Second
 }
 
 // newMetrics 初始化指标收集器：创建空计数映射并记录启动时间。
@@ -178,15 +199,10 @@ func (s *Server) metricsText() string {
 	sb.WriteString(fmt.Sprintf("translator_info{version=\"2.0.0-go\"} 1\n"))
 	sb.WriteString(fmt.Sprintf("# HELP translator_uptime_seconds 服务运行秒数\n# TYPE translator_uptime_seconds gauge\ntranslator_uptime_seconds %d\n", int(now.Sub(m.startedAt).Seconds())))
 
-	// 运行时指标：goroutine 数、堆内存、累计分配（Go runtime 采样）
+	// 运行时指标：goroutine 数（便宜，保持实时）；堆两档与平台规模在**昂贵段快照**里（P2⑥）
 	sb.WriteString("# HELP go_goroutines 当前 goroutine 数\n# TYPE go_goroutines gauge\n")
 	sb.WriteString(fmt.Sprintf("go_goroutines %d\n", runtime.NumGoroutine()))
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-	sb.WriteString("# HELP go_heap_bytes Go 堆内存字节\n# TYPE go_heap_bytes gauge\n")
-	sb.WriteString(fmt.Sprintf("go_heap_bytes %d\n", mem.HeapAlloc))
-	sb.WriteString("# HELP go_alloc_bytes 累计分配字节\n# TYPE go_alloc_bytes counter\n")
-	sb.WriteString(fmt.Sprintf("go_alloc_bytes %d\n", mem.TotalAlloc))
+	sb.WriteString(s.expensiveScaleSegment())
 
 	// HTTP 请求：按路径排序输出，保证指标文本稳定
 	// ★ 死锁修复（2026-08-26 冒烟暴露）：原实现 L131 与 L143 两次 RLock、仅一次
@@ -319,22 +335,61 @@ func (s *Server) metricsText() string {
 	sb.WriteString("# HELP translator_distlock_errors_total Redis 分布式锁获取异常总数（调用方已降级本地执行）\n# TYPE translator_distlock_errors_total counter\n")
 	sb.WriteString(fmt.Sprintf("translator_distlock_errors_total %d\n", distlock.ErrCount()))
 
-	// 平台规模（租户/余额/KB 全平台汇总，仅聚合不泄露租户明细）
+	// ★ P1 防篡改可观测（2026-09-15）：审计写入失败累计——audit_logs 为普通表，
+	// 写入失败若静默丢失则「谁改了数据无留痕」；计数暴露后 Prometheus 可对增长告警。
+	sb.WriteString("# HELP translator_audit_write_failures_total 审计日志写入失败累计数（>0 且持续增长需排查 DB/磁盘）\n# TYPE translator_audit_write_failures_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_audit_write_failures_total %d\n", store.AuditWriteFailures()))
+
+	return sb.String()
+}
+
+// expensiveScaleSegment 组「昂贵段」文本（堆两档＋平台规模四档），TTL 快照窗口内直接吃缓存（P2⑥）。
+// 单飞语义：scaleMu 罩住重算全程——并发抓取最坏让后到的那次排队等一轮查询，
+// 不会两台监控同时各打一遍库；这条观测面本来就是低频腿，排队比放大便宜。
+// 各档读失败只**省略该档**（与旧实现同口径：宁可少一档，不许凭空造假 0）。
+func (s *Server) expensiveScaleSegment() string {
+	ttl := metricsScaleTTL()
+	if s.metrics == nil || ttl <= 0 {
+		return s.buildScaleSegment() // 无采集器的测试服务器／排障档：现算，不写缓存
+	}
+	m := s.metrics
+	m.scaleMu.Lock()
+	defer m.scaleMu.Unlock()
+	if time.Now().Before(m.scaleExpires) {
+		return m.scaleText
+	}
+	seg := s.buildScaleSegment()
+	m.scaleText = seg
+	m.scaleExpires = time.Now().Add(ttl)
+	return seg
+}
+
+// buildScaleSegment 现算昂贵段本体（ReadMemStats 的 STW 与四条聚合 SQL 都只在这一条腿上发生）。
+// 规模腿从旧实现的「List＋每租户一次 GetBalance（每次还带 EnsureBalance 的 INSERT）」
+// 收敛成**两条聚合 SQL**：只读观测面把抓取器当写库打是 P2⑥ 的取证本体；
+// 余额合计口径相应从「启用租户逐个求和」变为「balance_accounts 全表求和」——
+// 对 gauge 观测语义等价（停用户行的余额本来就该计入平台负债），并在下方注释钉死。
+func (s *Server) buildScaleSegment() string {
+	var sb strings.Builder
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	sb.WriteString("# HELP go_heap_bytes Go 堆内存字节\n# TYPE go_heap_bytes gauge\n")
+	sb.WriteString(fmt.Sprintf("go_heap_bytes %d\n", mem.HeapAlloc))
+	sb.WriteString("# HELP go_alloc_bytes 累计分配字节\n# TYPE go_alloc_bytes counter\n")
+	sb.WriteString(fmt.Sprintf("go_alloc_bytes %d\n", mem.TotalAlloc))
+
 	if s.Store != nil {
-		if tenants, err := s.Ten.List(); err == nil {
-			active := 0
-			var totalBalance int64
-			for _, t := range tenants {
-				// 统计启用租户数并累加各租户余额
-				if t.Status == "active" {
-					active++
-				}
-				if b, err := s.Store.GetBalance(t.ID); err == nil {
-					totalBalance += b.Balance
-				}
-			}
+		// 启用租户数（聚合 COUNT，不再 List 全表遍历）
+		var active int
+		if err := db.QueryRow(s.Store.DB(), db.CurrentDialect(),
+			"SELECT COUNT(*) FROM tenants WHERE status='active'").Scan(&active); err == nil {
 			sb.WriteString("# HELP translator_tenants_active 启用租户数\n# TYPE translator_tenants_active gauge\n")
 			sb.WriteString(fmt.Sprintf("translator_tenants_active %d\n", active))
+		}
+		// 平台余额合计（全表 SUM；缺行的租户余额记 0，与旧实现「EnsureBalance 补 0 再读」同值）
+		var totalBalance int64
+		if err := db.QueryRow(s.Store.DB(), db.CurrentDialect(),
+			"SELECT COALESCE(SUM(balance),0) FROM balance_accounts").Scan(&totalBalance); err == nil {
 			sb.WriteString("# HELP translator_balance_tokens_total 平台余额总 token\n# TYPE translator_balance_tokens_total gauge\n")
 			sb.WriteString(fmt.Sprintf("translator_balance_tokens_total %d\n", totalBalance))
 		}
@@ -354,12 +409,6 @@ func (s *Server) metricsText() string {
 			sb.WriteString(fmt.Sprintf("translator_jobs_queued %d\n", queued))
 		}
 	}
-
-	// ★ P1 防篡改可观测（2026-09-15）：审计写入失败累计——audit_logs 为普通表，
-	// 写入失败若静默丢失则「谁改了数据无留痕」；计数暴露后 Prometheus 可对增长告警。
-	sb.WriteString("# HELP translator_audit_write_failures_total 审计日志写入失败累计数（>0 且持续增长需排查 DB/磁盘）\n# TYPE translator_audit_write_failures_total counter\n")
-	sb.WriteString(fmt.Sprintf("translator_audit_write_failures_total %d\n", store.AuditWriteFailures()))
-
 	return sb.String()
 }
 

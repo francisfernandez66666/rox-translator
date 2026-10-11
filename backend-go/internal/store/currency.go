@@ -297,7 +297,11 @@ func (s *Store) SetFxRates(rates map[string]float64) error {
 	}
 	if len(clean) == 0 {
 		_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM system_config WHERE key=?", ConfigFxRates)
-		return err
+		if err != nil {
+			return err
+		}
+		s.dropConfigCache(ConfigFxRates) // 裸 DELETE 成功后失效，清空即时可见（P2⑤ 补腿）
+		return nil
 	}
 	packed, err := json.Marshal(clean)
 	if err != nil {

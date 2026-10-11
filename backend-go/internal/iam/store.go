@@ -30,25 +30,52 @@ type Store struct {
 	mu sync.Mutex // 写操作互斥：SQLite 单写者模型下降低并发 SQLITE_BUSY 概率
 }
 
-// write 串行化执行写操作（事务/Exec 统一入口）。
-func (s *Store) write(fn func() error) error {
+// withWriteMu 按方言决定是否串行化写（★ 2026-10-11 慢 SQL 批 P1②，收窄的落点在锁的**射程**不在写法）：
+//
+//   - SQLite（体验机/CI 内存库）：单写者模型，保留全局互斥——这是 mu 存在的唯一理由；
+//   - PostgreSQL（生产）：多写者真并发＋唯一索引自己兜底，全局互斥反而把并发注册/
+//     用户管理串成一条队——现网取证实测"持锁等库"平均 ~60ms，一条慢写拖住全部写操作。
+//
+// 三条写入口（write/execW/execWID）一律走这里，**禁止**再在任何方法里直接 s.mu.Lock()
+// （接线锁见 store_write_lock_gate_test.go；已逐条点过：全部加锁体都是单语句或自管事务，
+// 没有任何 PG 下依赖互斥的正确性序列——DeleteOrg 的多语句事务本来就在锁外）。
+func (s *Store) withWriteMu(fn func()) {
+	if db.CurrentDialect().IsPostgres() {
+		fn()
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return fn()
+	fn()
+}
+
+// write 串行化执行写操作（事务/Exec 统一入口）。
+// ★ 现役零调用点（2026-10-11 grep 全量核实，历史多语句序列都已改自管事务）；
+// 保留而不删除：收窄判据仍由 withWriteMu 统一供给，将来出现"必须串行"的新写段时它是对的落点。
+func (s *Store) write(fn func() error) error {
+	var err error
+	s.withWriteMu(func() { err = fn() })
+	return err
 }
 
 // execW 互斥执行单条写 SQL。
 func (s *Store) execW(query string, args ...interface{}) (sql.Result, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return db.Exec(s.db, db.CurrentDialect(), query, args...)
+	var res sql.Result
+	var err error
+	s.withWriteMu(func() {
+		res, err = db.Exec(s.db, db.CurrentDialect(), query, args...)
+	})
+	return res, err
 }
 
 // execWID 执行 INSERT 并返回自增主键（跨方言；PostgreSQL 经 RETURNING 取回，避免 lib/pq 的 LastInsertId 不支持）。
 func (s *Store) execWID(query string, args ...interface{}) (int64, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return db.InsertID(s.db, db.CurrentDialect(), "id", query, args...)
+	var id int64
+	var err error
+	s.withWriteMu(func() {
+		id, err = db.InsertID(s.db, db.CurrentDialect(), "id", query, args...)
+	})
+	return id, err
 }
 
 // NewStore 构造函数：初始化并返回实例。

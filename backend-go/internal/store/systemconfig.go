@@ -10,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,26 +24,122 @@ type SysConfig struct {
 	UpdatedAt string `json:"updated_at"` // 最近更新时间（RFC3339 字符串）
 }
 
+// sysCfgCacheEntry GetConfig 的进程内缓存条目（★ 2026-10-11 慢 SQL 批 P2⑤）。
+// 尺子只有 llmsource 那一把（AGENTS §一·3）：TTL 节流＋写侧"先落库、落成了才碰进程侧"＋
+// 读失败沿用上一份快照＋换库即失效（挂在 Store 实例上构造性成立，见 store.go 字段注释）。
+// value 不做"空串＝没有"的二义编码：**缺键也缓存空串**（负缓存），
+// 因为 hasKey 字段记录的是"这一行到底存不存在"之外的信息并不需要——GetConfig 契约本来就是
+// 缺键回 ("", nil)，缓存回 "" 与库语义一致。
+type sysCfgCacheEntry struct {
+	value     string
+	expiresAt time.Time
+}
+
+// sysConfigCacheTTL 缓存窗口（SYSTEM_CONFIG_CACHE_TTL_SEC，默认 5s，与 LLM_CONFIG_RELOAD_TTL_SEC 同档）。
+// 0 是显式"每次都现查"档（排障与单测用）；负数/非法按默认档，判据口径与 probeTTL 一致。
+// 为什么 5 秒：档位数字/验证开关这类配置改完"下一位访客生效"就够（现网取证里它每请求被读 2–26 次，
+// 全是同一份 KV 的重复往返）；再短就是拿库往返换那几秒的鲜度，方向反了。
+func sysConfigCacheTTL() time.Duration {
+	if v := os.Getenv("SYSTEM_CONFIG_CACHE_TTL_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 5 * time.Second
+}
+
 // GetConfig 读取配置项；不存在返回空字符串。
 // 参数：key=配置键名；返回配置值（无记录时返回 "" 且无错误）。
+// ★ TTL 缓存（P2⑤）三条口径：
+//  1. 命中窗口内直接回缓存，**零往返**；窗口外现查，查到（含"缺键回空"）才写缓存；
+//  2. 现查失败（网络/库坏）⇒ **沿用上一份快照**并回缓存值，不许把一次抖动打成"配置没了"
+//     ——照 llmsource 那条「库读不到＝沿用快照，不许按 cfg 重发」的方向，只是这里连"重发"都没有；
+//  3. 本方法是**读侧唯一动刀点**：ConfigsByKeys 是 llmsource 热加载探针自己的腿（它已带 TTL 节流），
+//     给它再套一层缓存＝在同一把尺子下面垫第二层延迟，**禁止**；
+//     绕开本方法直接摸 system_config 的写点（billing.go 启动默认项、points_rate_rebase 的事务内
+//     upsert、支付配置/汇率/进度账的 DELETE）**落库成功后必须调 dropConfigCache 显式失效**——
+//     本进程"读自己的裸写"不许等 TTL（既有契约测试钉的就是清空即时可见）；
+//     只有**库外直改**（运维手改 SQL、另一台实例先写）才接受 ≤5 秒的鲜度代价，与 llmsource 同档。
 func (s *Store) GetConfig(key string) (string, error) {
+	ttl := sysConfigCacheTTL()
+	if ttl > 0 {
+		s.sysCfgMu.Lock()
+		if e, ok := s.sysCfgCache[key]; ok && time.Now().Before(e.expiresAt) {
+			s.sysCfgMu.Unlock()
+			return e.value, nil
+		}
+		s.sysCfgMu.Unlock()
+	}
 	var v string
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT value FROM system_config WHERE key=?", key).Scan(&v)
 	if err == sql.ErrNoRows {
-		return "", nil // 键不存在按空串处理
+		v = "" // 键不存在按空串处理
+		err = nil
 	}
-	return v, err
+	if err != nil {
+		if ttl > 0 {
+			s.sysCfgMu.Lock()
+			e, ok := s.sysCfgCache[key]
+			s.sysCfgMu.Unlock()
+			if ok {
+				return e.value, nil // 口径 2：读不到 ≠ 没有，沿用上一份快照
+			}
+		}
+		return "", err
+	}
+	if ttl > 0 {
+		s.sysCfgMu.Lock()
+		if s.sysCfgCache == nil {
+			s.sysCfgCache = map[string]sysCfgCacheEntry{}
+		}
+		s.sysCfgCache[key] = sysCfgCacheEntry{value: v, expiresAt: time.Now().Add(ttl)}
+		s.sysCfgMu.Unlock()
+	}
+	return v, nil
 }
 
 // SetConfig 写入配置项（存在则更新，不存在则插入，upsert）。
 // 参数：key=配置键名，value=配置值；返回错误。
+// ★ 写侧纪律（§一·3 同一条尺子）：**先落库、落成了才碰进程侧**——
+// 落库失败直接返回错误且缓存一字不动（反过来会把"保存失败"说成"这台已经生效了"）；
+// 落库成功即把新值翻进缓存，本实例读自己的写**不等 TTL**。
 func (s *Store) SetConfig(key, value string) error {
 	// ON CONFLICT(key) 实现 upsert，保证键唯一
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"INSERT INTO system_config (key, value, updated_at) VALUES (?,?,?) "+
 			"ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
 		key, value, time.Now().Format(time.RFC3339))
-	return err
+	if err != nil {
+		return err
+	}
+	if sysConfigCacheTTL() > 0 {
+		s.sysCfgMu.Lock()
+		if s.sysCfgCache == nil {
+			s.sysCfgCache = map[string]sysCfgCacheEntry{}
+		}
+		s.sysCfgCache[key] = sysCfgCacheEntry{value: value, expiresAt: time.Now().Add(sysConfigCacheTTL())}
+		s.sysCfgMu.Unlock()
+	}
+	return nil
+}
+
+// dropConfigCache 让**绕开 SetConfig 的裸 SQL 写点**（DELETE、事务内 upsert、条件 INSERT）
+// 在落库成功后显式失效缓存键（★ 2026-10-11 慢 SQL 批 P2⑤ 补腿）。
+// 存在的理由：本批回归实锤——支付清空/汇率清除/进度账回收/F-78 补发四类写点都是裸 SQL，
+// 缓存若不失效会把「已清除」读成「还在库上」（现网同形态＝运营清空支付私钥后 ≤5 秒渠道
+// 仍按已配置走，方向危险）。纪律：**先落库、落成了才碰缓存**，与 SetConfig 写侧同一条尺子；
+// 裸写失败的一律不许调本函数（失效了也读不回真值，反而掩盖写失败）。
+// 多实例口径不变：别的进程最多再陈旧一个 TTL 窗口，与 llmsource 懒探同一档。
+// 参数 keys: 已被裸写改动/删除的配置键；空参数无操作。
+func (s *Store) dropConfigCache(keys ...string) {
+	if len(keys) == 0 {
+		return
+	}
+	s.sysCfgMu.Lock()
+	for _, k := range keys {
+		delete(s.sysCfgCache, k)
+	}
+	s.sysCfgMu.Unlock()
 }
 
 // ConfigsByKeys 一次查询读取多个配置项（★ 2026-10-04 〇-AR 第 5 波「每台热加载」的探测腿）。

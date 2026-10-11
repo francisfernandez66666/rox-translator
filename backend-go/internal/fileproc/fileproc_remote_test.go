@@ -202,6 +202,10 @@ func resetDispatchProbe() {
 	probeErr = nil
 	probeAt = time.Time{}
 	probeErrAt = time.Time{}
+	// ★ 展示视图与单飞标志同属进程级状态（2026-10-11 慢 SQL 批加的），桩换一批必须跟着清，
+	// 否则上一用例的旧读数会喂给下一用例的展示腿（那一条"冷面第一问必须同步拨"就测不到了）。
+	probeViewPtr.Store(nil)
+	probeRefreshing.Store(false)
 	remoteOnce = sync.Once{}
 	remoteGate = nil
 	degradedUntil = time.Time{}
@@ -894,6 +898,79 @@ func TestProbeCacheHonorsTTL(t *testing.T) {
 	//   （没有这一档，远端宕掉时每次 /api/health 都付一次最坏 15s 的 ssh——把故障放大成自家慢接口）
 	if n := countLines(t, callLog); n != 3 {
 		t.Fatalf("失败后 30s 内仍重复拨远端（探测次数 %d，健康面会被故障放大成慢接口）", n)
+	}
+}
+
+// TestDisplayProbeStaleWhileRevalidate ★ 慢 SQL 批 P0 修复锁（现网实测首条 3.07s 的那条腿）。
+//
+// 判据钉的是两半，缺一不可：
+//  1. **展示腿不再为过期付同步 SSH**——远端已改成 expired 档，TTL 过期后的第一问仍回 online（旧读数）；
+//     若谁把展示腿改回同步 dispatchProbe，这一问当场变 degraded，本条第一段红（反证 F1 即此形态）；
+//  2. **后台那条腿真拨、且只拨一趟**——轮询等翻档成 degraded（旧 sync.Once「永不翻旧」的对偶盲区），
+//     拨号计数从 1 变 2 且**恒等于 2**：多拨＝单飞坏了，不变的 1＝后台是死分支。
+func TestDisplayProbeStaleWhileRevalidate(t *testing.T) {
+	enableDispatchForTest(t)
+	fakeBinDir(t, "pdf")
+	callLog := filepath.Join(t.TempDir(), "probe_calls.txt")
+	t.Setenv("FPD_FAKE_PROBE_LOG", callLog)
+	t.Setenv("FPD_FAKE_PROBE", "ok")
+
+	if got := DispatchStatus(); got != "online" {
+		t.Fatalf("冷面第一问期望 online（没视图必须同步拨）实际 %q", got)
+	}
+	if n := countLines(t, callLog); n != 1 {
+		t.Fatalf("冷面第一问期望恰好拨 1 次实际 %d", n)
+	}
+
+	// 把成功缓存与出栈视图一起推到"已过期"（真等要 10 分钟，测试不等），并把远端翻成到期档。
+	probeMu.Lock()
+	probeAt = time.Now().Add(-2 * time.Hour)
+	probeMu.Unlock()
+	if v := probeViewPtr.Load(); v != nil {
+		probeViewPtr.Store(&probeView{res: v.res, at: time.Now().Add(-2 * time.Hour)})
+	}
+	t.Setenv("FPD_FAKE_PROBE", "expired")
+
+	// 判据 1：这一问必须**立刻**回旧读数 online——同步重探在 expired 档下只会回 degraded。
+	if got := DispatchStatus(); got != "online" {
+		t.Fatalf("TTL 过期后健康面第一问仍付了同步重探（3.07s 腿没消）: %q", got)
+	}
+
+	// 判据 2：后台单飞必须把档位翻旧。轮询上限 10s，间隔 20ms（不是"睡一觉赌调度"）。
+	deadline := time.Now().Add(10 * time.Second)
+	flipped := false
+	for !flipped && time.Now().Before(deadline) {
+		if DispatchStatus() == "degraded" {
+			flipped = true
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !flipped {
+		t.Fatal("后台重探从没翻档（展示面会永远停在过期前的 online，等同 sync.Once 复活）")
+	}
+	if n := countLines(t, callLog); n != 2 {
+		t.Fatalf("过期到翻档期望总拨号 2 次（1 冷探＋1 后台）实际 %d ⇒ 单飞失效或重复拨", n)
+	}
+	// 翻档后紧接着连问三次：失败短缓存窗口内**一发都不许多拨**（旧形态④的判据在展示腿上同样成立）。
+	for i := 0; i < 3; i++ {
+		if got := DispatchStatus(); got != "degraded" {
+			t.Fatalf("失败短缓存期内期望 degraded 实际 %q", got)
+		}
+	}
+	if n := countLines(t, callLog); n != 2 {
+		t.Fatalf("失败短缓存期内重复拨远端（健康面会被故障放大成慢接口）: %d", n)
+	}
+	// ★ 收 goroutine 尾巴：判到 degraded 时后台那一趟**还没写完它最后一笔**（发布视图在锁内，
+	// 解锁与清标志在其后）——不等单飞标志归零就退出，下一用例的 resetDispatchProbe 会和它
+	// 并发碰同一批进程级状态（-race 闸门实测抓到过这条）。标志清零是该 goroutine 的末笔写，
+	// 观测到 false 即其后全部写都已 happens-before。
+	idleDeadline := time.Now().Add(5 * time.Second)
+	for probeRefreshing.Load() && time.Now().Before(idleDeadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if probeRefreshing.Load() {
+		t.Fatal("5s 后单飞标志仍未归零 ⇒ 标志没被 defer 清，后台重探会一次被永久锁死")
 	}
 }
 

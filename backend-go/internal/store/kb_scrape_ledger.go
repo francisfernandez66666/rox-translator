@@ -164,6 +164,7 @@ func (s *Store) PruneScrapeLedger(now time.Time) (int, error) {
 		if err != nil {
 			return deleted, err
 		}
+		s.dropConfigCache(chunk...) // 回收即失效：裸 DELETE 后 GetConfig 不许再回"还在库上"（P2⑤ 补腿）
 		n, _ := res.RowsAffected()
 		deleted += int(n)
 	}

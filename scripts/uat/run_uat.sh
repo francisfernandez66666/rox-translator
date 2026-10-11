@@ -105,11 +105,15 @@ else
   log "竞态检测 go test -race ./internal/...（数分钟）..."
   # ★ -timeout 30m（2026-09-19）：store 包高负载下单跑实测 952s，默认 10m/包会假超时；
   #   失败文案同步改中性（旧文案把任何非零退出——含超时——都报成"数据竞争"，误导定位）
+  # ★ -timeout 60m（2026-10-11 慢 SQL 批）：internal/api 包在 -race 并发整轮下实测 2294s
+  #   （38 分钟），30m 预算把"跑到一半"打成 panic: test timed out——预检 1801s 那次的挂点
+  #   TestEstTokensFixedDefaults 只跑了 6 秒，纯墙钟不足而非断言回归（同一包在 40m 预算的
+  #   全量跑里 ok）。与 09-19 抬 store 到 30m 同一条修法：加预算、不改判据职责。
   # ★ 预检方言钉死 sqlite（2026-09-20）：单测族一律内存 SQLite（各测试已自钉方言，如
   #   langs_zh/admin_models_cache/h5_chunk），但 PG 模式上方导出的 DB_DRIVER/DB_DSN 仍会
   #   经 config.Default() 副作用泄漏方言——历史上两次造成整包 api 假红。预检职责=竞态
   #   检测（sqlite 语义即可），PG 方言覆盖由后置 UAT 矩阵（连真 PG 库）承担，不在此处。
-  (cd backend-go && env DB_DRIVER=sqlite DB_DSN= go test -race -count=1 -timeout 30m ./internal/...) \
+  (cd backend-go && env DB_DRIVER=sqlite DB_DSN= go test -race -count=1 -timeout 60m ./internal/...) \
     || { echo "❌ 竞态检测未通过（数据竞争或测试失败/超时，见上方 go test 输出），中止 UAT"; exit 1; }
   log "竞态检测通过"
 fi
@@ -197,6 +201,13 @@ rm -f "$WORK/dev.db"*
 #   c.UploadDir = UserDataDir/_uploads），不钉则分片上传（T28）写进本机真实应用数据目录，
 #   既污染生产数据又随沙箱权限时红时绿（EPERM 假红），钝化对真回归的敏感度。
 printf "# UAT T36 测试词包\n紫火核弹T36\n" > "$WORK/sensitive_words.txt"
+# ★ 2026-10-11（慢 SQL 批 P2⑤）：SYSTEM_CONFIG_CACHE_TTL_SEC=0 —— 矩阵的档位/配置注入走
+#   dblib.sh 的 dbcfg（psql/sqlite3 **外部裸写**，绕开服务端 SetConfig 写穿），TTL 缓存档下
+#   外部裸写要 ≤5 秒才在 GetConfig 现形；多条断言（T64 脏值回落缺省、T66/T69 防薅压格子、
+#   T60/A1m 删 paych 判未配置）契约都是「写完下一个请求即读到」。0 档＝该 knob 设计里预留的
+#   「显式每次都现查」排障/测试档（与防薅档在矩阵开大同一手法：夹具钉死鲜度档，本轮实测 25 条
+#   级联假红即由默认 5s 窗造成）。缓存行为本身由 systemconfig_cache_test.go 五射程单测＋-race
+#   承担，不靠矩阵；**生产不配这个 env**，默认 5s 档才是线上形态。
 ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
   ADMIN_TOKEN=uat-admin-token-36 METRICS_TOKEN=uat-metrics-36 \
   SENSITIVE_WORDS_FILE="$WORK/sensitive_words.txt" \
@@ -204,6 +215,7 @@ ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
   USDT_TRON_BASE="http://127.0.0.1:${MOCK_CHAIN_PORT}" USDT_SCAN_INTERVAL_SEC=5 \
   ASSIST_BASE_URL="http://127.0.0.1:${ASSIST_PORT}" ASSIST_ADMIN_TOKEN="$ASSIST_TOKEN" \
   USER_DATA_DIR="$WORK/udata" \
+  SYSTEM_CONFIG_CACHE_TTL_SEC=0 \
   nohup "$WORK/uat-server" -addr "127.0.0.1:${UAT_PORT}" -frontend frontend-react/dist -kbdb "$WORK/dev.db" \
   > "$WORK/server.log" 2>&1 < /dev/null &
 SERVER_PID=$!

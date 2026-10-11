@@ -204,6 +204,13 @@ func (s *Store) PointsRateRebase() {
 		observability.Error(context.Background(), "F-78 积分汇率补发：提交失败（整体回滚）", "err", err.Error())
 		return
 	}
+	// 补发链全程走事务内裸 SQL（upsertConfigTx/UPDATE），提交成功后必须显式失效缓存，
+	// 否则同进程 ≤5 秒内的 GetConfig 仍回旧汇率（P2⑤ 补腿；回滚分支不许调——库没变缓存就不该动）。
+	drop := append([]string{keyPointsRate, ConfigPointsRateRebase}, pointsMintedConfigKeys...)
+	if rulerFrom > 0 {
+		drop = append(drop, keyRulerFen) // 只在真改写过尺子时失效（未写＝库里没行，负缓存 "" 仍是真值）
+	}
+	s.dropConfigCache(drop...)
 	observability.Info(context.Background(), "F-78 积分汇率存量等值补发完成",
 		"from_rate", legacyPointsTokensRate, "to_rate", DefaultPointsTokensRate,
 		"scaled_rows", scaledRows, "ruler_from", rulerFrom, "ruler_to", rulerTo,

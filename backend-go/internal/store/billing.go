@@ -2300,6 +2300,9 @@ func (s *Store) EnsureBillingDefaults() {
 	}
 	for _, kv := range defaults {
 		db.Exec(s.db, db.CurrentDialect(), "INSERT INTO system_config (key,value) SELECT ?,? WHERE NOT EXISTS (SELECT 1 FROM system_config WHERE key=?)", kv[0], kv[1], kv[0])
+		// 裸条件 INSERT 灌默认值后失效该键：此前若有读点把"缺键"负缓存成 ""，
+		// 不失效则 ≤5 秒内读侧仍见空（P2⑤ 补腿；键集固定且小，无条件失效零成本）
+		s.dropConfigCache(kv[0])
 	}
 }
 

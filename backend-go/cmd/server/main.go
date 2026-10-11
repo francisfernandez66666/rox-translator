@@ -405,6 +405,15 @@ func main() {
 		Addr:              *addr,
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 30 * time.Second, // 请求头读取超时防慢速攻击
+		// ★ 慢 SQL 批 P1④（2026-10-11）：写侧与空闲兜底。刻意**不设 ReadTimeout**——
+		// 大文件上传在慢线路上是合法长请求，body 读超时会把正常上传打成套 4xx，代价大于收益。
+		// · IdleTimeout：keep-alive 空闲连接 2 分钟回收（现网取证：空闲期连接成组挂在 40 上限下）；
+		// · WriteTimeout：30 分钟＝比任何合法同步腿都宽（单任务 25 分钟硬上限在 worker 内，
+		//   不占 HTTP 请求），它抓的是"handler 挂死后一直占着连接"那一族，不是给正常流量设的坎。
+		//   SSE 走豁免：sseHeaders 里把本请求写超时清成无限（Unwrap 链两层包装器都已配），
+		//   所以这条超时**不会**掐翻译流；将来若有新的长流式面，也必须同样在入口清写超时。
+		WriteTimeout: 30 * time.Minute,
+		IdleTimeout:  2 * time.Minute,
 	}
 
 	// 优雅停机：监听 SIGTERM/SIGINT，先停止接收新请求并等待在途请求完成（最多 10 秒）再退出。

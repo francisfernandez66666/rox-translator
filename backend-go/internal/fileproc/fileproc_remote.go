@@ -49,6 +49,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"translator/internal/observability"
@@ -266,6 +267,32 @@ var (
 	failStreak    int
 )
 
+// ★★ 健康面出栈视图（stale-while-revalidate，2026-10-11 慢 SQL 批，消 /api/health 的 3 秒腿）。
+//
+// 现网实证（0AR 慢 SQL 取证）：TTL 过期的那一刻，第一个打进 /api/health 的请求要**同步付一次
+// SSH 重探**——实测首条 3.07s、随后 1.3ms。根因是 dispatchProbe 的锁被整个 SSH 往返持有，
+// 展示腿（DispatchStatus/DispatchReadinessSnapshot）直接走在它后面，就把公网 RTT 漏进了健康面。
+//
+// 修法只动**展示腿**：探测真值在每次真拨之后顺手发布进这个原子视图（锁外读、无阻塞），
+// 展示读到过期的视图就**先回旧读数、同时踢一次后台单飞重探**——翻档晚一个探测周期到，
+// 但健康面从此不再拨网络。门禁腿（DispatchRun/dispatchMemGB）**不走这里**，
+// 仍然同步拿新鲜真值："这一单能不能拨远端"不许拿旧快照当许可。
+//
+//	视图的 at 记录的是**那次真拨的时刻**（缓存命中不刷新），所以它的鲜度判据和 dispatchProbe 同源。
+type probeView struct {
+	res *DispatchProbe // nil ⇒ 那一次拨失败
+	err error          // res==nil 时的失败原因（对外只翻成状态词，绝不透出原文）
+	at  time.Time
+}
+
+// 展示腿（/api/health）读的无锁快照＋后台重探单飞标志（★ 2026-10-11 慢 SQL 批 P0 取证腿）。
+var (
+	// probeViewPtr 只在 dispatchProbe 的两处"刚拨完"落点写入（持锁），展示腿无锁读。
+	probeViewPtr atomic.Pointer[probeView]
+	// probeRefreshing 后台重探的单飞标志：拨的是公网机器，同一时刻一趟就够。
+	probeRefreshing atomic.Bool
+)
+
 // probeTTL 就绪缓存的重探周期（FILEPROC_DISPATCH_PROBE_TTL_SEC，默认 600s）。
 // 为什么默认 10 分钟：到期判定最坏晚 10 分钟翻旧，而派发本身还有 `expired`＋远端 78 拒绝两层；
 // 再密就是拿公网 RTT 换排场，这一条腿本来就是"增益路径"。
@@ -278,12 +305,15 @@ func probeTTL() time.Duration {
 	return 600 * time.Second
 }
 
-// DispatchStatus 给 /api/health 的三态状态词（★ 只出状态词，不出主机与路径，见 #42 口径）
+// DispatchStatus 给 /api/health 的三态状态词（★ 只出状态词，不出主机与路径，见 #42 口径）。
+//
+// 展示腿走 displayProbe（stale-while-revalidate）：TTL 过期时回旧读数＋踢后台重探，
+// **不再把 SSH 往返拉进请求里**（慢 SQL 批实测的 3.07s 首条就在这条腿上）。
 func DispatchStatus() string {
 	if !DispatchEnabled() {
 		return "off"
 	}
-	if _, err := dispatchProbe(context.Background()); err != nil {
+	if _, err := displayProbe(); err != nil {
 		return "degraded"
 	}
 	dispatchMu.Lock()
@@ -336,22 +366,78 @@ func DispatchStatusWords(p *DispatchProbe) (expire, memCap, selftest string) {
 }
 
 // DispatchReadinessSnapshot 组一份健康面读数（三态＋到期日＋内存帽＋自检状态词）。
-// ★ 它取的是**缓存的 probe**，不额外拨远端；派发关着时其余字段留空（"没配"不等于"配了但坏了"）。
+// ★ 它取的是**展示视图**（displayProbe，stale-while-revalidate），不在请求里拨远端；
+//
+//	派发关着时其余字段留空（"没配"不等于"配了但坏了"），探不到则如实写 unknown，绝不填一个看起来正常的默认值。
+//	三态与字段**出自同一份视图读数**——分两次探测会让"状态词"和"到期日"来自两个时刻
+//	（旧形态恰好就是这样，只是当时两次都落在同一份锁内缓存上才没露馅）。
 func DispatchReadinessSnapshot() DispatchReadiness {
-	st := DispatchStatus()
-	r := DispatchReadiness{Status: st}
-	if st == "off" {
-		return r
+	if !DispatchEnabled() {
+		return DispatchReadiness{Status: "off"}
 	}
-	// 只在缓存上取：dispatchProbe 命中 TTL 内缓存时零网络成本；过期会重探一次（同一把锁、同一判据）
-	p, err := dispatchProbe(context.Background())
+	p, err := displayProbe()
+	st := "online"
 	if err != nil {
-		// 探不到就把"取不到"如实写成 unknown，绝不填一个看起来正常的默认值
+		st = "degraded"
+	} else {
+		dispatchMu.Lock()
+		silent := time.Now().Before(degradedUntil)
+		dispatchMu.Unlock()
+		if silent {
+			st = "degraded"
+		}
+	}
+	r := DispatchReadiness{Status: st}
+	if p == nil {
 		r.ExpireDate, r.MemCap, r.Selftest = "", "unknown", "unknown"
 		return r
 	}
 	r.ExpireDate, r.MemCap, r.Selftest = DispatchStatusWords(p)
 	return r
+}
+
+// displayProbe 健康/展示面的探测读数（★ 2026-10-11 慢 SQL 批，配 DispatchStatus/DispatchReadinessSnapshot）。
+//
+// 三条判据与 dispatchProbe 同源（同一把尺子，禁止再造第二套优先级）：
+//   - **没有视图**（进程从没真拨过）⇒ 同步拨一次——冷面第一问必须给真读数，"不知道"不是答案；
+//   - **在窗口内**（成功 ≤TTL／失败 ≤probeFailBackoff）⇒ 直接回视图，零成本；
+//   - **过期**⇒ 先回**旧读数**，同刻踢一次后台单飞重探（翻档晚一个探测周期，健康面从此不拨网络）。
+//     TTL=0 是显式"每次都真探"的档（单测与排障用），这时过期腿退回同步拨，不许吃旧读数——
+//     否则 TestProbeCacheHonorsTTL 那一族的"重探"语义在展示面上名存实亡。
+//
+// ★ 后台重探只派发给 dispatchProbe 本身：它只取 probeMu、绝不碰 procGate/远端闸（§一·12 死锁教训），
+// ctx 用 context.Background 派生——请求 ctx 会随 handler 返回被 cancel，不能传给后台。
+func displayProbe() (*DispatchProbe, error) {
+	v := probeViewPtr.Load()
+	if v == nil {
+		return dispatchProbe(context.Background())
+	}
+	window := probeTTL()
+	if v.res == nil {
+		window = probeFailBackoff // 失败档用短退避：与 dispatchProbe 的失败缓存同长同尺
+	}
+	if time.Since(v.at) < window {
+		return v.res, v.err
+	}
+	if probeTTL() == 0 {
+		return dispatchProbe(context.Background())
+	}
+	triggerProbeRefresh()
+	return v.res, v.err
+}
+
+// triggerProbeRefresh 后台单飞重探：CAS 挡住并发，真正要不要拨、拨几次仍由 dispatchProbe 的
+// TTL/失败短缓存/静默期三层判据说话（这里只负责"有人来问了就去翻档"）。
+func triggerProbeRefresh() {
+	if !probeRefreshing.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer probeRefreshing.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), subTimeout())
+		defer cancel()
+		_, _ = dispatchProbe(ctx) // 吞掉返回值：真值已发布进出栈视图，这一趟只买"翻档"
+	}()
 }
 
 // dispatchProbe 远端就绪探测（★ 按 TTL 缓存：首次成功后复用 probeTTL()，过期或从没成功过才重探）。
@@ -381,9 +467,12 @@ func dispatchProbe(ctx context.Context) (*DispatchProbe, error) {
 		// 失败只缓存 probeFailBackoff 这么久就允许重探（旧形态是 sync.Once：失败一次就永不翻身，
 		// 换件不重启也修不好——2026-09-28 实测过一次）。成功读数 probeRes 保持到 TTL 到期。
 		probeErr, probeErrAt = err, time.Now()
+		// ★ 出栈视图跟着拨完落点一起发布（失败档）：展示腿据此回 degraded 旧读数，而不是自己去拨。
+		probeViewPtr.Store(&probeView{err: err, at: probeErrAt})
 		return nil, err
 	}
 	probeRes, probeErr, probeAt = res, nil, time.Now()
+	probeViewPtr.Store(&probeView{res: res, at: probeAt})
 	return probeRes, nil
 }
 
