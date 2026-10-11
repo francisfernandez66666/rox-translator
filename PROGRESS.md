@@ -1776,3 +1776,16 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 - **推送**：纯代码提交 `4b302ed` → 推送 `68aeaca`（origin/autosales）
 - **⚠️ 部署口径**：此改动只改了 Go 代码常量（`defaultPersona` / `defaultToneRules`），不影响 assist-server（Python）二进制。assist-server 冷缓存会读 seed.json 里的新值；热缓存需要客户侧会话刷新或等缓存过期后自动生效。无需换 binary。
 
+
+## 十、慢 SQL 性能批（2026-10-11 收口）
+
+- **范围（用户定档）**：P1＋P2 全量；P3 前端项不入批；决策⑨ AI 并发闸**暂不抬**。
+- **实装**：请求级用户缓存＋IAM 写锁收窄；连接池兜底＋HTTP WriteTimeout/IdleTimeout（不设 ReadTimeout，SSE 自管 deadline）；
+  `system_config` TTL 缓存（`SYSTEM_CONFIG_CACHE_TTL_SEC` 默认 5s）＋5 处裸 SQL 写点落库后显式失效；
+  `/metrics` 昂贵段 TTL 快照（`METRICS_SCALE_TTL_SEC` 默认 10s）；jobs 认领索引；/api/health 派发快照后台刷新；P2⑦ 审后零改动。
+- **反证两族入账**：①缓存必须钩住绕开 SetConfig 的裸写点（-race 红 10 条→补腿双轮绿）；②夹具的库外 SQL 写面钉 TTL=0
+  （PG 矩阵 r2 红 25 条→r3 全绿），生产保持默认档。G3 竞态预检 30m→60m（api 包竞态实测 2294s，纯墙钟）。
+- **闸门终账**：-race 二轮 45 包 0 FAIL；PG 矩阵 A/B 137/0、T 816/0、FE 0；multi_instance 33/0；assist_uat 157/0；扩展/SDK --check 双绿；注释闸双 0。
+- **推送**：代码 `08b3d8f`＋推送闸门修正 `0a6c02d`（排除口径补 `UI清晰度改进_*` 取证目录）→ 远端 `ebbf2d4`，零 .md、逐文件等价 0 差异。
+- **部署口径**：translator-server 必换（两站）；assist 不换（go list -deps 实测不含被改包）；前端零改动。详见《部署指南》§十六、
+  台账全账见 `UI清晰度改进_20261010/修改计划_登录后页面清晰度_20261010.md` §十八。
