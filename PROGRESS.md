@@ -1943,6 +1943,50 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 - **br 有没有真发到客户手上＝已收口**（见 4.1 的 F 段与公网段读数：三域 `content-encoding: br` 且下载体 sha
   逐字节等于本机 `.br` 侧车）。⚠️ 同一条判据在 **gzip 那一档结构上做不到**——CF 边缘会重新压缩，
   公网字节等值恒红，所以 `.gz` 的等值只在**源站直读**那一腿判，公网侧只判「有 gzip 且体积小于原文」。
-- **测试残骸**：A15 那 25 条通知探针**自删**（同段两条判据就是数它删干净没有）；
-  10-11 那批在挂件库留下的 **1 条访客会话／7 条消息**仍在（`sessions_base`/`messages_base`），删它要用户明令。
+- **测试残骸**：A15 那 25 条通知探针**自删**（同段两条判据就是数它删干净没有）。
+  ⚠️ **旧账里那句「10-11 那批在挂件库留了 1 条访客会话／7 条消息（`sessions_base`/`messages_base）」已按 10-12 实测翻案**：
+  那两张不是残骸表而是**产品真表**（`internal/assist/store/store.go:104/116/210` 建表并把逻辑名 `sessions`/`messages`
+  映射到它们），现网 `/opt/ai-assist/data/assist.db` 实测 `sessions_base=0`／`messages_base=0`
+  ⇒ 探针会话早被匿名清理腿按到期删掉了，**"删它要用户明令"这条挂账作废**（别再去 DROP 那两张表）。
+  同批还翻一条：台账里「工单 92–94 刻意保留」那三项**两库里都已不存在**（`langcross` 工单 33 行、id 区间 15..101；
+  `langcross_demo` 32 行、15..78；两侧 `id IN (92,93,94)` 均 0）⇒ 那条保留账已无对象，本轮清理脚本里那条
+  保留断言实测**删前删后都回 0**，属**结构性空转锁**（见 §6）。
 - **`canned_llm_model`／慢链路观测**等 §十 遗留的两条观察项状态不变，本批未触碰。
+
+### 6. 云端测试数据清理（2026-10-12 08:01 CST，生产库 `langcross`，用户明令「优先执行 UAT1003 清理和测试数据删除」）
+
+- **对象**：租户 **id=4／code=`uat1003`／name「UAT1003测试租户」**（10-03 那轮 UAT 建）＋它的 6 个账号
+  `10020–10025`＋平台层临时超管 `uat1003_super`(**id=10019**，`tenant_id=0`、`role=super_admin`，
+  故它不在"按 tenant_id 圈定"的那一侧，必须点名删)。
+- **实删 443 行**：按 `tenant_id=4` 圈到的 29 张有数据的表（`audit_logs` 103／`tm_review` 25／`kb_entries` 24／
+  `usage_ledger` 26／`chat_conversations` 9／`quota_grants` 9／`orders` 8／`api_keys` 6／`alerts` 5／`tickets` 5／
+  `payments` 5／`tm_segments` 4…）＋外键路径子表 `chat_messages` **18**（挂在 `chat_conversations` 上，不带 tenant_id）
+  ＋`ticket_state` **33**（挂在 `tickets` 上）＋按 user_id 挂的 `notifications` **108**／`user_task_period_cnt` **7**
+  ＋`users` 6＋`users(10019)` 1＋`tenants` 1。**逐表读数在 `delete.log` 里都留了行**。
+- **安全阀（三条，全部实测通过才落的刀）**：
+  ① 删前先把目标行 `\copy` 成 **34 份 CSV** 落 `/var/tmp/uat1003_cleanup_20261012_080135`（属主 postgres、0700，合计 212 KB）；
+  ② **回验不是数行数**——CSV 里有内嵌换行，`wc -l` 会撒谎：把每份 CSV **真导回 `CREATE TEMP TABLE … (LIKE 原表)`**
+     再数，34 份逐条与基线等值（`不符条数=0`），不过即 `exit 3` 且一行不删；
+  ③ 删除在**单个事务**里，尾部控制位断言任一不过即 `RAISE EXCEPTION` ⇒ 整体回滚：
+     别的租户一字不动（`t1 用户 5／t2 用户 1／t1 工单 26／t1 用量 2,153／t1 词条 69,522／t1 订单 2` 删前删后同一组数）、
+     全库余量等于"基线−目标"（`chat_messages 24→6`／`ticket_state 75→42`／`notifications 763→655`／`user_task_period_cnt 7→0`）、
+     目标归零、`users id=1` 平台超管在位。**孤儿表数=0**（按 tenant_id 再扫一遍 29 张表全空）。
+- **受保护固定账号未进射程**（这是本批唯一不能出错的一条）：演示站那 6 个 `demo_%` 账号在**另一个库** `langcross_demo`
+  （实测 `demo_%=6`，`10016 demo_admin`/`10017 demo_youtube`/`10018 demo_hr`/`10019 demo_cs`/`10020 demo_super`/`10021 demo_superadmin`），
+  本轮只动 `langcross`。⚠️ **两库的 `users.id` 各自独立**：`langcross` 里的 10019 是 `uat1003_super`，
+  `langcross_demo` 里的 10019 是 `demo_cs`——**按 id 清理前必须先问是哪个库**，否则一次就删掉受保护账号。
+- **自查抓到的一条缺口（如实记，不遮）**：备份按 `tenant_id=4` 圈 `users`，而 10019 的 `tenant_id=0`
+  ⇒ **那一行没进那 34 份 CSV**（`grep 10019` 在 `t4__users.csv` 里命中的是别的列，属假证据）。
+  出路实测成立：主站 `tm_*.bak.dump`（最近一份 `tm_20261012_025238.bak.dump`，02:52 CST＝删前 5 小时）**含 `TABLE DATA public users`**，
+  把整份 restore 进临时库 `uat1003_recov_chk` 后 10019 那一行完整可读（`tenant_id=0 / uat1003_super / UAT1003临时超管 / super_admin / active / created_at 2026-10-03T01:31:46Z`），
+  查完 `dropdb` 已删（复核库清单只剩 `langcross`/`langcross_demo`/`postgres`）。
+  **⇒ 改法**：以后再写这类清理脚本，"按用户集合删"的行必须**同时按那个集合备份**（本轮 `USET` 只用在 notifications/user_task_period_cnt，没用在 users）。
+  ⚠️ 顺带一条现网事实值得记账：**主库没有独立的定期整库 dump**，`/opt/translator/data/backups/` 里那批 `tm_*.bak.dump`
+  是**翻译库改动前的副作用留底**（一天多份、随改动密度长），02:52 那份正好救回 10019 属运气，不是设计。
+- **两项残项按用户口径没动，交下令**：
+  ① **13 把 `status=active` 的测试 API Key**（`langcross.api_keys`：id 2/3/4/5/6 `uat-*`/`regression`、
+     14 `translator`、17 `e2e-smoke`(**tenant_id=0**，call_count 492，最近用 08-25)、18 `dijie`(0 次)、
+     19 `e2e-final`(320)、20 `e2e-pdfpro`(56)、21 `sq-verify`、28 `临时测试`、30 `capacity-loadtest` 已是 `disabled`）；
+     真实客户那把是 id 29「默认 Key」(tenant 2 Hajimi，0 次)。**建议只 `status='disabled'` 不 DELETE**——
+     Key 删了不可复原，而 disable 是可逆的，且现网若有集成挂在它上面，disable 会在日志里留名、delete 只留 404。
+  ② **通知 655 行 / 演示库 1,019 行**里含历史 `kb_scrape` 日扫通知与告警痕迹，先前口径是刻意保留（排障抓手），本批未动。
