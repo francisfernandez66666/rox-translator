@@ -294,6 +294,44 @@
   闸门＝`backend-go/internal/fileproc/caddy_asset_cache_gate_test.go`（L1 无条件 immutable 必须为 0／
   L2 存在性匹配器在位／L3 `handle_errors` 里的 `no-store` 腿在位／L4 射程＝三份文件全扫且范围非空，
   另配 9 枚反证＝三份 × 各摘一条腿，含"把整个 `handle_errors` 块删掉"）。
+- ★★ **入口包的顶层不许有裸的浏览器存储读；首页必须有「失败这张脸」**（★ 2026-10-12 启动链黑屏批⑤，
+  现网实证＝用户「换 Edge 后打不开 langcross.lexicorn.cn，隐私模式还黑」，形态是**标签标题正常、页面整片黑零提示**）：
+  浏览器拒绝站点数据（Edge「阻止所有 Cookie」／InPrivate）时，读 `localStorage`／`sessionStorage` 不是返回 null 而是
+  **抛 `SecurityError`**。写在**模块顶层**（第 0 列、不在任何函数里）的裸读会当场中断入口包评估 ⇒ **React 从没挂载**，
+  而首页只有一个空 `<div id="root">` ⇒ 纯黑屏、控制台之外没有任何访客看得见的面。
+  这一族的坏在**它不在任何既有闸门射程里**：jsdom 单测里存储永远可用、`vite build` 照常绿、`check_frontend_tar.sh` 问的是字节不是运行时。
+  四条硬口径：
+  ① **模块顶层只许"取不到就按默认起步"的读**（语种偏好→回落浏览器语言检测；token/租户→按未登录起步），一律包 `try`
+     并留中文注释说明"这一份存值只是偏好，不是运行前提"；**禁止**新增顶层裸读（闸门按"第 0 列命中存储 API"判，缩进／注释不算）；
+  ② **首页必须有一个普通内联启动哨兵**（`index.html`，放在入口 `<script type="module">` **之前**——module 脚本自己失败时救不了自己）：
+     轮询 `#root.childElementCount`，**只在一直空着时**显示，界面起来就 `clearInterval` 收摊（零打扰）；
+     只做**三件读数**（站点数据是否被拒／哪个 SCRIPT 没加载／哪一行抛了异常），**报不出来就只说"没起来"，
+     不许写"一定是缓存"这类猜测文案**，且不许出现 token／堆栈／内部路径；
+  ③ 挂载之后的渲染期异常由 `main.tsx` 的 **`BootErrorBoundary`** 接住（哨兵在挂载成功时就收摊了，两段不重叠）；
+  ④ ★ **`<noscript>` 兜底文案必须落在 `<body>`**：HTML5 的「in-head noscript」插入模式只认 link/style/meta，
+     里面写 `<div>` 会让 `vite build` 的 parse5 **当场报错出不了包**（开发热更一切正常，一进构建才炸——本批首跑真踩）。
+  闸门＝`frontend-react/src/bootStorageGate.test.ts`（16 条腿：顶层裸存储读零命中＋两处修法形态点名＋哨兵位置/非 module/三件读数/收摊腿
+  ＋ noscript 落点判据＋Boundary 双腿，另配**六枚反证**）。
+  ⚠️ 写这类"读 index.html 源码"的字符串腿**不能吃整份 HTML**：本批自己踩的断言自伤——head 注释里含 `<body>`／`</head>` 字样，
+  两条腿一假红一假绿；必须先 `stripHtmlComments()` 再判，反证走**结构摘除＋计数对照**。
+- ★ **`entryFileNames` 不许写成"键在、值为 `undefined`"**（★ 同批顺手抓到、尚未在现网发作的交付链退化）：
+  `output: { entryFileNames: cond ? '…' : undefined }` 会让 Vite 认作"调用方自带命名"，**关掉它默认的
+  `assets/[name]-[hash].js`**，退化成 Rollup 的 `[name].js` ⇒ 普通发版（不带 `CACHE_BUST`）产出**根级无哈希 `/index.js`**，
+  于是批④ 的 `immutable` 长缓存失去意义、`@asset file` 存在性匹配器扫不到它、《部署指南》§五"逐个引用 asset 查落盘"失去判据对象
+  ——三层同时落空而**构建不报错、界面照常**。写法只有"整段 `build` 随 env 条件展开"这一种；
+  机械锁＝`scripts/check_frontend_tar.sh` 的 **T5**（入口名必须形如 `assets/index-<≥8 位哈希>.js`）＋ **T5b**
+  （同一函数喂两个真名必须放行、喂 `index.js`／`assets/index.js`／短哈希／空串必须判死）。
+- ★ **发版后复查脚本的公网腿：只重拨"这一跳没走完"，且"收完整了"才算判据**（★ 同批实测，跨境冷缓存抖动）：
+  `deploy/postdeploy_20261012.sh` 的 F 公网段连跑三次**红的不是同几条腿**，红腿读数一律 `code=000 size=0` 或**半截体**
+  （`code=200` 却只回 28,713 B／`size=390,925÷606,183`），而**源站段（带 SNI 打 127.0.0.1、绕开 CDN）三域字节等值一次全绿**
+  ⇒ 红的是本机这一跳链路，不是现网配置（这正是慢链路批要治的那个病，读记账进 PROGRESS §十二）。两条纪律：
+  ① 重拨只针对 `curl_rc≠0`／`code=000`，**判据本身不合格的（enc/sha 不对）不重拨**——摇绿灯就是把缺陷藏起来；
+  ② `code=200` 不等于"发到了"：每条判据先问 **`pd_complete`（curl 完整收完）**，旧形态只问 `enc=gzip 且 size<raw`，
+  会把**半截 JS** 判成"回落链活着"＝脚本侧真缺陷；单腿预算按**要搬多少字节**给（压缩档 120 s／原文档 300 s）；
+  ③ **重拨的第二枪起换 `--http1.1`**：这一跳的失败**集中在 HTTP/2**（实测同一分钟同一 URL：h2 三连败
+  `curl_rc=16` framing／`35` SSL／`28` 超时，换 1.1 立刻 `200 8,608 B` 且 `__BRANDING__` 命中 1）。
+  只换传输协商、内容判据一字不放宽，所以它属于① 的"这一跳没走完"；BAD 消息里必须带**末次用的协议**，
+  否则"换了协议才通"这件事只存在于改的人脑子里，下一个人只看到一串绿。
 - **列表类公开接口的分页与空值形态**（★ 2026-10-12 慢链路批③）：默认档＋上限一律收在 store 常量
   （`NotificationPageDefault=20`／`NotificationPageMax=100`），api 层只做**镜像同档**的 `effectivePageLimit`
   （出栈的 `limit` 必须是**真正生效的那一档**，不是回显入参），脏参数（非数字／负数／超上限）**折回档位不报错**。
