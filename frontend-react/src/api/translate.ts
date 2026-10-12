@@ -177,9 +177,13 @@ export interface EstimateResp {
   llm_queue_depth?: number
 }
 // 翻译前预估积分消耗与余额（失败静默返回 null，不打断输入）
-export async function estimateTranslation(text: string, targetLangs: string[], mode = 'pro'): Promise<EstimateResp | null> {
+// ★ 2026-10-13 用户令⑦（#31）：多带一个 ui_lang——后端预估的固定指令开销是按**真实提示词**
+//
+//	现算的（见 engine/costmodel.go），而中/英文界面走的是两套提示词，长度不同。
+//	不送这个字段就只能按中文那一套量，英文界面访客会看到偏高的区间。
+export async function estimateTranslation(text: string, targetLangs: string[], mode = 'pro', uiLang = ''): Promise<EstimateResp | null> {
   try {
-    const j = await request<EstimateResp>('/api/translation/estimate', { method: 'POST', body: JSON.stringify({ text, target_langs: targetLangs, mode }) })
+    const j = await request<EstimateResp>('/api/translation/estimate', { method: 'POST', body: JSON.stringify({ text, target_langs: targetLangs, mode, ui_lang: uiLang }) })
     return j?.success ? j : null
   } catch { return null } // 预估失败静默（不打断输入）
 }

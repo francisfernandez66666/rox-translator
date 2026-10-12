@@ -2939,6 +2939,8 @@ export const dict: Record<string, string> = {
   "common.inputTitle": "입력하세요",
   "common.noData": "데이터 없음",
   "common.pageError": "문제가 발생했습니다",
+  "common.chunkLoadFailed": "페이지 내용을 불러오지 못했습니다. 사이트가 방금 업데이트되었을 수 있습니다. 페이지를 새로고침해 주세요.",
+  "common.reloadPage": "페이지 새로고침",
   "common.retry": "재시도",
   "common.submitFail": "제출 실패",
   "common.unknownError": "알 수 없는 오류입니다. 페이지를 새로고침하세요",

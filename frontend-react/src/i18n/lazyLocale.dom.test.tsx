@@ -13,13 +13,18 @@
 //   C 行为层：词典未到手时必须**安静地**走 lang→en→zh 回退链（不抛、不露裸键）；
 //             ensureLocale 到手后同一键必须换成母语值，且同一语种的并发请求只拨一次；
 //   D 渲染层：语种到手要 emit() 触发重渲染（否则用户停在英文那一帧不再动＝懒加载变成"永远英文"）。
+//             ★ 2026-10-13 加 D2：emit() 在位**不等于**组件会重渲染——React 只在快照值变了才重渲染，
+//             而快照旧形态只有语种一个量，"chunk 到手而语种没变"那一帧被整个跳过（D 段拆成两条的正当理由）。
 //
 // ★ 反证口径（收口时实跑，见批次文档）：
 //   R1 把某语种的 dynamic 字面量删掉 ⇒ A 的等值计数红；
 //   R2 把 dynamic 改成变量拼接 `import(`./locales/${lang}`)` ⇒ A 的字面量锁红（chunk 不会再被切出）；
 //   R3 把 dictFor 的 `|| {}` 摘掉（返回 undefined）⇒ B/C 的"未到手不许抛"当场红（TypeError 击穿全站）；
 //   R4 把 ensureLocale 里那句 emit() 删掉 ⇒ D 的渲染锁红（界面停在英文那一帧）；
-//   R5 把 inflight 复用摘掉（每次新建 promise）⇒ C 的"同语种只拨一次"红。
+//   R5 把 inflight 复用摘掉（每次新建 promise）⇒ C 的"同语种只拨一次"红；
+//   ★ R4b（2026-10-13 实跑）只把 `dictRev++／bumpSnapKey()` 摘掉、**emit() 留着** ⇒ **D1 全绿、只有 D2 红**。
+//        这正是 D1 的盲区：它把"切语种"和"chunk 到手"挤在同一个 act 里，React 至少拿到一次语种变化，
+//        于是到手那一帧被顺带重渲染掩盖——现网 flaky（葡语/泰语/法语首屏停在英文）就是这么藏下来的。
 //
 // 运行：npx vitest run src/i18n/lazyLocale.dom.test.tsx
 // ============================================================================
@@ -201,5 +206,45 @@ describe('D · 渲染层：词典到手必须 emit，界面停在母语那一帧
     expect(shown(), 'chunk 到手后界面没换 ⇒ ensureLocale 里那句 emit() 被摘了（D 段反证 R4）').not.toBe(enFrame)
     expect(shown()).toBe(ruDict['chat.send'])
     cleanup()
+  })
+
+  // D2 ★ 2026-10-13 现网 flaky 本体（Playwright all_langs_full pt／th、landing_i18n fr 三条同因）：
+  // D1 测的是「setLang 切语种 + chunk 到手」，那两步之间 React 至少拿到一次**语种变了**的快照，
+  // 于是即使 ensureLocale 的 emit() 唤不醒任何组件，act 收尾时那次顺带重渲染也会把界面翻成母语——
+  // **假绿**。真实形态是 D1 没覆盖的：访客首屏语种由浏览器检测／存值决定（pt），从此再没人切语言，
+  // chunk 到手那一刻 currentLang 一个字没变，useSyncExternalStore 按"快照没变"直接跳过重渲染，
+  // 于是「英文一闪」变成「英文常驻」，只有等某个不相干的状态变更顺带重渲染才会换回来
+  // （现网截图正是那副样子：导航还是英文，晚挂载的葡语快算卡已经是葡语）。
+  // ⇒ 修法＝把「词典到手」本身做进快照（index.ts 的 dictRev／snapKey），本条锁的就是这一层。
+  it('D2 首屏语种固定＋chunk 稍后才到：没有任何"语种变化"可通知 React，也必须自动换成母语', async () => {
+    // 把 pt 词典换成"测试手里可控的那一份"：先让它一直在路上（界面必然停在英文那一帧，
+    // 不与调度赛跑），再由测试放行 ⇒ "到手那一刻"完全由本用例掌控。
+    let release!: (d: Record<string, string>) => void
+    const gated = new Promise<Record<string, string>>((r) => { release = r })
+    const FAB = 'Enviar (chunk 到手)'
+    localStorage.setItem('app_lang', 'pt')
+    vi.resetModules()
+    vi.doMock('./locales/pt', () => ({ dict: gated }))
+    const m = await import('./index')
+    expect(m.getLang(), '本用例前提是首屏语种＝pt（不是切过去，切语种那条腿 D1 已测）').toBe('pt')
+
+    function Probe() {
+      m.useLang()
+      return createElement('span', { 'data-testid': 'd2' }, m.t('chat.send'))
+    }
+    const { container } = render(createElement(Probe))
+    const shown = () => (container.querySelector('[data-testid="d2"]') as HTMLElement).textContent
+    // 首帧：pt 词典还没到手 ⇒ 安静回退英文（这是懒加载的设计形态，见 index.ts dictFor 上方）
+    expect(shown(), '首帧本该是英文回退').toBe(m.translateIn('en', 'chat.send'))
+
+    // 只放行 chunk，**不做任何切语种、不 rerender、不碰 props**——这就是"没人再来推第二下"的真实形态
+    await act(async () => {
+      release({ 'chat.send': FAB })
+      await gated
+    })
+    expect(shown(), 'chunk 到手后界面还停在英文 ⇒ 到手事件没进 useSyncExternalStore 的快照'
+      + '（反证 R4b：把 index.ts 里的 dictRev++／bumpSnapKey() 摘掉即红在这里，而 D1 依然全绿）').toBe(FAB)
+    cleanup()
+    vi.doUnmock('./locales/pt')
   })
 })

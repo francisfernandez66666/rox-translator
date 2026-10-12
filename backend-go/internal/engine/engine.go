@@ -1064,6 +1064,13 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	return PostProcessTranslation(content, targetLang)
 }
 
+// reviewPromptFmt 校对腿提示词模板（五个 %s 依次＝语言名、文化规范块、原文、待审校译文、输出契约）。
+// ★ 提成常量的唯一理由：预估腿（costmodel.ChatLegFixedTokens）要量这一句的固定开销，
+//
+//	量的是**真发出去的那份文本**，不是另抄一份字数。改这里＝预估的校对腿开销当场跟着变
+//	（等值锁＝TestChatLegFixedTokensDeriveFromRealPrompts）。
+const reviewPromptFmt = "你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s"
+
 // ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）。
 // 参数 stage: 流程阶段（默认 config.StageReview）。
 func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
@@ -1077,9 +1084,10 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	}
 	// ★ 14.3 纯度约束（2026-10-10）：审校提示词与初翻腿（purityInstructionNote）同一句
 	//   口径——禁止复述原文、禁止括号附注原词，避免审校把初翻已剥掉的复述又改回来。
-	prompt := fmt.Sprintf(
-		"你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s",
-		langName, culture, source, translation, contractNoteZh())
+	// ★ 2026-10-13（#31）：这一段模板**提成常量**是给 costmodel.ChatLegFixedTokens 量用的——
+	//   预估的固定开销必须从真发出去的那句提示词算出来，不能再抄一份字数（抄一份＝提示词涨
+	//   一倍而预估一行不动，正是旧公式「每句 500 token」那一族的病根）。改模板即改预估。
+	prompt := fmt.Sprintf(reviewPromptFmt, langName, culture, source, translation, contractNoteZh())
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {

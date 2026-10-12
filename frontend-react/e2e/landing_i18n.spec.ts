@@ -18,8 +18,9 @@ test.describe('落地页多语言（反馈④）', () => {
     await page.goto('/');
     const btn = page.locator('header .lang-sel-btn');
     await expect(btn).toBeVisible();
-    // ★ 判据翻转（用户拍板⑦）：触发钮固定词「语言」，自称名只在菜单选中项
-    await expect(btn).toContainText('语言');
+    // ★ 判据翻转（用户后令 2026-10-13）：触发钮可见文字**不分界面语言**统一英文 "Language"，
+    //   所以中文态也是 "Language"；自称名只在菜单选中项，本地字只留在读屏 aria-label
+    await expect(btn).toContainText('Language');
     await btn.click();
     const curZh = page.locator('[role="option"][aria-selected="true"]');
     await expect(curZh).toContainText('简体中文');
@@ -40,8 +41,9 @@ test.describe('首次访问浏览器语言自动检测', () => {
   test.use({ locale: 'fr-FR' });
   test('fr-FR → Français + 落地页全量法语（★ 2026-09-20 全站十语种后不再走英文回退）', async ({ page }) => {
     await page.goto('/');
-    // ★ 判据翻转（用户拍板⑦）：fr 界面下触发钮是固定词「Langue」，自称名在菜单选中项
-    await expect(page.locator('header .lang-sel-btn')).toContainText('Langue');
+    // ★ 判据翻转（用户后令 2026-10-13）：触发钮可见文字**不分界面语言**统一英文 "Language"，
+    //   所以 fr 访客也看到 "Language"（本地化仍在读屏 aria-label 与菜单选中项两条腿里），自称名在菜单选中项
+    await expect(page.locator('header .lang-sel-btn')).toContainText('Language');
     await page.locator('header .lang-sel-btn').click();
     await expect(page.locator('[role="option"][aria-selected="true"]')).toContainText('Français');
     // land.* 长尾键已在 locales/fr.ts 全量覆盖（2532 键口径）：法语访客直接看到法语 CTA

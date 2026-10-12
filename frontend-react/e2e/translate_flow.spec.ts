@@ -6,10 +6,12 @@
 //     而 UI 侧「用户能不能看到余额变了」一直是零覆盖）；
 //   · multilang_zip M1 已经覆盖「文件工单上传 → 完成 → 下载 zip 双语言产物」，本 spec 不重复；
 //   · 余额不足/失败路径由 api_uat_txn（T7 OpenAPI 余额硬闸、T29 扣费事务）覆盖，此处不重复。
-// 本 spec 只钉三条既有稳定行为（改坏任意一条都直接影响付费用户）：
+// 本 spec 只钉三条既有稳定行为（改坏任意一条都直接影响付费用户）＋★ 2026-10-13 新增的 TF4：
 //   TF1 中文源文 → 目标语译文上屏：译文非空、不等于原文、含拉丁字母，且剥掉括号内的源文回显后不含汉字；
 //   TF2 扣费可见：一轮翻译完成后「今日已耗」严格增加、「余额」严格减少（全部走页面既有数值，不直连 DB）；
-//   TF3 余额条随每轮刷新（不是只在挂载时读一次）——即 TF2 的读数必须是二次刷新后的值。
+//   TF3 余额条随每轮刷新（不是只在挂载时读一次）——即 TF2 的读数必须是二次刷新后的值；
+//   TF4 ★ 用户令③ 的气泡尾部四件同排同档（字号等值 14px ＋ 垂直中心同带）——
+//       完成态气泡只有这条真翻译链上才有，故运行时锁挂在这里而非 pixel_uat（那边是空态工作台）。
 // 锚点策略（A3 红灯的教训：可见文案不能当唯一锚点）：
 //   输入框 data-testid="translate-input"（既有）、余额条 data-testid="chat-balance"、
 //   用量条 data-testid="chat-usage"（本次补，见汇报）；数值解析只取文本里的第一个数字，
@@ -130,6 +132,29 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
       measured = lastAfter < balBefore;
     }
     expect(measured, `连续 3 轮翻译后余额未净减少（${lastBefore} → ${lastAfter}）：扣费未生效或界面未刷新`).toBe(true);
+
+    // ★ 2026-10-13 用户令③ TF4：气泡尾部四件（查看原文／复制／反馈／模式·消耗）**同排、同字号档**。
+    //   为什么只能量在这里：jsdom 单测不做 flex 布局、也不加载 theme.css（源码级锁见
+    //   MessageBubble.dom.test.tsx ⑨⑩），而 pixel_uat 那批几何锁跑的是空态工作台——**完成态气泡**
+    //   只有这条真翻译链上才有。投诉本体是「两排两档两种高低」，所以两条腿都要量：
+    //     字号等值（14，不是「只准更大」的单向锁）＋ 垂直中心同带（同排＝同一高低）。
+    const tail = await page.locator('.msg-actions').last().evaluate((row) => {
+      const rc = row.getBoundingClientRect();
+      const center = rc.top + rc.height / 2;
+      return Array.from(row.children).map((el) => {
+        const b = el.getBoundingClientRect();
+        return {
+          cls: el.className,
+          fs: parseFloat(getComputedStyle(el).fontSize),
+          off: Math.abs(b.top + b.height / 2 - center),
+        };
+      });
+    });
+    expect(tail.length, `尾部操作行只有 ${tail.length} 件 ≠ 4 件（查看原文/复制/反馈/模式·消耗）`).toBe(4);
+    for (const c of tail) {
+      expect(c.fs, `尾部控件「${c.cls}」字号 ${c.fs}px ≠ 14px（四件必须同档，字号只在 .msg-actions 声明一次）`).toBe(14);
+      expect(c.off, `尾部控件「${c.cls}」垂直中心偏离行中心 ${c.off}px ⇒ 已不是一排（高低不统一）`).toBeLessThanOrEqual(6);
+    }
 
     await page.screenshot({ path: 'artifacts/tf1_translate_flow.png' });
   });

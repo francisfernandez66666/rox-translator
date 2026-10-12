@@ -14,7 +14,7 @@
 // 运行：BASE_URL=http://127.0.0.1:8899 npx playwright test e2e/pixel_uat.spec.ts
 // ----------------------------------------------------------------------------
 // ★ 2026-09-22 载入闸门口径（详见 playwright.config.ts 的 #66 注释）：
-//   冷启动占位（WordSwap 换词动效）要演满 3 个语种拍次（约 9s）才放行。
+//   冷启动占位（WordSwap 换词动效）演满一拍即放行（★ 2026-10-13 用户令：原「3 拍 ≈9s」下限已降为 1 拍），
 //   登录后用例凡要「截图 / 量横向溢出 / 读整页文案」，都必须先等闸门撤销，
 //   否则截到的只是占位页、溢出检查等于没做（历史上 P4/P5 就是这样静默通过的）。
 // ★ 语种口径：本文件通篇用中文文案与 /工单|余额|套餐/ 类中文正则断言，
@@ -158,6 +158,32 @@ test.describe('像素级 UAT', () => {
     expect(geo.toolbarH, `工具条实高 ${geo.toolbarH}px ≠ 〇-P 真值 48px（描边回落 1.2px 后的实测档）`).toBe(48);
     expect(geo.composerH, `输入卡实高 ${geo.composerH}px ≠ 〇-P 真值 90px（输入 40 + 工具条 48 + 上下边框 2）`).toBe(90);
     expect(geo.footH, `框脚实高 ${geo.footH}px ≠ 〇-P 真值 109px（四排压成一排是本批的交付口径）`).toBe(109);
+    // ★ 2026-10-13 用户令①（「对话框没占满上下区域（除页眉页脚）」）运行时等值锁：
+    //   默认档必须是**吃满 .app-main 的剩余高度**，底沿只留 .cw-dialog 的下外边距 14px。
+    //   为什么源码级锁（ChatWindow.dialog.dom.test.tsx ⑥）不够：那条判的是「.cw-dialog 声明了
+    //   flex:1 1 0」，而「声明了却没吃到」这一族（外层 .cw-root/.app-main 的 flex 链被改厚、
+    //   页脚被挤出列尾、min-height 反向撑破）只有浏览器算完布局才看得见——
+    //   〇-L 那次灰描边留在页面上就是同一类失效。
+    //   为什么写等值而不是「≥ 某下限」：单向锁只拦变矮不拦变高，正是历史上把配色推离交付稿的形态。
+    //   旧档 min(70vh,640px) 在 1280×720 实测留 ~70px 黑（本条判红），高屏上更多＝用户看到的「一大片空」。
+    // 先确认页脚在场：隐藏/缺席的元素 getBoundingClientRect() 恒 0，会让下面的间距判据静默通过。
+    await expect(page.locator('footer').last(), '外壳页脚未渲染 ⇒ 本条吃满锁没有参照物').toBeVisible();
+    const fill = await page.evaluate(() => {
+      const d = document.querySelector('.cw-dialog')!.getBoundingClientRect();
+      const m = document.querySelector('.app-main')!;      const mr = m.getBoundingClientRect();
+      // 外壳页脚取**文档里最后一个** <footer>：页面内容区（长页）自己也可能带 footer，
+      // 用 querySelector('footer') 会量到内容区那一个，间距判据就变成了猜。
+      const footers = document.querySelectorAll('footer');
+      const f = footers[footers.length - 1].getBoundingClientRect();
+      return {
+        gapToMain: Math.round(mr.bottom - d.bottom), gapToFooter: Math.round(f.top - d.bottom),
+        // 溢出判据：吃满不等于撑破——app-main 一旦可滚，说明对话框把页脚顶出了首屏（〇-S 的原缺陷形态）
+        mainOverflows: m.scrollHeight > Math.round(m.clientHeight) + 2,
+      };
+    });
+    expect(Math.abs(fill.gapToMain - 14), `对话框底沿距 .app-main 底 ${fill.gapToMain}px ≠ 下外边距 14px ⇒ 没吃满（或多吃了）`).toBeLessThanOrEqual(3);
+    expect(Math.abs(fill.gapToFooter - 14), `对话框底沿距页脚上沿 ${fill.gapToFooter}px ≠ 14px ⇒ 页眉/页脚之间留了空白或页脚被顶走`).toBeLessThanOrEqual(3);
+    expect(fill.mainOverflows, '.app-main 出现整页滚动 ⇒ 对话框高度超出了页眉与页脚之间的空间').toBe(false);
     // ★ 〇-M 负向锁：语种面板在贴底的工具条里必须**向上弹**——宿主 .cw-dialog 是 overflow:hidden，
     //   向下弹会被裁掉（表现为「点了没反应」），而 DOM 顺序与结构锁全都扫不到这种失效。
     await page.locator('[data-testid="lang-multi-trigger"]').click();

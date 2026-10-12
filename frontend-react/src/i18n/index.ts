@@ -130,7 +130,10 @@ export const ALL_KEYS: ReadonlyArray<string> = Object.keys(en).sort()
 // 现在入口只含 zh/en 全量＋面板词典；其余语种在「当前语种确定」时各取自己那一份 chunk。
 //
 // ★ 代价（必须知晓，别再当成缺陷回查）：目标语种 chunk 到手前的那一两帧走
-//   lang→en→zh 回退链，于是非中文访客会先看到**英文**界面、chunk 落地后 emit() 触发重渲染换成母语。
+//   lang→en→zh 回退链，于是非中文访客会先看到**英文**界面、chunk 落地后触发重渲染换成母语
+//   （★ 2026-10-13：这一句最初**没成立**——emit() 只在位、快照却只有语种一个量，首屏语种此后不再变的人
+//    就被 React 跳过重渲染，"英文一闪"成了"英文常驻"；修法见下面 dictRev／snapKey 两处注释，
+//    锁＝lazyLocale.dom.test.tsx D2 ＋反证 R4b）。
 //   这是懒加载的固有形态，不是回归；对中文访客完全没有这一帧（zh 就在入口包里）。
 //   也因此本文件里**所有**取词点都必须经 dictFor()——旧形态 `dicts[lang][key]` 在词典未到手时
 //   会对 undefined 取下标直接 TypeError，把整站白屏（这是本次改造唯一的硬风险，锁见 lazyLocale.test.ts）。
@@ -155,6 +158,14 @@ const loadedLocales: Partial<Record<Lang, Dict>> = {}
 // 模块初始化三处可能同时要 ru，不该发出三次网络请求（chunk 有 HTTP 缓存，但重复的
 // fetch  promise 各自还会触发一次 emit／重渲染）。
 const inflightLocales = new Map<Lang, Promise<void>>()
+// dictRev 词典代数（★ 2026-10-13 修「英文一闪变成英文常驻」）：每有一份懒加载词典到手就 +1。
+// 为什么需要它：React 的 useSyncExternalStore **只在快照值变了才重渲染**，而旧快照只有 currentLang
+// 一个量——chunk 到手那一刻语种没变（用户从没点过语言选择器），于是订阅者一律被跳过，
+// 页面停在 en/zh 回退态直到某个不相干的状态变更顺带把它重渲染（现网实证：Playwright 三条
+// all_langs_full／landing_i18n 用例的截屏里「导航是英文、晚挂载的快算卡是葡语」）。
+// ⇒ 这一族「有 emit() 但没有可观测的快照变化」的静默腿，光看代码是抓不出来的，必须让
+//   「词典内容变了」本身进快照。
+let dictRev = 0
 
 /**
  * ensureLocale 确保某语种词典到手（zh/en 恒立即完成——它们就在入口包里）。
@@ -169,6 +180,10 @@ export function ensureLocale(lang: Lang): Promise<void> {
   const p = loader()
     .then((d) => {
       loadedLocales[lang] = d
+      // 顺序固定：先改可观测状态（词典＋代数＋快照键），后 emit——
+      // 订阅回调里可能立刻读快照，先 emit 会让那一帧读到旧键（同 §一·3「先落库、后碰进程侧」）。
+      dictRev++
+      bumpSnapKey()
       emit() // 词典到手＝出栈形态变了，让所有订阅组件重渲染（英文一闪 → 母语）
     })
     .catch(() => { /* 静默：界面继续走 en/zh 回退链，下一次 ensureLocale 重试 */ })
@@ -217,6 +232,9 @@ function detectBrowserLang(): Lang {
 //   机械锁见 src/bootStorageGate.test.ts（顶层裸存储访问零命中＋六枚反证）。
 let storedRaw: string | null = null
 try { storedRaw = localStorage.getItem('app_lang') } catch { /* 站点数据被浏览器策略拒绝⇒不认存值，也不许把全站打黑 */ }
+// stored 把上面那条受策略保护的原始读数按 Lang 收窄成"候选存值"（**只是类型收窄，不做判定**）：
+//   真裁决在下一行——必须在语种表里命中才算数，野值与 null 一律折回浏览器检测。
+//   分成两步是为了让「唯一一次裸存储读」收在那条 try 里，后续判断都不再碰 localStorage。
 const stored = storedRaw as Lang | null
 let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang()
 
@@ -250,6 +268,7 @@ void ensureLocale(currentLang)
 // 设置当前语言并持久化到 localStorage，触发订阅者重渲染
 export function setLang(l: Lang) {
   currentLang = l
+  bumpSnapKey() // 语种一变，快照键必须跟着变（快照键唯一写点＝bumpSnapKey，见其定义处）
   applyDir(l)
   try { localStorage.setItem('app_lang', l) } catch { /* ignore */ }
   emit() // 先按当前已到手词典重渲染（未到手时这一帧走 en/zh 回退，见 dictFor 上方代价说明）
@@ -270,13 +289,25 @@ function subscribe(cb: () => void) {
   return () => { listeners.delete(cb) }
 }
 
-// getSnapshot 返回当前语言快照（供 useSyncExternalStore 读取）
-function getSnapshot(): Lang { return currentLang }
+// snapKey 缓存的订阅快照键（★ 2026-10-13 见 dictRev 上方）。
+// 为什么必须**缓存**而不是每次现算：useSyncExternalStore 在每次渲染里都要拿到同一个值，
+// 现算字符串会「每次都不同」⇒ React 当场报 "The result of getSnapshot should be cached" 并无限重渲染。
+// 于是只有两个写点（setLang 换语种、ensureLocale 词典到手）能碰它，其余一律读缓存。
+let snapKey = `${currentLang}#${dictRev}`
 
-/** useLang 订阅当前语言；语言切换时所有调用组件重渲染 */
-/** Hook：当前语言（订阅切换） */
+// bumpSnapKey 重算快照键——**唯一**的写点，且必须在 emit() 之前调用（emit 的回调里组件就要读它）。
+function bumpSnapKey() { snapKey = `${currentLang}#${dictRev}` }
+
+// getSnapshotKey 给 React 的订阅快照：语种＋词典代数。
+// 两条腿缺一不可：只报语种测不到「chunk 到手」（本次缺陷本体），
+// 只报代数会在用户切语种时把同一代数值重复报给 React（切语种是真切换，必须重渲染）。
+function getSnapshotKey(): string { return snapKey }
+
+/** useLang 订阅当前语言与词典到手事件；语言切换或延迟词典落地时所有调用组件重渲染 */
+/** Hook：当前语言（订阅切换与词典到手） */
 export function useLang(): Lang {
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
+  useSyncExternalStore(subscribe, getSnapshotKey, getSnapshotKey)
+  return currentLang
 }
 
 /** t 纯函数取词（非响应式；组件内请配合 useLang 使用以获得切换刷新） */

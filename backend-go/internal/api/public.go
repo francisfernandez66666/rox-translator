@@ -151,7 +151,13 @@ table{display:block;overflow-x:auto;font-size:15px}
 </style></head><body>
 <div class="header"><div class="brand">🌐 能言 LangCross</div><nav>` + nav + `<a class="btn" href="/admin">管理后台</a></nav></div>
 <div class="wrap"><div class="card">` + body + `</div></div>
-<div class="footer">© 2026 能言 LangCross · 翻译平台<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
+<!-- ★ 2026-10-13 用户令②：本页脚补一条平台方品宣尾注（固定英文那一句；字面量**不在此抄写**——
+     唯一事实源是前端 components/BrandTagline.tsx 的 BRAND_TAGLINE，下面那行必须与它逐字相同，
+     等值锁见 frontend-react/src/components/BrandTagline.lock.test.ts 的 A/B 两段，删任一面即红）。
+     ⚠️ 这一面是后端直出的 /docs/*（法务页与帮助中心），不在前端 dist 里，改它**必须换 translator-server 二进制**才生效。
+     ⚠️ 说明注释里**故意不出现那串字面量**：闸门判"这句在不在"之前会先剥掉注释，
+        而把文案写在注释里＝注释冒充实现（本批反证真踩：删掉正文那句后 A 段仍判绿，只有 B 段红）。 -->
+<div class="footer">© 2026 能言 LangCross · 翻译平台 · Powered by LangCross AI<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 

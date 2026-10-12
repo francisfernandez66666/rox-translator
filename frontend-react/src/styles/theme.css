@@ -408,10 +408,23 @@ html, body { background: #000000; color: var(--lc-text); }
 .report-status { font-size: 14px; }
 .report-lang { color: var(--npz-text-2); }
 
-/* ---- 反馈入口 ---- */
-.msg-feedback-row { margin-top: 6px; display: flex; justify-content: flex-end; }
-.feedback-btn { border: none; background: transparent; color: var(--npz-text-2); font-size: 14px; cursor: pointer; padding: 2px 8px; border-radius: 10px; }
-.feedback-btn:hover { background: rgba(231, 233, 234, 0.10); color: #E7E9EA; }
+/* ---- 气泡尾部操作行（★ 2026-10-13 用户令③：「翻译完成后的内容字体大小和高低位置统一一下，
+       至少把查看原文/反馈/消耗在同一行」）----
+   改前的形态就是投诉本体：反馈＋模式/消耗在译文表里右对齐、meta 12px，
+   查看原文＋复制在它下面另起一行、左对齐 14px —— 两排、两档、两种高低。
+   现在是**一排四件**：字号只在 .msg-actions 声明一次（14px，同档），子件一律 `font: inherit`
+   且不带任何内联字号（谁都不再自己走一档），层级只靠**颜色**分档：
+   动作件走主文字档（可点），读数走 text-3（辅助 meta 档）。真值见 UI-ANNOTATIONS §6。
+   ⚠️ 排布按 left 对齐（原右对齐那一排已并进来），等值锁＝MessageBubble.dom.test.tsx ④⑤。 */
+.msg-actions-wrap { margin-top: 6px; }
+.msg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 14px; line-height: 20px; }
+.msg-act-btn { border: none; background: none; padding: 0; margin: 0; font: inherit; color: var(--npz-text-1); cursor: pointer; }
+.msg-act-btn:hover { opacity: .7; }
+/* 读数（模式 · 本次消耗）：同排同字号，只降一档颜色，不再降字号 */
+.msg-meta { font: inherit; color: var(--lc-text-3); white-space: nowrap; }
+/* 「查看原文」展开面板：做成操作行**下方**的兄弟节点（<details> 嵌在 flex 行里，
+   展开会把整行顶高，恰好破坏「同一行、同一高低」那一条） */
+.msg-src-panel { margin-top: 4px; padding: 4px 8px; font-size: 14px; line-height: 20px; color: var(--lc-text-3); white-space: pre-wrap; background: var(--npz-surface-2); border-radius: 4px; }
 
 /* ---- 下载卡图标：原蓝/红/绿 → 白 / 红 / 琥珀（无绿） ----
    三个文件类型档必须彼此可辨（交付包只保留白/红/琥珀三种非单色语义），

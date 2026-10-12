@@ -99,15 +99,15 @@ describe('WordSwap 多语言循环（★ 加载动效多语言播放）', () => 
   }, 20000)
 })
 
-describe('WordSwap 载入闸门（★ 2026-09-22「至少读完三个语言再载入」）', () => {
+describe('WordSwap 载入闸门（★ 2026-09-22 建立「演满再放行」；★ 2026-10-13 用户令下限 3→1）', () => {
   // 本 describe 走真实定时器，⑥ 一条就要二十多秒——慢是设计使然，不要为了提速改写法：
   // 换成 vi.useFakeTimers 后拍数会在瞬间跑完，用例只剩「计数器的算术」，
   // 验不到用户端的实质语义（三拍是否读得完），#66 就会被静默掏空。
   it('⑥ 每演完一拍回传累计拍数（1 → 2，正词定版停留之后才计数）', async () => {
     // onBeat 用 vi.fn() 包一层再接：既能查调用序列，又不改变组件自身的计数实现。
     const onBeat = vi.fn()
-    // ★ 时长锁（#66 的实质口径是「读得完」而非「闪过了」）：记录每拍完成时刻。
-    // 任何人把 SP.hold 调短都会静默废掉「至少读完三个语言」这条需求，而计次断言仍全绿。
+    // ★ 时长锁：**一拍必须读得完**（不是「闪过了」）。拍数下限已由 3 改 1，所以这一条现在是
+    // 唯一的「读得完」锁——任何人把 SP.hold 调短都会静默把那一拍压成一闪，而计次断言仍全绿。
     // 实测单拍约 2.7~3.1s，取下限 2000ms（机器卡顿只会让它变长，不会变短）。
     const t0 = Date.now()
     const stamps: number[] = []
@@ -131,8 +131,9 @@ describe('WordSwap 载入闸门（★ 2026-09-22「至少读完三个语言再�
     // 接口先回来：此时一拍未演完，占位不能收（这正是旧行为「闪一下就没了」的成因）
     act(() => rerender({ loading: false }))
     expect(result.current.busy).toBe(true)
-    // 边界取 minBeats-1 / minBeats 两点：只测「满 3 拍放行」会漏掉 off-by-one，
-    // 差一拍就收场（用户读到第 2 个语种被打断）正是这条需求最直观的失败形态。
+    // 边界取 minBeats-1 / minBeats 两点：只测「满 minBeats 拍放行」会漏掉 off-by-one，
+    // 差一拍就收场正是这条需求最直观的失败形态。
+    // ★ 2026-10-13 用户令后 minBeats=1，此处的「-1 点」即 0 拍：一拍未演完仍不许放行。
     act(() => { result.current.onBeat(MIN_READ_BEATS - 1) })
     expect(result.current.busy).toBe(true)
     act(() => { result.current.onBeat(MIN_READ_BEATS) })
@@ -143,7 +144,7 @@ describe('WordSwap 载入闸门（★ 2026-09-22「至少读完三个语言再�
     // 本条是 ⑦ 的**反向**锁：闸门只在「确实发生过加载」的那次挂载上补拍，不是无条件卡首屏。
     // ⑦ 全程从 loading:true 起步，证明不了 need 的抬起时机；情形一补的正是这个洞
     // （实现里 need 初值为 0、仅由 loading 抬起，写成「无条件 need=minBeats」的话 ⑦ 仍全绿，
-    //   而未登录直出登录页的访客会被凭空多按 9 秒——这条先红）。
+    //   而未登录直出登录页的访客会被凭空多按一整拍（≈3s，旧口径是三拍 ≈9s）——这条先红）。
     // 情形一：restoring 恒 false（无 token 直出登录页），首屏不该被动效拖住
     const a = renderHook(({ loading }: { loading: boolean }) => useWordSwapGate(loading), { initialProps: { loading: false } })
     expect(a.result.current.busy).toBe(false)
@@ -158,10 +159,11 @@ describe('WordSwap 载入闸门（★ 2026-09-22「至少读完三个语言再�
     expect(b.result.current.busy).toBe(false)
   })
 
-  it('⑨ 口径常量锁：闸门至少 3 拍，且缺省词对够排 3 个不同语种', () => {
-    // 「三个语言」是用户明确需求，落在 MIN_READ_BEATS 上；词对不足 3 拍时会循环回 EN，
-    // 用户看到的仍是同一批语种，等于需求被悄悄打折，故此处一并锁住。
-    expect(MIN_READ_BEATS).toBe(3)
+  it('⑨ 口径常量锁：闸门强制一拍（★ 2026-10-13 用户令由 3 改 1），且缺省词对够排一轮不同语种', () => {
+    // 本条锁的是**当前口径**：强制完整演示一次就交回判定权——前后端就绪即放行、
+    // 未就绪由 loading 那一半继续占位到就绪。**不许**把它调回 3（那是用户明确撤掉的固定时长税），
+    // 也不许调成 0（一拍都不演＝「加载态闪一下就没了」的旧形态复发）。
+    expect(MIN_READ_BEATS).toBe(1)
     expect(DEFAULT_PAIRS.length).toBeGreaterThanOrEqual(MIN_READ_BEATS)
     expect(new Set(DEFAULT_PAIRS.map((p) => p.tag)).size).toBeGreaterThanOrEqual(MIN_READ_BEATS)
   })

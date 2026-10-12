@@ -23,6 +23,9 @@ vi.mock('@/api', () => ({
 }))
 
 import Landing from './Landing'
+// ★ 2026-10-13 用户后令：触发钮可见文字固定英文，判据从组件取同一常量（不在此重写字面量，
+//   否则将来改文案会让「期望值」落后于实现，锁变成判「旧文案还在不在」）
+import { LANG_BTN_FIXED_TEXT } from './LangSelect'
 
 beforeEach(() => {
   cleanup()
@@ -110,12 +113,16 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', { 
   })
 
   it('⑦ 顶部导航挂 LangSelect（12 语种切换入口对访客可见）', () => {
-    // ★ 判据翻转（用户拍板⑦，非回归）：触发钮固定词「语言」（app.langBtn），自称名只在菜单选中项
+    // ★ 判据翻转（用户后令 2026-10-13，非回归）：触发钮**可见文字固定英文 "Language"**，
+    //   不再随界面语言本地化（拍板⑦的本地化那一半被覆盖）；自称名只在菜单选中项与 title
     render(<Landing />)
     const btn = document.querySelector('header .lang-sel-btn') as HTMLElement
     expect(btn).toBeTruthy()
-    expect(btn.textContent).toContain(t('app.langBtn')) // 固定词「语言」
+    expect(btn.textContent).toContain(LANG_BTN_FIXED_TEXT) // 固定 "Language"
+    expect(btn.textContent).not.toContain(t('app.langBtn')) // 中文本地字不许回到可见腿
     expect(btn.textContent).not.toContain('简体中文') // 自称名不许回占触发钮
+    // 本地化仍在读屏腿：aria-label 取该语种词典的 app.langBtn（zh 界面念「语言」）
+    expect(btn.getAttribute('aria-label')).toBe(t('app.langBtn'))
     // title 悬停腿保留当前语种信息
     expect(btn.getAttribute('title')).toBe('简体中文')
     // 展开菜单：选中项（is-cur）携带自称名「简体中文」

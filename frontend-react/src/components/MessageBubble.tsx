@@ -79,6 +79,10 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   // 移动端标记（窗口宽度 ≤ 768px）；typeof window 兜底：SSR/单测环境无 window，初值不能直接读
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈
+  // ★ 2026-10-13 用户令③：双语对照的「查看原文」从 <details> 换成受控展开——
+  // details 展开时面板在 flex 行内部长高，会把四个控件那一行顶歪（正是本条要治的「高低不统一」），
+  // 所以展开态归组件管，面板渲染成行下方的兄弟节点（折叠/展开语义与旧版一致，功能一项未减）。
+  const [srcOpen, setSrcOpen] = useState(false)
   // ★ 决策⑪②（2026-10-10）：慢预警横幅的「继续等待」本地消隐态——用户点了继续等就
   //   不再反复打扰；「转工单」整页跳工单页（MessageBubble 不在 Router 深处取导航，
   //   位置变更走 location.assign，测试环境可桩掉）。
@@ -464,39 +468,56 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                 )}
               </div>
             ))}
-            {/* 反馈入口 + ★ 14.4 meta 行（2026-10-10）：模式与积分移出 content 后落在这里——
-                小字灰档（var(--lc-text-3)），与反馈入口同排；积分只在确实扣了点时出现 */}
-            <div className="msg-feedback-row">
-              <button type="button" className="msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}
-                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}>
-                 {t('fb.entry')}
-              </button>
-              <span className="msg-meta" data-testid="msg-meta" style={{ fontSize: 12, color: 'var(--lc-text-3)', whiteSpace: 'nowrap' }}>
-                {modeBadge?.label}
-                {!!message.points_used && ` · ${tpl('msg.pointsUsed', { n: fmtPoints(message.points_used) })}`}
-              </span>
-            </div>
           </div>
         )}
 
-        {/* 普通文本（Markdown） */}
+        {/* 普通文本（Markdown）：★ 14.4 之后尾部操作行排在它后面，两类正文共用同一个「行尾控件」位置 */}
         {showMarkdown && <div dir="auto" className="bubble-text" dangerouslySetInnerHTML={{ __html: html }} />}
 
-        {/* ★ F7：双语对照（折叠显示原文）+ 一键复制译文（★ 14.4：复制只带译文本体） */}
-        {isAssistant && (source || copyText) && (
-          <div className="msg-srcbar" style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 6 }}>
-            {!!source && (
-              <details>
-                <summary style={{ fontSize: 14, color: 'var(--lc-text-3)', cursor: 'pointer' }}>{t('msg.showSrc')}</summary>
-                <div dir="auto" style={{ fontSize: 14, color: 'var(--lc-text-4)', whiteSpace: 'pre-wrap', marginTop: 4, padding: '4px 8px', background: 'rgba(128,128,128,.08)', borderRadius: 4 }}>{source}</div>
-              </details>
-            )}
-            {!!copyText && (
-              <button type="button" aria-label={t('msg.copy')} data-testid="copy-translation"
-                      style={{ border: 'none', background: 'none', padding: 0, font: 'inherit', fontSize: 14, color: '#E7E9EA', cursor: 'pointer' }}
-                      onClick={() => { void navigator.clipboard?.writeText(copyText); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
-                {copied ? t('msg.copied') : t('msg.copy')}
-              </button>
+        {/* ★ 2026-10-13 用户令③（「翻译完成后的内容字体大小和高低位置统一一下，至少把
+            查看原文/反馈/消耗在同一行」）：气泡尾部的四个小控件归到**同一行、同一字号档**。
+            改前的形态正是投诉本体——反馈＋模式/消耗在译文表里右对齐、meta 12px，
+            查看原文＋复制在它下面另起一行、左对齐 14px（两排两档两种高低）。
+            现在四个控件同排同档（14px 由 .msg-actions 一处声明，子件一律 font:inherit，
+            谁都不再写内联字号＝不会再各走一档），层级只靠颜色分档（text-1 动作 / text-3 读数）。
+            展开面板从 <details> 改成状态驱动：details 嵌在 flex 行里，展开会把整行顶高，
+            恰好破坏「同一行、同一高低」这一条，所以面板做成行下方的兄弟节点。
+            真值见 UI-ANNOTATIONS §6「气泡尾部操作行」；
+            锁＝MessageBubble.dom.test.tsx ④⑦⑧⑧b⑨⑩（结构＋行内零内联样式＋源码级 CSS 等值＋五枚反证）
+            ＋ e2e/translate_flow.spec.ts TF4（真浏览器量四件字号一律 14px、垂直中心同带）。 */}
+        {isAssistant && (source || copyText || hasTranslations) && (
+          <div className="msg-actions-wrap">
+            <div className="msg-actions" data-testid="msg-actions">
+              {!!source && (
+                <button type="button" className="msg-act-btn" data-testid="show-src"
+                        aria-expanded={srcOpen} onClick={() => setSrcOpen((v) => !v)}>
+                  {t('msg.showSrc')}
+                </button>
+              )}
+              {!!copyText && (
+                <button type="button" className="msg-act-btn" aria-label={t('msg.copy')} data-testid="copy-translation"
+                        onClick={() => { void navigator.clipboard?.writeText(copyText); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
+                  {copied ? t('msg.copied') : t('msg.copy')}
+                </button>
+              )}
+              {/* ★ 14.4 → ★ 2026-10-13 用户令③：反馈入口与「消耗」读数跟着搬进同一排
+                  （原来它们就是同排的两件，只是那一排在右边）；积分只在确实扣了点时出现。
+                  ⚠️ 模式**不在这里重复**——同一个词在译文表头已经是一枚带色的胶囊（.mode-badge），
+                  meta 再念一遍纯文本就是「同屏两处一模一样、还各是一档字号」，正是本条要统一掉的东西；
+                  能力一项未减：读的是同一个 modeBadge，只是只出栈一次。 */}
+              {hasTranslations && (
+                <button type="button" className="msg-act-btn msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}>
+                  {t('fb.entry')}
+                </button>
+              )}
+              {hasTranslations && !!message.points_used && (
+                <span className="msg-meta" data-testid="msg-meta">
+                  {tpl('msg.pointsUsed', { n: fmtPoints(message.points_used) })}
+                </span>
+              )}
+            </div>
+            {!!source && srcOpen && (
+              <div className="msg-src-panel" data-testid="src-panel" dir="auto">{source}</div>
             )}
           </div>
         )}

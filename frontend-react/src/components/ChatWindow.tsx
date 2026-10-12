@@ -15,6 +15,11 @@
 //   （超 3 折成「+n」，点开全展开）· 模式 · 缩翻 · 主按钮），1280×720 实测框脚 109px、输入卡 90px。
 //   形态锁三处（本文件 .cw-dialog* + ChatWindow.dom.test.tsx ①⑤ + pixel_uat.spec.ts P2b）
 //   已按「单框 + 输入在底 + 输入区单卡单工具条」钉死；再改形态必须先复述目标形态向用户确认，不要凭措辞反推。
+// ★ 2026-10-13 用户令①（「对话框没占满上下区域（除页眉页脚）」）：
+//   2026-10-10 决策⑩ 把默认档从 flex:1 吃满改成固定 min(70vh,640px)，实测就是这条投诉的成因——
+//   高屏上对话框只到 640px，下面留一大片黑。现把默认档改回**吃满页眉与页脚之间**（见 .cw-dialog 的
+//   flex:1 1 0），决策⑩ 的**能力**一项未减：顶缘手柄照旧可拖（拖过即进 .cw-resized 覆盖档）、
+//   双击回默认、高度记 localStorage。真值见 UI-ANNOTATIONS §6「工作台对话框默认高度档」。
 // ★ #36 同时移除即时翻译的文件翻译入口（上传按钮/隐藏 file input/校验/发送）：
 //       文件翻译统一走「文档翻译」工单页（TicketsPage → /api/tickets/create-file），
 //       即时翻译只做文本，避免同一份文件两条口径不一致的链路。
@@ -58,14 +63,21 @@ const CARD: React.CSSProperties = {
   background: 'var(--lc-panel)', border: '1.2px solid var(--lc-border-card)', borderRadius: 14,
 }
 
-// ★ 决策⑩（2026-10-10）：对话框高度记忆键（带 lc- 前缀的站点约定）。存的是像素值，
-//   0/缺键＝默认档 min(70vh,640px)；范围钳在 320px–90vh（与 CSS 的 min/max-height 同档）。
+// ★ 决策⑩（2026-10-10）：对话框高度记忆键（带 lc- 前缀的站点约定）。存的是像素值。
+// ★ 2026-10-13 用户令①（「对话框没占满上下区域（除页眉页脚）」）：默认档从固定 min(70vh,640px)
+//   改回**吃满 .cw-root 的剩余高度**（页眉与页脚之间的那一段全给对话框），
+//   于是 0/缺键＝默认档（CSS 的 flex:1 1 0 承担，JS 不写内联高度），
+//   >0＝用户拖过的**覆盖档**（加 .cw-resized 让内联高度生效，flex 不再拉伸）。
+//   范围钳在 320px–90vh（拖拽档与恢复档共用 cwClampDialogH 这一把尺子）。
 const CW_DIALOG_H_KEY = 'lc-cw-dialog-h'
-// 默认高度档的 JS 侧读数（拖拽起点用；渲染仍走 CSS 的 min(70vh,640px)，两处同口径）
+// 默认档的 JS 侧**估算**读数：只在实际高度量不到时用（jsdom 里 clientHeight 恒 0、
+// 极端情况下手柄先于布局完成被按下）。渲染本身不再依赖这个数字——默认档由 flex 吃满，
+// 所以这里估偏了也不会改变界面，只影响「从默认档起拖」的第一下行程。
 function cwDefaultDialogH(): number {
   return Math.min(Math.round(window.innerHeight * 0.7), 640)
 }
-// 高度钳制纯函数：拖拽与会话恢复共用同一条 320px–90vh 档（低于下限＝输入区被压没，高于上限＝又回到占满整屏）
+// 高度钳制纯函数：拖拽与会话恢复共用同一条 320px–90vh 档（低于下限＝输入区被压没，
+// 高于上限＝拖过头要把页脚顶出屏幕，得自己滚回去才看得见）
 function cwClampDialogH(h: number): number {
   return Math.max(320, Math.min(Math.round(window.innerHeight * 0.9), h))
 }
@@ -110,7 +122,7 @@ export default function ChatWindow() {
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQ, setSearchQ] = useState('')
 
-  // ★ 决策⑩（2026-10-10）：对话框高度（像素，0=默认档 min(70vh,640px)，记忆到 localStorage）
+  // ★ 决策⑩（2026-10-10）：对话框高度（像素，0=默认档「吃满页眉与页脚之间」，>0=拖拽覆盖档，记忆到 localStorage）
   const [dialogH, setDialogH] = useState<number>(() => {
     try { return parseInt(localStorage.getItem(CW_DIALOG_H_KEY) || '0', 10) || 0 } catch { return 0 }
   })
@@ -128,6 +140,9 @@ export default function ChatWindow() {
   // scrollRef 现在指向合并框内的滚动区（原文输入 + 结果气泡都在其中）
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  // ★ 2026-10-13 用户令①：默认档改回 flex 吃满后，「起拖时这一档实际多高」只有浏览器知道，
+  //   所以拖拽起点要实测这个节点（量不到才回落到按视口推导的估算档）。
+  const dialogRef = useRef<HTMLDivElement>(null)
 
   // ---- 余额 / 用量加载 ----
   // 从 myPackage 接口读取个人余额、今日用量及企业预算额度（均为积分）
@@ -208,12 +223,14 @@ export default function ChatWindow() {
     if (!text || chat.selectedLangs.length === 0) { setEstimate(null); return }
     let alive = true
     const timer = setTimeout(async () => {
-      const r = await estimateTranslation(text, chat.selectedLangs, mode)
+      const r = await estimateTranslation(text, chat.selectedLangs, mode, lang)
       if (!alive || !r) return
       setEstimate({ min: r.points_min, max: r.points_max, s: r.cost_sentences_approx ?? 0, low: r.points_balance < r.points_max, qd: r.llm_queue_depth })
     }, 600)
     return () => { alive = false; clearTimeout(timer) }
-  }, [input, chat.selectedLangs, mode])
+    // ★ lang 进依赖：界面语言会改变后端提示词那一套（预估的固定开销按真实提示词现算），
+    //   不重跑就会把「切换语言之前」那一份区间继续挂着。
+  }, [input, chat.selectedLangs, mode, lang])
 
   // ★ F7：快捷键 Cmd/Ctrl+K 聚焦搜索框
   useEffect(() => {
@@ -278,8 +295,11 @@ export default function ChatWindow() {
   function startDrag(e: React.MouseEvent) {
     e.preventDefault()
     const startY = e.clientY
-    // 钳制交给 cwClampDialogH（320px–90vh 与 CSS 同档），这里只取起点
-    const startH = dialogHRef.current > 0 ? dialogHRef.current : cwDefaultDialogH()
+    // 起点优先级：已拖过的记忆高度 ＞ **当前实测高度**（默认档是 flex 吃满，只有量出来才知道多高）
+    // ＞ 量不到时的视口估算档（jsdom 里 clientHeight 恒 0，走第三条）。
+    // 钳制交给 cwClampDialogH（320px–90vh 与 .cw-resized 的 max-height 同档），这里只取起点。
+    const measured = dialogRef.current ? dialogRef.current.clientHeight : 0
+    const startH = dialogHRef.current > 0 ? dialogHRef.current : (measured > 0 ? measured : cwDefaultDialogH())
     const onMove = (ev: MouseEvent) => {
       setDialogHeight(cwClampDialogH(startH + (startY - ev.clientY)))
     }
@@ -302,6 +322,9 @@ export default function ChatWindow() {
   //   否则会把用户正要看的东西藏进收起态里。
   const hasSession = chat.messages.length > 0 || chat.isLoading
   const collapsed = !expandedLatch && input.trim() === '' && !hasSession && !searchOpen && !chat.errorMessage
+  // ★ 2026-10-13 用户令①：只有「用户拖过」（记忆高度 >0）且当前不是收起态时，才进入覆盖档
+  //   .cw-resized（flex:0 0 auto）——否则 flex:1 1 0 会把内联 height 直接吃掉，拖拽手柄形同失效。
+  const resized = dialogH > 0 && !collapsed
   // 点击入口条展开并聚焦输入框（latch 置位后不再自动收起）
   function expandFromEntry() {
     setExpandedLatch(true)
@@ -397,13 +420,17 @@ export default function ChatWindow() {
       )}
 
       {/* ★ #36 合并对话框：内部三段式（框头 / 滚动区 / 框脚）。
-          ★ 决策⑩（2026-10-10）：高度从 flex:1 吃满改为固定档 min(70vh,640px)（CSS），
-          顶缘手柄可拖 320px–90vh、双击回默认、高度记 localStorage（lc-cw-dialog-h）；
+          ★ 2026-10-13 用户令①（覆盖 2026-10-10 决策⑩ 的固定默认档）：默认高度**吃满页眉与页脚
+          之间的剩余空间**（.cw-dialog 走 flex:1 1 0，JS 不写内联高度），与本文件头第 3 行
+          「一张占满除页眉页脚外整屏的对话框」的定档口径重新一致；
+          顶缘手柄仍可拖 320px–90vh、双击回默认、高度记 localStorage（lc-cw-dialog-h），
+          拖过之后进入覆盖档 .cw-resized（内联高度生效、不再被 flex 拉伸）；
           空输入且无会话时整卡收成单行入口条（cw-collapsed：框头/滚动区/工具条隐藏，
           只留输入行，点击展开——收起是 CSS 档不是卸载，DOM 归属口径与测试锁不冲突）。 */}
       <div
-        className={`cw-dialog${collapsed ? ' cw-collapsed' : ''}`}
-        style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)', ...(dialogH > 0 && !collapsed ? { height: cwClampDialogH(dialogH) } : {}) }}
+        ref={dialogRef}
+        className={`cw-dialog${collapsed ? ' cw-collapsed' : ''}${resized ? ' cw-resized' : ''}`}
+        style={{ ...CARD, boxShadow: '0 8px 24px rgba(0,0,0,.4)', ...(resized ? { height: cwClampDialogH(dialogH) } : {}) }}
         onClick={collapsed ? expandFromEntry : undefined}
       >
         {/* ★ 决策⑩：顶缘拖拽手柄（6px 命中带，cursor:row-resize；双击回默认档） */}
@@ -546,23 +573,30 @@ export default function ChatWindow() {
 }
 
 // —— 页面级样式（cw- 前缀，避免与组件库类名重名）——
-// .cw-dialog 用 flex:1 + min-height:0 吃满外层剩余高度；内部滚动只发生在 .cw-dialog-body。
+// .cw-dialog 默认档用 flex:1 吃满外层剩余高度（页眉与页脚之间），内部滚动只发生在 .cw-dialog-body；
+// 拖过的覆盖档 .cw-resized 才撤掉拉伸、按内联高度定高（见上方 2026-10-13 用户令① 那段）。
 // .cw-dialog-acts 的右内边距是给固定定位的 AI 助手浮球让位，避免遮住主按钮。
 // 描边/文字一律取 --lc-border-* 与 --lc-text-* 令牌（本文件进 #68 闸门扫描范围，
 // 写死暗值会红）；圆角走 --lc-r-ctl，与组件库控件同档，避免「同为按钮却两种圆角」。
 // 焦点环单独写 :focus-visible：纯黑底上默认 UA 焦点样式几乎看不见，必须自绘 outline。
 const CW_CSS = `
 .cw-root{box-sizing:border-box}
-/* ★ 决策⑩（2026-10-10）：高度口径从 flex:1 吃满改为固定默认档 min(70vh,640px)，
-   可拖范围由 min-height:320px / max-height:90vh 承担（拖拽时 JS 写内联 height，
-   同一条 320–90vh 钳制，两处口径一致）。 */
-.cw-dialog{display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px;height:min(70vh,640px);min-height:320px;max-height:90vh}
+/* ★ 2026-10-13 用户令①（覆盖决策⑩ 的固定默认档 min(70vh,640px)）：默认档＝**吃满 .cw-root
+   里除横幅/余额条/搜索条之外的全部剩余高度**，也就是页眉与页脚之间那一段全给对话框
+   （flex:1 1 0 而不是写死 vh——写死 vh 在矮屏会把页脚顶出首屏、在高屏又留一大片黑）。
+   下限 320px 保住「框头＋一行输入＋工具条」不被压没；可拖上限由 .cw-resized 的 max-height 与
+   JS 的 cwClampDialogH 同档承担（320–90vh）。 */
+.cw-dialog{display:flex;flex-direction:column;overflow:hidden;margin:12px 6% 14px;flex:1 1 0;min-height:320px}
 /* ★ 决策⑩：顶缘拖拽手柄——6px 命中带贴住卡片顶缘，hover 时给出可拖暗示 */
 .cw-resize-handle{flex:0 0 6px;cursor:row-resize;background:transparent}
 .cw-resize-handle:hover{background:var(--lc-border-faint)}
+/* ★ 2026-10-13：覆盖档＝用户拖过（内联 height 才是最终高度）。必须撤掉 flex 的拉伸与收缩，
+   否则 flex-grow 会把内联高度当摆设、手柄拖不动；90vh 上限与 JS 钳制同一把尺子。 */
+.cw-dialog.cw-resized{flex:0 0 auto;max-height:90vh}
 /* ★ 决策⑩：空态整卡收成单行入口条——收起是 CSS 档（display:none）而非卸载，
-   DOM 归属与既有结构锁不冲突；cursor:text 提示「点一下就能打字」。 */
-.cw-dialog.cw-collapsed{height:auto;min-height:0;cursor:text}
+   DOM 归属与既有结构锁不冲突；cursor:text 提示「点一下就能打字」。
+   收起档同样必须撤 flex 拉伸（单行条不该被撑满），高度交给内容。 */
+.cw-dialog.cw-collapsed{flex:0 0 auto;height:auto;min-height:0;cursor:text}
 .cw-dialog.cw-collapsed .cw-resize-handle,
 .cw-dialog.cw-collapsed .cw-dialog-head,
 .cw-dialog.cw-collapsed .cw-dialog-body,

@@ -123,6 +123,70 @@ func TestPublicDocPageActiveNav(t *testing.T) {
 	}
 }
 
+// ---------- 页脚品宣尾注（★ 2026-10-13 用户令②） ----------
+
+// brandTaglineForUITest 是后端直出页脚必须出现的那句固定文案。
+// 唯一事实源在**前端** `frontend-react/src/components/BrandTagline.tsx` 的 BRAND_TAGLINE，
+// 两边逐字等值由那条锁的 B 段钉住；本测试钉的是另一半——**服务端真发出去的那份 HTML** 里
+// 页脚那段确实带着这句（前端静态锁只读源码文件，读不到 publicLayout 拼完的结果）。
+const brandTaglineForUITest = "Powered by LangCross AI"
+
+// footerTaglineViolation 判「这份 HTML 的页脚正文里有没有那句品宣尾注」，返回违规说明（空串＝合规）。
+//
+// ★ 两条刻意的窄口径，都是本批反证真踩出来的：
+//  1. **先剥注释再判**（复用同文件 stripCodeComments）：第一版只问"整份文件含不含这句"，
+//     而我在页脚上方写的说明注释里引用了用户原话，于是把正文那句删掉后照样判绿——
+//     这叫「注释冒充实现」，是源码级正向锁最典型的假绿形态。
+//  2. **只看 <div class="footer"> 那一段**：不给整份 HTML 判，否则别处（导航、正文）
+//     出现同样的字样也会把页脚这一腿蒙过去。段取不到即判"锁失明"而不是"没有违规"。
+func footerTaglineViolation(html string) string {
+	m := regexp.MustCompile(`(?s)<div class="footer">(.*?)</div>`).FindStringSubmatch(stripCodeComments(html))
+	if m == nil {
+		return `取不到 <div class="footer"> 那段（页脚写法变了＝锁失明，不是这里干净了）`
+	}
+	if !strings.Contains(m[1], brandTaglineForUITest) {
+		return "页脚正文缺这句固定文案（注释里写了也不算）"
+	}
+	return ""
+}
+
+// TestPublicDocPageFooterBrandTagline 三篇公开文档页的页脚都必须出这句（用户令「所有有页脚的页面」）。
+func TestPublicDocPageFooterBrandTagline(t *testing.T) {
+	pages := map[string]string{
+		"terms":   publicDocPage("用户协议", "<p>正文</p>", "terms"),
+		"sla":     publicDocPageLang("SLA", "<p>中</p>", "<p>en</p>", "sla"),
+		"privacy": publicDocPage("隐私协议", "<p>正文</p>", "privacy"),
+	}
+	for name, html := range pages {
+		if why := footerTaglineViolation(html); why != "" {
+			t.Errorf("/docs/%s 页脚品宣尾注不合格：%s", name, why)
+		}
+	}
+	// 反证（同一判据函数，证明上面三条不是摆设）：
+	// ① 页脚那句整条删掉 ⇒ 必须红
+	broken := strings.Replace(pages["terms"], " · "+brandTaglineForUITest, "", 1)
+	if why := footerTaglineViolation(broken); why == "" {
+		t.Error("反证失效：删掉页脚那句仍判绿")
+	}
+	// ② 只在 HTML 注释里写这句、正文没有 ⇒ 必须红（注释冒充实现那一族）。
+	//    ⚠️ 夹具必须建在**已经删掉正文那句**的 broken 上：直接往现网 HTML 上插注释，
+	//    正文那句还在（本批实跑第一次就因此判绿），测的是"有没有第二处"而不是"注释不算数"。
+	commentOnly := strings.Replace(broken, `<div class="footer">© 2026`,
+		`<div class="footer"><!-- `+brandTaglineForUITest+` -->© 2026`, 1)
+	if why := footerTaglineViolation(commentOnly); why == "" {
+		t.Error("反证失效：注释里写着那句就判绿（注释冒充实现）")
+	}
+	// ③ 页脚那段整块没了 ⇒ 报"锁失明"而不是静默合规
+	noFooter := regexp.MustCompile(`(?s)<div class="footer">.*?</div>`).ReplaceAllString(pages["terms"], "")
+	if why := footerTaglineViolation(noFooter); !strings.Contains(why, "锁失明") {
+		t.Errorf("页脚整段被删时应报锁失明，实报：%q", why)
+	}
+	// ④ 对照组：合规文本必须真走到"空串"，否则前三条只是恒红
+	if why := footerTaglineViolation(pages["terms"]); why != "" {
+		t.Errorf("现网形态被判红（恒红闸门）：%s", why)
+	}
+}
+
 // ---------- 其余两处后端直出页（/openapi/docs、/office/taskpane.html）----------
 
 // TestOpenAPIDocsMonochromeTruth 开放 API 文档页（Markdown 渲染壳）必须走 §1.1 纯黑令牌。
