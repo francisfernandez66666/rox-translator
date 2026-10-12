@@ -264,11 +264,15 @@ TMPB="/tmp/_pd_body.$$"; TMPH="/tmp/_pd_hdr.$$"
 #    传输被切断而 http_code 照旧 200），同一 URL 隔 30 秒重拨又全绿
 #   （rox-test 首页连拨两次 `code=000`，第三次 `200/8,935 B` 且 `__BRANDING__` 命中 1）。
 #   ⇒ 这是跨境那一跳在**冷缓存＋低吞吐**下的抖动（本批要治的那个病，不是配置坏了）。
-#   两件事必须同时成立，缺一都出事：
+#   三件事必须同时成立，缺一都出事：
 #   ① **只重拨"这一跳没走完"**（`CURL_RC≠0` 或 `CODE=000`）——判据本身不合格的（enc 不对、sha 不对）**不重拨**，
 #      否则就是把一条真红摇成绿灯；
 #   ② **完整收完才算数**：`CURL_RC` 必须为 0 并进入判据。旧形态只问 `code=200`＋`size<raw`，
-#      于是 28,713 B 的**半截 gzip 体**会被判成"回落链活着"（那是假绿——客户手上那份 JS 根本没收完）。
+#      于是 28,713 B 的**半截 gzip 体**会被判成"回落链活着"（那是假绿——客户手上那份 JS 根本没收完）；
+#   ③ **重拨要换一条传输路径**，不然就是在同一颗钉子上敲第三次：现网实测这一跳的失败**集中在 HTTP/2**
+#      （`curl_rc=16` framing／`35` SSL／`28` 超时），同一分钟 `--http1.1` 立刻 `200` 且内容判据照旧过
+#      ⇒ 第二枪起自动换 1.1（只换协商，不放宽任何一条内容判据；BAD 消息里带末次用的协议，
+#      否则"换了协议才通"这件事只存在于我脑子里，下一个人只会看到一串绿）。
 #   重拨次数用尽仍不成 ⇒ 照旧 BAD，并在消息里带上"拨了几次"，别让"没拨通"读成"现网没问题"。
 PUB_TRIES="${PUB_TRIES:-3}"
 PUB_MAX="${PUB_MAX:-120}"
@@ -277,14 +281,31 @@ PUB_MAX="${PUB_MAX:-120}"
 #   ⇒ 拿"压缩档的预算"去判原文档就是**结构性偶红**（而偶红的闸门和真断在屏幕上一样，会把人引去查 Caddy）。
 #   原文档这一腿单独给 300 s；判据本身一字不放宽。
 PUB_MAX_BIG="${PUB_MAX_BIG:-300}"
+# ★ 小页面腿（首页 8.6 KB／dotfile 兜底／404 探针）再单开一档：它们要搬的字节**最少**，
+#   却最容易死在连接层抖动上——10-12 实测同一条首页腿连拨三次 `curl_rc=28／16／35`，
+#   每次按 120 s 白等 ⇒ 一条 8 KB 的腿花掉 6 分钟还是红。
+#   ⇒ 短预算×多拨（30 s×5）；判据本身一字不放宽（仍然 `pd_complete` ＋ `code=200` ＋ 命中=1）。
+PUB_MAX_SMALL="${PUB_MAX_SMALL:-30}"
+PUB_TRIES_SMALL="${PUB_TRIES_SMALL:-5}"
 PD_MAX="$PUB_MAX"
 pd_fetch() {
   BODY_OUT="$1"; HDR_OUT="$2"; URL_IN="$3"; shift 3
   local _n _rc
   for _n in 1 2 3 4 5; do
-    [ "$_n" -gt "$PUB_TRIES" ] && break
+    # 逐腿档（PD_TRIES_LIM）没设就按全局 PUB_TRIES；循环上界 5 是这两档的硬天花板
+    [ "$_n" -gt "${PD_TRIES_LIM:-$PUB_TRIES}" ] && break
+    # ★ 重拨的**第二枪起换 HTTP/1.1**（现网实测：同一台同一分钟，首页 8,608 B 走 h2 三连败
+    #   `curl_rc=16`（HTTP/2 framing layer）／`28`（超时），换 --http1.1 就拿到 `200 8608 B`＋`__BRANDING__` 命中 1；
+    #   606 KB 原文那一腿同形（h2 退 `rc=16 size=0`））。这一换只动**传输协商**，内容判据一字不放宽，
+    #   所以它属于① 的"这一跳没走完"，不属于"把真红摇成绿灯"。
+    CURL_PROTO="h2"
     rm -f "$BODY_OUT" "$HDR_OUT"
-    CODE=$(curl -s -o "$BODY_OUT" -D "$HDR_OUT" -w '%{http_code}' --max-time "${PD_MAX:-$PUB_MAX}" "$@" "$URL_IN"); _rc=$?
+    if [ "$_n" -gt 1 ]; then
+      CURL_PROTO="http1.1"
+      CODE=$(curl -s --http1.1 -o "$BODY_OUT" -D "$HDR_OUT" -w '%{http_code}' --max-time "${PD_MAX:-$PUB_MAX}" "$@" "$URL_IN"); _rc=$?
+    else
+      CODE=$(curl -s -o "$BODY_OUT" -D "$HDR_OUT" -w '%{http_code}' --max-time "${PD_MAX:-$PUB_MAX}" "$@" "$URL_IN"); _rc=$?
+    fi
     [ -f "$BODY_OUT" ] || : > "$BODY_OUT"
     SIZE=$(wc -c <"$BODY_OUT" | tr -d ' ')
     SHA=$(shasum -a 256 "$BODY_OUT" 2>/dev/null | awk '{print $1}')
@@ -299,13 +320,19 @@ pd_fetch() {
 }
 # 公网段的**每一条**判据都先问"这次收完整了吗"（CURL_RC=0）再问内容；缺这一档时半截体会被放行
 pd_complete() { [ "${CURL_RC:-1}" = "0" ]; }
+# 小页面腿（首页／dotfile／404 探针）走短预算×多拨；跑完把两档复位，免得下一腿吃错档
+pd_small() {
+  PD_MAX="$PUB_MAX_SMALL"; PD_TRIES_LIM="$PUB_TRIES_SMALL"
+  pd_fetch "$@"
+  PD_MAX="$PUB_MAX"; PD_TRIES_LIM=""
+}
 for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   # 档一：br, gzip ⇒ 必须 br，且下载体逐字节等于本机 .br
   pd_fetch "$TMPB" "$TMPH" "$u/$ENTRY" -H 'Accept-Encoding: br, gzip'
   if pd_complete && [ "$ENC" = "br" ] && [ "$SHA" = "$L_BR_SHA" ]; then
     echo "  OK   $u/$ENTRY content-encoding=br 且下载体 sha＝本机 .br（${SIZE} B code=$CODE）"
   else
-    echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} sha=${SHA:0:16} size=$SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次 —— 期望 br/${L_BR_SHA:0:16}（${L_BR_SIZE} B）⇒ 侧车没发出／CDN 剥了 br／磁盘是旧代（curl_rc≠0 或 code=000＝这一跳没走完，不是配置问题，但要人工确认）"
+    echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} sha=${SHA:0:16} size=$SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} —— 期望 br/${L_BR_SHA:0:16}（${L_BR_SIZE} B）⇒ 侧车没发出／CDN 剥了 br／磁盘是旧代（curl_rc≠0 或 code=000＝这一跳没走完，不是配置问题，但要人工确认）"
     PUB_RC=1
   fi
 
@@ -320,7 +347,7 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   if pd_complete && [ "$ENC" = "gzip" ] && [ "${SIZE:-0}" -gt 0 ] && [ "${SIZE:-0}" -lt "$L_SIZE" ]; then
     echo "  OK   $u/$ENTRY 只给 gzip 时回压缩档（size=$SIZE < raw=$L_SIZE；体的 sha=${SHA:0:16} 是 CF 边缘重压后的字节，不与本机 .gz 等值——等值看源站段 F-2）"
   else
-    echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次 —— 期望 enc=gzip 且 0<size<raw 且完整收完 ⇒ 回落链那一半没接上（侧车缺／CDN 把档换成原文／这一跳没走完）"
+    echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} —— 期望 enc=gzip 且 0<size<raw 且完整收完 ⇒ 回落链那一半没接上（侧车缺／CDN 把档换成原文／这一跳没走完）"
     PUB_RC=1
   fi
 
@@ -332,19 +359,19 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   if pd_complete && [ -z "$ENC" ] && [ "$SIZE" = "$L_SIZE" ]; then
     echo "  OK   $u/$ENTRY 无 Accept-Encoding 时发原文（${SIZE} B＝本机 raw，负向对照成立）"
   else
-    echo "  BAD  $u/$ENTRY 无 Accept-Encoding 却 enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次 ⇒ 负向对照不成立（客户端协商这一层判据不可信）"
+    echo "  BAD  $u/$ENTRY 无 Accept-Encoding 却 enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} ⇒ 负向对照不成立（客户端协商这一层判据不可信）"
     PUB_RC=1
   fi
 
   # 首页品牌注入（§一·5 的三域判据，本批换了源、动过 Caddy，照旧复验一次）
   #   ★ 改成走 pd_fetch：旧形态一条 `--max-time 25` 的 curl 没有重拨，跨境那一跳抖一下就报"命中=0"，
   #     而同一个首页体量在 30 秒后又完整拿得到（10-12 实测：连拨两次 code=000、第三次 200/8,935 B 命中 1）。
-  pd_fetch "$TMPB" "$TMPH" "$u/"
+  pd_small "$TMPB" "$TMPH" "$u/"
   b=$(grep -c '__BRANDING__' "$TMPB" 2>/dev/null || true)
   if pd_complete && [ "$CODE" = "200" ] && [ "$b" = "1" ]; then
     echo "  OK   $u/ 首页 __BRANDING__ 命中=1（${SIZE} B code=$CODE）"
   else
-    echo "  BAD  $u/ __BRANDING__ 命中=$b（应为 1；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次）"; PUB_RC=1
+    echo "  BAD  $u/ __BRANDING__ 命中=$b（应为 1；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}）"; PUB_RC=1
   fi
   # ★ content_type 含空格 ⇒ 先整段取出值、再按 ; 切第一格，不拿 awk 的裸词序读
   #   ★★ 两条"判据自己撒谎"的形态都在这里（2026-10-12 启动链黑屏批实测）：
@@ -354,25 +381,25 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   #      本函数**刻意不改 `CODE`**（它是**那一次尝试**的读数，改了会把"传输没走完"谎报成"走完了"）。
   #   ② 负向腿（磁盘上真存在 dotfile ⇒ 回 `application/octet-stream`）天生是**恒零命中**那条族 ⇒ 配 T2 正锁
   #      （包内脏文件为 0）与 §五 换源复验（`find` 回 0）同批成立才算闭合。
-  pd_fetch "$TMPB" "$TMPH" "$u/.DS_Store"
+  pd_small "$TMPB" "$TMPH" "$u/.DS_Store"
   dsct=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | grep -im1 '^content-type:' | sed 's/^[^:]*:[[:space:]]*//' | cut -d';' -f1)
   dshead=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | grep -cim1 '^HTTP/')
   if [ "$dshead" = "1" ] && [ "$dsct" = "text/html" ]; then
     echo "  OK   $u/.DS_Store 仍是 SPA 兜底 HTML（content-type=text/html）"
   else
-    echo "  BAD  $u/.DS_Store content-type=${dsct:-<无>}（不是 text/html ⇒ 磁盘上可能还有真文件；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次）"; PUB_RC=1
+    echo "  BAD  $u/.DS_Store content-type=${dsct:-<无>}（不是 text/html ⇒ 磁盘上可能还有真文件；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}）"; PUB_RC=1
   fi
 
   # ★ 边缘那一跳的「404 不许可缓存」判据（本批现网事故的公网腿锁）：
   #   探针名带 404PROBE 字样，**永不与 vite 生成的哈希名同名**，所以就算这条真把一次 404 送进边缘缓存，
   #   也没有任何页面引用它 ⇒ 不伤访客；而它要抓的是"immutable 被写回无条件档"这个退化形态。
-  pd_fetch "$TMPB" "$TMPH" "$u/assets/index-404PROBE-NEVERREAL.js"
+  pd_small "$TMPB" "$TMPH" "$u/assets/index-404PROBE-NEVERREAL.js"
   cc=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | awk 'tolower($1)=="cache-control:"{sub(/^[^:]*:[ \t]*/,"");print}' | head -1)
   cfs=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | awk 'tolower($1)=="cf-cache-status:"{print toupper($2)}' | head -1)
   if pd_complete && [ "$CODE" = "404" ] && ! echo "$cc" | grep -q 'immutable\|31536000'; then
     echo "  OK   $u 的 /assets 404 不带长缓存头（cache-control=${cc:-<无>} cf=$cfs code=$CODE）"
   else
-    echo "  BAD  $u 的 /assets 404 cache-control=${cc:-<无>}（含 immutable/31536000 ⇒ 一次探针就能把 404 在边缘钉一年，本批事故就是这么发生的）code=$CODE cf=$cfs curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次"
+    echo "  BAD  $u 的 /assets 404 cache-control=${cc:-<无>}（含 immutable/31536000 ⇒ 一次探针就能把 404 在边缘钉一年，本批事故就是这么发生的）code=$CODE cf=$cfs curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}"
     PUB_RC=1
   fi
 done
