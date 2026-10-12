@@ -13,13 +13,16 @@
 # 用法：
 #   bash scripts/check_frontend_tar.sh [tar 路径]        # 默认 /tmp/frontend-dist.tar.gz
 #   bash scripts/check_frontend_tar.sh --dist <dist 目录> # 直接验磁盘上的 dist（打包前用）
-#   退 0＝四档全过；退 1＝有 BAD（不许换源）；退 2＝参数/文件本身不成立（没东西可验）
+#   退 0＝五档全过；退 1＝有 BAD（不许换源）；退 2＝参数/文件本身不成立（没东西可验）
 #
-# 四档判据（都只问"这批改动真送出去了吗"，不重复单测已证明的语义）：
+# 五档判据（都只问"这批改动真送出去了吗"，不重复单测已证明的语义）：
 #   T1 brotli/gzip 侧车在位且数量对得上——省字节这件事的物理载体就是这两批文件；
 #   T2 macOS 脏文件为零（.DS_Store 与 ._ AppleDouble）——历史上两次公网可下载都源自 scp -r／tar 未排除；
 #   T3 入口 asset 原文体积 ≤ 上限——懒加载退化（词典被改回静态 import）在这里当场越界；
 #   T4 语种 chunk 份数达标——12 语种懒加载的产物就是这些独立 chunk，一份都没有＝①没生效。
+#   T5 入口文件名带内容哈希且在 assets/ 下——长缓存与「文件真在才发」那条 Caddy 条件化的前提；
+#      2026-10-12 的 CACHE_BUST 逃生阀写法（`entryFileNames: undefined`）会把产物退成固定名 /index.js。
+#      判据形状见下方 entry_shape_ok，`FRONTEND_TAR_SELFTEST=1` 会把五种名字喂给同一个函数自证射程。
 # ============================================================================
 set -uo pipefail
 
@@ -77,6 +80,7 @@ GZ=$(list | grep -cE '\.gz$' || true)
 DIRTY=$(list | grep -cE '(\.DS_Store|/\._[^/]*|^\./\._[^/]*)$' || true)
 LOCALE=$(list | grep -cE '/(zh-hant|ja|ko|th|ru|ar|fr|es|de|pt|id|vi|it|nl|pl|tr)-[A-Za-z0-9_-]+\.js$' || true)
 ENTRY=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' "$ROOT/index.html" 2>/dev/null | head -1)
+
 if [ -n "$ENTRY" ] && [ -f "$ROOT/$ENTRY" ]; then
   ENTRY_SIZE=$(wc -c <"$ROOT/$ENTRY" | tr -d ' ')
 else
@@ -85,6 +89,24 @@ fi
 
 RC=0
 echo "  侧车：br=$BR gz=$GZ ｜ 语种 chunk=$LOCALE ｜ 入口=${ENTRY:-<取不到>} raw=${ENTRY_SIZE:-<无>} B ｜ 脏文件=$DIRTY"
+
+# T5 的判据单独成函数：自检模式（文件末尾）与真包判据**共用同一个函数**，
+# 否则「自测通过」只证明了一份副本判据，真包走的还是另一份（本仓两份判据打架的老形态）。
+entry_shape_ok() { # $1＝从 index.html 认出来的入口相对路径；返回 0＝形态合格
+  case "${1:-}" in
+    assets/index-*.js) ;;
+    *) return 1 ;;
+  esac
+  local rest last
+  rest="${1%.js}"
+  rest="${rest#assets/index-}"
+  last="${rest##*-}" # 最后一段＝内容哈希（CACHE_BUST 档在它前面另加一段标记）
+  [ "${#last}" -ge 8 ] || return 1
+  case "$last" in
+    *[A-Za-z0-9]*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # T1 侧车：入口那一份必须**两档都在**（br→gzip→identity 是一条回落链，少一档就是半条链）
 if [ "$BR" -ge 1 ] && [ "$GZ" -ge 1 ] && [ -n "$ENTRY" ] \
@@ -118,6 +140,30 @@ if [ "$LOCALE" -ge "$LOCALE_MIN" ]; then
   echo "  OK   T4 语种 chunk=$LOCALE 份 ≥ ${LOCALE_MIN}（词典按语种切开了）"
 else
   echo "  BAD  T4 语种 chunk=$LOCALE < ${LOCALE_MIN} ⇒ 词典没有独立 chunk，多半是 import 又写成了静态"; RC=1
+fi
+
+# T5 入口名形态：必须落在 assets/ 下、且最后一段是 ≥8 字符的内容哈希。
+# 这一档治的是「名字本身不再随内容变」——固定名的代价是三件事一起落空：
+#   ① immutable 长缓存没有意义（同名换内容＝老字节被钉一年，反过来新字节拿不到）；
+#   ② Caddy 那条「文件真在才发长缓存」的条件化写在 `handle /assets/*` 里，固定名若落在根路径直接不在射程内；
+#   ③ 换源后按入口名逐 asset 校验落盘的步骤会找空（《部署指南》§五）。
+# 现网来路（2026-10-12 真踩）：CACHE_BUST 逃生阀写成 `output: { entryFileNames: undefined }`，
+# 键存在但值为 undefined ⇒ Vite 不再补自己的默认 ⇒ Rollup 用默认 `[name].js` ⇒ 产物是根目录 `index.js`。
+if entry_shape_ok "$ENTRY"; then
+  echo "  OK   T5 入口名带内容哈希且在 assets/ 下（$ENTRY）"
+else
+  echo "  BAD  T5 入口名形态不合（=${ENTRY:-<取不到>}）⇒ 名字不随内容变，长缓存与按名校验都落空"; RC=1
+  echo "       ⇒ 核 vite.config.ts 的 build：CACHE_BUST 未设时**整段 rollupOptions 都不许出现**（不是把值写成 undefined）"
+fi
+
+# T5b 判据自证：把五种名字喂给**同一个**函数——两正三负，负向腿必须真能判负。
+# 没有这一段，「T5 通过」可能只是判据恒真（本仓负向锁的老形态：射程为空比判红更难发现）。
+if entry_shape_ok "assets/index-BBMceqr3.js" && entry_shape_ok "assets/index-20261012a-BRVjfTbB.js" \
+   && ! entry_shape_ok "" && ! entry_shape_ok "index.js" && ! entry_shape_ok "assets/index.js" \
+   && ! entry_shape_ok "assets/index-1234567.js"; then
+  echo "  OK   T5b 入口名判据自证（2 例合格放行／固定名＋短哈希名 4 例判负）"
+else
+  echo "  BAD  T5b 入口名判据自证没过 ⇒ T5 这一档的射程不可信"; RC=1
 fi
 
 echo

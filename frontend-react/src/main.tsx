@@ -52,12 +52,71 @@ import './styles/mobile.css'
 
 // 挂载应用到 DOM 节点，并开启严格模式
 // ToastProvider：@langcross/ui 全局提示容器，等价替换 TDesign 的 MessagePlugin
+//
+// ★ 2026-10-12 启动哨兵的「挂载之后」那一半（与 index.html 里那段内联脚本配成一对）：
+//   index.html 的哨兵只在 #root 一直空着时才出话，能治「入口包评估中断／脚本没加载」；
+//   但**挂载成功之后**再抛异常（某块面板渲染炸了）时 React 会把整棵树卸掉，
+//   #root 已经非空 ⇒ 哨兵早就收摊了 ⇒ 用户看到的仍然是一片黑。
+//   所以这一层用 ErrorBoundary 兜住：出话而不是出黑屏，且文案是人话、不外泄堆栈。
+//   判据锁见 src/bootStorageGate.test.ts（哨兵在位 + 顶层零裸存储访问）。
+class BootErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props)
+    this.state = { failed: false }
+  }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  componentDidCatch(err: unknown) {
+    // 只进控制台供排障，屏幕上一个技术字眼都不给访客
+    console.error('[boot] 界面渲染中断', err)
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    const box: React.CSSProperties = {
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: '#0B0C0E',
+      color: '#E7E9EA',
+      padding: 32,
+      font: '15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif',
+      overflow: 'auto',
+      zIndex: 99999,
+    }
+    const btn: React.CSSProperties = {
+      marginTop: 8,
+      padding: '10px 20px',
+      font: '15px/1 system-ui,-apple-system,"Segoe UI",sans-serif',
+      background: '#FFFFFF',
+      color: '#0B0C0E',
+      borderRadius: 8,
+      cursor: 'pointer',
+    }
+    return (
+      <div style={box} role="alert">
+        <p style={{ margin: '0 0 10px', fontWeight: 600 }}>页面出错了</p>
+        <p style={{ margin: '0 0 10px' }}>
+          界面在显示的过程中被打断了。重新加载通常就能恢复；如果每次都停在这一页，请把浏览器控制台里的第一行红字发给技术支持。
+        </p>
+        <button style={btn} onClick={() => location.reload()}>
+          重新加载
+        </button>
+      </div>
+    )
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <ToastProvider>
-      <ToastBridge />
-      <DialogHost />
-    <App />
-    </ToastProvider>
+    <BootErrorBoundary>
+      <ToastProvider>
+        <ToastBridge />
+        <DialogHost />
+        <App />
+      </ToastProvider>
+    </BootErrorBoundary>
   </React.StrictMode>,
 )

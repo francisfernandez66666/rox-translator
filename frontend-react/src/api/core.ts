@@ -20,11 +20,20 @@ const API_BASE = import.meta.env.VITE_API_BASE || ''
 export { API_BASE }
 
 // 登录态：所有请求自动带 Authorization Bearer，租户由后端从 JWT 解析
-let authToken = sessionStorage.getItem('auth_token') || ''
 // 超管生效租户：以 X-Tenant-ID 下发（仅超级管理员使用租户切换器）
 // 存储键 v2：v1 键作废（防历史残留把超管误挂到具体租户，导致前台误命中该租户知识库）
 const TENANT_KEY = 'active_tenant_id_v2'
-let activeTenantId = Number(sessionStorage.getItem(TENANT_KEY) || 0)
+// ★ 2026-10-12（现网「标题正常、整页黑」诊断，同 src/i18n/index.ts 那条）：
+//   这两条读原本是模块顶层的**裸** sessionStorage.getItem。浏览器按策略拒绝站点数据时它抛
+//   SecurityError，而这个文件是全站的必经腿（每个 api/* 都 import 它）⇒ 入口 chunk 评估中断，
+//   React 压根没挂载，用户看到一片黑。现在取不到就按「未登录／租户档 0」起步，
+//   与关掉标签页后的正常冷启动形态完全一致，不新增任何状态语义。
+let authToken = ''
+let activeTenantId = 0
+try {
+  authToken = sessionStorage.getItem('auth_token') || ''
+  activeTenantId = Number(sessionStorage.getItem(TENANT_KEY) || 0)
+} catch { /* 站点数据被浏览器策略拒绝⇒按未登录起步，界面照常可用 */ }
 
 /** 设置登录 token 并持久化到 sessionStorage（比 localStorage 更安全：不跨标签页、关闭即清） */
 export function setAuthToken(token: string) {

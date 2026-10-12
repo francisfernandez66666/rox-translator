@@ -208,7 +208,16 @@ function detectBrowserLang(): Lang {
 }
 // currentLang 当前语言（localStorage 有效值 > 浏览器检测；★ #23 存的野值一律重检测，
 // 防止旧版本脏数据让全站取词踩空）
-const stored = localStorage.getItem('app_lang') as Lang | null
+// ★ 2026-10-12（现网「标题正常、整页黑」诊断）：这一行原本是一条**裸**的模块顶层 localStorage 读。
+//   浏览器把站点数据/Cookie 按策略拒绝时（Edge·Chrome 的「阻止所有 Cookie」档，含隐私模式），
+//   取 `localStorage` 属性当场抛 SecurityError ⇒ 入口 chunk 的模块评估中断 ⇒ React 根本没挂载，
+//   屏幕上只剩黑色背景与正确标题（HTML 已到、JS 没跑完）。同文件另三处存储读写
+//   （setLang 的 setItem／detectBrowserLang／applyDir）本来就各自包着 try，这一处是唯一漏网的那条。
+//   取向＝**取不到就当没存过**（自然回落浏览器检测），绝不让「读不到偏好」升级成「整站打不开」。
+//   机械锁见 src/bootStorageGate.test.ts（顶层裸存储访问零命中＋六枚反证）。
+let storedRaw: string | null = null
+try { storedRaw = localStorage.getItem('app_lang') } catch { /* 站点数据被浏览器策略拒绝⇒不认存值，也不许把全站打黑 */ }
+const stored = storedRaw as Lang | null
 let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang()
 
 // ★ F3：RTL 方向接线——document.dir 随语言切换。
