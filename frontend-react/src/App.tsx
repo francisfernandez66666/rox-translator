@@ -15,7 +15,7 @@
 //   品牌 14、Tab 13 胶囊；#67 放大的内联字阶（汉堡 24/品牌 23/租户徽标 15 等）全部还原。
 // ============================================================================
 
-import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth, isPlatformBillingContext } from '@/stores/auth'
@@ -106,7 +106,8 @@ import BillingCenter from './components/MyBilling' // ★ F8 账单中心（趋�
 import { EmailBindModal } from './components/modals'
 // ★ D2 #24：全站加载态复用落地页「划掉错词→亮起正词」换词动效（实现与样式唯一份在 WordSwap/theme.css）
 // ★ 2026-09-22：useWordSwapGate 载入闸门——冷启动占位即使接口已返回，也要把动效演满
-//   3 个语种拍次再收场（读得完 + 给首屏前后端调用留时间），路由懒加载不受此约束。
+//   MIN_READ_BEATS 拍再收场。★ 2026-10-13 用户令：拍数下限由 3 改 **1**（强制演示一次即止），
+//    readiness 之后不再补拍；路由懒加载不受此约束。
 import WordSwap, { useWordSwapGate } from './components/WordSwap'
 // ★ #23：12 语种界面语言下拉（顶栏/登录卡/后台共用）
 import { LangSelect } from './components/LangSelect'
@@ -121,7 +122,7 @@ import { Badge, Button, Icon } from '@/ui/langcross/src'
 // ★ 2026-09-20 反馈③：minHeight 100dvh 撑满首屏，动效真正垂直居中而非挤在半高容器里；
 // ★ 2026-09-24 用户反馈：去掉「加载中」提示文字——换词动效本身就是加载语义，纯动效更干净，
 //   文字仅保留为 WordSwap 的 ariaLabel 供读屏），
-// 路由懒加载时展示；onBeat 只在冷启动闸门（会话恢复）传入，用于「演满 3 个语种再放行」
+// 路由懒加载时展示；onBeat 只在冷启动闸门（会话恢复）传入，用于「至少完整演满一拍再放行」
 // 用普通函数而非 React.memo：它只在 Suspense 解析期短暂挂载，没有可优化的重复渲染路径。
 // 标题走模块级 gt（而非 useT）：占位通常只活几百毫秒，不值得为它订阅语言变更。
 function PageLoading({ label = gt('app.loading'), onBeat, loop = true }: { label?: string; onBeat?: (done: number) => void; loop?: boolean } = {}) {
@@ -134,6 +135,21 @@ function PageLoading({ label = gt('app.loading'), onBeat, loop = true }: { label
       <WordSwap className="ws--lg" ariaLabel={label} onBeat={onBeat} loop={loop} />
     </div>
   )
+}
+
+// ---- 前台工作台外壳 ----
+// ---- 页面级错误边界（懒加载崩了只崩一屏）----
+// ★ 2026-10-13 链路批④（#29）：懒加载页面**取不到分片**时只让这一块出话。
+// 现网症状：发版换源后浏览器里那一页还留着上一代的哈希 chunk 名，切工单＝第一次去拉那个
+// 已经不存在的文件，spa.go 对不存在路径回退成 index.html（200 但内容是 HTML），
+// 于是评估模块当场抛 "Importing a module script failed."。
+// 不包这一层的话异常会一路撞到 App 最外层的全局边界，**整壳连头带尾**被崩溃卡替换
+// （顶栏、导航、页脚都没了，用户只剩「返回首页」一条路）；包了之后外壳照常可用，
+// 崩的只是当前这一屏。
+// resetKey 吃 pathname：用户切到别的页面即自动复位，异常态不许跟着历史栈粘住。
+function RouteBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation()
+  return <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
 }
 
 // ---- 前台工作台外壳 ----
@@ -171,7 +187,8 @@ function FrontShell() {
     return () => clearInterval(id)
   }, [])
   // ★ 2026-09-24 〇-S（#7）：menuOpen（汉堡抽屉开关）随抽屉一并退役，自助入口改走 AccountMenu 下拉
-  // ★ 2026-09-22 载入闸门：后端探活撤销后，占位仍留到 WordSwap 演满 3 个语种拍次
+  // ★ 2026-09-22 载入闸门：后端探活撤销后，占位仍留到 WordSwap 演满 MIN_READ_BEATS 拍
+  //   （★ 2026-10-13 用户令：该下限由 3 改 1——强制演示一次即止，就绪了就放，没就绪继续等）
   // 闸门放在 FrontShell 这一层：它只替换 .app-main 里的路由出口，顶栏照常渲染
   //   （用户看得见自己在哪个产品/能切语言），而路由内容在占位期间根本不挂载，两者不会同屏打架。
   // loading 源是 chat store 的 isBackendLoading（初值 true）：探活成功即撤；
@@ -262,6 +279,11 @@ function FrontShell() {
     // 这层的 fallback 渲染在外层 div 之外、没有卡片底可依托，所以文档底由 theme.css 开头
     // 那条 html,body{background:#000}（★ #66）铺黑，否则切页瞬间会看到
     // 「灰字换词动效糊在白纸」的对比度反转。
+    // ★ 2026-10-13 链路批④（#29）：这一层同样在懒加载**顶栏件**（Bell / AccountMenu / SiteFooter），
+    //   换源后旧哈希失效时它和页面级懒加载撞的是同一个异常，所以也给一层路由级边界——
+    //   内层 .app-main 的边界更近，页面崩由它先接住（顶栏保住）；只有顶栏件自己取不到时
+    //   才落到这一层，出同一张「页面内容没有取到…请重新加载页面」的人话卡。
+    <RouteBoundary>
     <Suspense fallback={<PageLoading />}>
     {/* ★ 2026-09-24 〇-S（#7）：minHeight:100vh → height:100dvh——页脚常驻外壳列尾后，
         聊天区不能再按「视口-顶栏」自算高度（否则页脚被顶出首屏、永远滚不到），
@@ -428,7 +450,8 @@ function FrontShell() {
         {bootGate.busy ? (
           // 后端冷启动占位（★ D2 #24）：spinner 换成与路由懒加载同一份 WordSwap 换词动效，
           // 纯黑页面上不再闪白，两处加载态共用唯一实现；
-          // ★ 2026-09-22：接口先回来也不立刻收场，演满 3 拍（读得完三个语种）再进工作台
+          // ★ 2026-09-22：接口先回来也不立刻收场，至少完整演满一拍再进工作台
+          //   （★ 2026-10-13 用户令：由「演满 3 拍」改为「强制一次」，之后完全跟着就绪信号走）
           // .loading-screen 在本仓没有任何 CSS 定义（Vue 版遗留名），排版全靠同行内联样式
           // 这里与 Root 的 restoreGate 是两个独立闸门实例：各自持有 played/need，也各自挂一份
           // WordSwap 从第一拍数起，只有各自真的见过 loading 才会补拍（不会互相借用对方的拍数）
@@ -437,28 +460,30 @@ function FrontShell() {
             <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
-          <Suspense fallback={<PageLoading />}>
-            <Routes>
-              <Route path="/" element={<ChatWindow />} />
-              <Route path="/tickets" element={<TicketsPage />} />
-              <Route path="/editor" element={<EditorPage />} />
-              <Route path="/billing" element={<BillingCenter />} />
-              {/* 路由守卫：/invites 仅个人版可达（isPersonal 取自 meContext），企业用户命中即弹回工作台。
-                  isPersonal 初值是 true，所以 meContext 尚未回来的那一帧放行——深链直达时可能先闪一下邀请页 */}
-              <Route path="/invites" element={isPersonal ? <ReferralPanel /> : <Navigate to="/" replace />} />
-              <Route path="/packages" element={<MyPackagePanel />} />
-              <Route path="/my" element={<AccountPanel />} />
-              {/* 公开定价页：营销门面（无需登录，Root 内另有未登录分支），挂在 FrontShell
-                  下是为了让已登录用户也能从工作台直达 */}
-              <Route path="/pricing" element={<PricingPage />} />
-              {/* ★ 〇-X #55：公开比价与算价页（访客在 Root 的未登录分支直出，这里覆盖已登录入口） */}
-              <Route path="/compare" element={<PriceComparePage />} />
-              {/* ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看） */}
-              <Route path="/chat-history" element={<ChatHistory />} />
-              {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Routes>
-          </Suspense>
+          <RouteBoundary>
+            <Suspense fallback={<PageLoading />}>
+              <Routes>
+                <Route path="/" element={<ChatWindow />} />
+                <Route path="/tickets" element={<TicketsPage />} />
+                <Route path="/editor" element={<EditorPage />} />
+                <Route path="/billing" element={<BillingCenter />} />
+                {/* 路由守卫：/invites 仅个人版可达（isPersonal 取自 meContext），企业用户命中即弹回工作台。
+                    isPersonal 初值是 true，所以 meContext 尚未回来的那一帧放行——深链直达时可能先闪一下邀请页 */}
+                <Route path="/invites" element={isPersonal ? <ReferralPanel /> : <Navigate to="/" replace />} />
+                <Route path="/packages" element={<MyPackagePanel />} />
+                <Route path="/my" element={<AccountPanel />} />
+                {/* 公开定价页：营销门面（无需登录，Root 内另有未登录分支），挂在 FrontShell
+                    下是为了让已登录用户也能从工作台直达 */}
+                <Route path="/pricing" element={<PricingPage />} />
+                {/* ★ 〇-X #55：公开比价与算价页（访客在 Root 的未登录分支直出，这里覆盖已登录入口） */}
+                <Route path="/compare" element={<PriceComparePage />} />
+                {/* ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看） */}
+                <Route path="/chat-history" element={<ChatHistory />} />
+                {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </Suspense>
+          </RouteBoundary>
         )}
       </div>
 
@@ -516,6 +541,7 @@ function FrontShell() {
       <Suspense fallback={null}><AiAssist /></Suspense>
     </div>
     </Suspense>
+    </RouteBoundary>
   )
 }
 
@@ -532,8 +558,9 @@ function Root() {
 
   // 会话恢复守卫：本地有 token 时 authMe 还没返回（restoring 初值 = !!token），
   // 这帧既不能当「已登录」出工作台，也不能当「未登录」闪出登录页，只出占位。
-  // ★ 2026-09-22：占位由一行文字升级为全站同一份 WordSwap 换词动效，并演满 3 个语种
-  // 拍次再放行（authMe 早回来也留足首屏时间）；无 token 时 restoring 恒 false，不补拍。
+  // ★ 2026-09-22：占位由一行文字升级为全站同一份 WordSwap 换词动效，并至少完整演满一拍；
+  // ★ 2026-10-13 用户令：补拍下限由 3 改 1（强制演示一次即止，authMe 早回来就立刻放行）。
+  // 无 token 时 restoring 恒 false，不补拍。
   const restoreGate = useWordSwapGate(restoring)
   if (restoreGate.busy) {
     // 闸门期间必须在所有分支判定之前直接 return：这帧 user 还没回来，
@@ -547,21 +574,25 @@ function Root() {
     // 与 FrontShell 内的 /pricing 路由分别覆盖「访客」与「已登录」两种入口。
     if (path === '/pricing') {
       return (
-        <Suspense fallback={<PageLoading />}>
-          <PricingPage />
-          {/* ★ autosales：定价页常驻 AI 接待挂件 */}
-          <AiAssist />
-        </Suspense>
+        <RouteBoundary>
+          <Suspense fallback={<PageLoading />}>
+            <PricingPage />
+            {/* ★ autosales：定价页常驻 AI 接待挂件 */}
+            <AiAssist />
+          </Suspense>
+        </RouteBoundary>
       )
     }
     // ★ 〇-X #55：比价与算价页与 /pricing 同级营销门面，访客可直达（否则会被兜底送去登录页，
     //   而"注册前能不能看到价"正是这个页存在的全部意义）
     if (path === '/compare') {
       return (
-        <Suspense fallback={<PageLoading />}>
-          <PriceComparePage />
-          <AiAssist />
-        </Suspense>
+        <RouteBoundary>
+          <Suspense fallback={<PageLoading />}>
+            <PriceComparePage />
+            <AiAssist />
+          </Suspense>
+        </RouteBoundary>
       )
     }
     // ★ S5 门面：未登录访问 `/` 出官网落地页；登录/注册走 /login、/register
@@ -573,32 +604,38 @@ function Root() {
       //   已登录用户根本不进这个分支（上面 `!user` 已分流），所以这一档只影响未登录访客。
       if (!landingEnabledForGuest()) return <Navigate to="/login" replace />
       return (
-        <Suspense fallback={<PageLoading />}>
-          <Landing />
-          {/* ★ autosales：落地页常驻 AI 接待挂件 */}
-          <AiAssist />
-        </Suspense>
+        <RouteBoundary>
+          <Suspense fallback={<PageLoading />}>
+            <Landing />
+            {/* ★ autosales：落地页常驻 AI 接待挂件 */}
+            <AiAssist />
+          </Suspense>
+        </RouteBoundary>
       )
     }
     // 未登录兜底：非营销路径一律出登录页。/admin 前缀以 admin 态出——Login 内部会拦掉
     // 非租管账号，并关掉注册等前台专属流程；onLogin 再补一次角色校验，不够格立即弹回工作台
     return (
-      <Suspense fallback={<PageLoading />}>
-        <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
-        {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
-        <AiAssist />
-      </Suspense>
+      <RouteBoundary>
+        <Suspense fallback={<PageLoading />}>
+          <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
+          {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
+          <AiAssist />
+        </Suspense>
+      </RouteBoundary>
     )
   }
   // 后台路由守卫：/admin 只对租管及以上（roleLevelSafe>=2）开放，AdminDashboard 自身不再判权；
   // 不够格的登录用户走 else 分支——不渲染任何后台数据，只给一个返回首页的出口（Button 现为 LangCross 件）
   if (path.startsWith('/admin')) {
     return roleLevelSafe(user.role) >= 2 ? (
-      <Suspense fallback={<PageLoading />}>
-        <AdminDashboard />
-        {/* ★ autosales：管理后台常驻挂件 */}
-        <AiAssist />
-      </Suspense>
+      <RouteBoundary>
+        <Suspense fallback={<PageLoading />}>
+          <AdminDashboard />
+          {/* ★ autosales：管理后台常驻挂件 */}
+          <AiAssist />
+        </Suspense>
+      </RouteBoundary>
     ) : (
       <div style={{ padding: 40 }}>
         <Button onClick={() => navigate('/')}>{t('app.backHome')}</Button>

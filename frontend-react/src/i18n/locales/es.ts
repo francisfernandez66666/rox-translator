@@ -2939,6 +2939,8 @@ export const dict: Record<string, string> = {
   "common.inputTitle": "Introduzca",
   "common.noData": "Sin datos",
   "common.pageError": "Algo salió mal",
+  "common.chunkLoadFailed": "No se pudo cargar el contenido de la página; es probable que el sitio se haya actualizado hace poco. Vuelva a cargar la página.",
+  "common.reloadPage": "Recargar la página",
   "common.retry": "Reintentar",
   "common.submitFail": "Error al enviar",
   "common.unknownError": "Error desconocido, actualiza la página",

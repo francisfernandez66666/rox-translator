@@ -2939,6 +2939,8 @@ export const dict: Record<string, string> = {
   "common.inputTitle": "يرجى الإدخال",
   "common.noData": "لا توجد بيانات",
   "common.pageError": "حدث خطأ ما",
+  "common.chunkLoadFailed": "تعذّر تحميل محتوى الصفحة — ربما تم تحديث الموقع للتو. يُرجى إعادة تحميل الصفحة.",
+  "common.reloadPage": "إعادة تحميل الصفحة",
   "common.retry": "إعادة المحاولة",
   "common.submitFail": "فشل الإرسال",
   "common.unknownError": "خطأ غير معروف، يرجى تحديث الصفحة",

@@ -41,6 +41,7 @@ import { LeadForm } from '@/components/LeadForm' // ★ P1-3 收尾留资表单�
 import TrialPanel from '@/components/TrialPanel' // ★ 〇-Z #74：hero 右侧演示卡的「就地试用」形态（点演示卡或「免费试用」切进来）
 import PriceQuickCalc from '@/components/PriceQuickCalc' // ★ 〇-Y #64：价格方案区下方的「快速算价」卡（系数来自 /api/pricing/meta，细节点进 /compare）
 import { LangSelect } from '@/components/LangSelect' // ★ 2026-09-20 反馈④：落地页对非中文访客给出手动切换入口（12 语种，与顶栏同一组件）
+import { BrandTagline } from '@/components/BrandTagline' // ★ 2026-10-13 用户令②：页脚品宣尾注（与全站页脚同一事实源）
 import { INDUSTRY_META, industryName } from '@/lib/industries' // 覆盖范围区块：行业包与本页术语大卡同源的一份事实
 import { PERSONA_FALLBACK } from '@/lib/personas' // 覆盖范围区块：八个角色 code 与后端 persona 包对齐
 
@@ -1442,7 +1443,13 @@ export default function Landing() {
         {/* 分隔线用 1px 空 div 而不是 border：这里要的是"上 40 下 20"的不对称呼吸，border 只能贴一边 */}
         <div className="lc-foot-div" />
         {/* 版权行走 {brand} 模板插值：租户改名后与导航/页脚品牌区同源联动（2026-09-19 修硬编码品牌名破口） */}
-        <div className="lc-foot-bot">{tpl('land.copyright', { brand })}</div>
+        {/* ★ 2026-10-13 用户令②：品宣尾注与版权行同档同行。这里的 {brand} 只作用于版权那半句，
+            尾注那半句**不跟着改名**（租户白标改的是客户面板的名字，不是"底下跑的是谁的引擎"） */}
+        <div className="lc-foot-bot">
+          {tpl('land.copyright', { brand })}
+          <span style={{ opacity: 0.5 }}> · </span>
+          <BrandTagline style={{ fontWeight: 600 }} />
+        </div>
       </footer>
     </div>
   )

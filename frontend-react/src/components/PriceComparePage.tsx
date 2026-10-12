@@ -18,6 +18,7 @@ import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
 import { usePricingMeta } from './usePricingMeta'
+import { BrandTagline } from './BrandTagline' // ★ 2026-10-13 用户令②：页脚品宣尾注（与全站页脚同一事实源）
 import { fmtInt, fmtNum } from '../lib/format'
 
 // 数值与算式口径：全部来自 @/lib/priceCalc（★ 〇-Y #64 抽出的一档事实源）。
@@ -216,6 +217,10 @@ export default function PriceComparePage() {
       <footer className="lc-cmp-foot">
         © 2026 {brand} · <a href="/pricing">{t('land.pNavPricing')}</a> ·
         <a href="/docs/terms"> {t('land.fTerms')}</a> · <a href="/docs/privacy">{t('land.fPrivacy')}</a>
+        {/* ★ 2026-10-13 用户令②：与报价页页脚同一条品宣尾注（固定英文、不进词典、不随租户改名；
+            口径与反证见 components/BrandTagline.tsx 与 BrandTagline.lock.test.ts） */}
+        {' · '}
+        <BrandTagline style={{ fontWeight: 600 }} />
       </footer>
     </div>
   )

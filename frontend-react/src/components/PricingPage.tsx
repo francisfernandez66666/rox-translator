@@ -11,6 +11,7 @@ import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
 import { usePlans } from './usePlans'
+import { BrandTagline } from './BrandTagline' // ★ 2026-10-13 用户令②：页脚品宣尾注（与全站页脚同一事实源）
 import { fmtQuoteMoney } from './quoteFmt'
 import type { PlanLite } from './usePlans'
 import { fmtInt } from '../lib/format'
@@ -129,6 +130,11 @@ export default function PricingPage() {
 
       <footer className="lc-prc-foot">
         © 2026 {brand} · {t('land.pFootPlatform')} · <a href="/docs/terms">{t('land.fTerms')}</a> · <a href="/docs/privacy">{t('land.fPrivacy')}</a>
+        {/* ★ 2026-10-13 用户令②：品宣尾注——用户点名「所有有页脚的页面」都要有这一条，
+            报价页这类对外门面尤其（访客在这里比的正是"值不值"，AI 赋能那半句是决策信息）。
+            固定英文、不进词典、不随租户改名：见 components/BrandTagline.tsx 文件头三条口径。 */}
+        {' · '}
+        <BrandTagline style={{ fontWeight: 600 }} />
       </footer>
     </div>
   )

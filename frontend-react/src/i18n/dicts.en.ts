@@ -46,6 +46,10 @@ export const baseEn: Record<string,string> = {
   'common.retry': 'Retry',
   'common.pageError': 'Something went wrong',
   'common.unknownError': 'Unknown error, please refresh the page',
+  // ★ 2026-10-13 链路批④（#29）：与 dicts.zh.ts 同键——懒加载分片取不到（多为发版后旧页面
+  //   还指向上一代哈希 chunk）时的可读文案与整页重载钮。
+  'common.chunkLoadFailed': 'Page content could not be loaded — the site was probably just updated. Please reload the page.',
+  'common.reloadPage': 'Reload page',
   'app.brandTitle': '{name} Translation Platform',
   'app.notify': 'Notifications',
   'app.openMenu': 'Open menu',

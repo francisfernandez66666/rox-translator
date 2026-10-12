@@ -37,6 +37,11 @@ import { ToastProvider } from './ui/langcross/src'
 import ToastBridge from './components/ToastBridge'
 // DialogHost：confirmDialog / promptText 等命令式弹窗的挂载点（取代 TDesign Dialog 调用）
 import { DialogHost } from './components/uiDialogs'
+// ★ 2026-10-13 链路批④（#29）：懒加载分片取不到时的「自动补一次整页重载」恢复腿。
+// 必须在 createRoot **之前**装：它监听的是 Vite 的 window 事件，与 React 挂载无关，
+// 而 CSS 预载失败那一族根本不会走到渲染期（只有这个事件看得见）。
+// 实现与三条口径见 src/lib/chunkRecovery.ts。
+import { installChunkRecovery } from './lib/chunkRecovery'
 
 // 项目主题覆盖样式（变量已重映射到 --lc-* 纯黑单色令牌）
 import './styles/theme.css'
@@ -108,6 +113,10 @@ class BootErrorBoundary extends React.Component<{ children: React.ReactNode }, {
     )
   }
 }
+
+// 先把分片恢复腿装上（一次性 window 监听，见 lib/chunkRecovery 的三条口径注释），
+// 再挂载应用：这样第一屏的懒加载解析失败也在这条腿的射程里。
+installChunkRecovery()
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

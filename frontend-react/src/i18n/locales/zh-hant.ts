@@ -2939,6 +2939,8 @@ export const dict: Record<string, string> = {
   "common.inputTitle": "請輸入",
   "common.noData": "暫無數據",
   "common.pageError": "頁面出現異常",
+  "common.chunkLoadFailed": "頁面內容未取得，通常是網站剛更新過。請重新載入頁面。",
+  "common.reloadPage": "重新載入頁面",
   "common.retry": "重試",
   "common.submitFail": "提交失敗",
   "common.unknownError": "未知錯誤，請嘗試刷新頁面",

@@ -289,7 +289,56 @@ MG=$(curl -s $B/api/admin/models -H "$AH")
 echo "$MG" | grep -qE '\*\*\*\*' && { PASS=$((PASS+1)); echo "PASS|A5-mask"; } || { FAIL=$((FAIL+1)); echo "FAIL|A5-mask|$MG"; }
 
 # ---------- A6 估价 ----------
+# ★ 2026-10-13 用户令⑦（#31）「预估的积分也不准」：这一段的判据从「信封有没有 success」
+# 扩成「读数合不合法＋量级对不对＋句数还进不进成本」。
+# 旧形态只 ck '"success":true' 一条，属于 §一·3 点名的**假成功判据**——
+# 现网截图那条输入（180 个拉丁字符、单语种、专业档）横幅出 30~75 积分、实收 1 积分，
+# 而当时的 A6 是**绿的**：接口返回得一切正常，只是数算错了，信封判据看不见金额。
+# 公式本体已由 backend-go/internal/engine/costmodel_test.go 钉住，A 段这几条钉的是
+# 「接口有没有把那份公式接到出参上」（改接线不改公式时，单测那边不会红，只有这里会红）。
 ck A6-estimate '"success":true' "$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d '{"text":"早上好，欢迎使用翻译助手平台进行文本翻译测试。","target_langs":["en"],"mode":"fast"}')"
+# A6-TXT：含 "e.g." 与 "600912.SH" 的那条真实输入——旧公式把这两个点各当一句，
+# 一段话数成 8 句，再乘「每句 500 token × 2 轮」，于是 12,000 token 起步（30 积分）。
+# 这条文本就是本段的靶子，别换成"干净的句子"（换了判据射程会归零，锁还在但抓不到东西）。
+A6_TXT='Root cause visible in the log: the ledger is keyed by req.Code (suffixed, e.g. 600912.SH), my test read the bare code. Fix the test keys to use the same withSuffix derivation'
+A6_LONG=$(python3 -c "print('$A6_TXT'*40)")
+A6J=$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d "{\"text\":\"$A6_TXT\",\"target_langs\":[\"en\"],\"mode\":\"pro\",\"ui_lang\":\"zh\"}")
+# A6① 读数合法性：points_min ≥1 且 max ≥ min（恒零报文与"没算"在报文上同形＝F-49 那一族）
+A6R=$(echo "$A6J" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+a,b=int(d.get("points_min",0)),int(d.get("points_max",0))
+print("OK" if a>=1 and b>=a else "BAD")' 2>/dev/null || echo ERR)
+echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-points-nonzero"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-points-nonzero|got=${A6J:0:220}"; }
+# A6② 量级红线：截图那条必须落在个位数积分档（旧公式在这里出 30~75，实收 1）
+A6R=$(echo "$A6J" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("OK" if int(d.get("points_max",999))<=10 else "BAD")' 2>/dev/null || echo ERR)
+echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-points-magnitude"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-points-magnitude|want<=10 got=${A6J:0:220}"; }
+# A6③ 射程对照（② 的反向那一半）：源文 ×40 之后读数必须显著抬高。
+# 没有这一条，② 可能只是"接口恒回 1 积分"的空转锁——负向腿恒零命中必须配一枚正向对照。
+A6JL=$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d "{\"text\":\"$A6_LONG\",\"target_langs\":[\"en\"],\"mode\":\"pro\",\"ui_lang\":\"zh\"}")
+A6R=$(A6_SHORT="$A6J" A6_LONGR="$A6JL" python3 -c 'import json,os
+s=int(json.loads(os.environ["A6_SHORT"]).get("points_min",0))
+l=int(json.loads(os.environ["A6_LONGR"]).get("points_min",0))
+print("OK" if l>3*s and s>=1 else "BAD")' 2>/dev/null || echo ERR)
+echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-long-text-scales"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-long-text-scales|short=${A6J:0:120}|long=${A6JL:0:120}"; }
+# A6④ 结构红线：语种数进成本、句数不进成本。
+# 单语 vs 四语（同一份文本）：积分必须涨到 ≥3 倍（取整后不严格 4 倍），
+# 而出参 sentences 读数**一字不变**——它是展示读数，一旦回到成本公式里就是本批缺陷复活。
+A6J4=$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d "{\"text\":\"$A6_TXT\",\"target_langs\":[\"en\",\"en\",\"en\",\"en\"],\"mode\":\"pro\",\"ui_lang\":\"zh\"}")
+A6R=$(A6_ONE="$A6J" A6_FOUR="$A6J4" python3 -c 'import json,os
+a=json.loads(os.environ["A6_ONE"]); b=json.loads(os.environ["A6_FOUR"])
+pa,pb=int(a.get("points_min",0)),int(b.get("points_min",0))
+sa,sb=int(a.get("sentences",0)),int(b.get("sentences",0))
+print("OK" if pb>=3*pa and pa>=1 and sa==sb and sa>=1 else "BAD")' 2>/dev/null || echo ERR)
+echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-langs-cost-sentences-readout"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-langs-cost-sentences-readout|one=${A6J:0:120}|four=${A6J4:0:120}"; }
+# A6⑤ 文件形态（只有段数）：不许估成零消耗
+A6JS=$(curl -s $B/api/translation/estimate -H "$H1" -H "$J" -d '{"segment_count":12,"target_langs":["en"],"mode":"fast"}')
+A6R=$(echo "$A6JS" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("OK" if d.get("success") and int(d.get("points_min",0))>=1 else "BAD")' 2>/dev/null || echo ERR)
+echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-segment-form-nonzero"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-segment-form-nonzero|got=${A6JS:0:220}"; }
+echo "INFO|A6-estimate|$A6J"
 
 # ---------- A7 聊天翻译 + 计量入账（usage_ledger 行增） ----------
 # ★ 2026-09-21（#33 任务系统）：口径改为「净消耗」= 窗口前容量 + 窗口内新发放 − 窗口后容量。

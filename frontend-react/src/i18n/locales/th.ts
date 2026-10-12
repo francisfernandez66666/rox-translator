@@ -2939,6 +2939,8 @@ export const dict: Record<string, string> = {
   "common.inputTitle": "กรุณาป้อน",
   "common.noData": "ไม่มีข้อมูล",
   "common.pageError": "เกิดข้อผิดพลาด",
+  "common.chunkLoadFailed": "โหลดเนื้อหาหน้าไม่ได้ เว็บไซต์น่าจะเพิ่งปรับปรุง กรุณาโหลดหน้าใหม่อีกครั้ง",
+  "common.reloadPage": "โหลดหน้าใหม่",
   "common.retry": "ลองใหม่",
   "common.submitFail": "ส่งไม่สำเร็จ",
   "common.unknownError": "ข้อผิดพลาดไม่ทราบสาเหตุ กรุณารีเฟรชหน้า",

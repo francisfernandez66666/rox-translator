@@ -25,6 +25,8 @@ import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { setLang, t } from '@/i18n'
 import { ToastProvider } from '@/ui/langcross/src'
 import Login from './Login'
+// ★ 2026-10-13 用户后令：触发钮可见文字固定英文，判据从组件取同一常量（不在此重写字面量）
+import { LANG_BTN_FIXED_TEXT } from './LangSelect'
 
 // AI 接管流程在登录屏不渲染，剔掉以免连带加载重依赖
 vi.mock('./AiRegisterFlow', () => ({ default: () => null }))
@@ -108,12 +110,15 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
   })
 
   it('⑤ 卡右上角语言入口为 12 语种下拉（★ #23 取代旧 zh/en 胶囊），选择即切换', () => {
-    // ★ 判据翻转（用户拍板⑦，非回归）：触发钮固定词「语言」（app.langBtn），自称名只在菜单选中项
+    // ★ 判据翻转（用户后令 2026-10-13，非回归）：触发钮可见文字**不分界面语言**统一固定英文
+    //   "Language"，本地字只留在读屏 aria-label；自称名在菜单选中项
     renderLogin()
     const btn = card().querySelector('.lc-auth-card__corner .lang-sel-btn') as HTMLButtonElement
     expect(btn).toBeTruthy()
-    // 中文态触发钮显示固定词「语言」（app.langBtn），不再显示自称名
-    expect(btn.textContent).toContain('语言')
+    // 中文态触发钮显示固定英文，不显示本地字「语言」、也不显示自称名
+    expect(btn.textContent).toContain(LANG_BTN_FIXED_TEXT)
+    expect(btn.textContent).not.toContain('语言')
+    expect(btn.getAttribute('aria-label')).toBe('语言') // 读屏腿仍按界面语言念
 
     fireEvent.click(btn)
     const items = card().querySelectorAll('.lang-sel-menu [role="option"]')

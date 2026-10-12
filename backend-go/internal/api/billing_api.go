@@ -126,6 +126,22 @@ func (s *Server) markupMultiplier() float64 {
 	return m
 }
 
+// modeMarkup 解析「该租户 + 该翻译模式**实际生效**的成本均摊系数」——全系统只有这一处算法。
+// 参数 eff: 现读的生效策略；mode: fast/pro（与 tenant.ModeFromContext 同一档名）。
+// 返回: 生效系数（模式因子优先，缺省回落策略全局值）。
+//
+// ★ 2026-10-13（#31）提成函数的理由：扣费腿（ChargeUsageRealtime）与预估腿
+// （handleTranslationEstimate）过去各有一份「取 markup」的写法，预估那份只读全局
+// billing_markup_multiplier、不读模式因子，于是租户策略给 pro 配了 2.0 而横幅仍按 1.5 报——
+// 同一笔消耗两处算出两个数，正是 §一·11「三把尺子」那一族。两侧现在都只调本函数。
+func modeMarkup(eff ops.EffectivePolicy, mode string) float64 {
+	markup := eff.MarkupMultiplier
+	if rule, ok := eff.Mode(mode); ok && rule.Markup > 0 {
+		markup = rule.Markup
+	}
+	return markup
+}
+
 // ChargeUsageRealtime 实时计量钩子（边工作边计费）：每次 LLM 调用产生真实 token 用量后，
 // 由 llm.Client.OnUsage 回调。★ 计量（落 usage_ledger）始终开启——
 // 无论是否强制计费，token 用量都被实时记录，支撑「已消耗不退还」与用量看板。
@@ -162,10 +178,8 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 		}
 		return fmt.Errorf("翻译模式 %s 已停用", mode)
 	}
-	markup := eff.MarkupMultiplier
-	if hasRule && rule.Markup > 0 {
-		markup = rule.Markup
-	}
+	// ★ 2026-10-13（#31）：markup 的解析收进 modeMarkup 一处（预估腿共用，见那条评论）
+	markup := modeMarkup(eff, mode)
 	billed := int64(float64(total) * markup)
 	if billed < total {
 		billed = total // 系数异常兜底：至少按真实消耗计

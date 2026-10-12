@@ -46,6 +46,12 @@ export const baseZh: Record<string,string> = {
   'common.retry': '重试',
   'common.pageError': '页面出现异常',
   'common.unknownError': '未知错误，请尝试刷新页面',
+  // ★ 2026-10-13 链路批④（#29）：懒加载分片取不到时的专用文案（现网表现＝切工单整页翻
+  //   「Importing a module script failed.」——发版换源后，浏览器里那一页还留着上一代的哈希名）。
+  //   这里必须说人话并给出唯一有效的出口（整页重新加载），不许把浏览器原文甩给客户看；
+  //   消费点＝components/ErrorBoundary.tsx，恢复腿＝lib/chunkRecovery.ts。
+  'common.chunkLoadFailed': '页面内容没有取到，通常是网站刚更新过。请重新加载页面。',
+  'common.reloadPage': '重新加载页面',
   'app.brandTitle': '{name} 智能翻译平台',
   'app.notify': '通知',
   'app.openMenu': '打开菜单',

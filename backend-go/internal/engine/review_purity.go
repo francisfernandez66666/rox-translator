@@ -125,7 +125,14 @@ func reviewOutputRejectReason(targetLang, out string) string {
 //     所以 head 非空、含目标脚本的行也一行不可能落进尾段）。因此**不写走不到的死支**，
 //     改由用例 TestStripTrailingForeignResidualInvariants 把这两条性质钉住
 //     （AGENTS §一·13「死支别写断言」的反面用法：不变量要断言，但不要伪装成判据）；
-//  3. **数字序列逐字不变**——尾段带数字＝它可能在传信息（型号／日期／数量），不许猜 ⇒ 不剥。
+//  3. **尾段的数字必须是正文的复读**（★ 2026-10-13 用户令⑧ #32 由「数字序列逐字不变」放宽而来，
+//     判据本体见 tailDigitsAreEcho）——原形态是「尾段一带数字就不剥」，方向是安全的，
+//     但它把**回声里复读的编号**也当成了新信息：现网实证是译文正文已经写了
+//     「600912.SH」，尾段那句英文回译又念了一遍同一个号，于是整段英文永远剥不掉
+//     （用户报的「翻译结果仍然带回了非代码开发用的英文」正是这一形态）。
+//     放宽后的判据问的是**信息**而不是形状：尾段每个数字序列都必须在正文里已经出现过，
+//     出现过的就是复读（剥掉零信息损失）；只要有一个没出现过，就按「它在传新信息」处理不剥
+//     （「We need 200 units」那一例照旧不剥，原用例一字不改仍是绿的）。
 //
 // 阈值档名与"不剥"的返回形态同为对外排障契约，逐字钉在用例里。
 func stripTrailingForeignResidual(targetLang, text string) (string, bool) {
@@ -166,10 +173,35 @@ func stripTrailingForeignResidual(targetLang, text string) (string, bool) {
 		return text, false
 	}
 	head := strings.TrimRight(string(r[:cut]), " \t")
-	if strings.Join(digitSeqRe.FindAllString(head, -1), "|") != strings.Join(digitSeqRe.FindAllString(text, -1), "|") {
+	if !tailDigitsAreEcho(head, tail) {
 		return text, false // 前置 3
 	}
 	return head, true
+}
+
+// tailDigitsAreEcho 前置 3 的判据本体：尾段的数字序列是否**全部**是正文已说过的复读。
+// 参数 head 剥点前的正文；tail 候选尾段。返回: true＝尾段不带新数字，可以剥。
+//
+// 三条口径都是"宁可少剥不可误剥"方向上的：
+//   - 尾段没有数字 → true（与放宽前的"逐字不变"在这一档完全等价，不改变既有行为）；
+//   - 比对的是 digitSeqRe 的**完整匹配串**（`\d+(?:[.,]\d+)*` 的最长匹配），
+//     不做子串包含——正文里是"1600912"时不能算作"600912"已经说过（那是两个号）；
+//   - 正文一个数字都没有而尾段有 → false（新信息，不剥）。
+func tailDigitsAreEcho(head, tail string) bool {
+	tailDigits := digitSeqRe.FindAllString(tail, -1)
+	if len(tailDigits) == 0 {
+		return true
+	}
+	seen := make(map[string]struct{}, len(tailDigits))
+	for _, d := range digitSeqRe.FindAllString(head, -1) {
+		seen[d] = struct{}{}
+	}
+	for _, d := range tailDigits {
+		if _, ok := seen[d]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // nativeLineCount 数「含非拉丁字母（目标脚本）的行数」，供不变量断言用（非生产判据）。

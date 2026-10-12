@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useT, t, tpl } from '@/i18n'
 import { useBranding, DEFAULT_BRAND_NAME } from '@/branding'
 import { footerLinksGet, BrandLink } from '@/api/branding'
+import { BrandTagline } from './BrandTagline' // ★ 2026-10-13 用户令②：页脚品宣尾注（唯一事实源在那边）
 
 // ============ 本文件职责中文说明 ============
 // 全站页脚组件：按访问域名解析品牌并展示平台级页脚链接。
@@ -58,6 +59,11 @@ export default function SiteFooter() {
       }}
     >
       <span>{tpl('footer.copyright', { brand })}</span>
+      <span style={{ opacity: 0.5 }}>·</span>
+      {/* ★ 2026-10-13 用户令②：品宣尾注紧跟版权行，**不分语种、不随租户改名**（口径见 BrandTagline 文件头）。
+          位置放在这里而不是段尾，是因为下面那段「平台级页脚链接」是整块可替换的分支——
+          挂在分支里就会随超管配置挪位置，挂在分支外才能保证「每个有页脚的页面都在同一处」。 */}
+      <BrandTagline style={{ fontWeight: 600 }} />
       <span style={{ opacity: 0.5 }}>·</span>
       {/* 手册入口**无条件渲染**（★ D-4）：页脚链接是「平台级配置」，超管一旦在 footer_links
           里配了条目，下面那段就会整块替换默认协议入口——手册若挂在那条分支里就会随配置消失。
