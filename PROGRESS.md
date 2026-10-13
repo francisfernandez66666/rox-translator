@@ -3,7 +3,7 @@
 > 最后更新：**2026-10-12（启动链黑屏批·已上线）**——用户报「本机换 Edge 后打不开 langcross.lexicorn.cn，隐私模式还黑」，
 > 根因是一条**只在浏览器拒绝站点数据时才发作**的静默失败：`src/i18n/index.ts` 与 `src/api/core.ts` 在**模块顶层**裸读
 > `localStorage`／`sessionStorage`，浏览器一拦就抛 `SecurityError` ⇒ **入口模块评估中断、React 从没挂载** ⇒
-> 标签标题正常、页面**纯黑零提示**（jsdom 单测里存储永远可用，构建照常绿，四腿包自检问的是字节不是运行时）。
+> 标签标题正常、页面**纯黑零提示**（jsdom 单测里存储永远可用，构建照常绿，包自检五腿问的是字节不是运行时）。
 > 三层修法全落：① 顶层裸读全部包 try（取不到就按"没存过／未登录"起步，宁可丢偏好不打黑屏）；
 > ② `index.html` **普通内联启动哨兵**（放在入口 module 之前，6 s 内 `#root` 一直空才显示一张人话面板＋重载钮，
 >    只做三件读数——站点数据被拒／哪个脚本没加载／哪一行抛异常，**不写"一定是缓存"这类猜测文案**）；
@@ -1855,7 +1855,7 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 - **② 预压缩**：`scripts/precompress_dist.mjs` 给 dist 每个文本资产出 `.br`(q11)／`.gz`(9) 两份**侧车**，
   Caddy 三处 `/assets/*` 改 `file_server { precompressed br gzip }`（仓库两份 conf＋演示站那份的**事实源** `scripts/bootstrap-demo.sh`）。
   三条硬口径已进 AGENTS §一·5：顺序只有一种（build → 预压缩 → `--check` → tar → 自检 → 上传，**build 整目录重写会把侧车抹掉**）；
-  Caddy 没侧车时**静默发原文**（无日志无报错、界面照常＝"省下的字节没上线"没有任何症状）；`--check` 与自检四腿全部**现算**不写死数字。
+  Caddy 没侧车时**静默发原文**（无日志无报错、界面照常＝"省下的字节没上线"没有任何症状）；`--check` 与包自检五腿全部**现算**不写死数字。
   「更小才落盘」是这条链唯一的体积安全阀（隔离实例实测 14 B 原文会发出 220 B 的 `.br`）。
   实测：37 个文本资产 raw **3,357,710 B → br 813,717 B（省 75.8%）／gz 981,751 B（省 70.8%）**。
 - **③ 通知分页**：`store.NotificationPageDefault=20`／`NotificationPageMax=100` 收档位，
@@ -2024,7 +2024,7 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
   于是顶层那一句 `localStorage.getItem(...)` 当场抛 `SecurityError: Failed to read the 'localStorage' property from 'Window'`
   ⇒ **模块评估中断，React 从没 mount** ⇒ 黑屏，且控制台之外没有任何用户看得见的面。
   这是本仓那一族熟悉形态的又一个实例：**失败的那一层不在任何闸门的射程里**（单测在 jsdom 里存储永远可用，构建照常绿，
-  `check_frontend_tar.sh` 四腿问的是字节不是运行时）。
+  `check_frontend_tar.sh` 五腿问的是字节不是运行时）。
 - **修法（三层，各管一段，缺任一段都有形态能黑屏）**：
   ① **顶层裸存储读全部包 try**：`i18n/index.ts` 存值取不到就**按没存过起步**（回落到浏览器语言检测），
      `api/core.ts` 取不到就**按未登录起步**——两处都是「这一份存值只是偏好，不是运行前提」，
@@ -2092,3 +2092,146 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
   会回 `被拒：SecurityError`；设置 → Cookies 和网站数据 → 不要选「阻止所有 Cookie」（InPrivate 默认就偏严）。
   现在再撞同一条路径，页面**不会再是纯黑**：要么界面正常起来（哨兵自己收摊），要么出现一张写着「站点数据被浏览器拒绝／脚本没加载／哪一行出错」
   并带**重新加载**按钮的提示面板。
+
+## 十三、界面与链路批（2026-10-13）：八条用户点名 ＋ 一条自查出的「词典到手不重渲染」
+
+> 用户形态：截图八条（界面四条、链路三条、译文一条）。收口时自己又抓到一条本仓最不好发现的形态——
+> **懒加载词典到手了，界面却不换回母语**，而且它让 §十一 慢链路批① 那句「英文一闪是设计」变成了空头支票。
+> 代码提交 `e93cb65` → 纯代码推送 `355fb71`（55 个代码文件，零 `.md`、零 UI 交付包）。
+
+### 一、实装（九条各自的"为什么这么修"）
+- **#25 工作台对话框吃满上下**：默认档改成 `.cw-dialog{flex:1 1 0}`（页眉与页脚之间那一段全归它），
+  JS 不再写内联高度，也不再写那条 `height:min(70vh,640px)`；只有顶缘手柄**拖过之后**才进 `.cw-resized` 覆盖档
+  （记忆高度进 localStorage `lc-cw-dialog-h`，钳 320 px–90 vh，双击回默认）。
+  空态入口条 `.cw-collapsed` 既不吃拉伸也不吃记忆高度——否则空态会被撑成一张大空框。
+  这条**覆盖** 2026-10-10 决策⑩ 的固定高度档，真值与几何读数（1280×720 底沿距 `.app-main` 底 14 px、容差 ≤3 px）
+  写进 `UI-ANNOTATIONS.md`，运行时锁＝`pixel_uat.spec.ts` **P2b**。
+- **#26 页脚品宣尾注**「Powered by LangCross AI」落在**五张渲染面**：全站页脚、首页、`/pricing`、`/compare`、
+  后端直出 `/docs/*` 的 `<div class="footer">`。三条口径：不本地化（不进 12 份词典，品牌标识不是界面文案）、
+  不随租户白标改名（不接 `brandName`/`{brand}` 插值）、**只有一个出处**＝`BrandTagline.tsx` 的 `BRAND_TAGLINE`。
+  ★ 本批真踩的闸门缺陷：锁判"这句在不在"之前会**先剥注释**，而我把文案抄进了说明注释——
+  删掉正文那句后 A 段仍判绿、只有 B 段红。修法＝**给锁补剥注释的形，不删注释**，并把裁决写进锚点上方注释
+  （AGENTS §一·5 新立一条；`BrandTagline.lock.test.ts` E 段八枚反证含"注释冒充实现"两枚）。
+- **#27 译文完成后四件同排同档**：`.msg-actions` 一行 `font-size:14px`，动作件与消耗读数一律 `font:inherit`
+  （**层级只靠颜色分档，不再靠字号分档**）。旧形态是两排（反馈独占一排右对齐＋meta 12 px／查看原文＋复制另起一排 14 px）；
+  旧类名 `.msg-feedback-row`/`.feedback-btn`/`.msg-srcbar` 一并退役、不许复活（锁里有负向清零腿）。
+  ★ 同批发现的另一半「不统一」＝**同一个模式词出栈两次**（表头胶囊一枚＋尾部 `.msg-meta` 又念一遍纯文本，还各一档字号），
+  尾部那枚已摘。「查看原文」改成 `<details>`→受控 `srcOpen` 展开，面板作操作行**下方兄弟**（嵌在 flex 行内会被顶高，破坏"同一高低"）。
+  运行时锁＝`translate_flow.spec.ts` **TF4**（行内子件数 4、四件 `fontSize` 逐个 **等于** 14 px、垂直中心偏差 ≤6 px）。
+- **#28 右上角语言入口不分界面语言一律显示「Language」**：入口是"给看不懂当前界面的人用的"，本地化它恰好把最需要它的人挡在门外。
+  `aria-label` 仍本地化（读屏要语义不要固定词）。旧锁 `landing_i18n.spec.ts` 那条"取词随语言变"的期望按新口径**翻转**，
+  翻转理由写进注释——只删断言会让下一个人按旧口径改回来。
+- **#29 切工单报 `Importing a module script failed.`**：懒加载路由 chunk 取失败是**模块级**异常，
+  React 树没机会挂载，屏幕只剩空白，用户刷新也未必好。新增 `src/lib/chunkRecovery.ts`＝
+  认出 chunk 类失败→**整页重载一次**（时间戳闸保证同一会话只一枪；无限刷新比白屏更坏），
+  7/7 路由各包一层 `RouteBoundary`，兜底文案走 12 份词典（缺键＝该语种看到英文，不是崩）。
+  锁＝`chunkRecovery.dom.test.tsx`（判定与只重载一次）＋`chunkRecovery.wiring.test.ts`（**数路由级组件全集**并判每一个都在 Boundary 内——
+  只测恢复逻辑本身属"判据级代替不了守卫级"，新增路由漏包必须当场红）。
+- **#30 动效读稿三遍改一遍**：`MIN_READ_BEATS` 3→1，弱链路首屏不再被逐词动画拖成十几秒（锁＝`WordSwap.dom.test.tsx` ⑨ 常量等值）。
+- **#31 预估积分不准**（现网实证：180 个拉丁字符、单语种、pro 档，横幅「≈30~75 积分（约 60 句）」，同一气泡实收「1 积分」）：
+  错的是**结构**不是系数，两处——① 旧公式按「源句数 × 语种数 × 每句 500 token × 2 轮」，
+  而即时翻译链是**整篇一次 prompt、每语种一腿**，句数根本不进成本（文件／工单链才逐段调用，那里"段"才有成本意义）；
+  ② `countSentences` 以「. ! ? ; 换行」切分，"e.g." 与 "600912.SH" 各切一刀，一段话数成 8 句。
+  新建 `internal/engine/costmodel.go`（初翻腿＝固定指令开销＋源文/译文 token；校对腿再加两版译文；
+  下限＝只走初翻那一腿——校对判不纯即退初翻是**真实路径**；上限＝两腿都走，pro 再乘一档质检重译期望余量），
+  `api/estimate.go` 薄委托。两处常数**不许再抄第二份**：引擎校对提示词提成 `reviewPromptFmt` 常量让预估量的是真发出去的那句
+  （改模板即改预估，等值锁 `TestChatLegFixedTokensDeriveFromRealPrompts`）；markup 收进 `api.modeMarkup` 一个解析口
+  （过去预估腿只读全局系数、不读模式因子，租户给 pro 配 2.0 而横幅按 1.5 报＝§一·11「多把尺子」那一族）。
+  出参字段一字未改，`cost_sentences_approx` 仍是「上限 ÷ 每句汇率」，只是分子不再吃句数。
+  `countSentences` 与 `ScriptTokens` 权重各自配锁；前端多送 `ui_lang`（中／英界面两套提示词长度不同）。
+  ⚠️ 「同一把尺子」＝**折算规则同源**，不是拿预估当账单：扣多少仍只由 `llm.Client` 回传真实 usage × markup 决定。
+- **#32 译文仍带回非目标语言的英文**：剥尾段残片那条腿的**前置 3** 原本是「数字序列逐字不变」，方向安全，
+  但它把回声里复读的编号也当成新信息——正文已写「600912.SH」，尾段英文回译又念一遍同一个号，整段就永远剥不掉。
+  改成问**信息**不问形状：新增 `tailDigitsAreEcho`，尾段每个数字序列都必须在正文里已出现才允许剥，
+  有一个没出现就不剥（"We need 200 units" 那例照旧不剥，原用例一字未改仍是绿的）；比对用完整匹配串、不做子串包含
+  （正文"1600912"不算说过"600912"，那是两个号）。锁＝`engine/review_purity_tail_digits_test.go`。
+- ★ **自查第 9 条：懒加载词典到手不触发重渲染**（本批最有价值的一条，用户没点名、日志零痕迹、界面"能打开"）：
+  React 18 `useSyncExternalStore` 只在**快照值变了**才重渲染，而旧快照只由语种构成——chunk 到手时语种没变 ⇒
+  `emit()` 空响，十语种访客**永久停在英文回退链**，§十一 那句"一闪之后换回母语"从没成立过。
+  修法＝把**词典代数折进快照键**：`dictRev` 每有一份词典落地 +1，`snapKey = ${currentLang}#${dictRev}`，
+  唯一写点 `bumpSnapKey()`；键必须**缓存**，不许在 `getSnapshot` 里现算（未缓存字符串会踩
+  "getSnapshot should be cached" 无限重渲染）。zh／en 在入口包里、`ensureLocale` 立即 resolve，**不抬代数**。
+  锁＝`lazyLocale.dom.test.tsx` **D2**；反证 R4b＝摘掉 `bumpSnapKey()` 后**只有 D2 红、D1（切语种）仍绿**
+  ——这才证明这条锁的射程是"词典到手"而不是"换语言"（AGENTS §一·5 口径③ 已按新形态改写）。
+
+### 二、闸门（本轮实跑，逐条留日志）
+- 后端：`go build` 0／`go vet` 0；`-race` 整轮 **0 条 DATA RACE**（`/tmp/go_race_final_1013.log`），
+  唯一一条 FAIL 是 `fileproc` 需要真 pymupdf——按 AGENTS §二 那条口径**补依赖而不是放宽用例**，
+  带 `FILEPROC_PYTHON_BIN` 单包复跑 `ok 19.345s`（`/tmp/go_race_fileproc_1013.log`）。
+  ⚠️  launch 踩坑两条：把 `-race` 从**仓库根**起跑得到的是
+  `pattern ./internal/...: directory prefix internal does not contain main module`（必须 `cd backend-go`）；
+  上一轮 04:30 的 run_uat 带 `UAT_SKIP_RACE=1` ⇒ 那份日志**不含竞态档案**，不能拿它当"竞态跑过"。
+- 前端：`npx tsc --noEmit` 0；全量 vitest 并行 11 条红——签名逐条读：3× `Test timed out in 5000ms`、7× `options not ready`，
+  **零条取值不符** ⇒ 串行 `--no-file-parallelism` 复跑 **104 文件／794 用例全绿**（`SERIAL_FINAL_EXIT=0`），判负载不判回归。
+- 发布闸门：`run_uat.sh`（PG 方言）A/B 主链路 **PASS=157 FAIL=0**、T 套件 **PASS=819 FAIL=0**、前端 E2E exit=0；
+  `assist_uat.sh` **PASS=157 FAIL=0**；`multi_instance_e2e.sh` `MULTI_EXIT=0`。
+  ⚠️ Playwright 有两条 flaky（`landing_i18n`、`landing_off_gate`）：trace 读下来是并发矩阵负载下"重载后再点一次"的
+  actionability 超时，页面当时已在断言要的英文态；按诚实口径记账，**没有**为把它钉死而单跑无负载复测。
+- 注释闸：`missing_comments.py`／`missing_comments_ts.py` 均 **0 缺失**（扫描面 Go 302 文件／TS 204 文件，按文件列表喂）。
+  本轮 TS 闸点名的那条是 `const stored` 此前就没有紧邻注释——按判据补的是"这一行只做类型收窄、真裁决在下一行"，
+  刻意没动 `bootStorageGate.test.ts` 第 80 行钉的那条 `try` 字面量（改一个字节就假红）。
+- 交付链：`vite build`→`precompress_dist.mjs`→`--check`→`COPYFILE_DISABLE=1 tar`→`check_frontend_tar.sh` **五腿全过**
+  （入口 `assets/index-Cil7bhKZ.js` raw **608,625 B**、38 br＋38 gz 侧车、语种 chunk 10 份、脏文件 0、入口名形状 OK）。
+  ⚠️ 本批真踩：`check_frontend_tar.sh` 不带参数时判的是**默认路径 `/tmp/frontend-dist.tar.gz`**——
+  上一轮我拿它复验时磁盘上是 10-12 那份旧包，绿灯是**昨天的包**给的。此后一律核对它打印的入口名。
+- 推送：干跑清单 55 个文件全在 `backend-go|frontend-react|scripts` 内，无名单外非代码路径（§一·9 那条口径过目）；
+  `--apply` 推 `355fb71`，二次校验"提交含 55 个文件、零 `.md`"通过，`git show --name-only 355fb71 | grep -c '\.md$|前端及UI相关'` 回 **0**。
+
+### 三、部署与事故账（2026-10-13 07:4x，两站换源＋两站换件）
+- **换件范围判定**：`git show --name-only e93cb65` 实测命中 `backend-go/internal/api/`（5 件，含 `public.go` 直出面）
+  与 `internal/engine/`（5 件），**零 `internal/assist/*`** ⇒ 只换 `translator-server`，`translator-assist` 不换、不重启
+  （`internal/engine` 不在 assist 的 import 里，这一条是现读 `go list -deps ./cmd/assist-server` 的口径，不是"看起来无关"）。
+- **交付件与落位读数**：前端 tar sha `00689d38…`、二进制 sha `1188830f…`（**两站落位后服务器侧现读逐字符相同**）；
+  入口 `assets/index-Cil7bhKZ.js`（raw 608,625 B），三域首页都指向它；正式换源 TS=**20261013_074640**，
+  `web.old.*` 两站各 3 份、dotfile 复验 0、`translator`／`translator-demo`／`caddy` 三单元 `active`。
+- **接线验收**（用户令「发版后只确认接线全通、不跑线上像素校验」）：
+  `postdeploy_20261012.sh` `REMOTE_ALL_OK=1`＋`POSTDEPLOY_ALL_OK=1`／exit 0；`deploy_check.sh` 内网 9／公网 15；
+  `smoke_tenant_domain.sh` 15 判据 0 失败**且反向对照如实 exit 1／FAIL≥2**；`smoke_brand_homepage.sh` 全绿；
+  三域 `__BRANDING__` 命中各 1；通知匿名 **401＋application/json**；扩展 zip 200／12,153 B／`PK`／指纹 `a372bfe5…`＝登记值；
+  本批新三条腿＝`/docs/terms`·`/docs/privacy`·`/docs/sla` 品宣尾注**各 1**（这一面在二进制里，命中 0＝换件没落地）、
+  chunk 公网**真体**（`AdminDashboard-*.js` 297,371 B，不是 8,6xx B 的兜底页）、匿名 `estimate` **401＋JSON**
+  （★ 我最初把这条写成"匿名打预估看句数量级"，实测该口第一行就是 `s.authUser(r)`，匿名一律 401 ⇒ 文档已按两腿改写，
+  量级那一腿必须带 token，见《部署指南》§十）。
+- ⚠️ **本批一次现网自伤（07:44:19→07:45:43＝两站停 **1 分 24 秒**，我造成的，产品逻辑一字未错）**：
+  当天现攒的换源脚本把**部署根** `/opt/translator` 当 **web 根**传进替换函数，`mv $root $root.old.$TS` 于是把
+  `bin／data／log／.venv／web` **整棵**搬走，放上去的只是 dist 内容 ⇒ 两个后端单元进入崩溃重启循环。
+  恢复链＝停两单元 → 把误放的 dist 目录改名 `<root>.webnew.<TS>` →
+  把 `<root>.old.<TS>` **原路搬回** → 核 `bin/web/data` 与属主 → 起单元，回位脚本回 `REVERT_ALL_OK=1`；
+  随后用修正版（传 `/opt/translator/web`）正式换源成功 `SWAP_ALL_OK=1`。
+  ★ **窗口两端与两种失败码＝事后从服务器 journal 复取的实测**（不是当时的手感）：起点 07:44:19 两单元
+  `Deactivated successfully`；循环里**主站每一枪退 `status=209/STDOUT`**（`StandardOutput` 指向
+  `<部署根>/log/…`，那一层被一起搬走，systemd 连标准输出都开不出来）、**演示站每一枪退 `status=203/EXEC`**
+  （可执行文件不在）⇒ **同一根因在两台上出两种失败码**，只认 203 就会漏判主站那一台；
+  两单元各失败 **23** 次（初次启动＋`restart counter is at N` 数到 **22**），首枪 07:44:19、末枪 07:45:31，
+  末枪之后 `Stopped` 且不再有计划内的重启作业，**07:45:43 出现一次干净的 `Started`**，此后到 07:46:40 无一次退出
+  ⇒ 把服务捞回来的是**回位脚本**那一次重启，窗口＝07:44:19→07:45:43。
+  ⚠️ 07:46:40 **不是**恢复时刻（它只是修正版换源自己的 `Deactivated`→`Stopped`→`Started` 三连），
+  而 `systemctl show -p ActiveEnterTimestamp` 事后恒回**最近一次**重启＝07:46:40，拿它当终点会多算 57 秒。
+  ⚠️ 本条的时长先后记错过两次（"约 4 分钟"按手感、"2 分 21 秒"拿错终点），现已按 journal 逐条改写 AGENTS／《部署指南》／本节三份。
+  ⚠️ **归因诚实**：`deploy/release_20261006.sh` 的 P4 段一直是正确的 `rehost /opt/translator/web` 形态，
+  这次是**没复用它、现攒了一份一次性命令** ⇒ 固化方向不是"再补一份脚本"，而是把正确形态收成一枚
+  与批次无关的常设执行体，并给最容易抄错的那一维（根的**形状**）装上断言。
+  **为什么不能只写进教训**：这条链上"目录改名"是唯一不可逆动作，而手工命令里同一个函数参数**物理上分不出**
+  部署根与 web 根——所以修法＝把参数形状变成脚本里的断言，并把"要不要落位"从一次判断变成两段式闸门。
+- **固化物＝`deploy/swap_web_and_binary.sh`＋`deploy/swap_web_and_binary_selftest.sh`**（本仓第一次把换源＋换件收成**与批次无关**的常设执行体，
+  并把它守卫的射程做成可复跑夹具；两道形状守卫＋"备料全绿才落位"）。
+  本机假树自证六段（**已入库**＝`deploy/swap_web_and_binary_selftest.sh`，判绿只认末行 `SWAPTEST_ALL_OK=1`）：正测 `SWAP_ALL_OK=1`／exit 0；传部署根 → 第一道拦且**目录指纹一变未动、二进制没换**；
+  只摘第一道 → 第二道（同级必须有 `bin/`）仍拦住；**两道全摘 → 真复现 07:44**（`translator.old.<TS>` 出现、
+  `data/app.db` 与 `bin/translator-server` 原地消失）⇒ 前两段的绿灯确实来自守卫本身；tar sha 给错 → 在任何动作前 `SWAP_ABORT`；
+  首页引用缺件 → 判死且不换名、不换二进制。
+  ⚠️ 自证第一轮跑歪两处（都是**夹具/接线**问题，判据本身在拦）：同一条命令里把脚本跑了两次且第一次没带 `DEPLOY_DIRS`
+  ⇒ 打在 mac 的真 `/opt` 路径上得到 `BAD 第一站现读入口名为空`；夹具语种文件名写成 `ar-XY20000AB.js`（9 字符）不满足
+  `[A-Za-z0-9_-]{8}\.js$` ⇒ `BAD 语种 chunk 只有 0 份`。修夹具时顺手拿**现网 dist 实测**了那条正则＝命中十份、
+  恰为 `ar/de/es/fr/ja/ko/pt/ru/th/zh-hant`，`index-*`／`ChatWindow-*` 一个不误伤。
+  ⚠️ 自证还逼出一处真实修法：旧形态"本站拒绝后仍继续换二进制＋重启单元"＝留下 **web 旧代＋后端新代**的混合半态
+  （同 §一·9 那族"部分失败单一 buildCommit 看不见"），现已改成备料段任一 BAD 就清 `.new`、整段停手。
+  **诚实记账**：这枚脚本的六段自证全在 `/tmp` 假树里跑，**现网那一次成功换源用的是修正版一次性脚本**，
+  常设脚本尚未在现网真跑过一次 ⇒ 下一批发版就是它的首跑，首跑要按 §五 那条"只认 exit 码＋`SWAP_ALL_OK`"复核。
+
+### 四、遗留与待决策（本批没做、需要用户拍板的）
+- 本批九条都属"界面形态与最后一公里"，**不换 CDN**：跨境链路塌到几 KB/s 时，chunk 取失败的概率仍在，
+  #29 那条"重载一次"是把失败变得可恢复，不是让失败不发生（治标口径同 §十一 文末那条国内 CDN／CF 付费档待拍板）。
+- `countSentences` 的切分缺陷（"e.g."／"600912.SH" 各切一刀）**本批刻意没动**：它还服务「余额≈句数」换算与免费额度发放，
+  改它＝改对外语义，要单独一批。旧账里"预估吃它的读数"这一半已经断开。
+- 旧账不变：13 把 active 测试 API Key、保留的 `kb_scrape`/`alert` 通知、整库 pg_dump 日备闹钟未装、
+  体验机派发到期 2026-10-26、工单建单预检那把第二尺子是否收敛。
