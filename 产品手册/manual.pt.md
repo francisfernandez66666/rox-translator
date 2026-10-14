@@ -194,11 +194,12 @@ Suporte a formatos de arquivo:
 | Com restauração de layout | docx, pptx, xlsx, pdf, txt, csv, md | Arquivo traduzido no mesmo formato |
 | Entrega em tabela bilíngue | srt, vtt, json, yaml etc. | Xlsx com original/tradução lado a lado |
 | Somente texto | formatos legados da família doc, ppt, xls, odt/ods/odp, rtf, epub | .md traduzido |
+| Reconhecimento primeiro | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imagens, OCR); mp3, m4a, wav, ogg, flac, aac, opus (áudio, transcrição) | .md com a tradução; em áudio, também um .srt com a linha do tempo original e uma cópia do áudio |
 
 Limites e observações:
 
 - Há limites de quantidade e tamanho de arquivos por solicitação; PDFs com mais de 40 MB ou 120 páginas são recusados com uma mensagem sugerindo converter para docx primeiro.
-- PDFs digitalizados (páginas em imagem) não são compatíveis; texto dentro de imagens não é traduzido, conforme a estratégia do produto.
+- PDFs digitalizados (páginas em imagem) e imagens passam primeiro pelo reconhecimento óptico de texto (OCR) antes da cadeia de tradução; arquivos de áudio são transcritos primeiro. Se o componente de reconhecimento não estiver disponível, o trabalho é recusado com um motivo claro — nunca com uma tradução vazia.
 - Se a gravação do layout falhar em algum arquivo, ele é automaticamente rebaixado para entrega em .md, com aviso na central de notificações — a solicitação como um todo não falha por isso.
 
 ### 5.2 Estados e fluxo da solicitação
@@ -402,7 +403,7 @@ O saldo atual ou o orçamento do departamento acabou. Usuários comuns: procurem
 A tradução de arquivos é feita exclusivamente em «Solicitações de tradução → Arquivo»; o chat faz apenas tradução de texto puro.
 
 **Q3: Meu PDF foi recusado na tradução?**
-Converta primeiro em docx os PDFs com mais de 40 MB ou 120 páginas; PDFs digitalizados (páginas inteiras em imagem) ainda não são compatíveis.
+Converta primeiro em docx os PDFs com mais de 40 MB ou 120 páginas; PDFs digitalizados (páginas inteiras em imagem) são tratados por OCR, sem necessidade de conversão.
 
 **Q4: Por que a tradução não segue meu glossário?**
 Confira se os termos foram importados para um pacote da base de conhecimento visível ao seu departamento (capítulo 7) e use o modo «Revisão profissional» para conteúdo oficial.

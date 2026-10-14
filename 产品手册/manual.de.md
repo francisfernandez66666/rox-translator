@@ -194,11 +194,12 @@ Unterstützte Dateiformate:
 | Layout wiederherstellbar | docx, pptx, xlsx, pdf, txt, csv, md | Übersetzungsdatei im selben Format |
 | Gegenüberstellungstabelle | srt, vtt, json, yaml usw. | Ausgangstext/Übersetzung als xlsx-Gegenüberstellung |
 | Nur Text | Altformate doc, ppt, xls, odt/ods/odp, rtf, epub | Übersetzung als .md |
+| Erst erkannt, dann übersetzt | png, jpg, jpeg, bmp, tif, tiff, webp, heic (Bilder, OCR); mp3, m4a, wav, ogg, flac, aac, opus (Audio, Transkription) | Übersetzung als .md; bei Audio zusätzlich .srt auf der Original-Zeitachse plus Kopie der Originalaudiodatei |
 
 Grenzen und Hinweise:
 
 - Die Dateianzahl und -größe pro Auftrag ist begrenzt; PDFs über 40 MB oder 120 Seiten werden mit dem Hinweis abgelehnt, sie zuerst in docx zu konvertieren.
-- Gescannte PDFs (nur Bilder) werden nicht unterstützt; Text in Bildern wird gemäß Produktstrategie nicht übersetzt.
+- Gescannte PDFs (nur Bilder) und Bilddateien durchlaufen zuerst die Texterkennung (OCR) und danach die Übersetzungskette; Audiodateien werden zuerst transkribiert. Ist die Erkennungskomponente nicht eingerichtet, wird der Auftrag mit klarer Ursache abgelehnt — eine leere Übersetzung wird nie ausgeliefert.
 - Schlägt das Layout-Backwriting wider Erwarten fehl, wird die betreffende Datei automatisch auf .md-Auslieferung zurückgestuft und per In-App-Nachricht informiert — der Gesamtauftrag scheitert daran nicht.
 
 ### 5.2 Auftragsstatus und Ablauf
@@ -402,7 +403,7 @@ Das aktuelle Guthaben oder das Abteilungsbudget ist aufgebraucht. Gewöhnliche N
 Dateiübersetzungen laufen ausschließlich über „Übersetzungsaufträge → Datei“; der Chat dient nur der reinen Textübersetzung.
 
 **Q3: PDF-Übersetzung wurde abgelehnt?**
-PDFs über 40 MB oder 120 Seiten bitte zuerst in docx konvertieren und dann den Auftrag anlegen; gescannte PDFs (seitenweise nur Bilder) werden derzeit nicht unterstützt.
+PDFs über 40 MB oder 120 Seiten bitte zuerst in docx konvertieren und dann den Auftrag anlegen; gescannte PDFs (seitenweise nur Bilder) werden per Texterkennung (OCR) erschlossen, eine Konvertierung ist dafür nicht nötig.
 
 **Q4: Warum weicht die Übersetzung von meinem Glossar ab?**
 Prüfen Sie, ob die Begriffe in die Wissensdatenbank importiert wurden und das Paket für Ihre Abteilung sichtbar ist (Kapitel 7); für offizielle Inhalte wählen Sie bitte den Modus „Profi“.

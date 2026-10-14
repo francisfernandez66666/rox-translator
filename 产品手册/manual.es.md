@@ -194,11 +194,12 @@ Formatos admitidos:
 | Con restauración de maquetación | docx, pptx, xlsx, pdf, txt, csv, md | Archivo traducido en el mismo formato |
 | Entrega en tabla comparativa | srt, vtt, json, yaml, etc. | xlsx original/traducción |
 | Solo texto | familia heredada doc, ppt, xls; odt/ods/odp, rtf, epub | .md con la traducción |
+| Reconocimiento previo | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imágenes, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, transcripción) | .md con la traducción; en audio se añade un .srt con los tiempos originales y una copia del audio |
 
 Límites y notas:
 
 - Cada trabajo tiene un máximo de cantidad y tamaño de archivos; los PDF de más de 40 MB o 120 páginas se rechazan con un mensaje amable que sugiere convertirlos primero a docx.
-- Los PDF escaneados (solo imágenes) no son compatibles; el texto dentro de imágenes no se traduce, según la política del producto.
+- Los PDF escaneados (solo imágenes) y las imágenes pasan primero por reconocimiento óptico de texto (OCR) antes de la cadena de traducción; los archivos de audio se transcriben primero. Si el componente de reconocimiento no está disponible, el trabajo se rechaza con un motivo claro y nunca se entrega una traducción vacía.
 - Si la escritura del formato llegara a fallar, ese archivo se degrada automáticamente a entrega en .md y se notifica por mensaje interno; el trabajo completo nunca falla por este motivo.
 
 ### 5.2 Estados del trabajo y flujo
@@ -402,7 +403,7 @@ El saldo actual o el presupuesto del departamento se agotó. Los usuarios normal
 La traducción de archivos se realiza exclusivamente en «Trabajos de traducción → Archivo»; el cuadro de conversación solo traduce texto.
 
 **P3: ¿Rechazaron mi trabajo de PDF?**
-Los PDF de más de 40 MB o 120 páginas deben convertirse primero a docx antes de crear el trabajo; los PDF escaneados (páginas completas de imagen) aún no son compatibles.
+Los PDF de más de 40 MB o 120 páginas deben convertirse primero a docx antes de crear el trabajo; los PDF escaneados (páginas completas de imagen) se procesan con OCR, no hace falta convertirlos.
 
 **P4: ¿Por qué la traducción no coincide con mi glosario?**
 Comprueba que los términos se hayan importado a un paquete de la base de conocimiento visible para tu departamento (capítulo 7) y, para contenido de publicación formal, elige el modo «Profesional».

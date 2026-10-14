@@ -1657,11 +1657,11 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 
 ## 二、核心能力（全部已上线）
 
-- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/md 输出译文文件（写回失败自动重试、不降级）；srt/vtt/json/yaml 等以对照表（xlsx）形式交付；多文件混合工单、多目标语言打包 zip；某语言漏译 >50% 直接置工单失败拒交残缺产物
+- **多格式文件翻译**：docx/pptx/xlsx/pdf/txt/csv/md 输出译文文件（写回失败自动重试、不降级）；srt/vtt/json/yaml 等以对照表（xlsx）形式交付；**★ 2026-10-15 收口批新准入**：图片 png/jpg/jpeg/bmp/tif/tiff/webp/heic 经本机 OCR、音频 mp3/m4a/wav/ogg/flac/aac/opus 经本机 ASR，识别后都进同一条翻译链（图片交付译文 .md；音频交付 .srt（带原时间轴）＋译文 .md＋原音频副本）；即时翻译工作台另有麦克风转写与译文朗读两个端点。清单唯一事实源＝`fileproc/formats.go`，交付形态唯一判据＝`engine/file.go` 的 `writebackDelivery`；多文件混合工单、多目标语言打包 zip；某语言漏译 >50% 直接置工单失败拒交残缺产物
 - **PDF 保真翻译管线（两阶段，a1a5aad）**：
    1. `extract`：pdf2docx 转 DOCX 并提取段落键（含表格/嵌套/文本框/页眉脚）
-   2. LLM 翻译段落键 → `apply`：在缓存 DOCX 上 w:t 级替换（图片/排版零破坏）+ LibreOffice 转回 PDF（★ 图片内容按产品策略不翻译，OCR 已移除）
-    - ⚠️ 已知限制与缓解：超大 PDF（`pdf2docx + LibreOffice` 转 PDF 易超时/卡死）已由上传前置拦截兜底——**PDF 体积 >40MB 或页数 >120 页直接友好拒绝并提示转 docx**；转换子进程标记为 OOM 优先受害者，超限快速失败而非挂死整机。常规 PDF 可稳定翻译，超大/扫描件仍建议优先上传 `.docx` 源文件
+   2. LLM 翻译段落键 → `apply`：在缓存 DOCX 上 w:t 级替换（图片/排版零破坏）+ LibreOffice 转回 PDF（★ 括注「图片内容按产品策略不翻译，OCR 已移除」**已被 2026-10-15 收口批覆盖**：图片件与扫描件现在走本机 OCR（PaddleOCR 的 ONNX 推理）识别后进同一条翻译链，仍不接任何 hosted OCR 服务；详见 §十四 与本文件「格式支持」条）
+    - ⚠️ 已知限制与缓解：超大 PDF（`pdf2docx + LibreOffice` 转 PDF 易超时/卡死）已由上传前置拦截兜底——**PDF 体积 >40MB 或页数 >120 页直接友好拒绝并提示转 docx**；转换子进程标记为 OOM 优先受害者，超限快速失败而非挂死整机。常规 PDF 可稳定翻译。**扫描件（整页图片）自 2026-10-15 起由本机 OCR 识别后进翻译链**，不再要求转 docx；但识别准确率受清晰度影响，且 OCR/ASR 权重未落盘的节点上 `ocr_ready=false`，建单侧返回可行动文案而不是静默出空文本（口径见《部署指南》§一 资产同步行与 AGENTS §一·17）
 - **双模式**：⚡快速（AI 初翻+校对）/ 🎓专业校对（知识库+评估+硬闸全流水线）
 - **计费体系（Token 实费 + 双桶台账）**：额度=发放台账（quota_grants，带到期可叠加）+ 永久余额（balance_accounts）；扣减顺序「台账近到期行→永久余额」事务原子；部门预算墙、套餐/订单/发票
 - **邀请裂变**：个人邀请码+专属链接+二维码；被邀人注册→邀请者体验叠加(+30万，有效期默认14天、后台可调)；首笔付费套餐→邀请者+50万（token 数与有效期均后台可调：默认永久余额，可改为限时台账）；同对每种奖励仅一次。**仅个人用户（is_personal=1）可获得邀请奖励（含多邀得多付费奖励），企业租户后端跳过发放；★ 2026-09-07 起企业用户/平台超管前端彻底隐藏「邀请好友」入口，邀请奖励参数并入「运营策略」面板（invite 因子，超管平台级可配）**。
@@ -2231,7 +2231,120 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 ### 四、遗留与待决策（本批没做、需要用户拍板的）
 - 本批九条都属"界面形态与最后一公里"，**不换 CDN**：跨境链路塌到几 KB/s 时，chunk 取失败的概率仍在，
   #29 那条"重载一次"是把失败变得可恢复，不是让失败不发生（治标口径同 §十一 文末那条国内 CDN／CF 付费档待拍板）。
-- `countSentences` 的切分缺陷（"e.g."／"600912.SH" 各切一刀）**本批刻意没动**：它还服务「余额≈句数」换算与免费额度发放，
-  改它＝改对外语义，要单独一批。旧账里"预估吃它的读数"这一半已经断开。
+- ~~`countSentences` 的切分缺陷（"e.g."／"600912.SH" 各切一刀）**本批刻意没动**：它还服务「余额≈句数」换算与免费额度发放，
+  改它＝改对外语义，要单独一批。旧账里"预估吃它的读数"这一半已经断开。~~
+  ⇒ **已于 2026-10-14 收口批实装**（见下面 §十四）：切分搬进 `internal/api/sentence_count.go` 唯一实现，
+  且这一批把那句"它还服务余额句数／免费额度"**核正为不成立**——那三条读点各自独立（`balancePayload` 走
+  `TokenSentenceRate`、试用按请求计次、套餐取 `packages.sentences`），所以改切分**不动钱**。
+- ~~工单建单预检那把第二尺子是否收敛。~~ ⇒ **已闭**（同批 #43：判据形状收成一把尺子，不翻对外行为，见 §十四）。
 - 旧账不变：13 把 active 测试 API Key、保留的 `kb_scrape`/`alert` 通知、整库 pg_dump 日备闹钟未装、
-  体验机派发到期 2026-10-26、工单建单预检那把第二尺子是否收敛。
+  体验机派发到期 2026-10-26。
+
+## 十四、能力批与收口（2026-10-14~15）：OCR/ASR/TTS 三能力 ＋ 四处「一把尺子」 ＋ 零停机第一阶段 ＋ 判据两处过时修正
+
+### 一、这批做了什么（12 个域，一句话一条）
+- **能力三件（本批主线）**：`fileproc/ocr.go`＋`ocr_image.go`＋`ocr_recognize.py`／`ocr_translate_image.py`（PP-OCR 的
+  **ONNX 推理**，刻意不装 paddlepaddle——GPU 框架 500MB+ 纯属浪费，`onnxruntime` 直接驱动权重）；
+  `asr.go`＋`asr_transcribe.py`（sherpa-onnx，SenseVoice 主力／Parakeet 欧洲语路由／Whisper tiny 冷门兜底，
+  输入由部署机 `ffmpeg` 归一到 16k 单声道 wav）；`tts.go`＋`tts_speak.py`（Chatterbox Multilingual V3 ONNX 导出
+  ＋ `resemble-perth` 水印**默认开**、产物可溯源；`pkuseg`／`pykakasi` 是中／日文本前端，缺一个那语种音质就塌，
+  所以进探测清单）。三档就绪位出栈在 `/api/health` 的 `ocr_ready`/`asr_ready`/`tts_ready`。
+- **交付形态与准入清单只有一份**：`fileproc/formats.go`（`TranslateFormatOrder`／`IsTranslateFormat`／`MaxUploadBytes`）
+  ＋ `engine/file.go` 的 `writebackDelivery` 一处判据；前端那份由 `api/translateFormats.lock.test.ts` **跨语言等值**钉住
+  （P0 是射程腿：解析结果不足时报「锚点漂了、闸门已失效」，不是"清单不等值"）。
+- **工单提取失败理由出栈收敛**（#43／#55）：`extractFailureReason` 让图片／音频件原样带出**可行动**文案
+  （「节点未启用识别」这一类），建单预检与工单明细两条面同源。
+- **采集与告警类站内信收件人一把尺子**（#46）：`api/notify_recipients.go`＝`auth.IsSuperAdmin` ×
+  `auth.EffectiveUserStatus`（与"能不能进后台"同一条判据）。收敛前的真缺陷不是形状难看：
+  只有 `role='super_admin'` 账号的部署（新库／后台提权就写这个值），问题反馈与销售线索的站内信**一条都发不到人**。
+- **句子切分**（#40）：`api/sentence_count.go` 唯一实现，只重判 ASCII 句点，缩写／小数／代码／文件名不再各切一刀；
+  判不出倾向时按边界处理（宁可多算一句，少算＝客户以为更便宜）。同批**核正**了这里挂着的旧说法（见 §十三 那条翻转）。
+- **预估与实扣同一把尺子**（#31/#40 批收口）：模型只在 `engine/costmodel.go` 一份、`api/estimate.go` 薄委托，
+  固定指令开销从**真发出去的那句提示词**量出来，token→积分只走 `Store.PointsFromTokens` 一个换算口，前端必须送 `ui_lang`。
+- **译文朗读＋语音输入**（P3／P2 前端腿）：`api/chat_audio.go`＋`src/api/chatVoice.ts`＋`lib/voiceFail.ts`，
+  朗读件落进气泡尾部那一排。
+- **通知路由收敛**：`src/lib/noticeRouting.ts`＋`noticeRouting.lock.test.ts`，`Bell` 徽标按新档分派。
+- **零停机第一阶段**（#41／#45）：`cmd/server/listen_systemd.go`（`LISTEN_FDS` 认领＋`sdTakeoverMarker` 与装配脚本
+  `BINARY_MARKER` 等值锁）＋`boot_timer.go` 启动路径计时＋`deploy/install_socket_activation.sh` 四档
+  ＋两份 `.socket` 单元**首次进版本库**（此前它们只以未跟踪文件躺在磁盘上——`autosales` 与 `autox` 两侧都没有，
+  意味着"照仓库克隆装不出这套接管"，属 §三「有脚本无调度」的第二层）＋`swap_web_and_binary.sh` 的重启窗口探针（三条裁决抬进 FAIL）。
+- **USDT 收银台承诺对齐**（#42）：额度未接线时不许承诺自动入账；`pay_usdt_watch` 只出状态词与计数，
+  绝不出上游地址／Key（同 §一·12 纪律）。
+- **预压缩 brotli 大窗口白屏事故的机械防线**（#45 现网事故）：`compressBuf` 里 br/gz **两档解码往返逐字节等值**
+  （`precompress_brotli_gate_test.go` P1–P4）＋ `check_frontend_tar.sh` 的 **T6/T6b**（把包内每份侧车真解回原文；
+  判据问「浏览器能不能解」而不是「文件在不在」，本机没有 node 时**判红不判跳过**）。
+- **e2e 两处判据修正**（本批收口，见下面 §三）：TF3 刷新时机拆独立断言；TF4 件数从写死翻成派生式＋新增形状锁。
+
+### 二、发布闸门整轮读数（2026-10-15 本机串行，PG 方言；`translate_flow` 另配定向复跑）
+| 闸门 | 读数 |
+|---|---|
+| 后端 `go build`／`vet`／`test -race` | 全绿；`internal/api` 竞态单包 **1579.532s ok** |
+| `internal/fileproc`（带 `FILEPROC_PYTHON_BIN`） | `ok 47.043s`（不带 venv 时 pymupdf 那条腿 `t.Fatal`＝**只许补依赖不许放宽**） |
+| `run_uat.sh`（PG） | **A-PASS=139／B=157／T=869，FAIL=0** |
+| `multi_instance_e2e.sh` | **PASS=33／FAIL=0**（含 M5 段 C/D/E 四台实例腿） |
+| `assist_uat.sh` | 绿 |
+| 前端串行 vitest | **109 test files passed**；`npx tsc --noEmit` exit 0 |
+| Playwright 全量 | **80 passed（2.2m）**；`translate_flow` 定向复跑 1 passed（TF1/TF2-a/TF2-b/TF3/TF4 五段全过） |
+| `vite build` ＋ 预压缩 | br 省 **75.7%**／gz 省 **70.6%**，入口 raw **611,180 B**、语种 chunk **10 份**、脏文件 0 |
+| `check_frontend_tar.sh` | `FRONTEND_TAR_ALL_OK=1`（T1–T6＋T5b/T6b；T6 解码往返 `checked=78 bad=0`） |
+| `build_extension.sh --check`／`build_sdk.sh --check` | 无漂移 |
+| `swap_web_and_binary_selftest.sh`／`install_socket_activation_selftest.sh` | `SWAPTEST_ALL_OK=1`（六段）／`SOCKETTEST_ALL_OK=1`（A1–A6／P1／P2） |
+| 注释闸（`missing_comments.py`／`missing_comments_ts.py`） | 实文件扫 **314 个 Go**／**207 个 TS**，两闸**零缺失**；各配「整块删除才见红」反证验过射程 |
+| `sync_fileproc_assets.sh` 本机演练 | 9 脚本＋5 资产**逐文件 sha256 等值**（含本批四份新 `.py`） |
+
+### 三、本批两处判据红——**都不是产品缺陷**，改的是判据（口径已升进 AGENTS §三）
+- **TF4「尾部四件」写死件数被一枚合法新控件顶红**：实到 5 件，因为本批的朗读按钮落进的正是要保护的那一排
+  （用户投诉本体是"两排两档两种高低"，它已经修好了）。修法＝派生式四件套（点名件在位／反馈恰一枚／无第三类 class
+  与再包一层／总数只做下界当**射程自证**）＋jsdom 侧同源点名＋新锁 `src/translateFlowE2eLock.test.ts`（R1 反证＝装回写死件数必红）。
+  ⚠️ 新锁首跑的红是**它自己**的缺陷：变异体里 `tail.items.length` 没被 `tail\.(length|count)` 抓到＝**假反证**；
+  链式取长必须整段吃完再判（`tail[\w.]*\.(?:length|count)\b`）。
+- **TF3 换测量锚点拆掉了「两读数同批刷新」的隐含等式**：旧锚点 `msg-meta` 随 SSE `done` 帧即出，新锚点余额条
+  要等 `PKG_REFRESH_DEBOUNCE_MS = 2000` ＋一次 `myPackage` 往返。一条断言里于是同时问"钱扣了"和"屏幕何时刷"，
+  慢的那件决定成败、红的信息却指不到是哪件。修法＝刷新时机拆成独立 `expect.poll`（等读数**变化**，不是等固定毫秒），
+  本轮没等到让位给下一轮，两种红分开报（「一次都没刷新＝刷新链路断了」vs「净减没发生＝扣费未生效／被每日奖励补平」）。
+
+### 四、闸门链自身的两处空转（本批真踩，判据一字未放宽）
+- **串行链里只写了 `precompress_dist.mjs --check`，漏了生成步** ⇒ G8/G9 双双判红（`br=0`／侧车全缺），
+  而 dist 和构建都是好的——红的是**链**。补 `node scripts/precompress_dist.mjs` 后 `CHECK=0`＋`FRONTEND_TAR_ALL_OK=1`。
+  顺序只有一种：`vite build` → 生成 → `--check` → tar → `check_frontend_tar.sh`（AGENTS §二 已把那行拆成两行）。
+- **注释闸读数 `TOTAL 0 declarations in 0 files`** 与历史上"喂目录＝恒空假绿"同形 ⇒ 用**反证消歧**而不是改判据：
+  整块删掉 `chat_audio.go` 里 `func asrReason` 上方注释 → `TOTAL 1 declarations in 1 files`；`voiceFail.ts` 同法 → 1。
+  实文件数 314／207 两侧都对上，两闸真零缺失。⚠️ 多行 doc 块**删任一行仍绿**（判据只看紧邻上一非空行），
+  所以这类反证必须整块删除才有效。
+
+### 五、遗留与待决策（本批没做、需要用户拍板；每条都写现象→根因→为什么不直接修→修法前置）
+1. **TTS 在工单侧的 mp3 产物还没接线**——现象：朗读（聊天侧）与「译文配音交付」（工单侧）共用 `tts_speak.py`，
+   只有前者有入口。根因：工单交付形态判据 `writebackDelivery` 只分「原位写回／xlsx 对照表」两档，音频交付是第三档。
+   为什么不直接修：动它＝动对外交付契约（客户看到的产物集合变了），要先定"谁付这个钱"（TTS 是否计入积分）。
+   前置＝`store.PointsFromTokens` 那条换算口给音频一个系数，或明确"朗读只在聊天侧、工单不出声"。
+2. **`tk.imageHeavyHint` 有字段零消费点**——现象：建单预检算出了"这张件以图为主"的提示，但没有任何出栈点读它。
+   根因：#43 收的是"判据形状一把尺子"，展示面不在那一跳。为什么不直接修：提示文案是对外文案面，
+   加了就要 12 语种同步补译＋locale 全量词典加键。前置＝定文案与语种集，再随二进制生效。
+3. **`errorstyle`／`logratchet` 基线未下调**——现象：`TestErrorStyleRatchet` 基线仍 485／log.Printf 仍 176+69。
+   根因：本批只保证"不新增"。修法＝再迁一批并同步改基线数字（AGENTS §一·2 明令别只改数字）。
+4. **现网 assist 库缺 `image-ocr`／`audio-transcribe` 两行功能卡**——现象：改完代码挂件不会提这两个能力。
+   根因：`seed/seed.json` 只在**首启空表**时灌库，存量库不跟进（AGENTS §三 那条）。修法＝随批
+   `python3 scripts/assist_kb_sync.py --host <服务器>`（先只读打差异，确认后 `--apply`，写前自动备份）。
+5. **库里若存在 `configs.promise_rules` 行会盖掉新默认**——同 §四 的 DB 值优先机制；排障时先读库里那一节再判断代码默认。
+6. **billing 迁移的站内信写给 `user_id=0`**——现象：迁移告警进的是"无归因"行，铃铛里看不见。
+   根因：迁移期还没有收件人上下文。修法前置＝决定发给超管（走 §一·15 那一个口径）还是只进日志。
+7. **T71 的 ready 支本机无调度**——现象：矩阵里 `ocr/asr/tts` 那条只有"未就绪"分支被真跑过。
+   根因：本机没有权重（刻意不进 git、禁运行时下载）。修法＝现网投放权重后跑一次真件，或在 CI 装一份最小权重。
+8. **`extractFailureReason` 属对外文案面改动**——现象：源站本地跑绿不代表线上文案变了。
+   根因：它出栈在 Go 侧 ⇒ **必须换二进制**（§一·5「纯注释提交只对 React 侧成立」同族）。
+9. **本批新暴露的一族覆盖缺口**：新增端点没随批补词条、既有断言钉死了旧清单长度、写死件数锁被新控件顶红——
+   三条同一形态＝**判据替旧口径说话**。已就位的机械防线＝`translateFormats.lock.test.ts` P0 射程腿＋
+   `translateFlowE2eLock.test.ts`；未做的＝"新增能力必须同时动哪几张清单"目前没有一张总表可查。
+10. **图片「原位写回」只有能力腿、没有交付腿**——现象：`fileproc/ocr_image.go` 的 `RenderTranslatedImage`
+    （把译文按坐标块画回原图）与 `ImageBoxes` 在全仓**零调用方**（连测试都没有），而同一批的 `RememberImageBoxes`
+    有真调用方（`ocr.go:157`）＝框坐标在缓存、没人来取。根因：v2 的分期里这是 **P4**，P1a/P2 只交付了
+    「识别后进翻译链、出译文 .md」这一半。为什么不直接修：交付形态是**对外契约**（客户拿到的产物集合会从「一个 .md」
+    变成「一张翻译过的图」），且 `writebackDelivery` 需要新增一档；`ImageBoxes` 是进程内 map，跨实例/重启即失效，
+    写回链路要么在同一次请求内完成要么换持久载体。前置＝拍板「图片要不要出图」＋若出图，字形与字体（`assets/fonts/`
+    那份 DroidSansFallback）按语种怎么取。⚠️ 已把这条诚实写进 `ocr_image.go` 头注释（旧注释声称
+    「engine/file.go 里有那一个分支」＝注释凭空指路，AGENTS §一·14 那一族）。
+11. **《产品手册》的 PDF 交付物仍是旧口径**——现象：12 份 `manual.*.md` 已按新格式表改写，但
+    `产品手册/pdf/` 里那份预置 PDF（注册欢迎邮件的附件，`manual_pdf_path` 默认
+    `/opt/translator/data/manual.pdf`）**不会随 md 源稿自动重生成**——仓内没有 md→PDF 工具链（v2 §六 第 7 条已写明）。
+    根因：PDF 是外部渠道产物。后果＝新注册用户邮件里那份手册还写着「图片内的文字不翻译」，与网页版手册相对立。
+    前置＝决定「走外部渠道重导一份并替换 `data/manual.pdf`」还是「邮件改挂在线手册链接」（后者要动邮件模板与发送链）。

@@ -197,7 +197,13 @@
      （过去预估腿只读全局系数、不读模式因子，租户给 pro 配 2.0 而横幅按 1.5 报，同 §一·11「多把尺子」那一族），
      token→积分只走 `Store.PointsFromTokens` 一个换算口。
      ⚠️ 「同一把尺子」指**折算规则同源**，不是拿预估当账单：真正扣多少仍只由 `llm.Client` 回传的真实 usage × markup 决定。
-     ⚠️ `countSentences` 本身**一字未动**（它还服务「余额≈句数」换算与免费额度发放，那条链要的是句数语义）。
+     ⚠️ **「句数」那一维已被重做（★ 2026-10-13 用户令 #40 批，本批收口）**：切分实现搬进
+     `internal/api/sentence_count.go`（唯一实现，判据只重判 **ASCII 句点「.」**——换行／`!?;`／全角 `。！？；` 的边界与改造前逐字一致），
+     缩写名单＋小数／代码／文件名那几类不再各切一刀；**判不出倾向时按边界处理**（宁可多算一句，不许少算——少算＝客户以为更便宜）。
+     ★ 原先这里那句「它还服务「余额≈句数」换算与免费额度发放」**不成立**（实读代码核正）：
+     余额句数走 `balancePayload` 的 `total / TokenSentenceRate`、试用额度按**请求计次**、套餐额度取 `packages.sentences` 固定值，三条都不读这一份。
+     ⇒ 所以改切分**不动钱**，但"不动钱"是由那三个读点各自成立，**不是**由本函数的判据成立——新增任何一个"按句数算账"的读点前，先读这一条。
+     锁＝`api/sentence_count_test.go`。
      ⚠️ 前端必须送 `ui_lang`：中／英界面是两套提示词、长度不同，不送就只能按中文那套量，英文界面访客看到偏高区间。
      锁＝`api/estimate_costmodel_gate_test.go`（委托与单一算法）＋`engine/costmodel_test.go`（含 `ScriptTokens` 权重量级锁——
      改权重必须同步那条锁：抬高＝所有短文本一起估贵，压低＝客户按预估备的钱不够花）＋ UAT **A6 五腿**。
@@ -270,6 +276,20 @@
      而这类锁判"这句在不在"之前会**先剥注释**——把文案抄进注释＝注释冒充实现，
      本批反证真踩：删掉正文那句后 A 段仍判绿、只有 B 段红（同 §一·9 与记忆里那条「负向锁会被自己新写的注释再犯」，
      裁决＝**给锁补剥注释的形，不删注释**）。
+  ★ ③ **样式也只有一个出处**（★ 2026-10-14 用户后令「这个页脚的句子能不能提亮并且做重点提示」补立）：
+     面色/字色/字重/圆角/内垫一律写进 `BrandTagline.tsx` 那份**导出的** `TAGLINE_STYLE`，四面调用**一律不带 `style`**
+     （原先四面各内联一份 `fontWeight: 600`＝「改四面留一面」的温床，正是本仓页脚链接/手册入口反复出现过的漂移形态）。
+     后端直出面拿不到组件，只能**同值重声明**那条 `.footer .brand-tagline{…}`，等值由 `BrandTagline.lock.test.ts`
+     G1–G5 机械钉住：**比对吃 `var()` 解析后的实值、两张令牌表各自查**（前端 tokens.css／直出面自己那份 `:root`），
+     因为这一族最坏的静默形态是**「名字照抄、值没落地」**——直出面 `:root` 里只有 `--lc-white`，
+     把规则写成前端的 `--lc-fill-white` 时 var() 解不开 ⇒ 面色退回 transparent、字色退回继承灰，
+     **界面照常渲染、零报错、两侧名字还完全一致**（按名字比的锁在这里恒绿）。
+     同批另配 `undeclaredCSSVars()` 在服务端拼完的 HTML 上做集合差（守卫级，不是判据级），
+     ⚠️ 那条腿的 `:root` 正则**必须带 `(?s)`**：直出面 `:root` 是多行写法，不带 s 取不到块＝把自己判成"锁失明"（本批首跑真红在这）。
+     这一档写成**等值锁**（G2 逐维点名交付真值 + G3 四面不带 style 负向 + G4 五枚反证），
+     禁「只许更亮/更大」的单向锁（§一·5 界面规格＝UI 交付真值）；真值见 UI-ANNOTATIONS §6 尾注那一行。
+     ⚠️ **`brand-tagline` 类名是判据靶子**：G5/B 段/public_ui_test.go 三处都按它取规则与 markup，
+     只改类名不改另一侧＝三处里至少一处读空并判"锁失明"，改这一族形态时三处一起同步。
   语种相关纪律同批确立的两条：尾注**不分语种、不随租户改名**（品宣句，租户品牌域也一样出这一句）；
   它挂在页脚「平台级链接块」的**分支外**——挂在可替换分支里就会随超管配置挪位置。
 - ★ **右上角语言入口的可见文案固定「Language」，不随界面语言变**（★ 2026-10-13 用户令④ #28）：
@@ -303,20 +323,33 @@
   **内容指纹**而非 zip 字节哈希（zip 内含 mtime，同源码两次打包字节不同），比对排障按这个口径，
   漂移由 `build_extension.sh --check` 与 `src/extensionPackage.test.ts` 拦。
 - ★★ **静态资源预压缩侧车属「交付包层」，不是构建层**（★ 2026-10-12 慢链路批②）：
-  `scripts/precompress_dist.mjs` 给 dist 里每个文本资产出 `.br`(brotli q11)／`.gz`(gzip 9) 两份**侧车**，
+  `scripts/precompress_dist.mjs` 给 dist 里每个文本资产出 `.br`(brotli q11／**窗口固定 22＝1 MiB，见下面 ④**)／`.gz`(gzip 9) 两份**侧车**，
   由 Caddy `file_server { precompressed br gzip }` 直出（§一·5 第 5 面之外的**第 6 类盲区**：它不在源码里，
-  在**包里的文件**里）。三条硬口径：
+  在**包里的文件**里）。四条硬口径：
   ① **顺序只有一种**：`vite build` → `precompress_dist.mjs` → `--check` → tar → `check_frontend_tar.sh` → 上传。
      build 整目录重写 dist＝把侧车抹掉（**包括 `run_uat.sh` 那次"源码比 dist 新就重建"**），所以预压缩不可能是 build 的上游；
      反过来"决策不写进 `npm run build`"是刻意的——侧车只对**交付**有意义，本地 dev／后端直出都不经 Caddy。
   ② **Caddy 没有侧车时静默发原文**：无日志、无报错、界面照常、构建照常绿 ⇒
      "省下的 15–20% 字节没上线"在现网**没有任何症状**（同 §一·12／§一·13 那一族「有自动降级的链路，产物能打开不算验收」）。
-     ⇒ 唯一能在推上线之前抓住它的地方就是**包本身**，所以换源前自检五腿（T1 侧车／T2 macOS 脏文件／T3 入口体积／T4 chunk 份数／T5 入口名形状＋T5b 判据自证）
+     ⇒ 唯一能在推上线之前抓住它的地方就是**包本身**，所以换源前自检六腿（T1 侧车／T2 macOS 脏文件／T3 入口体积／T4 chunk 份数／T5 入口名形状／**T6 侧车必须能解回原文**，各配 T5b／T6b 判据自证）
      必须是**两条发版路径共用的一把尺子**：`deploy/deploy_to_production.sh` 走**薄委托**
      `bash scripts/check_frontend_tar.sh`，§五 手工链跑同一个脚本——**禁止**再在其中一处内联第二份判据
      （两份判据迟早打架，同 §一·5 报价单一事实源那条）。
   ③ `--check` 与 `check_frontend_tar.sh` 的判据都**现算**（现读入口名、现算 sha、现数体积），不写死数字；
      「侧车比原文大就不落盘」是这条链唯一的体积安全阀（Caddy 照发不误，隔离实例实测 14 B 原文发出 220 B 的 `.br`）。
+  ④ ★★ **brotli 窗口上限＝22（1 MiB），大窗口那一档永久禁止写回**（★ 2026-10-14 现网白屏事故）：
+     `BROTLI_PARAM_LGWIN`／`WBITS` > 24 是 brotli 的**扩展档位**，浏览器内置解码器一律把窗口钉在 **16 MiB**，
+     超出的字节流**解不开**——而这条链上没有任何一处的症状指向「压缩参数」：侧车存在、`--check` 现算相符、
+     Caddy 照常带 `content-encoding: br` 发出去、`curl --compressed` 拿本机解码器照样能解（所以**发版机自己测不出来**），
+     用户那边是**整片白屏**、只有控制台一行 `Failed to decode downloaded script`。
+     实测对照（同一份入口 JS 608,625 B，同 node 同参数只差窗口）：不带 ⇒ 160,718 B 且 `brotliDecompressSync` 逐字节解回；
+     带 ⇒ 160,719 B、头四字节 `1156c125`、`brotliDecompressSync` 当场抛 `Decompression failed`。
+     ⇒ 两条机械防线：单测 `backend-go/internal/fileproc/precompress_brotli_gate_test.go` 四腿
+     （P1 大窗口参数不许出现在**代码行**——注释里写它属于记录事故，允许，所以判据先剥注释；
+     P2 br 与 gz **两档**解码往返都必须在位；P3 解回后必须**逐字节等值**，只 catch 异常不够；
+     P4 唯一出口 `compressBuf` 里两档各调一次自证，防止往返被挪出复算路径而退化成"只比对字节"），
+     交付侧 `check_frontend_tar.sh` 的 **T6**（把包内每份 `.br`／`.gz` **真解回原文**再与磁盘上的原文逐字节等值——
+     判据问的是「浏览器能不能解」而不是「文件在不在」，后者正是这次事故的盲区；本机没有 node 时**判红不判跳过**）。T6b 自证＝喂一份人工截断的侧车必须判红。
   ⚠️ 语法坑：`precompressed` 必须写在 `file_server {` **块内单独一行**，与 `{` 同行在 adapt 期直接报错。
   ⚠️ 演示站那份 conf 的**事实源是 `scripts/bootstrap-demo.sh`**（只改线上那份，下次 bootstrap 就写回旧形态）。
   ⚠️ **动 Caddy 只 `validate` + `systemctl reload`**；`caddy stop/start/restart/run` 这些子命令打的是同一个
@@ -752,6 +785,86 @@
   （合法报价**独立成句**时一字不动，那才是断言的射程，见 `..._KeepsLegalQuote`）。
   ★ 本腿只作用于对话正文、**不入 canned 缓存 ⇒ 不需要抬 `cannedPromptRev`**（换二进制即生效）。
 
+### 14. 文件格式准入与交付形态：清单只有一份（★ 2026-10-14 #43／#48 立为硬约定）
+
+- **准入清单唯一事实源**＝`internal/fileproc/formats.go` 的 `TranslateFormatOrder`／`IsTranslateFormat`
+  ＋ `anydoc.go` 的 `AnydocFormats` ＋ `formats.go` 的 `MaxUploadBytes`。
+  前端那份由 `frontend-react/src/api/translateFormats.lock.test.ts` 跨语言等值钉住
+  （P1 还原模式清单、P2 纯文案独占清单、P3 体积**现算** `40 << 20` 的位移写法）。
+  ★ **P0 是射程腿**：解析结果不足（还原 <12／独占 <16／读不到 `<n> << <bits>`）时报的是
+  **「锚点漂了、闸门已失效」**，不是"清单不等值"——这两条读数分不开，下一位就会把闸门摘掉。
+- **禁止**在任何调用方再内联一份准入白名单。机械判据按**形状**而不是"文件里出现过 .docx"：
+  同一行并列出现 ≥3 个 Office/PDF 那四件，或 `".docx": true` 这种 map 条目；
+  写回 switch 的 `case ".docx":` 与交付形态分档是合法逐格式代码，**不许误伤**
+  （判红一次的代价是闸门被人摘掉，比红灯更坏）。
+- **交付形态判据只有一处**＝`internal/engine/file.go` 的 `writebackDelivery`：
+  · `srt/vtt/json/yaml/yml` → **xlsx 双语对照表**（这是设计，不是降级）；
+  · `pdf/docx/pptx/txt/csv/md` → **原位写回**，失败自动重试（≤2 次）后**退纯文案 .md ＋ warning**，
+    **绝不退 xlsx**。PDF 是三级链：原版式覆盖（`pdf_overlay`）→ 版式重建（fpdf）→ 纯文案 .md。
+  ⚠️ 旧口径「PDF 无原格式回写、统一降级 xlsx」**已废止**（2026-09-18 换链，注释残留到 2026-10-14 才清完十处）；
+  `pdfwrite.go` 里 `WriteTranslatedPDFviaDocx`／`ExtractTextsPdfDocx` 是**已退役的回滚位**，现网零调用方。
+- ⚠️ **注释里点名的锚点必须是现存的东西**：`assist/engine/promise.go` 与 `reply_fabrication.go` 曾把依据写成
+  早已删除的 `engine/file.go allowedExt`——这类"注释声称有个事实源而它不存在"会让下一个人照着不存在的路径改判据
+  （同 §一·12 那条「注释声称有锁而锁不存在」）。
+
+### 15. 平台超管站内信只有一个投递口径（★ 2026-10-14 #46 立为硬约定）
+
+- 采集／告警／反馈／线索类站内信的收件人一律走 `internal/api/notify_recipients.go` 的 `superAdminRecipients()`：
+  **是谁** ⇒ `auth.IsSuperAdmin`（role 等级 ≥4 且 `tenant_id=0`）；
+  **能不能收** ⇒ `auth.EffectiveUserStatus` ∈ {active, deactivating}——与 `server.go` 判"能不能进后台"**同一条判据**
+  （注销宽限期当日仍可登录，那就当日仍该收到）。两把尺子都取自现成谓词，所以"投递面"与"判定面"不会再一次各长一套。
+- **禁止**再写裸 SQL `role IN ('super_admin','admin')` 或 `ListUsersByRole(0,"admin")` 找收件人。
+  收敛前五处各有尺度，真缺陷不是形状难看：一个只有 `role='super_admin'` 账号的部署（新库／后台提权就写这个值），
+  问题反馈与销售线索的站内信**一条都发不到人**——提交方以为超管收到了，铃铛里什么都没有。
+- 名单取不到（Store 为空／库读失败）⇒ **不发**并 `observability.Warn`，禁止 panic、更禁止降级成"发给所有人"。
+  现读现算不缓存：收件人变更要当场生效。
+
+### 16. 零停机发版第一阶段：socket activation 与亚秒窗口探针（★ 2026-10-14 #41／#45）
+
+- 监听交接只认 systemd 那三个环境变量（`LISTEN_PID`／`LISTEN_FDS`，起点 `SD_LISTEN_FDS_START=3`），
+  实现＝`cmd/server/listen_systemd.go`；"这一支二进制认得交来的 fd"的**字面证据**是常量
+  `sdTakeoverMarker = "LISTEN_FDS_TAKEOVER_V1"`，它与装配脚本 `deploy/install_socket_activation.sh` 的
+  `BINARY_MARKER` 由 `cmd/server/listen_systemd_test.go` **等值**钉住（改名式破坏必须当场红）。
+- 装配四档一条命令走到底：`--status`（只读基线）→ **先按正常发版把带标记的二进制换上两站**（G1 认不出标记即判红停在干跑）
+  → `--apply`（写 `/etc/systemd/system` → `daemon-reload` → `enable --now` → restart → 验收）→ `--rollback`
+  （disable 两份 socket、**不需要回滚代码**）。射程自证＝`deploy/install_socket_activation_selftest.sh`，判绿只认 `SOCKETTEST_ALL_OK=1`。
+- ★ **现网状态要现读，别把"代码合了"读成"现网零停机"**：2026-10-14 实读两站 `translator*.socket` 单元 **0 份**
+  ＝接管尚未装配，进程仍是 systemd 直接重启。判据 `systemctl list-units --all 'translator*.socket'`
+  ＋ `bash deploy/install_socket_activation.sh --status`（同 §三「有脚本无调度要问到第二层」）。
+- **重启窗口探针默认开**（`deploy/swap_web_and_binary.sh`，关掉要显式 `WINDOW_PROBE_OFF=1`；URL 未配时按
+  `CHECK_PORTS` 生成回环 `/livez` 默认档）。三条裁决都是**抬进 FAIL 的发版判据**，不是给人看着玩的读数：
+  ① 一个样本都没采到 ⇒ 判红（**不许把"没测到"读成"通过"**——这条锁空转时看起来是绿的）；
+  ② 非 2xx 必须为 0，且红字按病因分两档：真 5xx／4xx ⇒ 接管没生效（按 §九 L0 回滚），
+     `000` ⇒ 这一跳没走完（被拒＝接管没生效，等满＝启动太慢，先看 P99 与 journal 归因）；
+  ③ **P99 < 1s** 才叫"亚秒达标"——5xx 归零而延迟没过线，说明启动瘦身那一步（S3）的活儿还没完。
+- ⚠️ **只有默认档才会走到的腿，必须由夹具实跑一次**：那条"先赋空串再拼接"的 `set -u` 坑就是在夹具 T7e 才现形的，
+  而它的位置在「已落位 mv 之后、`systemctl restart` 之前」——真上线踩到就是**两站停在未重启状态**。
+  光读代码看不出这类缺陷（同 §三「判据级断言代替不了守卫级」）。
+
+### 17. 能力脚本与模型资产随批落盘：`sync_fileproc_assets.sh` 是唯一同步口（★ 2026-10-15 本批 OCR/ASR/TTS 立为硬约定）
+
+- `backend-go/internal/fileproc/` 下的**每一个 `*.py` 与整个 `assets/` 树**都由
+  `scripts/sync_fileproc_assets.sh` 同步到 `/opt/translator/bin/` 并**逐文件核对 sha256**。
+  该脚本刻意**不枚举清单**（"忘记更新清单"正是 §12-D5 那次「PDF 原版式写回 100% 失败却被降级链完全兜住」的根因），
+  所以新增脚本／资产**零改动即进射程**——但**只进射程，不进现网**：不跑这一步，线上就是「二进制有 OCR、磁盘上没 OCR.py」。
+- 本批新落射程的六件：`ocr_recognize.py`／`ocr_translate_image.py`／`asr_transcribe.py`／`tts_speak.py`
+  ＋ `assets/{ocr,asr,tts}/`（含 `assets/tts/voices/`）。2026-10-15 本机演练实证（`MODE=local DEST_ROOT=/tmp/fpd-drill SKIP_CHOWN=1`）：
+  9 个脚本＋5 份资产**全部指纹等值**，含四份新 `.py` 与 README。
+- ★ **模型权重不进 git、禁止运行时联网下载**（`assets/*/README.md` 就是这条的落点，且那份 README **只本地存在、不推远端**，
+  同 §一·9「文档不外推」——所以远端克隆里 `assets/` 是空目录，`find assets -type f` 在开发机上非空、在 CI 的纯代码克隆上可能为空，
+  那是形态不是缺陷；判"资产缺失"要看**部署机** `/opt/translator/bin/assets/`，不看仓库）。
+- **就绪判据现读、且必须有消费者**：`/api/health` 的 `ocr_ready`／`asr_ready`／`tts_ready` 三档
+  判据＝Python 模块可导入 ＋ 本目录资产落盘（TTS 另查默认音色非空）。缺权重 ⇒ **false**，
+  建单时返回可行动友好文案——这是设计行为，不是降级（D5 口径：资产缺失必须现在就红，不许「全绿但一进去必崩」）。
+  ⚠️ 三档 `false` 与三档「从没被调用过」在 health 上长得一样，所以发版验收**不许**只看这三个布尔值收尾：
+  必须按 §一·12 那条同一口径——**跑一单真件**（图片件＋音频件各一），看那一单在日志里真进了 OCR/ASR 分支，
+  才算这一腿上线（"产物能打开"不算验收）。
+- 部署机的系统依赖同批新增 **`ffmpeg`**（ASR 容器归一到 16k 单声道 wav；wav 读取走 `sherpa_onnx.read_wave` 内置，
+  运行期不引第三方音频库）——见《部署指南》§一 apt 行；漏装的表现是 `asr_ready` 恒 false 且零报错行。
+- 本地跑 fileproc 那批带真依赖的用例必须钉 `FILEPROC_PYTHON_BIN`（本机 `~/.venvs/langcross-fileproc/bin/python3`），
+  判据见 §二 那条 fileproc 依赖说明：**只许补依赖，不许放宽或跳过**（2026-10-15 又踩一次：没带这个 env，
+  `internal/fileproc` 整包 FAIL，读起来像真回归；指到 venv 后 `ok 47.043s`，判据一字未动）。
+
 ---
 
 ## 二、提交前闸门（必须全绿）
@@ -767,7 +880,10 @@ bash scripts/build_extension.sh --check           # 扩展漂移闸门（动过 
 #   不静默跳过（「PyMuPDF 认不认这个字体」除真构造 Font 外没有第二条路，跳过＝绿灯无效）。
 #   CI 走 pip install，本机装在 ~/.venvs/langcross-fileproc —— run_uat.sh 已自动发现并导出 FILEPROC_PYTHON_BIN；
 #   两处都没有时**只许补依赖，不许放宽或跳过该用例**（旧表现是整条 PG 矩阵在竞态预检段中止，后三段一行没跑）。
+node scripts/precompress_dist.mjs                 # ★ 生成侧车（写）——**顺序只有一种**：vite build → 这一步 → 下面的 --check → tar
 node scripts/precompress_dist.mjs --check         # ★ 2026-10-12 慢链路批②：预压缩侧车闸门（缺失／比原文大／内容与当前文件不符 ⇒ ABORT=2）；**必须在 vite build 之后**跑，build 会抹掉侧车
+                                                  # ★ 2026-10-15 闸门链实测再踩一次顺序：串行链里只写了 --check，于是 G8/G9 双双判红（br=0／侧车全缺），
+                                                  #   而 dist 与构建都是好的——红的是**链**，不是产物。写发版链时生成步与校验步各是一行，不许合并成"跑一次 --check"。
 bash scripts/check_frontend_tar.sh                 # ★ 同批：换源前对**打包件**自检五腿（侧车在位／macOS 脏文件=0／入口体积上限／语种 chunk 份数／入口名形状＋T5b 自证）；`deploy_to_production.sh` 与《部署指南》§五 手工链共用这一把尺子
 bash scripts/build_sdk.sh --check                 # SDK 托管产物漂移闸门（★ 2026-09-25 〇-T：动过 sdk/ 却没重打 public/sdk/ 时红灯；e2e/sdk_download.spec.ts 同口径）
 bash deploy/swap_web_and_binary_selftest.sh        # ★ 2026-10-13：换源＋换件执行体的**守卫射程**自证（本机假树六段，判绿只认 `SWAPTEST_ALL_OK=1`；动过 `deploy/swap_web_and_binary.sh` 必跑）
@@ -959,3 +1075,23 @@ bash deploy/swap_web_and_binary_selftest.sh        # ★ 2026-10-13：换源＋�
   点名一个开局 6s 的用例：那是**纯超时不是挂死/回归**（同 09-19 store→30m 先例），只加预算（现 60m）不改判据职责。
   配套流程账：后台批跑的**通知 exit 码恒 0**（复合命令末尾 echo），判绿只认日志内标记行
   （`RACE2_DONE_EXIT`／`UAT_MAIN_EXIT` 等）与 FAIL 行——本批第一轮就差点把"10 条红"读成"exit 0 绿"。
+
+- **★ 判据的「数量」与「时机」两族过时形态（★ 2026-10-15 收口批 e2e 两处红换来的口径，两条都**不是**产品缺陷，改的是判据）**：
+  ① **写死件数／长度的锁会被一枚合法的新控件顶红**——`e2e/translate_flow.spec.ts` 的 TF4 把「气泡尾部四件」钉成
+  `expect(tail.length).toBe(4)`，而本批 P3 的译文朗读按钮落进的就是同一排（形态恰是用户要的「同排同档」）⇒
+  判据红、实现是对的、投诉本体（两排两档两种高低）其实已经修好了。
+  ⇒ 硬口径：凡"这一排有几件"的判据一律写成**派生式四件套**——点名件各在位（正锁，缺席才红）＋ 反馈类控件**恰一枚**
+  （唯一性）＋ 不许出现第三类 class／不许被别的容器再包一层（负向锁）＋ 总数只做**下界**且当**射程自证**用
+  （下界红＝闸门失明，不是"清单变了"）。jsdom 侧（`MessageBubble.dom.test.tsx` ⑦）同源点名，形状由
+  `src/translateFlowE2eLock.test.ts` 机械钉住（P1 负向＋P2 五腿在位＋P3 data-testid 锚点等值＋R1 反证：
+  把判据装回写死件数**必须**判红——R1 首跑就是靠 `expect(mutated).not.toBe(code)` 之外再要求"变异体里真出现写死件数"，
+  否则空替换的 no-op 会伪装成"锁抓住了破坏"，同记忆里那条反证自伤）。
+  ★ 同族的另一半别漏：**注释与 CSS 里那句"四件"也是判据靶子**（`theme.css`／`MessageBubble.tsx` 的注释已同步翻成
+  "一排（本批加朗读后为五件）"）——留着旧数字，下一个人就会顺着旧口径把新按钮删掉。
+  ② **换测量锚点会拆掉"两个读数同批刷新"这条隐含等式**——TF3 原先读气泡尾部那条 `msg-meta` 上的消耗，它随 SSE `done`
+  帧即出；本批改读侧栏余额条 `chat-balance`，那一条要等 `PKG_REFRESH_DEBOUNCE_MS = 2000` **＋一次 `myPackage` 往返**。
+  同一条断言里于是塞了两件事（"钱扣了" ＋ "屏幕什么时候刷"），**慢的那一件决定成败**，而红的信息完全指不到是哪一件。
+  ⇒ 硬口径：刷新时机拆成**独立断言**并等它自己那条链（`expect.poll` 等读数**变化**，不是等某个固定毫秒），
+  "这一轮没等到"要让位给下一轮（`refreshed=false` 但 `refreshSeen` 记下）而不是让整条判红；
+  两种红**分开报**——「连续 3 轮一次都没刷新 ⇒ 刷新链路断了」vs「净减没发生 ⇒ 扣费未生效或被每日奖励补平」。
+  通用形态：**判据换锚点＝判据的前提变了**，旧锚点顺带提供的那条"同批刷新"不再免费，必须要么显式等、要么显式拆开。

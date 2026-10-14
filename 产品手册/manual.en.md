@@ -194,11 +194,12 @@ Format support:
 | Layout-restored | docx, pptx, xlsx, pdf, txt, csv, md | Same-format translated file |
 | Bilingual table | srt, vtt, json, yaml, etc. | Source/translation xlsx |
 | Text only | legacy doc/ppt/xls family, odt/ods/odp, rtf, epub | Translated .md |
+| Recognized first | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, speech-to-text) | Translated .md; audio also ships a translated .srt on the original timeline plus a copy of the source audio |
 
 Limits:
 
 - Per-job file count and size are capped; PDFs over 40 MB or 120 pages are rejected with a hint to convert to docx first.
-- Scanned PDFs (all images) are not supported; text inside images is not translated by design.
+- Scanned PDFs (image-only pages) and image files run through text recognition (OCR) before entering the translation chain; audio files are transcribed first. If the recognition component is not ready, the request is refused with a clear reason — an empty translation is never delivered.
 - If layout write-back fails for one file, it automatically degrades to .md delivery with an in-app notice — the whole job never fails for that reason.
 
 ### 5.2 Job states and workflow
@@ -402,7 +403,7 @@ The balance or department budget is exhausted. Users: contact your company admin
 File translation now lives exclusively in Translation Jobs → File. The chat is for text only.
 
 **Q3: My PDF job was refused?**
-PDFs over 40 MB / 120 pages must first be converted to docx; scanned (image-only) PDFs are not supported.
+PDFs over 40 MB / 120 pages must first be converted to docx; scanned (image-only) PDFs are recognized via OCR and then translated, so no conversion is needed.
 
 **Q4: The translation ignores my company's terminology?**
 Check that the terms are imported into a KB pack visible to your department (section 7), and use *Pro* mode for publishable content.

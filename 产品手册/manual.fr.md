@@ -194,11 +194,12 @@ Formats pris en charge :
 | Mise en forme restituée | docx, pptx, xlsx, pdf, txt, csv, md | Fichier traduit dans le même format |
 | Livrable en tableau comparatif | srt, vtt, json, yaml, etc. | xlsx source/traduction en vis-à-vis |
 | Texte seul uniquement | anciens formats doc, ppt, xls, odt/ods/odp, rtf, epub | Traduction en .md |
+| Reconnaissance puis traduction | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR) ; mp3, m4a, wav, ogg, flac, aac, opus (audio, transcription) | Traduction en .md ; pour l'audio, aussi un .srt calé sur la piste originale et une copie de l'audio source |
 
 Limites et précisions :
 
 - Le nombre et la taille des fichiers par ticket sont plafonnés ; un PDF de plus de 40 Mo ou de plus de 120 pages est refusé de manière conviviale, avec le conseil de le convertir d'abord en docx.
-- Les PDF scannés (images pures) ne sont pas pris en charge ; le texte incéré dans les images n'est pas traduit, par conception du produit.
+- Les PDF scannés (images seules) et les images passent d'abord par la reconnaissance de texte (OCR) avant la chaîne de traduction ; les fichiers audio sont d'abord transcrits. Si le composant de reconnaissance n'est pas en place, la demande est refusée avec un motif clair — jamais traduite en vide.
 - En cas d'échec de la réécriture de la mise en forme, le fichier concerné est automatiquement dégradé en livraison .md et une notification interne vous en informe — le ticket dans son ensemble n'échoue pas pour autant.
 
 ### 5.2 États des tickets et cycle de vie
@@ -402,7 +403,7 @@ Le solde actuel ou le budget du département est épuisé. Les utilisateurs ordi
 La traduction de fichiers passe désormais uniquement par « Tickets de traduction → Fichier » ; la conversation ne fait que de la traduction de texte.
 
 **Q3 : Mon PDF a été refusé à la traduction ?**
-Un PDF de plus de 40 Mo ou de plus de 120 pages doit d'abord être converti en docx avant création du ticket ; les PDF scannés (images seules) ne sont pas pris en charge pour l'instant.
+Un PDF de plus de 40 Mo ou de plus de 120 pages doit d'abord être converti en docx avant création du ticket ; les PDF scannés (images seules) sont traités par reconnaissance de texte (OCR), aucune conversion n'est nécessaire.
 
 **Q4 : Pourquoi la traduction ne correspond-elle pas à mon glossaire ?**
 Vérifiez que les termes ont bien été importés dans la base de connaissances et que le pack est visible par votre département (chapitre 7) ; pour des contenus destinés à la publication, choisissez le mode « Relecture professionnelle ».
