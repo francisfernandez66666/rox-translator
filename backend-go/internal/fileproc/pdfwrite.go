@@ -102,7 +102,9 @@ func WriteTranslatedPDF(ctx context.Context, outPath string, srcTexts []string, 
 	return writePDFViaGoFpdf(outPath, fontPath, srcTexts, translations)
 }
 
-// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）。
+// WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表）。
+// ⚠️ 这一行旧括号里那句「图片内容按产品策略不翻译」是 2026-10-14 OCR 恢复**之前**的策略口径，现已作废
+// （图片/扫描件现走本机 OCR：pdf.go 的 extractPdfText 文本层为空时降级 ExtractImageOCR，见 ocr.go）。
 // ⚠️ **已退役**（2026-09-18：版式漂移/白块/字体探测等问题的源头，代码只留作回滚位，现网零调用方）：
 // 主链＝pdf_overlay 原版式覆盖，兜底＝本文件的 WriteTranslatedPDF。
 // 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；inPath=输入 PDF 路径；
