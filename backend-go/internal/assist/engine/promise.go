@@ -29,7 +29,8 @@
 //	给自己的。所以证据链只留在本注释，正文只有业务口径。
 //
 // 口径 ↔ 代码出处对照（改下面任何一条前先看这些位置）：
-//   - 原格式回写清单：internal/engine/file.go 的 allowedExt 与 writebackDelivery
+//   - 准入格式清单：internal/fileproc/formats.go 的 TranslateFormatOrder／IsTranslateFormat（★ 2026-10-14 #43 已把原先四份副本收拢为这一处）
+//   - 原格式回写清单：internal/engine/file.go 的 writebackDelivery
 //   - 字幕/数据文件出对照表：internal/fileproc/text_formats.go 的 WriteComparisonXlsx
 //   - 老格式只在纯文案模式放行：internal/fileproc/anydoc.go 的 AnydocFormats
 //   - 术语命中拦下重译：internal/gate/gate.go RunWithTerms 第 9 项 + internal/engine/gates.go 打回重译
@@ -37,8 +38,15 @@
 //   - 订阅/体验额度带到期日：internal/store/quota_grants.go 文件头（永久余额另存 balance_accounts）
 //   - docx 局部格式按权重还原、超链接文本不译：internal/fileproc/docx.go（D21 段与文件头）
 //   - PDF 三级降级链：internal/engine/file.go 的 PDF 分支（原版式覆盖 → 版式重建 → 纯文案）
-//   - 图片型 PDF 不翻内容：internal/fileproc/pdfwrite.go「图片型文档按产品策略不做内容翻译」
-//   - 动画/公式/OCR 无实现：internal/fileproc 下 animation|transition|oMath|ocr 全部零命中
+//   - 图片/扫描件经 OCR 识别后翻译：internal/fileproc/ocr.go 的 ExtractImageOCR（就绪判据 OcrAvailable）
+//   - 音频经 ASR 转写后翻译：internal/fileproc/asr.go 的 ExtractAudioASR／TranscribeAudio（就绪判据 AsrAvailable）
+//   - 译文朗读（TTS）：internal/fileproc/tts.go 的 SpeakToWav（就绪判据 TtsAvailable，按语种音色）
+//   - 图片/音频在准入清单里：internal/fileproc/formats.go 的 IsImageFormat／IsAudioFormat（★ 清单仍只有那一份）
+//   - 图片/音频的交付形态：internal/engine/file.go 的 writebackDelivery（image→译文 md；audio→srt+md+原音频）
+//   - ★ 2026-10-15 校正：旧文里「图片型 PDF 不翻内容」「OCR 无实现」两条**已作废**——
+//     前者是 pdfwrite.go 那批退役策略的口径（现 PdfImageHeavy 只服务 image_heavy 提示与预估分档），
+//     后者写作时 fileproc 下 ocr 确实零命中，现已有识别腿（本机 onnx，文档不出境）。
+//     留这一条不是为了记账，是因为下面正文的分档就是按这些代码实证分的，锚点漂了分档就不可核。
 //   - 语种数现值：GET /api/translation/langs（config.TranslateLangs 再补一个 zh）
 //
 // ⚠️ 和 defaultToneRules 一样，这段会被库里现值**整体盖掉**，所以它必须拿来就能用；
@@ -56,6 +64,9 @@ const defaultPromiseRules = `【承诺边界】（这一段管「能说什么」
 - 文档翻译后下载的还是原格式文件：Word（docx）、Excel（xlsx）、PPT（pptx）、PDF、txt、csv、md。
 - 字幕和数据文件 srt、vtt、json、yaml 能翻，但交付形态是「原文+译文」两列的 xlsx 对照表，不是原文件——这条要主动讲清，别让人以为能下回同一个 json。
 - 老格式和电子书（doc、xls、ppt、odt、ods、odp、rtf、epub）只在「纯文案」方式下能翻，产物是译文文本，不还原版式。
+- 图片与扫描件（png、jpg、jpeg、bmp、tif、tiff、webp、heic）里的文字能识别出来再翻，产物是译文文本文件，不是一张翻译后的图片。
+- 录音和音频文件（mp3、m4a、wav、ogg、flac、aac、opus）能转成文字再翻，交付是三件：带原时间轴的译文字幕（srt）＋原文/译文对照的文本文件＋你上传的那份音频本身。
+- 即时翻译的输入框支持直接用麦克风说话录入：说出来的话先转成文字填进输入框，你可以改完再点翻译（不会一转完就自动扣费）。
 - 术语库：库里定过译法的词，译文没照库走会被系统拦下重译；品牌名翻前先保护、翻后归一。没入库的词不打包票。
 - 计费：按实际用量扣积分，用多少扣多少（具体系数只看【系统现值】）。
 - 充值和买断拿到的积分进永久余额，不过期。
@@ -68,11 +79,14 @@ const defaultPromiseRules = `【承诺边界】（这一段管「能说什么」
 - 讲「结合上文」「前后一致」时说清范围：只在同一篇文档内部成立，分开两次上传的句子是各翻各的。
 - 讲支持语种时只用【系统现值】给的数字；那一段没出现就说「具体支持哪些我发你一份清单」。「40+」「上百种」「全球语言都能翻」这类说法一个都不许说。
 - 讲「清单外的语种能不能翻」时分开说：界面语言面板分两组，一组走完整流程（术语、品牌保护、译文闸门都在），另一组标着「其他语言」的走模型直翻——能出译文，但没有那套保障，质量要打个问号。别说成和清单内一样，也别说「什么语言都行」。
+- 讲图片与扫描件识别时必须补一句：识别质量跟着图片清晰度走，模糊、手写、拍歪的那一类可能少识别几行，译文要自己核对一遍。别说成「什么图都读得出来」。
+- 讲音频转写时必须补一句：多人抢话或背景噪声重的片段，时间轴可能错位，字幕建议对着音频核一遍。
+- 讲「把译文读出来」时必须补两句：一是**能不能读取决于那门语种配没配音色**，有些语种暂时没有语音；二是**没有语音只影响听，译文照常交付、照常计费**。不许反过来写成「朗读失败＝翻译没成」。
 
 三、平台没有的能力，问到就直说不支持，再告诉他现在能做到的是哪一条：
 - PPT 里的动画、切换效果、嵌在里面的视频画面。
 - 数学公式：只当普通文字处理，不保证翻完还能当公式编辑。
-- 图片里的文字、扫描件：不做识别提取，整页都是图的 PDF 直接翻不了。
+- 把翻译后的文字再排回图片画面、或在音频里替换人声（配音）：只做「识别/转写→翻译→文本或字幕交付」，不改原始媒体文件。
 - 阿拉伯语、希伯来语这类从右往左写的语种：能出译文，但版面不会镜像重排。
 - 任何准确率、满意度、「零失误」「翻完不用再校对」这类质量保证；案例数、词库规模、服务时长这类数字，【相关知识】里没有的一律回「这个我帮你确认下」。
 

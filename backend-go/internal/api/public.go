@@ -133,6 +133,13 @@ a:hover{text-decoration:underline}
 .footer{background:var(--lc-foot);text-align:center;color:var(--lc-text-4);font-size:14px;padding:28px;line-height:2}
 .footer a{color:var(--lc-text-4);margin:0 6px}
 .footer a:hover{color:var(--lc-text-2)}
+/* ★ 2026-10-14 用户后令「把页脚那句品宣尾注提亮并做重点提示」：这一行的样式与前端
+   components/BrandTagline.tsx 那份 TAGLINE_STYLE **逐字同值**（面 = 实心白档、字 = 反相黑、
+   字重 600、圆角 999px、内垫 1px 8px）。为什么只能重声明一遍：本页是后端直出的静态 HTML，
+   拿不到前端 tokens.css／组件，只能把同一批真值再抄一次——所以等值由
+   frontend-react/src/components/BrandTagline.lock.test.ts 的 G 段机械钉住（改一侧不抄另一侧即红）。
+   ⚠️ 字号仍不指定（继承 .footer 的 14px），与前端「不给五张面各造一个新字号档」同口径。 */
+.footer .brand-tagline{display:inline-block;background:var(--lc-white);color:#000000;font-weight:600;border-radius:999px;padding:1px 8px;white-space:nowrap;unicode-bidi:isolate}
 hr{border:none;border-top:1px solid var(--lc-card-line);margin:24px 0}
 table{width:100%;border-collapse:collapse;margin:14px 0;font-size:16px}
 th,td{border:1.2px solid var(--lc-line);padding:10px 12px;text-align:left}
@@ -154,10 +161,13 @@ table{display:block;overflow-x:auto;font-size:15px}
 <!-- ★ 2026-10-13 用户令②：本页脚补一条平台方品宣尾注（固定英文那一句；字面量**不在此抄写**——
      唯一事实源是前端 components/BrandTagline.tsx 的 BRAND_TAGLINE，下面那行必须与它逐字相同，
      等值锁见 frontend-react/src/components/BrandTagline.lock.test.ts 的 A/B 两段，删任一面即红）。
+     ★ 2026-10-14 用户后令「提亮＋重点提示」：这句外面套的那层 span 带着本页自己的一份样式
+     （上面 .footer .brand-tagline 那一行，值与前端 TAGLINE_STYLE 逐字同值），
+     **类名是判据靶子**——改名不改样式也会让 G 段读不到规则而判"锁失明"，别只改一边。
      ⚠️ 这一面是后端直出的 /docs/*（法务页与帮助中心），不在前端 dist 里，改它**必须换 translator-server 二进制**才生效。
      ⚠️ 说明注释里**故意不出现那串字面量**：闸门判"这句在不在"之前会先剥掉注释，
         而把文案写在注释里＝注释冒充实现（本批反证真踩：删掉正文那句后 A 段仍判绿，只有 B 段红）。 -->
-<div class="footer">© 2026 能言 LangCross · 翻译平台 · Powered by LangCross AI<br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
+<div class="footer">© 2026 能言 LangCross · 翻译平台 · <span class="brand-tagline">Powered by LangCross AI</span><br><a href="/docs/terms">用户协议</a> · <a href="/docs/privacy">隐私协议</a> · <a href="/admin">管理后台</a></div>
 </body></html>`
 }
 

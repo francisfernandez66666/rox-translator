@@ -185,6 +185,22 @@ func TestGuardReplyFabricationDropsUnknownDeliverables(t *testing.T) {
 	} {
 		mustPass(t, fabScopeOf(t, e), ok)
 	}
+	// ★ 反向对照②b（2026-10-15 OCR/ASR/TTS 批）：`语音翻译／音频翻译／图片翻译／扫描件` 与拉丁档 `ocr`
+	//   已从 deliverable* 名单**移出**，因为那些能力已经真交付
+	//   （`fileproc/ocr.go`／`asr.go`／`tts.go`／`api/chat_audio.go`＋`formats.go` 准入清单）。
+	//   这一组钉的是"移出必须生效"：留在名单里的后果是把**正确回答整句删掉**
+	//   ——判据问库，而库里当时并没有讲这件事的功能卡，0 命中即判编造。
+	//   ⚠️ 上面②那四条拒绝句仍然放行，走的是**否定豁免**那一条腿，不是这条名单——两条别混。
+	for _, ok := range []string{
+		"图片翻译和扫描件都可以，识别走的是本地 OCR。",
+		"语音翻译支持，音频文件直接建成工单即可。",
+		"We support OCR on scanned images.",
+	} {
+		mustPass(t, fabScopeOf(t, e), ok)
+	}
+	//   而 `视频翻译` **必须还在这张名单里**（fileproc 下没有任何视频入口）：库里没有它，那句照判。
+	//   没有这一条正向判红，上面那三段"放行"完全可能只是 ② 整条腿失明（本仓纪律：负向放行必配正向射程）。
+	mustFabricate(t, fabScopeOf(t, e), "我们提供视频翻译，字幕可以直接嵌进画面。", fabrUnknownDeliver, "视频翻译")
 	// ★ 反向对照③：豁免标记**不收裸 "not"**（收了就是"外文正文里凡带 not 的句子全部放行"）。
 	// 「not only」这种非否定的用法必须仍然把 sandbox 判出来——这一条钉的是标记表的窄度。
 	mustFabricate(t, fabScopeOf(t, e), "We support sandbox access, not only for admins.", fabrUnknownDeliver, "sandbox")

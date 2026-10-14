@@ -72,4 +72,23 @@ func TestWritebackDelivery(t *testing.T) {
 			t.Errorf("writebackDelivery(%q) = %q, want \"inplace\"", ext, got)
 		}
 	}
+	// ★ P1a：图片格式经 OCR 投喂翻译，无原格式可原位回写，交付形态为 "image"（产出译文 .md）。
+	imageFormats := []string{".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic"}
+	for _, ext := range imageFormats {
+		if got := writebackDelivery(ext); got != "image" {
+			t.Errorf("writebackDelivery(%q) = %q, want \"image\"", ext, got)
+		}
+	}
+	// ★ P2：音频格式经 ASR 转写投喂翻译，译文是文本塞不回音轨，交付 "audio"（.srt + .md + 原音频）。
+	audioFormats := []string{".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus"}
+	for _, ext := range audioFormats {
+		if got := writebackDelivery(ext); got != "audio" {
+			t.Errorf("writebackDelivery(%q) = %q, want \"audio\"", ext, got)
+		}
+	}
+	// ★ 反向对照：交付形态必须两两互斥——.md 是原位回写档，不能被误判成图片/音频降级档，
+	//   否则不同形态会在同一条分支里互相串位（只测「该对的对了」测不出这种漂移，必须有反向对照）。
+	if got := writebackDelivery(".md"); got != "inplace" {
+		t.Errorf("writebackDelivery(\".md\") = %q, want \"inplace\"（反向对照：md 不是音频降级档）", got)
+	}
 }

@@ -1448,7 +1448,7 @@ export default function Landing() {
         <div className="lc-foot-bot">
           {tpl('land.copyright', { brand })}
           <span style={{ opacity: 0.5 }}> · </span>
-          <BrandTagline style={{ fontWeight: 600 }} />
+          <BrandTagline />
         </div>
       </footer>
     </div>

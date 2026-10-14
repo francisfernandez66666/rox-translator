@@ -45,6 +45,9 @@ import ModeToggle from '@/components/ModeToggle'
 import { intlLocale, fmtDateTime } from '../lib/format'
 // ★ F-52②（批 I-8）：「文本过长」本地闸（上限由本页 loadBalance 从 /api/me/package 喂养）
 import { setChatMaxChars } from '../lib/chatLimit'
+// ★ P3 语音两件套（麦克风录音 / 译文朗读）：全部家当在 api/chatVoice.ts，
+//   不想用语音能力时删掉本处 import 与下面那一段引用即可，不留下半截状态。
+import { asrTranscribe, micSupported, startMicRecording } from '@/api/chatVoice'
 // ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
 import { slowVerdict } from '../lib/slowEstimate'
 
@@ -96,6 +99,19 @@ function Spinner() {
   return <span className="cw-spin" aria-hidden="true" />
 }
 
+// MicGlyph 麦克风线条图标（纯黑体系：**currentColor 描边**，与全站禁 emoji 同口径）。
+// active=录音中：描边转语义红 #E5484D——"正在被记录"是必须一眼看见的状态，
+function MicGlyph({ active }: { active: boolean }) {
+  const c = active ? '#E5484D' : 'currentColor'
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="6.2" y="2" width="3.6" height="7.2" rx="1.8" fill="none" stroke={c} strokeWidth="1.2" />
+      <path d="M3.6 7.6a4.4 4.4 0 0 0 8.8 0" fill="none" stroke={c} strokeWidth="1.2" strokeLinecap="round" />
+      <line x1="8" y1="12" x2="8" y2="14" stroke={c} strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 // 默认导出组件：前台即时翻译工作台（输入与结果同框）
 export default function ChatWindow() {
   const [lang, t2] = useT()
@@ -129,12 +145,19 @@ export default function ChatWindow() {
   // 拖拽闭包里要读最新高度，state 异步更新会读到旧值——旁挂 ref 同步
   const dialogHRef = useRef(dialogH)
   function setDialogHeight(h: number) { dialogHRef.current = h; setDialogH(h) }
-  // ★ 决策⑩：空态最小化闩——一旦展开过就保持展开（输入清空后又弹回收起是打扰，不是智能）
+  // ★ 决策⑩：手动展开闩——**只有用户点过入口条**才保持展开。
+  // ★ 2026-10-14 红框批改口径（用户报「输入过内容后，清空输入框不会回缩大小」）：
+  //   旧形态把「打过字」也当成一次展开请求（onChange 里 setExpandedLatch(true)），于是这一闩
+  //   在第一次按键后就永久为真——清空输入时卡片既回收不起（闩挡着），用户看到的就是一张空卡占着半屏。
+  //   「清空后又弹回收起是打扰」这句原话仍然成立，但打扰只发生在**用户明确点开过这张卡**的场合；
+  //   普通「输一段、发不出去或删干净」不该被永久钉在展开档。所以闩只由 expandFromEntry 置位。
   const [expandedLatch, setExpandedLatch] = useState(false)
 
   // ★ 余额 / 用量（2026-09-19 全积分口径：API 出参即积分，前端零换算）
   const [balance, setBalance] = useState<{ points: number; approx: number } | null>(null)
-  const [usage, setUsage] = useState<{ today: number } | null>(null)
+  // ★ 2026-10-14 用户令（红框批）：界面不再显示「今日已耗」，这一份 today 状态随之撤下——
+  //   留着它＝只有 setter 没有读点的死状态（下一个读代码的人会以为还有第三处消费方）。
+  //   后端出参 `points_used_today` 一字未动（管理台/看板/账单/SDK 仍读它），撤的只是这块界面。
   const [orgBudget, setOrgBudget] = useState<{ limit: number; used: number; name: string } | null>(null)
 
   // scrollRef 现在指向合并框内的滚动区（原文输入 + 结果气泡都在其中）
@@ -144,8 +167,9 @@ export default function ChatWindow() {
   //   所以拖拽起点要实测这个节点（量不到才回落到按视口推导的估算档）。
   const dialogRef = useRef<HTMLDivElement>(null)
 
-  // ---- 余额 / 用量加载 ----
-  // 从 myPackage 接口读取个人余额、今日用量及企业预算额度（均为积分）
+  // ---- 余额 / 预算加载 ----
+  // 从 myPackage 接口读取个人余额与企业预算额度（均为积分）
+  // ★ 2026-10-14 红框批：这里原本还读「今日用量」，界面按用户令撤下后不再取它。
   // org_budget 只在 points_limit>0 时才有意义：未开预算的企业回传 0，
   // 若照样 set 就会在余额条里渲染「已用 X / 共 0」这种误导文案，故显式清成 null。
   const loadBalance = useCallback(async () => {
@@ -155,16 +179,16 @@ export default function ChatWindow() {
         // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端对 tid<=0 固定回 0。
         //   余额条与部门预算徽标照此渲染会长期显示「余额 0 积分」——一个不会扣点的身份
         //   天天被告知没钱。守卫只压这两处**展示**，不做提前 return：
-        //   chat_max_chars（F-52② 本地闸的唯一数据源）与今日用量在平台上下文同样要刷。
+        //   chat_max_chars（F-52② 本地闸的唯一数据源）在平台上下文同样要刷。
         //   判据与 App 顶栏同源（isPlatformBillingContext），用 getState() 取角色是为了
         //   不把 user 塞进本回调依赖、引起余额广播链路重建。
         const platformCtx = isPlatformBillingContext(useAuthStore.getState().user?.role)
         if (!platformCtx && typeof r.points_balance === 'number') {
           setBalance({ points: r.points_balance, approx: r.balance_sentences_approx ?? 0 })
         }
-        if (typeof r.points_used_today === 'number') {
-          setUsage({ today: r.points_used_today })
-        }
+        // ★ 2026-10-14 红框批：这里原来还有一句 setUsage(r.points_used_today)——界面按用户令
+        //   不再显示「今日已耗」，那个状态就成了只有 setter 没有读点的死状态，一并撤下。
+        //   后端出参 `points_used_today` 一字未动（管理台/看板/账单/SDK 仍读它）。
         if (!platformCtx && r.org_budget && r.org_budget.points_limit > 0) {
           setOrgBudget({ limit: r.org_budget.points_limit, used: r.org_budget.points_used_this_month, name: r.org_budget.name })
         } else {
@@ -202,10 +226,16 @@ export default function ChatWindow() {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
   }, [chat.messages])
 
-  // ---- 输入区初始自适应高度 ----
-  // 空依赖：仅挂载时归一一次高度，之后由 onChange、窗口 resize、发送后清空三条路径驱动
-  // （autoResize 是唯一算高度的地方，几处共用才不会各自实现出不同的封顶值）。
-  useEffect(() => { autoResize() }, [])
+  // ---- 输入区自适应高度 ----
+  // ★ 2026-10-14 红框批：高度重挂到 [input] 的 effect 上——effect 跑在提交之后，
+  //   打字、删字、程序化清空（发送／撤销回填）三种改法都只有一条驱动路径，
+  //   不必在每个 setInput 旁边各补一次同步调用（旧形态那样写会随调用点增多而漏一处）。
+  //   ⚠️ 归因订正：本批一开始把「清空不回缩」记成「onChange 量到旧的 scrollHeight」，
+  //   反证推翻了这条——把改动摘掉、按旧形态跑，jsdom 里清空那一枪照样缩回 40px
+  //   （浏览器在 change 事件发出**之前**就已经把新值写进 DOM，量到的一直是当前内容）。
+  //   真缺陷是上面那条永久展开闩（用户圈的是整张卡，不是 textarea 那一行），见 expandedLatch 的注释。
+  //   三条驱动路径（挂载／窗口 resize／输入变化）仍共用同一个 autoResize，封顶值只有一份。
+  useEffect(() => { autoResize() }, [input])
 
   // ---- 切换模式并持久化 ----
   // fast/pro 模式切换，同时写入 localStorage 以便跨会话记忆
@@ -325,7 +355,10 @@ export default function ChatWindow() {
   // ★ 2026-10-13 用户令①：只有「用户拖过」（记忆高度 >0）且当前不是收起态时，才进入覆盖档
   //   .cw-resized（flex:0 0 auto）——否则 flex:1 1 0 会把内联 height 直接吃掉，拖拽手柄形同失效。
   const resized = dialogH > 0 && !collapsed
-  // 点击入口条展开并聚焦输入框（latch 置位后不再自动收起）
+  // ★ 2026-10-14 红框批：口径收窄成「用户点过才叫展开」。
+  //   collapsed 里那一条 `!expandedLatch` 现在只代表**手动点开**，不再被打字顺带置位——
+  //   否则闩会在第一次按键后永久为真，清空输入也回不了单行入口条（用户报的那条缺陷本体）。
+  // 点击入口条展开并聚焦输入框（点过之后本回合不再自动收起，避免边打字边抽走工具条）
   function expandFromEntry() {
     setExpandedLatch(true)
     setTimeout(() => inputRef.current?.focus(), 0)
@@ -348,6 +381,52 @@ export default function ChatWindow() {
     // ★ #36：缩翻接到文本翻译（0=未启用，后端 maxLengthOption 自行忽略）
     if (condenseOn && condenseMax > 0) options.max_length = condenseMax
     chat.sendMessage(rawText, options)
+  }
+
+  // ---- ★ P3 麦克风录音（2026-10-14）----
+  // 口径：**录音只是另一种输入法**。录完识别出文本就填进输入框，由用户确认/改错后再照常发送。
+  //   刻意不做「识别完自动发送」——ASR 把专有名词听错在短句里并不罕见，
+  //   而一条自动发出去的错原文既费积分又没法挽回。
+  // 可用性：浏览器不支持就直接**不渲染这颗按钮**（不给一个点了必然报错的入口）。
+  const canMic = micSupported()
+  const micRef = useRef<{ stop: () => Promise<Blob | null>; cancel: () => void } | null>(null)
+  const [micOn, setMicOn] = useState(false)
+  const [micBusy, setMicBusy] = useState(false)
+
+  async function startMic() {
+    if (!canMic || micBusy) return
+    const ctrl = startMicRecording((why) => {
+      setMicOn(false)
+      toast({ title: why === 'mic-denied' ? t2('chat.micDenied') : t2('chat.micFailed'), tone: 'warn' })
+    })
+    if (!ctrl) { toast({ title: t2('chat.micUnsupported'), tone: 'warn' }); return }
+    micRef.current = ctrl
+    setMicOn(true)
+  }
+
+  async function stopMic() {
+    const ctrl = micRef.current
+    micRef.current = null
+    setMicOn(false)
+    if (!ctrl) return
+    const blob = await ctrl.stop()
+    if (!blob || blob.size === 0) return
+    setMicBusy(true)
+    try {
+      const text = await asrTranscribe(blob)
+      if (text.trim()) {
+        setInput((prev) => (prev.trim() ? prev.trim() + ' ' + text.trim() : text.trim()))
+        expandFromEntry()
+        setTimeout(autoResize, 0)
+      }
+    } catch {
+      // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：asrTranscribe 抛的是 VoiceError，
+      //   它的 message 是**后端给运维看的那句中文**，直接 toast 就成了「俄语界面里一句中文」。
+      //   ASR 失败在客户侧只有一个可行动作——重试或改用键盘输入，而这句话典里本来就有。
+      toast({ title: t2('chat.micFailed'), tone: 'warn' })
+    } finally {
+      setMicBusy(false)
+    }
   }
 
   const canSend = input.trim().length > 0
@@ -389,12 +468,15 @@ export default function ChatWindow() {
 
       {/* 余额 / 用量条：§2.2「余额条 高20 · 11px #9AA0AA · 左缩进 60」——11 号字按 1.45 行高约 16，
           上下各 2 内边距即凑足 20 高；多段并排放不下时仍靠 flexWrap 换行，故用 minHeight 不钉死。 */}
-      {(balance || usage || orgBudget) && (
+      {(balance || orgBudget) && (
         <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, minHeight: 20, padding: '2px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
-          {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额/今日已耗是扣费可见性的
-              唯一界面口径，锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。 */}
+          {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额是扣费可见性的界面口径，
+              锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。
+              ★ 2026-10-14 用户令：「今日已耗 N 积分」这一颗**从界面撤掉**（红框批）。
+              撤的是显示面，不是账：出参 `points_used_today` 仍由后端照旧给出，管理台/看板/账单照旧可读；
+              扣费可见性的界面锚点收敛到 chat-balance（余额减少＝真扣了钱，比"今日已耗"更贴钱）。
+              三处消费方（platformBilling 单测／e2e translate_flow／e2e-manual 实时余额）已同批改锚。 */}
           {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
-          {usage && <span data-testid="chat-usage">{tpl('chat.usedTokens', { n: fmtPoints(usage.today) })}</span>}
           {orgBudget && <span>{tpl('chat.orgBudgetFmt', { name: orgBudget.name, used: fmtPoints(orgBudget.used), limit: fmtPoints(orgBudget.limit) })}</span>}
           {/* 预估消耗：积分区间与 ≈句数都由后端直出（零换算）；low（预估上限已超余额）转琥珀加粗 */}
           {estimate && (
@@ -509,7 +591,7 @@ export default function ChatWindow() {
               aria-label={t('chat.placeholder')}
               data-testid="translate-input"
               value={input}
-              onChange={(e) => { setInput(e.target.value); if (e.target.value.trim()) setExpandedLatch(true); autoResize() }}
+              onChange={(e) => { setInput(e.target.value) }}
               placeholder={t('chat.placeholder')}
               rows={1}
               style={{ width: '100%', background: 'transparent', border: '0' }}
@@ -541,6 +623,17 @@ export default function ChatWindow() {
               </label>
               {/* 弹性占位：把主按钮推到行尾；窄屏 flex-wrap 换行时它自然收拢，不会把按钮挤没 */}
               <div style={{ flex: 1 }} />
+              {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送），见上方 startMic 注释。
+                  不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。 */}
+              {canMic && (
+                <button type="button" className="cw-icon-btn" data-testid="mic-btn"
+                  title={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
+                  aria-label={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
+                  disabled={micBusy}
+                  onClick={() => { if (micOn) void stopMic(); else void startMic() }}>
+                  <MicGlyph active={micOn} />
+                </button>
+              )}
               {chat.isLoading ? (
                 <Button variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
               ) : (

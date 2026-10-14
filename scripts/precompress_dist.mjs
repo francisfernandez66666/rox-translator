@@ -41,7 +41,7 @@
 //       摘掉「更小才落盘」⇒ 小文本也被压出更大的侧车且 check 判红；摘掉脏文件闸 ⇒ .DS_Store 随包上线；
 //       摘掉过期判据 ⇒ 重 build 后旧侧车继续投；把 --check 写成恒 0 ⇒ 整套发版前判据失效；
 //       把仓库根解析退回 `new URL().pathname` ⇒ 中文目录名被百分号编码、默认 dist 路径恒不存在）。
-import { brotliCompressSync, gzipSync, constants as zlibConstants } from 'node:zlib'
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync, constants as zlibConstants } from 'node:zlib'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
@@ -57,23 +57,55 @@ const TEXT_EXT = new Set([
 // 注：`.wasm` 刻意不收——它已经是 deflate 级熵的容器，且浏览器对 wasm 走编译缓存，
 // 给它做 brotli 收益极小（历史读数：一份 200 KB wasm 的 brotli 只省 3%），不值这趟往返。
 
-// brotli 参数：质量 11（最高档，发版机一次性付出）＋大窗口。
-// 这里不追求"码率最优"，追求**确定性与可复现**：同一份输入字节 + 同一组参数 ⇒ 同一份输出字节。
+// brotli 参数：质量 11（最高档，发版机一次性付出）。
+// 这里不追求"码率最优"，追求**确定性与可复现**：同一份输入字节 + 同一组参数 ⇒ 同一组输出字节。
+//
+// ★★ 2026-10-14 现网事故：这里曾经带着一行 `BROTLI_PARAM_LARGE_WINDOW: 1`，它把整站打白屏了。
+//   大窗口（WBITS>24）是 brotli 的**扩展档位**，而浏览器内置的解码器一律把窗口上限钉在 16 MiB——
+//   Caddy 把这个流原样发给带 `Accept-Encoding: br` 的访客，Chrome/Edge/Firefox/Safari **全部判解码失败**，
+//   于是入口 `<script type=module>` 直接 import 失败＝白屏（现网长相：哨兵报「有脚本没能加载 index-Cil7bhKZ.js」）。
+//   A/B 实测（同一份 608,625 B 入口、同 node、只改这一个参数）：
+//     不带 ⇒ 160,718 B，brotliDecompressSync 解回 608,625 B 逐字节相等；
+//     带 ⇒   160,719 B，头四字节 1156c125，brotliDecompressSync 抛 "Decompression failed"。
+//   现网那份 .br 的头四字节正是 1156c125 —— 缺陷坐实，与 CDN／Caddy／前端代码都无关。
+//   ⚠️ 收益那一侧本来就是零：本项目最大的单个文本资产 605 KB，离 16 MiB 窗口差两个数量级，
+//      大窗口对这种量级**一个字节都省不到**（实测 160,718 vs 160,719，反而大 1 B）。
+//   ⇒ 这一档**永久禁止再写回来**。机械锁见 backend-go/internal/fileproc/precompress_brotli_gate_test.go，
+//      且真正的防线不是"参数没写"，是下面 compressBuf 出口那道**解回来逐字节等值**的自检。
 const BROTLI_BASE = {
   [zlibConstants.BROTLI_PARAM_QUALITY]: 11,
-  [zlibConstants.BROTLI_PARAM_LARGE_WINDOW]: 1,
   [zlibConstants.BROTLI_PARAM_NPOSTFIX]: 0,
   [zlibConstants.BROTLI_PARAM_NDIRECT]: 20,
 }
 
-/** 把一份原文压成指定格式的字节（返回 Buffer）。*/
+/** 把一份原文压成指定格式的字节（返回 Buffer）。
+ *  ★ 出口必过 decodeOrThrow：产出的字节**必须能被同一个解码器解回原文**才允许落盘。
+ *    侧车是"发出去给浏览器解"的东西，判据就不能只问"我压出来了吗"，要问"对面解得开吗"。
+ *    这一句是本次事故的根治腿——上面那行参数即便被人再写回来，这里会当场抛，
+ *    一个坏侧车都落不到 dist 里，更进不了 tar。 */
 function compressBuf(buf, fmt) {
   if (fmt === 'br') {
-    return brotliCompressSync(buf, {
+    const out = brotliCompressSync(buf, {
       params: { ...BROTLI_BASE, [zlibConstants.BROTLI_PARAM_SIZE_HINT]: buf.length },
     })
+    return decodeOrThrow(out, buf, fmt)
   }
-  return gzipSync(buf, { level: 9 })
+  const out = gzipSync(buf, { level: 9 })
+  return decodeOrThrow(out, buf, fmt)
+}
+
+/** 解码回原文并与源字节逐字节比对；解不开或不等即抛（抛＝这个侧车不许上线）。 */
+function decodeOrThrow(compressed, original, fmt) {
+  let back
+  try {
+    back = fmt === 'br' ? brotliDecompressSync(compressed) : gunzipSync(compressed)
+  } catch (e) {
+    throw new Error(`${fmt} 侧车解不开（浏览器会判解码失败）：${e && e.message}`)
+  }
+  if (Buffer.compare(back, original) !== 0) {
+    throw new Error(`${fmt} 侧车解回后与原文不等（解出 ${back.length} B，原文 ${original.length} B）`)
+  }
+  return compressed
 }
 
 /** 递归收集目录下所有普通文件（返回相对 dist 根、正斜杠分隔的路径）。 */
@@ -97,9 +129,25 @@ function isEligible(rel) {
   if (isSidecar(rel)) return false
   return TEXT_EXT.has(path.extname(rel).toLowerCase())
 }
-/** 是不是侧车文件（`.br` / `.gz` 后缀）。 */
-function isSidecar(rel) { return rel.endsWith('.br') || rel.endsWith('.gz') }
-/** 侧车对应的原文路径。 */
+/**
+ * 是不是侧车文件（`.br` / `.gz` 后缀**且剥掉后缀后仍是一个文本资产**）。
+ *
+ * ★★ 2026-10-14 真踩：只按后缀判会把**别人的真产物**当成侧车删掉。
+ *   SDK 的 Python 源码包叫 `langcross_translator-1.0.2.tar.gz`——它以 `.gz` 结尾，
+ *   于是"孤儿侧车清理"那一档去找那个**结构上根本不存在**的 `langcross_translator-1.0.2.tar`，
+ *   找不到就当死字节 `rmSync` 了（三个 `.tar.gz` 全没，`.whl`/`.tgz` 因为后缀不是 `.gz` 而幸存）。
+ *   最坏的是它的**症状分布**：`--check` 那一档不跑清理 ⇒ 我复跑核对时是绿的；
+ *   `check_frontend_tar.sh` 的 T1 只问"文本资产该有侧车的那几对" ⇒ 看不见多删的文件；
+ *   一路到 Playwright 打 `/sdk/*.tar.gz` 落进 SPA 兜底（200＋整页 HTML）才现形。
+ *   ⇒ 侧车的定义必须问**语义**（"这是某个文本资产的压缩副本"）而不是问后缀，
+ *     与 AGENTS §一·12「就绪判据不许吃零值」同族：判据的输入本身要能指回一个真存在的东西。
+ */
+function isSidecar(rel) {
+  if (!rel.endsWith('.br') && !rel.endsWith('.gz')) return false
+  // 剥掉后缀后的名字必须仍是 TEXT_EXT 里那一类文本件，才可能是本脚本写出来的侧车。
+  return TEXT_EXT.has(path.extname(baseOfSidecar(rel)).toLowerCase())
+}
+/** 侧车对应的原文路径（只在 isSidecar 为真时有意义）。 */
 function baseOfSidecar(rel) { return rel.slice(0, -3) }
 /** 原文对应的侧车路径。 */
 function sidecarOf(rel, fmt) { return rel + (fmt === 'br' ? '.br' : '.gz') }

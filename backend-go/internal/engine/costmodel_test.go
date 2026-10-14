@@ -371,8 +371,11 @@ func pointsForTest(tokens int64) int64 {
 	return (tokens + r/2) / r
 }
 
-// countSentencesForTest 复刻旧公式的「句数」读数，只用于反面对照（证明样本密度差 20 倍）。
-// 参数 text: 源文。返回: 按「. ! ? ; 换行」切分后的句数（与 api.countSentences 同口径的最小复刻）。
+// countSentencesForTest 复刻**改造前**旧公式的「句数」读数，只用于反面对照（证明样本密度差 20 倍）。
+// 参数 text: 源文。返回: 按「. ! ? ; 换行」一律切分后的句数。
+// ⚠️ 这不是 api.countSentences 的复刻（2026-10-13 那份切分已按上下文重判 ASCII 句点，见
+// internal/api/sentence_count.go）。这里刻意把"一律切"的老形态**冻结在本函数内**——
+// 对照腿要问的是「旧公式在同样本上会算出多大」，api 侧改了它就得跟着变，那就不是对照而是复述了。
 func countSentencesForTest(text string) int64 {
 	var n int64 = 1
 	for _, r := range text {

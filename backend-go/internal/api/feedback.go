@@ -160,11 +160,11 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 	// 告警触达（复用告警面板/邮件/群机器人链路）
 	s.Store.CreateAlert(f.TenantID, "warning", "feedback",
 		fmt.Sprintf("收到用户 #%d 的%s反馈：%s", u.ID, map[string]string{"text": "文本翻译", "ticket": "工单"}[targetType], truncateRunes(content, 80)))
-	// ★ 站内通知超管（问题反馈入口）：通知 platform 超管（tenant_id=0, role=admin）
-	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
-		_ = s.Store.CreateNotification(sa.ID, "收到新的问题反馈",
-			fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)), "feedback", f.ID)
-	}
+	// ★ 站内通知超管（问题反馈入口）：#46 起走唯一写点（口径＝鉴权侧同一个超管谓词，
+	//   收敛前这里按角色字面量圈人，只有 super_admin 账号的部署一条都发不到）
+	s.notifySuperAdmins("收到新的问题反馈",
+		fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)),
+		store.NotifyRefFeedback, f.ID)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "id": f.ID})
 }
 
@@ -349,12 +349,12 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 	// ★ 回复提醒对方：超管回复→通知提交者；提交者补充→再通知超管
 	if auth.IsSuperAdmin(u) {
 		_ = s.Store.CreateNotification(f.UserID, "你的问题反馈有新回复",
-			truncateRunes(content, 60), "feedback", f.ID)
+			truncateRunes(content, 60), store.NotifyRefFeedback, f.ID)
 	} else {
-		for _, sa := range s.Store.ListUsersByRole(0, "admin") {
-			_ = s.Store.CreateNotification(sa.ID, "问题反馈有新回复",
-				fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)), "feedback", f.ID)
-		}
+		// 提交者补充 → 再通知超管（#46：与新建反馈同一唯一写点，禁止在这一支再抄一份角色名单）
+		s.notifySuperAdmins("问题反馈有新回复",
+			fmt.Sprintf("%s：%s", u.DisplayName, truncateRunes(content, 60)),
+			store.NotifyRefFeedback, f.ID)
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "replies": json.RawMessage(thread)})
 }

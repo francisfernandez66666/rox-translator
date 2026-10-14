@@ -237,7 +237,7 @@ func (s *Store) notifyDeptQuota(tid int64, org *Org, used int64) {
 		targets = s.usersByRoleInOrg(tid, org.ID, "tenant_admin")
 	}
 	for _, uid := range targets {
-		_ = s.CreateNotification(uid, "部门预算已耗尽", msg, "quota", org.ID)
+		_ = s.CreateNotification(uid, "部门预算已耗尽", msg, NotifyRefQuota, org.ID)
 	}
 }
 
@@ -251,7 +251,7 @@ func (s *Store) notifyTenantQuota(tid int64, sum *OrgBudgetSummary) {
 		sum.TotalLimit, sum.UsedThisMonth, marker)
 	_ = s.CreateAlert(tid, "critical", "quota", msg)
 	for _, uid := range s.usersByRoleInOrg(tid, 0, "tenant_admin") {
-		_ = s.CreateNotification(uid, "组织预算已耗尽", msg, "quota", tid)
+		_ = s.CreateNotification(uid, "组织预算已耗尽", msg, NotifyRefQuota, tid)
 	}
 }
 

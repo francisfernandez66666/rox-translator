@@ -6,6 +6,21 @@
 // ★ key、占位符（{n}/{msg}/{total} 等）与文案本体一律不得随注释改动。
 // =============================================
 export const zh: Record<string, string> = {
+  'chat.micDenied': '麦克风权限被拒绝，请在浏览器设置里允许后再试',
+  'chat.micFailed': '录音识别失败，请重试或直接输入文字',
+  // ★ P3 语音两件套（麦克风录音 / 译文朗读）；中英两份必须逐键对等（parity.test.ts）
+  'chat.mic': '录音',
+  'chat.micStop': '停止录音',
+  'chat.micWorking': '正在识别录音…',
+  'chat.micUnsupported': '当前浏览器不支持录音',
+  'chat.speak': '朗读',
+  'chat.speakStop': '停止朗读',
+  // ★ 语音失败三档文案（改造方案 §六 第 9 条）：与后端 reason 档位一一对应
+  //   unsupported_lang / too_long / 其余（capability_missing·empty·failed）。
+  //   三句都必须写明「文字译文不受影响」——译文第一，语音只是择优产出。
+  'chat.voiceLangUnavailable': '该语种暂时没有朗读语音，译文不受影响',
+  'chat.voiceTooLong': '译文过长，暂时无法一次朗读，请分段后再试',
+  'chat.voiceUnavailable': '暂时没有朗读语音，译文不受影响',
   // ---- 修改密码弹窗 ----
     // ★ F2：聊天状态/额度提示（useChat）
   'chat.preparing': '准备中',
@@ -192,6 +207,19 @@ export const zh: Record<string, string> = {
 
 // 英文文案词典：键与上方 zh 一一对应。
 export const en: Record<string, string> = {
+  'chat.micDenied': 'Microphone permission denied — allow it in browser settings and try again',
+  'chat.micFailed': 'Transcription failed — please retry or just type the text',
+  // ★ P3 语音两件套（麦克风录音 / 译文朗读）；中英两份必须逐键对等（parity.test.ts）
+  'chat.mic': 'Record',
+  'chat.micStop': 'Stop',
+  'chat.micWorking': 'Transcribing…',
+  'chat.micUnsupported': 'This browser does not support recording',
+  'chat.speak': 'Listen',
+  'chat.speakStop': 'Stop audio',
+  // ★ 语音失败三档文案（与上方 zh 逐键对等）：档位名见 lib/voiceFail.ts
+  'chat.voiceLangUnavailable': 'No voice audio for this language — your translation is unaffected',
+  'chat.voiceTooLong': 'This translation is too long to read at once — try reading it in parts',
+  'chat.voiceUnavailable': 'Voice audio is unavailable right now — your translation is unaffected',
   'chat.preparing': 'Preparing',
 'chat.quotaExhausted':'Quota exhausted. Top up or upgrade to continue.',
   'chat.insufficientTitle': 'Insufficient balance',

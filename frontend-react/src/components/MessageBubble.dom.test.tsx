@@ -7,7 +7,8 @@
 //   ④ 消耗读数落在气泡尾部操作行（与查看原文/复制/反馈同排），不进 content；模式只出栈一次；
 //   ⑤ 慢预警横幅仅在流式进行态出现，「继续等待」本地消隐；无进行态不出现。
 //   ⑦⑧⑨⑩ ★ 2026-10-13 用户令③（「字体大小和高低位置统一一下，至少把查看原文/反馈/消耗在同一行」）：
-//      四件同排、字号只在 .msg-actions 一处声明、旧的两排档不许复活（含源码级 CSS 等值锁＋反证）。
+//      尾部各件同排、字号只在 .msg-actions 一处声明、旧的两排档不许复活（含源码级 CSS 等值锁＋反证；
+//      ★ 2026-10-15：⑦ 的点名清单已含本批新增的「朗读」，件数不写死）。
 // 运行：npx vitest run src/components/MessageBubble.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
@@ -161,23 +162,26 @@ describe('决策⑪② 慢预警横幅（deadline 前 ~15s 的 warning 帧）', 
 //   查看原文＋复制在它下面另起一行、左对齐 14px。修法＝四件同排、字号只在 .msg-actions 声明一次。
 //   真值：《前端及UI相关/UI-ANNOTATIONS.md》§6「气泡尾部操作行」。
 // ============================================================================
-describe('用户令③ 气泡尾部操作行（四件同排同档）', () => {
-  // 一条消息凑齐四件：有上一条原文（查看原文）＋有结构化译文（复制/反馈/读数）
+describe('用户令③ 气泡尾部操作行（同排同档；件数按点名正锁，不写死数字）', () => {
+  // 一条消息凑齐全部件：有上一条原文（查看原文）＋有结构化译文（复制/朗读/反馈/读数）
   const mkFull = () => mkMsg({
     content: 'Hello world',
     points_used: 12,
     data: { translations: { en: 'Hello world' }, lang_names: { en: '英语' }, mode: '模型翻译（无知识库）' } as any,
   })
 
-  it('⑦ 查看原文／复制／反馈／消耗全在同一个 .msg-actions 里（直接子节点，谁都不另起一排）', () => {
+  it('⑦ 查看原文／复制／朗读／反馈／消耗全在同一个 .msg-actions 里（直接子节点，谁都不另起一排）', () => {
     const { container, getByTestId } = render(<MessageBubble message={mkFull()} source="你好世界" />)
     const row = getByTestId('msg-actions')
     const meta = container.querySelector('[data-testid="msg-meta"]')!
     const fb = container.querySelector('.msg-fb-btn')!
-    // 四件都是这一排的直接子节点（closest 只证「在同一排内」，parentElement 才证「没被别的容器再包一层、
-    // 也就是没有被拆回两个 flex 子块各占一排」）
+    // 每一件都是这一排的直接子节点（closest 只证「在同一排内」，parentElement 才证「没被别的容器再包一层、
+    // 也就是没有被拆回两个 flex 子块各占一排」）。
+    // ★ 2026-10-15 补「朗读」这一枚：本批 P3 的 SpeakButton 落进同一排后，e2e TF4 那条"件数＝4"翻成了
+    //   派生判据（见 translate_flow.spec.ts 里那段理由）；这里把新控件也纳入**点名正锁**，
+    //   否则「加了一件」这件事在 jsdom 侧零覆盖，而下一次真掉件时没人看得见。
     for (const [name, el] of [['查看原文', getByTestId('show-src')], ['复制', getByTestId('copy-translation')],
-                              ['反馈', fb], ['消耗', meta]] as const) {
+                              ['朗读', getByTestId('speak-translation')], ['反馈', fb], ['消耗', meta]] as const) {
       expect(el, `「${name}」不在尾部操作行内`).toBeTruthy()
       expect(el.parentElement, `「${name}」不是 .msg-actions 的直接子节点（又被子块分排了）`).toBe(row)
     }

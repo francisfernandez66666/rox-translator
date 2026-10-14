@@ -8,8 +8,11 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
+
+	"translator/internal/fileproc"
 )
 
 // validateUploadExt：白名单内/外、大小写、无扩展名。
@@ -90,10 +93,72 @@ func TestParseUploadTooBig(t *testing.T) {
 }
 
 // whitelistKeys：返回非空扩展名列表（错误提示用）。
+//
+// ★ 2026-10-15 重钉为**派生等值锁**（原形态钉死 12 个，OCR/ASR 批把准入清单扩到 27 项后恒红）：
+// 写死数字这类锁的坏处不是"会过时"而是"过时了还在替旧口径说话"——旧断言看似在守白名单，
+// 实际守的是"扩项之前那一代清单的长度"，谁扩一次格式就得先猜一次它想数什么。
+// 现在只问一件真有判别力的事：api 层这把闸**是否逐项等于 fileproc 那一份唯一事实源**
+// （AGENTS §一·14「准入清单只有一份」在 api 侧的接线腿；§一·14 的机械锁在
+// upload_formats_gate_test.go 守清单本身，这一条守的是调用方有没有拿到同一份）。
+// 两侧都判：少一项＝api 收了别人不收的（客户传上来后端才拒），多一项＝准入被 api 层私加。
 func TestWhitelistKeys(t *testing.T) {
 	keys := whitelistKeys(translateExtWhitelist)
-	// 三期扩容：docx/pptx/xlsx/pdf/txt/csv/srt/vtt/md/json/yaml/yml = 12 个
-	if len(keys) != 12 {
-		t.Fatalf("翻译白名单应有 12 个扩展名, got %d", len(keys))
+	if len(keys) == 0 {
+		t.Fatal("白名单为空：错误提示将一句格式都不列")
 	}
+	got := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		got[k] = true
+	}
+	if missing := whitelistMissing(got); len(missing) > 0 {
+		t.Fatalf("准入清单有而 api 白名单没有：%v（fileproc 收了、上传闸却拒＝两把尺子打架）", missing)
+	}
+	if extra := whitelistExtra(got); len(extra) > 0 {
+		t.Fatalf("api 白名单多出清单外的项：%v（＝这一层私加准入）", extra)
+	}
+
+	// ---- 反证两枚：证明上面两条腿真的会抓，而不是"恒空的形状检查" ----
+	// R1 少了 .docx ⇒ whitelistMissing 必须点名它（把判据摘成恒空的那类破坏就在这里现形）
+	truncated := make(map[string]bool, len(got))
+	for k := range got {
+		if k != ".docx" {
+			truncated[k] = true
+		}
+	}
+	if m := whitelistMissing(truncated); !containsString(m, ".docx") {
+		t.Fatalf("反证 R1 失效：白名单少了 .docx 却没被抓到（实得 %v）", m)
+	}
+	// R2 混进一个清单外的 .exe ⇒ whitelistExtra 必须点名它
+	polluted := make(map[string]bool, len(got)+1)
+	for k := range got {
+		polluted[k] = true
+	}
+	polluted[".exe"] = true
+	if e := whitelistExtra(polluted); !containsString(e, ".exe") {
+		t.Fatalf("反证 R2 失效：白名单私加 .exe 却没被抓到（实得 %v）", e)
+	}
+}
+
+// whitelistMissing 列出唯一事实源有、而待检白名单没有的扩展名（升序返回便于判据与报错稳定）。
+func whitelistMissing(got map[string]bool) []string {
+	var out []string
+	for _, want := range fileproc.TranslateFormatOrder {
+		if !got[want] {
+			out = append(out, want)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// whitelistExtra 列出待检白名单有、而唯一事实源不认的扩展名（升序同上）。
+func whitelistExtra(got map[string]bool) []string {
+	var out []string
+	for k := range got {
+		if !fileproc.IsTranslateFormat(k, false) {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

@@ -412,7 +412,7 @@ html, body { background: #000000; color: var(--lc-text); }
        至少把查看原文/反馈/消耗在同一行」）----
    改前的形态就是投诉本体：反馈＋模式/消耗在译文表里右对齐、meta 12px，
    查看原文＋复制在它下面另起一行、左对齐 14px —— 两排、两档、两种高低。
-   现在是**一排四件**：字号只在 .msg-actions 声明一次（14px，同档），子件一律 `font: inherit`
+   现在是**一排（本批 P3 朗读加入后为五件）**：字号只在 .msg-actions 声明一次（14px，同档），子件一律 `font: inherit`
    且不带任何内联字号（谁都不再自己走一档），层级只靠**颜色**分档：
    动作件走主文字档（可点），读数走 text-3（辅助 meta 档）。真值见 UI-ANNOTATIONS §6。
    ⚠️ 排布按 left 对齐（原右对齐那一排已并进来），等值锁＝MessageBubble.dom.test.tsx ④⑤。 */

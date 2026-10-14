@@ -268,7 +268,7 @@ func (s *Server) runTicketRetentionScan() {
 				}
 				_ = s.Store.CreateNotification(r.CreatedBy, "工单产物已过保留期",
 					fmt.Sprintf("工单号 %s 的结果文件超过 %s 保留期已被清理；译文仍保留在翻译记忆中，可重新发起工单复用。", r.TicketNo, exp.Format("2006-01-02")),
-					"ticket", r.ID)
+					store.NotifyRefTicket, r.ID)
 				s.Store.LogAudit(r.TenantID, 0, "ticket_result_cleanup", "tickets", r.TicketNo)
 			}
 			continue
@@ -283,7 +283,7 @@ func (s *Server) runTicketRetentionScan() {
 					_ = s.Store.CreateNotification(r.CreatedBy, "工单结果即将过期",
 						fmt.Sprintf("工单号 %s 的结果文件将在 %d 天后（%s）清理，请尽快下载；译文长期有效。",
 							r.TicketNo, daysLeft, exp.Format("2006-01-02")),
-						"ticket", r.ID)
+						store.NotifyRefTicket, r.ID)
 				}
 			}
 		}

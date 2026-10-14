@@ -40,7 +40,7 @@ func TestFriendlyAnydocError(t *testing.T) {
 		want   string
 	}{
 		{"ERR:EncryptedError:file is password protected", "文件已加密或带密码，无法提取文案，请解除密码后重试"},
-		{"Traceback (most recent call last):\nERR:NeedsOcrError:pages=[3,4]", "扫描版/图片型文档：服务器不提供文字识别（OCR），无法提取文案，请转存为 Word 后重试"},
+		{"Traceback (most recent call last):\nERR:NeedsOcrError:pages=[3,4]", "扫描版/图片型文档：图片（png/jpg 等）现已支持文字识别（OCR）直接上传即可；若为扫描版 Word/PDF，请先转存为图片或扫描件 PDF 后重试，或确认服务器已部署 OCR 模型资产"},
 		{"ERR:MalformedError:bad zip member", "文件结构损坏：未能提取到有效内容"},
 		{"ERR:MissingPartError:word/document.xml", "文件结构损坏：未能提取到有效内容"},
 		{"ERR:Import:anydoc 库未安装（pip install firecrawl-anydoc）", "纯文案模式依赖未就绪：服务器未安装 firecrawl-anydoc"},

@@ -53,7 +53,7 @@ func min(a, b int) int {
 	return b
 }
 
-// TestWriteTranslatedPDFNoFont 无字体时返回错误（供调用方降级 xlsx）。
+// TestWriteTranslatedPDFNoFont 无字体时返回错误（PDF 三级链的第二级失败⇒调用方退纯文案 .md，不退 xlsx 对照表）。
 func TestWriteTranslatedPDFNoFont(t *testing.T) {
 	t.Setenv("PDF_FONT_PATH", "/nonexistent/font.ttf")
 	savedCandidates := systemFontCandidates

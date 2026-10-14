@@ -84,7 +84,7 @@ func RunTokenMigration(st *store.Store) {
 		}
 		_ = st.CreateNotification(0, "计费体系升级：句数额度已折算为 token",
 			"您的剩余句数额度已按 1 句 = "+itoa(rate)+" token 折算充入余额，后续翻译按实际 token 消耗计费。",
-			"tenant", it.id)
+			store.NotifyRefTenant, it.id)
 		converted++
 		log.Printf("[billing-token-migrate] 租户 %d：%d 句 → %d token", it.id, it.sentence, tokens)
 	}

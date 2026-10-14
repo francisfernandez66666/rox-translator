@@ -1402,6 +1402,11 @@ if [ "$T41CHK" = "STILL" ]; then FAIL=$((FAIL+1)); echo "FAIL|T42-paid-left-manu
 #   ④ 整轮 mock 是健康的 ⇒ 不许有 usdt_watch_dead 的 open 告警（反向锁，配①的正向读数）。
 HW=$(curl -s "$B/api/health" --max-time 20)
 ck T42-health-usdt-watch-word '"usdt_watch":"(ok|failing|unknown|disabled)"' "$HW"
+# ★ #42（2026-10-14）第二维：额度档必须**另出一个词**，不许并进上面那四档。
+#   这一条在 UAT 里天然是 configured（mock 端点不含 trongrid 字样＝自建端点形态），
+#   判据只锁"三档枚举之内且字段在位"，不锁具体值——具体值取决于那台有没有 Key，
+#   写死就会把「运维配了 Key」与「矩阵换了 mock」两件事混成一条红。
+ck T42-health-usdt-tron-quota-word '"usdt_tron_quota":"(configured|anonymous|not_listed)"' "$HW"
 R=$(post "$H1" '{"points":27,"channel":"usdt"}' /api/pay/create)
 OIDZ=$(echo "$R" | pv '["order"]["id"]')
 LIVE=$(echo "$R" | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("usdt_pay",{}).get("auto_settle_live")).lower())' 2>/dev/null || echo ERR)
@@ -3597,6 +3602,287 @@ LG70=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=0 AND charge_kind=
 ckq T70-cleanup-ledger-empty 0 "${LG70:-0}"
 CK70=$(dbq "SELECT COUNT(*) FROM system_config WHERE key LIKE 'trial_%'" | tr -d '[:space:]')
 ckq T70-cleanup-config-empty 0 "${CK70:-0}"
+
+# ============================================================================
+# ---------- T71 语音与图片三件套（OCR/ASR/TTS，★ 2026-10-15 改造方案 §六） ----------
+# 进程内那一层已经锁住的细则本段一概不重复（能力探测的 D5 口径、TTLError 分档函数、
+#   承诺文案与准入清单的跨包等值、前端档位名↔词典键，全在
+#   internal/fileproc/{tts_p3,asr_p2,upload_formats_gate}_test.go 与
+#   internal/assist/engine/promise_media_gate_test.go、frontend-react/src/api/chatVoice.lock.test.ts）。
+# 本段锁的是单测**结构上看不见**的四层，客户屏幕与运维日志吃的正是这一层字节：
+#   ① **状态码合同**：语音/图片能力坏掉**绝不**把请求打成 5xx——
+#      "这一次没有语音"是一次没有产出，不是协议错误（「译文第一」的出栈形态）；
+#      而协议/入参/鉴权类失败必须诚实 4xx 且带 code（§一·8 writeError 口径），逐条按三件套锁。
+#   ② **档位单源**：出栈的 reason 只许是 fileproc.TtsReason* 那五档。
+#      前端 VoiceError 按它取 12 语种词典，后端偷偷加第六档的形态是
+#      「外语界面掉回默认文案」——不报错、不退 5xx、没人看得见，只有这条名单拦得住。
+#      名单判据配**正向对照**（本节必须至少真出现过一次档位），否则"名单内无一命中"会被读成"锁通过了"。
+#   ③ **参数失败先于能力失败**（顺序锁，环境无关）：超长译文必须回 too_long 而不是 capability_missing。
+#      运维按档位决定"要不要投放几百 MB 模型资产"，把入参问题报成能力缺失＝白装一整套权重。
+#      这一条在 tts_ready=false 与 =true 的两台机器上必须同形，所以本段**不分支**。
+#   ④ **准入清单真接在建单链上**：图片/音频各过一次真件建单（.png／.wav），
+#      并各配一条"未知扩展必须被拒"的反向对照——只测放行侧的话，把准入判据整段摘掉本段仍绿。
+#      同批锁「预估不误拦」：同样 1 MiB，.txt 按 /3 估被拒、.wav 按 /8000 估放行，
+#      这是 09-15 那条「700KB PDF 提示需 402553 积分」误拦的同族（容器类文件的字节大头不是正文）。
+# 就绪档的处置（诚实口径，别读成"两条路都放行"）：
+#   OCR/ASR/TTS 就绪与否由 /api/health **现读**，本机与 CI 恒为 false（assets 目录只有 README，
+#   权重要运维按 README 投放）。所以"能力缺失"那一支断具体档位与资产指向；
+#   ready=true 那一支改断"终态且不静默"（completed ⇒ 产物非空；rejected ⇒ 理由非空）。
+#   ⚠️ 本机跑不到 ready 支 ⇒ 那条判据不能只留代码，必须用**合成样本**打一次判据自证
+#      （vshape71 那四条 A1–A4），否则它就是《部署指南》那一族「有代码无调度」——
+#      判据从没被执行过，写错也永远绿灯。
+#   字段读不到（现网仍是旧二进制）⇒ 直接判红并点名"闸门失明"，**不许**退回 false 冒充"能力未就绪"
+#      （同 §一·12「就绪判据不许吃零值」）。
+# ============================================================================
+echo "=== T71 语音与图片三件套（OCR/ASR/TTS）"
+
+# bool71 <json文本> <键> → "true" / "false" / 空串（键缺失或值不是布尔一律回空）
+#   分成"空"而不是把缺失压成 false：缺失＝这个二进制里**压根没有这一档**，
+#   按 false 判会让"字段漂了"冒充成"能力没就绪"，而后者是运维会去装模型的那种读法。
+bool71(){ printf '%s' "$1" | python3 -c 'import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("")
+    raise SystemExit
+v = d.get(sys.argv[1]) if isinstance(d, dict) else None
+print("true" if v is True else ("false" if v is False else ""))' "$2" 2>/dev/null; }
+
+# mreq71 <curl 参数…> → 写 MR71ST / MR71BODY / MR71CT
+#   为什么单开一个助手而不是复用 req3：语音两件套一条要 -F（multipart 由 curl 生成 boundary），
+#   一条的出参是**二进制**（req3 会把 body 按文本读进来，wav 字节会花掉）。
+mreq71(){ local tf hf; tf="/tmp/uat_mreq71_$$.bin"; hf="/tmp/uat_mreq71_$$.hdr"
+  MR71ST=$(curl -s -o "$tf" -D "$hf" -w '%{http_code}' --max-time 120 "$@")
+  MR71BODY=$(python3 -c 'import sys
+try:
+    print(open(sys.argv[1], encoding="utf-8", errors="replace").read())
+except Exception:
+    print("")' "$tf")
+  # Content-Type 从**响应头**里取，不塞进 -w：curl 的 %{content_type} 值本身含空格
+  #（audio/wav; charset 之类），一行读数会被劈成两格——AGENTS §一·3 那条探针自伤的同形坑。
+  MR71CT=$(python3 -c 'import sys
+ct = ""
+try:
+    for ln in open(sys.argv[1], encoding="utf-8", errors="replace"):
+        if ln.lower().startswith("content-type:"):
+            ct = ln.split(":", 1)[1].strip()
+except Exception:
+    ct = ""
+print(ct.lower())' "$hf")
+  rm -f "$tf" "$hf"
+}
+
+# R71_TIERS — 对外档位名单（与 fileproc.TtsReason* 逐字同源；前端 chatVoice.ts 的 switch 只认这几档）
+R71_TIERS='empty|too_long|capability_missing|unsupported_lang|failed'
+R71_SEEN=""
+# vreason71 — 从刚才那次语音响应里取档位名；取不到回 <无>（让"没带档位"这一形态在日志里可读）
+vreason71(){ local v; v=$(printf '%s' "$MR71BODY" | grep -oE '"reason":"[a-z_]+"' | head -1 | sed -E 's/.*"reason":"([a-z_]+)".*/\1/'); printf '%s' "${v:-<无>}"; }
+
+# vshape71 <kind:asr|tts> <body> <content_type 小写> [头四字节] → 0=形态合格
+#   问的是「这一次语音请求有没有一个客户或运维能读懂的结果」：
+#   asr ⇒ 要么有非空 text，要么有名单内档位；tts ⇒ 要么真是 audio/* 且字节以 RIFF 开头，要么有名单内档位。
+#   写成函数而不是内嵌 grep，是为了给它配合成样本的判据自证（本机恒走 not-ready 支，见段头⚠️）。
+vshape71(){ local kind="$1" body="$2" ct="$3" magic="${4:-}"
+  case "$kind" in
+    asr)
+      printf '%s' "$body" | grep -qE '"text":"[^"]' && return 0
+      ;;
+    tts)
+      case "$ct" in
+        audio/*) [ "$magic" = "RIFF" ] && return 0 ;;
+      esac
+      ;;
+  esac
+  printf '%s' "$body" | grep -qE "\"reason\":\"($R71_TIERS)\"" && return 0
+  return 1
+}
+
+# ⓪ 判据自证四条（先证锁有射程，再拿它断现网）：合格/不合格样本各打一次，
+#    含两条"看起来像成功"的静默形态（200＋空体、200＋名单外档位）。
+vshape71 asr '{"text":"今天的产品评审会改到下午三点"}' "" && { PASS=$((PASS+1)); echo "PASS|T71-judge-A1-asr-with-text"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-judge-A1-asr-with-text"; }
+vshape71 asr '{"text":""}' "" && { FAIL=$((FAIL+1)); echo "FAIL|T71-judge-A2-asr-empty-text-must-be-judged-bad"; } || { PASS=$((PASS+1)); echo "PASS|T71-judge-A2-asr-empty-text-must-be-judged-bad"; }
+vshape71 tts '{"error":"上游坏了","reason":"no_such_tier"}' "application/json" && { FAIL=$((FAIL+1)); echo "FAIL|T71-judge-A3-unknown-tier-must-be-rejected"; } || { PASS=$((PASS+1)); echo "PASS|T71-judge-A3-unknown-tier-must-be-rejected"; }
+vshape71 tts "" "audio/wav" "RIFF" && { PASS=$((PASS+1)); echo "PASS|T71-judge-A4-wav-bytes-are-a-result"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-judge-A4-wav-bytes-are-a-result"; }
+
+# ① 健康面三字段（T34-6 的 anydoc_ready 同口径：布尔值、未就绪时也必须存在该字段）
+H71=$(curl -s "$B/api/health" --max-time 20)
+ck T71-health-ocr-ready '"ocr_ready":(true|false)' "$H71"
+ck T71-health-asr-ready '"asr_ready":(true|false)' "$H71"
+ck T71-health-tts-ready '"tts_ready":(true|false)' "$H71"
+OCR71=$(bool71 "$H71" ocr_ready); ASR71=$(bool71 "$H71" asr_ready); TTS71=$(bool71 "$H71" tts_ready)
+ckq T71-health-three-fields-readable yes "$([ -n "$OCR71" ] && [ -n "$ASR71" ] && [ -n "$TTS71" ] && echo yes || echo no)"
+echo "  [T71] 就绪读数：ocr=$OCR71 asr=$ASR71 tts=$TTS71（false＝本机/CI 未投放模型资产，属预期档位）"
+
+# ② ASR 的鉴权与协议四态（三件套：状态码＋错误码＋文案）
+req3 POST "" /api/chat/asr ""; ck3 T71-asr-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" /api/chat/asr; ck3 T71-asr-get-405 405 METHOD_NOT_ALLOWED '仅支持 POST'
+B71JSON=$(printf '{"text":"hello"}')
+req3 POST "$H1" /api/chat/asr "$B71JSON"; ck3 T71-asr-needs-multipart-400 400 VALIDATION_ERROR 'multipart'
+
+TMPD71=$(mktemp -d)
+printf 'not-a-real-recording' > "$TMPD71/noise.webm"
+# multipart 但字段名不对：必须在**能力判定之前**就被拒（缺文件是入参问题，不是"这台没 ASR"）
+mreq71 -X POST "$B/api/chat/asr" -H "$H1" -F "notaudio=@$TMPD71/noise.webm"
+ckq T71-asr-missing-field-status 400 "$MR71ST"
+ck T71-asr-missing-field-code '"code":"VALIDATION_ERROR"' "$MR71BODY"
+ck T71-asr-missing-field-msg '缺少录音文件' "$MR71BODY"
+# 正常提交录音字节：能力坏掉也不许把请求打成 5xx
+mreq71 -X POST "$B/api/chat/asr" -H "$H1" -F "file=@$TMPD71/noise.webm"
+ckq T71-asr-never-5xx 200 "$MR71ST"
+vshape71 asr "$MR71BODY" "$MR71CT" && { PASS=$((PASS+1)); echo "PASS|T71-asr-body-not-silent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-asr-body-not-silent|st=$MR71ST ct=$MR71CT body=${MR71BODY:0:200}"; }
+R71_ASR_RS=$(vreason71); R71_SEEN="$R71_SEEN $R71_ASR_RS"
+if [ "$ASR71" = "false" ]; then
+  # not-ready 支：档位必须是 capability_missing，且那句人话必须带**可行动指向**（缺哪个资产）
+  ck T71-asr-unready-tier '"reason":"capability_missing"' "$MR71BODY"
+  ck T71-asr-unready-actionable 'assets/asr' "$MR71BODY"
+  echo "  [T71] ASR 走「能力缺失」支（本机未投放 sherpa-onnx 权重）"
+else
+  # ready 支：垃圾字节大概率听不出来，期望是 failed 而不是 capability_missing
+  #（"上游/脚本没坏却报能力缺失"会把运维支去重装资产；档位名单已由 vshape71 保证在档内）
+  ckn T71-asr-ready-no-capability-lying 'capability_missing' "$MR71BODY"
+  echo "  [T71] ASR 走「能力就绪」支，读数 reason=$R71_ASR_RS"
+fi
+
+# ③ TTS 的鉴权与入参三态
+req3 POST "" /api/chat/tts "$B71JSON"; ck3 T71-tts-anon-401 401 UNAUTHORIZED '未登录'
+req3 GET "$H1" /api/chat/tts; ck3 T71-tts-get-405 405 METHOD_NOT_ALLOWED '仅支持 POST'
+B71BLANK=$(printf '{"text":"   ","lang":"en"}')
+req3 POST "$H1" /api/chat/tts "$B71BLANK"; ck3 T71-tts-blank-400 400 VALIDATION_ERROR '没有可朗读的内容'
+
+# ④ 顺序锁（环境无关）：超长必须是 too_long，**不许**被能力档盖过去
+TXT71LONG=$(python3 -c 'print("译" * 2001)')
+B71LONG=$(printf '{"text":"%s","lang":"en"}' "$TXT71LONG")
+mreq71 -X POST "$B/api/chat/tts" -H "$H1" -H "$J" -d "$B71LONG"
+ckq T71-tts-too-long-status 200 "$MR71ST"
+ck T71-tts-too-long-tier '"reason":"too_long"' "$MR71BODY"
+R71_SEEN="$R71_SEEN too_long"
+# 短文本对照：同一次运行里它**不得**也是 too_long
+#   （反向必要——若整条链无论输入都回 too_long，上面那条"顺序锁"其实什么都没锁）
+B71SHORT=$(printf '{"text":"Hello world","lang":"en"}')
+mreq71 -X POST "$B/api/chat/tts" -H "$H1" -H "$J" -d "$B71SHORT"
+ckq T71-tts-short-status 200 "$MR71ST"
+ckn T71-tts-short-not-too-long '"reason":"too_long"' "$MR71BODY"
+vshape71 tts "$MR71BODY" "$MR71CT" && { PASS=$((PASS+1)); echo "PASS|T71-tts-body-not-silent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-tts-body-not-silent|st=$MR71ST ct=$MR71CT body=${MR71BODY:0:200}"; }
+R71_TTS_RS=$(vreason71); R71_SEEN="$R71_SEEN $R71_TTS_RS"
+if [ "$TTS71" = "false" ]; then
+  ck T71-tts-unready-tier '"reason":"capability_missing"' "$MR71BODY"
+  ck T71-tts-unready-actionable 'assets/tts' "$MR71BODY"
+  echo "  [T71] TTS 走「能力缺失」支（本机未投放音色/权重）"
+else
+  R71WAV="$TMPD71/tts.wav"
+  R71WST=$(curl -s -o "$R71WAV" -D "$TMPD71/tts.hdr" -w '%{http_code}' --max-time 120 \
+    -X POST "$B/api/chat/tts" -H "$H1" -H "$J" -d "$B71SHORT")
+  ckq T71-tts-ready-status 200 "$R71WST"
+  ck T71-tts-ready-audio-ctype '^content-type: *audio/wav' "$(tr -d '\r' < "$TMPD71/tts.hdr" | grep -i '^content-type:' || true)"
+  ckq T71-tts-ready-wav-magic RIFF "$(head -c 4 "$R71WAV" 2>/dev/null || true)"
+  ckq T71-tts-ready-non-empty yes "$([ -s "$R71WAV" ] && echo yes || echo no)"
+  echo "  [T71] TTS 走「能力就绪」支（真出了 wav 字节）"
+fi
+
+# ⑤ 档位单源：本节在网络上真发出去的每一个 reason 都必须在名单内
+R71_BAD=""
+for r in $R71_SEEN; do
+  case "$r" in
+    '<无>') : ;;
+    empty|too_long|capability_missing|unsupported_lang|failed) : ;;
+    *) R71_BAD="$R71_BAD $r" ;;
+  esac
+done
+# 裁决写成**显式变量**而不是 ${R71_BAD:+bad…}：那种写法在"没有越界档位"时展开成**空串**，
+# 而 ckq 判的是「期望 ＝＝ 实得」⇒ 干净反而判红（把锁写反的形态，只看读数看不出来）。
+if [ -n "$R71_BAD" ]; then R71_TIER_VERDICT="bad:$R71_BAD"; else R71_TIER_VERDICT="ok"; fi
+ckq T71-tier-all-on-the-list ok "$R71_TIER_VERDICT"
+ck T71-tier-coverage-positive yes "$([ -n "${R71_SEEN// /}" ] && echo yes || echo no)"
+#   正向对照的读数直接写进日志：只有一条"名单内无一命中也算过"的负向锁是空转锁
+echo "  [T71] 本节出栈档位读数：${R71_SEEN:- <无>}"
+
+# ⑥ 图片/音频准入真接在建单链上（真件＋反向对照）
+python3 - "$TMPD71/t71.png" <<'EOF'
+import sys, struct, zlib
+# 手工构造 1×1 真 PNG（无第三方依赖）：准入判据按扩展名，但**内容也得是真图片**——
+# 否则将来加内容嗅探时这条腿会静默变成"喂的是垃圾"，而现网 OCR 拿到的是垃圾字节。
+raw = b"\x00"                      # 每行前置过滤字节 0（RGB 一行一个像素）
+def chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+png = b"\x89PNG\r\n\x1a\n"
+png += chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(raw))
+png += chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+EOF
+ckq T71-png-magic 89504e47 "$(od -An -tx1 -N4 "$TMPD71/t71.png" 2>/dev/null | tr -d ' \n')"
+R71IMG=$(curl -s --max-time 60 $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD71/t71.png" -F "target_langs=en" -F "mode=fast")
+ck T71-image-create-accepted '"success":true' "$R71IMG"
+TK71IMG=$(echo "$R71IMG" | pv "['ticket'].get('id') or 0")
+printf 'MZ-not-an-executable' > "$TMPD71/t71.exe"
+R71EXE=$(curl -s --max-time 60 $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD71/t71.exe" -F "target_langs=en")
+ck T71-admission-rejects-unknown '不支持的格式' "$R71EXE"
+
+# ⑦ 预估不误拦（差分锁）：同样 1 MiB 字节，文本按 /3 估 ⇒ 拦；音频按 /8000 估 ⇒ 放行。
+#    刻意用「同字节数两个分母」而不是"预估等于 N 积分"的等值锁：分母是本批的口径，
+#    而 K/F 系数与汇率都会随运营改档（T40 已按现读算期望），差分形态对改档免疫。
+T71U="t71u_$(date +%s)$RANDOM"
+T71RG=$(reg "$T71U" uatpass123 "T71C$RANDOM" 演练T71 "$T71U@t.test")
+echo "$T71RG" | grep -q '"success": *true' || echo "  [T71] 注册失败: $(echo "$T71RG" | head -c 160)"
+T71TK=$(tok "$T71U" uatpass123); H71T="Authorization: Bearer $T71TK"
+head -c 1048576 /dev/urandom > "$TMPD71/t71_1m.txt"
+head -c 1048576 /dev/urandom > "$TMPD71/t71_1m.wav"
+R71TXT=$(curl -s --max-time 60 $B/api/tickets/create-file -H "$H71T" -F "files=@$TMPD71/t71_1m.txt" -F "target_langs=en" -F "mode=fast")
+ck T71-precheck-blocks-1m-text '"success":false' "$R71TXT"
+ck T71-precheck-code-quota '"code":"QUOTA_EXCEEDED"' "$R71TXT"
+R71WAVCR=$(curl -s --max-time 60 $B/api/tickets/create-file -H "$H71T" -F "files=@$TMPD71/t71_1m.wav" -F "target_langs=en" -F "mode=fast")
+ck T71-precheck-allows-1m-audio '"success":true' "$R71WAVCR"
+TK71WAV=$(echo "$R71WAVCR" | pv "['ticket'].get('id') or 0")
+
+# ⑧ 图片/音频工单跑到终态且不静默：能力缺失时必须给出**带资产指向的可读理由**，
+#    绝不允许"completed 却零译文"（09-25 F-42 那一族假 completed 在语音/图片这两条新腿上的同形复现）。
+not_silent71(){ local payload="$1" kind="$2" st reason final respath
+  st=$(printf '%s' "$payload" | pv "['ticket'].get('status')")
+  reason=$(printf '%s' "$payload" | pv "['ticket'].get('reject_reason') or ''")
+  final=$(printf '%s' "$payload" | pv "['ticket'].get('final_result') or ''")
+  respath=$(printf '%s' "$payload" | pv "['ticket'].get('result_path') or ''")
+  case "$st" in
+    completed) [ -n "$final$respath" ] && { PASS=$((PASS+1)); echo "PASS|T71-$kind-terminal-has-result"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-has-result|completed 却零产物（假成功形态）"; } ;;
+    rejected)  [ -n "$reason" ] && { PASS=$((PASS+1)); echo "PASS|T71-$kind-terminal-has-reason"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-has-reason|rejected 却不给理由"; } ;;
+    *) FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-status|got=$st（既非 completed 也非 rejected＝没跑到终态或在中间态被当成功）" ;;
+  esac; }
+D71IMG=$(waittk "$H1" "$TK71IMG")
+not_silent71 "$D71IMG" image
+if [ "$OCR71" = "false" ]; then
+  ck T71-image-unready-status '"status":"rejected"' "$D71IMG"
+  ck T71-image-unready-says-ocr 'OCR' "$D71IMG"
+  ck T71-image-unready-points-to-assets 'assets/ocr' "$D71IMG"
+fi
+D71WAV=$(waittk "$H71T" "$TK71WAV")
+not_silent71 "$D71WAV" audio
+if [ "$ASR71" = "false" ]; then
+  ck T71-audio-unready-status '"status":"rejected"' "$D71WAV"
+  ck T71-audio-unready-says-asr 'ASR' "$D71WAV"
+  ck T71-audio-unready-points-to-assets 'assets/asr' "$D71WAV"
+fi
+
+# ⑨ 译文第一（本批的根口径）：语音三档都失败之后，翻译主链必须照常出译文。
+#    这条判据问的是**另一条腿**——前三段证的是"语音自己怎么失败"，
+#    而客户真正不能接受的是"语音坏了把翻译也带下去"（改造方案 §一 的上游适配器定位）。
+DEV71T="uat71devTTTT01"
+B71TRIAL=$(t66body "今天的产品评审会改到下午三点，请给出结论。" en "$DEV71T" "")
+req3 POST "" /api/trial/translate "$B71TRIAL"; cks T71-trans-after-voice-failure 200
+ck T71-trans-after-voice-nonempty '"translation":"[^"]' "$R3BODY"
+ckn T71-trans-after-voice-no-failure-code 'TRANSLATION_FAILED' "$R3BODY"
+
+# ⑩ 收尾清账：本段自己写的试用限流行与租户 0 留痕行归零（工单行按 id 删，
+#    只删本段这两张，**不许**按租户/时间批量删——别的段的历史工单是排障素材）。
+dbq "DELETE FROM rate_limits WHERE key='$DEV71T'" >/dev/null
+R71LG=$(dbq "SELECT COUNT(*) FROM rate_limits WHERE key='$DEV71T'" | tr -d '[:space:]')
+ckq T71-cleanup-trial-rate-limits 0 "${R71LG:-0}"
+# 工单 id 兜 0：上面两张单若有一张没建成（断言已各自判红），这里不能拼出 `IN (,)` 那种
+# 语法错的 SQL——本仓吃过「恒失败的 DELETE」被静默兜住的亏（AGENTS §一·4），空串必须先折成 0。
+TK71IMG=${TK71IMG:-0}
+TK71WAV=${TK71WAV:-0}
+dbq "DELETE FROM tickets WHERE id IN ($TK71IMG,$TK71WAV)" >/dev/null
+R71TK=$(dbq "SELECT COUNT(*) FROM tickets WHERE id IN ($TK71IMG,$TK71WAV)" | tr -d '[:space:]')
+ckq T71-cleanup-tickets 0 "${R71TK:-0}"
+rm -rf "$TMPD71"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

@@ -1,7 +1,7 @@
 // ============ src/precompressGate.test.ts · 职责说明 ============
 // `scripts/precompress_dist.mjs`（发版机预压缩出包腿）与 Caddy `precompressed` 接线
 // 的**行为闸门**（2026-10-12 慢链路批②）；文件末尾 D 段同口径锁住
-// `scripts/check_frontend_tar.sh`（换源前自检四档）与它在 `deploy/deploy_to_production.sh`
+// `scripts/check_frontend_tar.sh`（换源前自检六档 T1–T6）与它在 `deploy/deploy_to_production.sh`
 // 里的那一次**薄委托**（判据只留一个事实源，两条换源路径调同一条）。
 //
 // 为什么这一批必须有自动化锁（而不是"看一眼 curl 的 content-encoding"）：
@@ -19,12 +19,16 @@
 //   R3 摘掉内容比对（只查在位）⇒ 重 build 后旧侧车继续投（本文件断言"过期"必红）；
 //   R4 把 --check 写成恒 0 ⇒ T5/T6 当场红；
 //   R5 Caddy 接线退回与 `{` 同行 ⇒ T9 语法锁当场红（那是 adapt 期硬错，线上会起不来）；
-//   R6 换源前自检的四档各破坏一次 ⇒ 只有对应那一档红（D3–D5 真跑夹具，见文件末尾 D 段）。
+//   R6 换源前自检的各档各破坏一次 ⇒ 只有对应那一档红（D3–D7 真跑夹具，见文件末尾 D 段；
+//      D7 是 2026-10-14 白屏批为新增的 T6「侧车解得回原文」补的那一枚反证）；
+//   R7 摘掉 `isSidecar` 的"剥掉后缀仍是文本件"守卫 ⇒ 孤儿清理腿把 SDK 的 `*.tar.gz` 真产物删掉
+//      （A7 真跑；A6 的射程证明，2026-10-14 现网红在 Playwright 才抓到，见 A6 上方注释）。
 // =============================================
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import zlib from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
@@ -135,6 +139,47 @@ describe('A · 生成腿：侧车只在"真的更小"时出现', () => {
     expect(g.code).toBe(0)
     expect(has(path.join(d, 'old-hash.js.br')), '原文没了还留着侧车＝随 tar 上线的死字节').toBe(false)
     expect(has(path.join(d, 'old-hash.js.gz'))).toBe(false)
+  })
+
+  // ★★ A6／A7 是 2026-10-14 那条真事故：预压缩的"孤儿侧车清理"把 **SDK 的 Python 源码包**
+  //   （`langcross_translator-1.0.2.tar.gz`）当成侧车删了——只按后缀判 `.gz`，
+  //   于是去找那个结构上根本不存在的 `.tar` 原文，找不到就 rmSync。
+  //   三个 `.tar.gz` 全没、`.whl`/`.tgz` 幸存，而 `--check` 那一档不跑清理 ⇒ 复跑核对是绿的，
+  //   一路到 Playwright 打 `/sdk/*.tar.gz` 落进 SPA 兜底（200＋整页 HTML）才现形。
+  it('A6 别人的真产物 `.tar.gz` 不许被当成孤儿侧车删掉（正锁＋--check 不许索要 .tar 原文）', () => {
+    const d = mkFixture()
+    // 用真名字与真形状：双扩展名、内容是不可压的随机字节（模拟已压缩容器）
+    const sdist = path.join(d, 'sdk', 'langcross_translator-1.0.2.tar.gz')
+    fs.mkdirSync(path.dirname(sdist), { recursive: true })
+    fs.writeFileSync(sdist, Buffer.alloc(2048, 0x8f))
+    fs.writeFileSync(sdist + '.sha256', 'x'.repeat(64) + '  langcross_translator-1.0.2.tar.gz\n')
+    writeCompressible(path.join(d, 'side.js')) // 正向对照：清理腿确实跑过、文本件照样出侧车
+    const g = run(['--dist', d, '--quiet'])
+    expect(g.code, `生成腿退 ${g.code}／${g.err}`).toBe(0)
+    expect(has(sdist), 'SDK 源码包被"孤儿侧车清理"删了 ⇒ 客户点下载就是 SPA 兜底整页 HTML').toBe(true)
+    expect(fs.statSync(sdist).size, '幸存但不许被改写').toBe(2048)
+    expect(has(sdist + '.br'), '.tar.gz 本身不该再有 brotli 侧车').toBe(false)
+    expect(has(path.join(d, 'side.js.br')), '同夹具里的文本件必须有侧车（否则上面的负向是空转）').toBe(true)
+    const c = run(['--dist', d, '--check'])
+    expect(c.code, `--check 不许索要那个不存在的 .tar 原文，实际 ${c.code}／${c.out}${c.err}`).toBe(0)
+  })
+
+  it('A7〔反证〕把 isSidecar 的文本扩展名守卫摘回"只看后缀"⇒ A6 的真产物确实会被删（证明 A6 有射程）', () => {
+    // 手法同 A4：复制到临时目录改那一行，**绝不原地改现役脚本**。
+    const bad = path.join(mkFixture(), 'broken.mjs')
+    const src = fs.readFileSync(SCRIPT, 'utf8')
+    const patched = src.replace(
+      '  return TEXT_EXT.has(path.extname(baseOfSidecar(rel)).toLowerCase())',
+      '  return true',
+    )
+    expect(patched).not.toBe(src) // 锚点漂了先红在这里，否则反证静默空转
+    fs.writeFileSync(bad, patched)
+    const d = mkFixture()
+    const sdist = path.join(d, 'langcross_translator-1.0.2.tar.gz')
+    fs.writeFileSync(sdist, Buffer.alloc(2048, 0x8f))
+    const g = run(['--dist', d, '--quiet'], bad)
+    expect(g.code, '坏版本照样能跑（这正是事故当时的"没人发现"）').toBe(0)
+    expect(has(sdist), '坏版本必须真的把它删掉——删不掉说明这条反证没打到靶子').toBe(false)
   })
 })
 
@@ -267,9 +312,9 @@ describe('C · 接线与路径解析', () => {
 //   历史上换源走过两条路径——`deploy/deploy_to_production.sh`（只覆盖主站）与《部署指南》§五
 //   的手工链（tar→scp→解到 web.new→两步 mv，演示站与租户通配块**本来就不在前者射程里**）。
 //   判据写在其中一条路径上，另一条路径就是"没有判据"，而这两批产物是同一份 dist。
-//   所以本体收成一个可被两条路径共同调用的脚本，这里既验它的**四档判据有射程**（D2–D5 真跑夹具），
+//   所以本体收成一个可被两条路径共同调用的脚本，这里既验它的**六档判据有射程**（D2–D7 真跑夹具），
 //   又验**调用方确实薄委托**（D6：不许在 deploy 脚本里再抄一份内联计数——那迟早长出一严一松）。
-describe('D · 换源前自检 check_frontend_tar.sh（四档判据的射程）', () => {
+describe('D · 换源前自检 check_frontend_tar.sh（六档判据的射程）', () => {
   const CHECKER = path.join(REPO_ROOT, 'scripts', 'check_frontend_tar.sh')
 
   /** 跑 shell 自检脚本；非零退出码在 execFileSync 下是异常，统一收成读数。 */
@@ -286,33 +331,43 @@ describe('D · 换源前自检 check_frontend_tar.sh（四档判据的射程）'
   function mkDist(): string {
     const d = mkFixture()
     fs.mkdirSync(path.join(d, 'assets'), { recursive: true })
+    // ★ 2026-10-14 白屏批加的一维：侧车必须是**真压缩字节**，不再是 'br-bytes' 这类占位串。
+    //   自检脚本新添的 T6 会把每一份 .br/.gz 解回来与原文逐字节比（那起现网事故的形态就是
+    //   "侧车在位、Caddy 照发、浏览器解不开"——只查在位永远抓不到）。占位串会被 T6 判死，
+    //   于是 D2 这条正向对照红的是夹具而不是判据。
+    const sidecar = (file: string) => {
+      const buf = fs.readFileSync(file)
+      fs.writeFileSync(`${file}.br`, zlib.brotliCompressSync(buf))
+      fs.writeFileSync(`${file}.gz`, zlib.gzipSync(buf))
+    }
     const entry = path.join(d, 'assets', 'index-AAAA1111.js')
     fs.writeFileSync(entry, 'console.log("入口 chunk：本批实测 605,065 B，夹具只要求 ≤ 上限")\n')
-    fs.writeFileSync(entry + '.br', 'br-bytes')
-    fs.writeFileSync(entry + '.gz', 'gz-bytes')
+    sidecar(entry)
     // 语种名必须与脚本里那份名单同源（少一个名字＝D5 的"抹掉全部"抹不干净，反证会假绿）
     for (const loc of ['zh-hant', 'ja', 'ko', 'th', 'ru', 'ar', 'fr', 'es', 'de', 'pt', 'id', 'vi', 'it', 'nl', 'pl', 'tr']) {
       const f = path.join(d, 'assets', `${loc}-BBBB2222.js`)
       fs.writeFileSync(f, 'export default {}')
-      fs.writeFileSync(f + '.br', 'x')
-      fs.writeFileSync(f + '.gz', 'x')
+      sidecar(f)
     }
     fs.writeFileSync(path.join(d, 'index.html'), '<html><script src="/assets/index-AAAA1111.js"></script>__BRANDING__</html>')
     return d
   }
 
-  it('D1 没有 index.html 的目录＝ABORT=2（不是"四档全过"）', () => {
+  it('D1 没有 index.html 的目录＝ABORT=2（不是"全档通过"）', () => {
     const d = mkFixture() // 空目录
     const r = runSh(['--dist', d])
     expect(r.code, `空目录应退 2，读数=${r.out}`).toBe(2)
     expect(r.out + r.err).toContain('ABORT=2')
   })
 
-  it('D2 干净夹具四档全过（正向对照：D3–D5 的负向不是"恒红"）', () => {
+  it('D2 干净夹具全档通过（正向对照：D3–D7 的负向不是"恒红"）', () => {
     const r = runSh(['--dist', mkDist()])
     expect(r.code, `读数=${r.out}${r.err}`).toBe(0)
     expect(r.out).toContain('FRONTEND_TAR_ALL_OK=1')
-    for (const t of ['T1', 'T2', 'T3', 'T4']) {
+    // ★ 每档都必须被点名判过：这里数的是**判据档名**而不是产物，
+    //   所以 2026-10-14 新增的 T5（入口名形状）／T6（侧车可解码）不进清单的话，
+    //   有人把那一整段删掉也能"全绿"（缺档＝判据被整段删掉也照样绿）。
+    for (const t of ['T1', 'T2', 'T3', 'T4', 'T5', 'T6']) {
       expect(r.out, `${t} 那一档必须在输出里被点名判过（缺档＝判据被整段删掉也照样绿）`).toContain(t)
     }
   })
@@ -346,6 +401,20 @@ describe('D · 换源前自检 check_frontend_tar.sh（四档判据的射程）'
     expect(r.code).toBe(1)
     expect(r.out).toMatch(/BAD\s+T4/)
     expect(r.out).not.toMatch(/BAD\s+T[123]/)
+  })
+
+  it('D7〔反证〕把入口的 .br 侧车截掉一半 ⇒ 只有 T6 红（在位≠解得开，那起现网白屏的形态）', () => {
+    const d = mkDist()
+    const br = path.join(d, 'assets', 'index-AAAA1111.js.br')
+    // 截半＝一个"存在、非空、看起来像压缩件"的坏字节流：T1（在位）／T3（原文体积）／T5（入口名）
+    // 全都照判绿，只有真把它解一遍才会现形——这正是本批要防的那一族静默失败。
+    const cut = fs.readFileSync(br).subarray(0, Math.max(4, Math.floor(fs.statSync(br).size / 2)))
+    fs.writeFileSync(br, cut)
+    const r = runSh(['--dist', d])
+    expect(r.code, `读数=${r.out}${r.err}`).toBe(1)
+    expect(r.out).toMatch(/BAD\s+T6/)
+    expect(r.out, '只许 T6 红：别的档也红＝归因会失效').not.toMatch(/BAD\s+T[12345](?!\d)/)
+    expect(r.out).not.toMatch(/BAD\s+T5\b/)
   })
 
   it('D6 调用方是薄委托：deploy 脚本调这一个文件，且不再抄第二份内联计数', () => {

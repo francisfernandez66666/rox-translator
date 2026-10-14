@@ -25,6 +25,8 @@ package engine
 
 import (
 	"context"
+	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -215,6 +217,28 @@ func artifactDisplayBase(diskPath string, options map[string]interface{}) string
 func artifactOutputDir(diskPath string) string {
 	raw := strings.TrimSuffix(filepath.Base(diskPath), filepath.Ext(diskPath))
 	return filepath.Join(filepath.Dir(diskPath), "translated", sanitizeArtifactBaseName(raw, ""))
+}
+
+// copyFileContents 把 src 原样拷到 dst（覆盖写）。
+// ★ P2 才有的用处：音频素材要随产物一并交付（srt 的时间轴对着原音频算的），
+//
+//	拷一份即可，绝不能按目标语言数放大。它是一个纯粹的字节搬运工，
+//	不做任何格式/编码假设，也不参与内容合法性判定。
+func copyFileContents(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 // fileNameNeedsTranslation 判断 base 名是否需要送模型：

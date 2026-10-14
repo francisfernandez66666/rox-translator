@@ -201,9 +201,18 @@ export async function healthCheck(): Promise<HealthResponse> {
 // 下面的格式/大小校验函数仍被工单页使用，务必保留。
 
 // ============ 翻译文件格式/大小校验（工单翻译入口使用，与后端白名单一致） ============
-// 与后端 translateExtWhitelist 保持一致：docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/yml
+// ★ 这一份清单**不是**事实源，只是事实源的**镜像**：唯一事实源是
+//   `backend-go/internal/fileproc/formats.go` 的 `TranslateFormatOrder`，
+//   等值由 `src/api/translateFormats.lock.test.ts`（#43）逐项钉住——后端加一项而这里没跟上，
+//   表现是"客户在文件选择框里根本选不中那个格式"（本批首跑就是这一形态被抓红：
+//   后端 P1a 加了 8 个图片格式走 OCR，前端 accept 还停在 12 项）。
+//   改这里必须同时确认后端那一行；只改一侧当场红。
 export const TRANSLATE_FILE_EXTS = [
   '.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.csv', '.srt', '.vtt', '.md', '.json', '.yaml', '.yml',
+  // 图片格式：后端经 OCR 投喂翻译引擎（fileproc/formats.go 里标 P1a 那一行）
+  '.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp', '.heic',
+  // 音频格式：后端经 ASR 转写投喂翻译引擎，产物为译文字幕 .srt + 译文 .md（fileproc/formats.go 里标 P2 那一行）
+  '.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.opus',
 ] as const
 
 // ★ 工单双模式（2026-09-13）：仅「纯文案模式」准入的格式（anydoc 本地提取转 Markdown，不还原版式）
@@ -212,13 +221,28 @@ export const TEXT_DELIVERY_ONLY_EXTS = [
   '.xls', '.xlsm', '.xlsb', '.odt', '.ods', '.odp', '.rtf', '.epub',
 ] as const
 
+// ============ 素材类（需识别/转写才进翻译）============
+// 这两类的共同点：**交付形态不是原格式**（图片不回填合成图、音频不改音轨），
+// 客户必须被提前告知，否则下载产物时会把它当成「文件坏了/只翻了一半」。
+// ★ 拆两个常量是为了让 UI 能按类显示不同话术（话术本身差异很大：图片出 .md、音频出 .srt+.md）；
+//   它在 translateFormats.lock.test.ts 里有一条「三类并起来恰好等于 TRANSLATE_FILE_EXTS」的划分锁，
+//   一边多一项而另一边没跟，那条会红——不要照着抄成第三份独立清单。
+export const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp', '.heic'] as const
+
+// 音频类：交付形态是**译文字幕 .srt ＋译文 .md**（不改音轨，后端走 ASR 转写，fileproc/asr.go）。
+// 与图片类同属「需识别/转写才进翻译」这一族，划分锁见 translateFormats.lock.test.ts 的 P6 那条。
+export const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.opus'] as const
+
 // 文件选择框 accept 属性（★ #36 后仅工单翻译页使用，保持与后端白名单一致）
 export const TRANSLATE_FILE_ACCEPT = TRANSLATE_FILE_EXTS.join(',')
 
-// 纯文案模式的 accept（还原文件模式既有 12 种 + anydoc 独占老格式/ODF/RTF/EPUB）
+// 纯文案模式的 accept（还原文件模式那一整族 + anydoc 独占的老格式/ODF/RTF/EPUB；
+// 项数不写死在这里——写死就是把别人的清单抄第二份，上面 #43 那条锁红过一次就是因为它过时了）
 export const TEXT_DELIVERY_ACCEPT = [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(',')
 
-// 单文件大小上限：与后端 translateUploadMax 对齐（40MB）
+// 单文件大小上限：事实源是后端 `fileproc.MaxUploadBytes`（api 侧的 `translateUploadMax` 只是它的薄委托）。
+// 这里不抄具体数字——档位由 `translateFormats.lock.test.ts` 的 P3 把 Go 那句 `<n> << <bits>`
+// **现读现算**再与这份常量等值钉住；抬档那天前端只改位移，写死数字的话锁就不会红。
 export const TRANSLATE_FILE_MAX_BYTES = 40 * 1024 * 1024
 
 /**

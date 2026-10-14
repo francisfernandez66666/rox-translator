@@ -775,7 +775,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 						fmt.Sprintf("文件版式还原失败已交付纯文案：%s", tf.FileName),
 						fmt.Sprintf("%s 翻译已完成，但版式还原失败（%s），已以纯文案 .md 交付；如需还原版式可重新发起还原模式工单。",
 							tf.FileName, strings.Join(res.Data.DegradedLangs, "/")),
-						"ticket", t.ID)
+						store.NotifyRefTicket, t.ID)
 				}
 				okCount++
 				// doneN = 本轮成功数 + 库里已标 error 的文件数（重跑同一工单时进度才不会倒退）
@@ -816,7 +816,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			s.Store.CreateNotification(t.CreatedBy,
 				fmt.Sprintf("文件翻译完成但有 %d 段未译出：%s", unTotal, t.Title),
 				"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
-				"ticket", t.ID)
+				store.NotifyRefTicket, t.ID)
 		}
 		if okCount == 0 && failCount == int64(len(files)) && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
@@ -842,7 +842,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		s.Store.CreateNotification(t.CreatedBy,
 			fmt.Sprintf("文件翻译完成但有 %d 段未译出：%s", un, t.Title),
 			"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
-			"ticket", t.ID)
+			store.NotifyRefTicket, t.ID)
 	}
 	// ★ 多语言产物打包 zip
 	zipPath := ""
@@ -873,7 +873,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			fmt.Sprintf("文件版式还原失败已交付纯文案：%s", t.Title),
 			fmt.Sprintf("翻译已完成，但 %s 版式还原失败，已以纯文案 .md 交付；如需还原版式可重新发起还原模式工单。",
 				strings.Join(res.Data.DegradedLangs, "/")),
-			"ticket", t.ID)
+			store.NotifyRefTicket, t.ID)
 	}
 	// ★ 逐段对照真值落库（2026-09-18，独立表 ticket_segments，前端无感知）：
 	//   必须在 HandleFile 之后、结果还在手上时落——SourceSegments/Translations 都是不序列化的

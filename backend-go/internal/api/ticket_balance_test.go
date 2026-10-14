@@ -143,4 +143,23 @@ func TestEstimateFileSourceChars(t *testing.T) {
 	if pdf*2 > old { // 新口径至少比旧口径小一半以上
 		t.Fatalf("PDF 估算未显著收敛：new=%d old(/3)=%d", pdf, old)
 	}
+	// ★ 图片（P1a）/音频（P2）：这两类经 OCR/ASR 后才产出文本，真实文本量比字节量低一到两个数量级。
+	//   这里锁的是**相对序**而不是具体比值（分母会随实测校准），防止有人把音频套回 /6 的通用档：
+	//   一段 10MB 的 mp3（约 20 分钟）按 /6 会估出 170 万字符，实际只有 4 千字左右，必然误拦。
+	img := estimateFileSourceChars("shot.png", size)
+	mp3 := estimateFileSourceChars("podcast.mp3", size)
+	wav := estimateFileSourceChars("raw.wav", size)
+	if img >= pdf {
+		t.Fatalf("图片密度应低于 pdf（默认 /12 档）：img=%d pdf=%d", img, pdf)
+	}
+	if mp3 >= img {
+		t.Fatalf("有损音频密度应远低于图片：mp3=%d img=%d", mp3, img)
+	}
+	if wav >= mp3 {
+		t.Fatalf("无损音频（PCM 字节量更大）密度应低于有损音频：wav=%d mp3=%d", wav, mp3)
+	}
+	// 反向对照：同样的文件名换回通用档以外的邻居不能被抬起来（防 case 抄错列表）
+	if got := estimateFileSourceChars("note.mp3", size); got != mp3 {
+		t.Fatalf("mp3 档应对所有 mp3 一致：note=%d podcast=%d", got, mp3)
+	}
 }

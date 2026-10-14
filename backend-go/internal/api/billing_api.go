@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 	"translator/internal/ops"
@@ -243,24 +242,9 @@ func (s *Server) balancePayload(tid int64) (grants, permanent, total, approx int
 	return grants, permanent, total, total / rate
 }
 
-// countSentences 统计文本的源句数（按换行与中英文句末标点切分，空段忽略）。
-// 参数 text: 源文本；返回句子数量（至少 1，保证计量非零）。
-func countSentences(text string) int64 {
-	// 用换行与句末标点统一替换为分隔符，再按分隔符切分
-	repl := strings.NewReplacer("\n", "。", "\r", "。", "。", "。", "！", "。", "？", "。",
-		".", "。", "!", "。", "?", "。", ";", "。", "；", "。")
-	segs := strings.Split(repl.Replace(text), "。")
-	n := int64(0)
-	for _, seg := range segs {
-		if strings.TrimSpace(seg) != "" {
-			n++
-		}
-	}
-	if n < 1 {
-		n = 1 // 空文本兜底为 1 句
-	}
-	return n
-}
+// countSentences 的实现在同包 sentence_count.go（★ 2026-10-13 切分判据重做，那里写了三条设计取向）。
+// 本文件不再保留句数切分——它是「余额≈句数」换算（上面的 balancePayload 走 rate 除法，不读句数）
+// 之外唯一的句数口径，两处各写一份迟早打架（AGENTS §一·3④ 同族）。
 
 // targetLangCount 解析请求目标语言数量（options.target_langs 数组长度；缺省按 1 计）。
 // 参数 options: 引擎请求选项；返回目标语言个数（至少 1）。

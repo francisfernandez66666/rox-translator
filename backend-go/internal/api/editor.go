@@ -3,7 +3,9 @@
 //   - GET  /api/tickets/segments?id=&lang=   读取工单的源文/译文逐段对照 + 术语表（供前端双栏编辑器）
 //   - POST /api/tickets/segments?id=&lang=   保存逐段编辑/通过/驳回批注到 translation_edits
 //
-// 文本工单解析 FinalResult；文件工单解析产物（xlsx/csv 对照表），docx/pdf 等二进制暂不支持在线逐段编辑。
+// 文本工单解析 FinalResult；文件工单里 docx/pdf 走 Office 段落抽取（★ 已支持在线逐段编辑，
+// PDF 优先读 ticket_segments 真值表，见 extractOfficeSegments），其余格式解析产物（xlsx/csv 对照表），
+// 解析不出对齐段落时回 supported=false（本包只读只判，判据与写回侧的交付形态无耦合）。
 // 所有接口要求登录且工单归属当前租户（超管可跨租户）。
 // =============================================
 package api
