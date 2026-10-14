@@ -19,15 +19,21 @@ var (
 
 // HealthResult 依赖健康检查结果
 type HealthResult struct {
-	PythonAvailable   bool     // Python 解释器是否可用
-	Fpdf2Available    bool     // fpdf2 库是否可导入（注意：pip 包名 fpdf2，**导入名是 fpdf**，见 doHealthCheck）
-	Pdf2docxAvaliable bool     // pdf2docx 库是否可导入
-	AnydocAvail       bool     // firecrawl-anydoc（导入名 anydoc）是否可导入——纯文案模式提取层
-	PymupdfAvailable  bool     // ★ 2026-09-28 新增：PyMuPDF（导入名 pymupdf）是否可导入——PDF「原版式写回」主链唯一依赖
-	LibreOfficeAvail  bool     // LibreOffice 是否可用
-	PythonPath        string   // Python 解释器路径
-	LibreOfficePath   string   // LibreOffice 路径
-	Warnings          []string // 告警信息
+	PythonAvailable   bool // Python 解释器是否可用
+	Fpdf2Available    bool // fpdf2 库是否可导入（注意：pip 包名 fpdf2，**导入名是 fpdf**，见 doHealthCheck）
+	Pdf2docxAvaliable bool // pdf2docx 库是否可导入
+	AnydocAvail       bool // firecrawl-anydoc（导入名 anydoc）是否可导入——纯文案模式提取层
+	PymupdfAvailable  bool // ★ 2026-09-28 新增：PyMuPDF（导入名 pymupdf）是否可导入——PDF「原版式写回」主链唯一依赖
+	// ★ 2026-10-14 OCR/ASR/TTS 接入（可插拔）：三项新能力就绪位。判据不只是 Python 模块，
+	//   还含模型资产与（TTS）默认音色落盘——真依赖清单与告警话术在 fileproc/{ocr,asr,tts}.go
+	//   同源维护，这里只做两行转发；删那三个文件 ⇒ 仅剩三处编译错误，回退成本可见。
+	OcrAvail         bool     // OCR（图片/扫描件识别）就绪——onnxruntime/numpy/PIL + assets/ocr/*.onnx
+	AsrAvail         bool     // ASR（音频转写）就绪——sherpa-onnx + assets/asr/*.onnx
+	TtsAvail         bool     // TTS（译文语音合成）就绪——Chatterbox ONNX 依赖 + assets/tts/*.onnx + 默认音色
+	LibreOfficeAvail bool     // LibreOffice 是否可用
+	PythonPath       string   // Python 解释器路径
+	LibreOfficePath  string   // LibreOffice 路径
+	Warnings         []string // 告警信息
 }
 
 // CheckHealth 检查依赖健康状态（仅执行一次）
@@ -82,6 +88,26 @@ func doHealthCheck() *HealthResult {
 			result.AnydocAvail = true
 		} else {
 			result.Warnings = append(result.Warnings, "Python firecrawl-anydoc 库未安装，工单「纯文案模式」不可用（pip install firecrawl-anydoc）")
+		}
+
+		// ★ 2026-10-14 OCR/ASR/TTS 接入（可插拔，用户令）：三项新能力探测各占一处转发，
+		//   依赖清单与告警话术在 fileproc/{ocr,asr,tts}.go 内同源维护。
+		//   与 anydoc 不同，这三项的告警文案来自各自 probe 函数（模块名/资产路径都在那边），
+		//   这里不重复第二套话术——两套话术必然漂移，漂移的那天就是运维被误导的那天。
+		if ok, warn := probeOcr(pythonPath); ok {
+			result.OcrAvail = true
+		} else {
+			result.Warnings = append(result.Warnings, warn)
+		}
+		if ok, warn := probeAsr(pythonPath); ok {
+			result.AsrAvail = true
+		} else {
+			result.Warnings = append(result.Warnings, warn)
+		}
+		if ok, warn := probeTts(pythonPath); ok {
+			result.TtsAvail = true
+		} else {
+			result.Warnings = append(result.Warnings, warn)
 		}
 	} else {
 		result.Warnings = append(result.Warnings, "Python 解释器未找到，文档转换子进程不可用")

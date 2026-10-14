@@ -257,6 +257,9 @@ func (s *Server) routesTranslate() {
 	s.mux.HandleFunc("/api/chat/messages", s.handleChatMessages) // ★ 〇-AM：获取单条会话消息列表
 	s.mux.HandleFunc("/api/translate/stream", s.handleTranslateFileStream)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
+	// ★ P3 语音两件套（录音识别 / 译文朗读）：两个端点都不做翻译，只做 A↔T 转换，见 chat_audio.go 头注。
+	s.mux.HandleFunc("/api/chat/asr", s.handleChatASR)
+	s.mux.HandleFunc("/api/chat/tts", s.handleChatTTS)
 	s.mux.HandleFunc("/api/translate", s.handleTranslateFile)
 	s.mux.HandleFunc("/api/download/", s.handleDownload)
 	s.mux.HandleFunc("/api/translation/langs", s.handleTranslationLangs)
@@ -920,6 +923,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"kb_ready":     s.DB != nil,
 		// ★ 工单双模式（2026-09-13）：anydoc 纯文案提取层是否就绪（venv firecrawl-anydoc + 脚本，healthcheck 缓存）
 		"anydoc_ready": fileproc.AnydocAvailable(),
+		// ★ 2026-10-14 OCR/ASR/TTS 接入（可插拔）：三项新能力就绪位，数据源同 anydoc_ready
+		//   （healthcheck 缓存，含模型资产落盘判定）。同 #42 口径：只出布尔，
+		//   绝不出路径、权重文件名或体积。识别/合并不就绪时产品行为是「友好降级」而非故障：
+		//   图片/扫描件/音频返回「节点未启用识别」，TTS 缺位只少语音不少译文（译文第一）。
+		"ocr_ready": fileproc.OcrAvailable(),
+		"asr_ready": fileproc.AsrAvailable(),
+		"tts_ready": fileproc.TtsAvailable(),
 		// ★ 文档转换远程派发（2026-09-28 §5.2）：off=未开闸；online=远端就绪；degraded=连续失败降级中。
 		//   同 #42 口径：本端点无鉴权，只出状态词，**绝不出远端主机、路径或文件名**。
 		"dispatch":          disp.Status,
@@ -930,6 +940,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   收银台那句「达到确认数后自动入账」跟着这个状态词走：非 ok 即不再对客户承诺自动。
 		//   同 #42 口径：本端点无鉴权，只出状态词，绝不出收款地址、上游域名或 Key。
 		"usdt_watch": s.usdtWatchHealthWord(),
+		// ★ #42（2026-10-14）：TRON 那条腿的**额度档**——configured / anonymous / not_listed。
+		//   它和上面那词是**两个维度**：usdt_watch 管"监听此刻活没活"，这一维管"这份活有没有
+		//   额度保证能长期承诺"。现网实证＝Key 三处（env/system_config/unit）全不存在，
+		//   监听却可以一直 ok ⇒ 只靠 usdt_watch=ok 会把"今天恰好没被限流"写成对客承诺。
+		//   同样只出状态词，绝不出 Key、端点域名或命中次数。
+		"usdt_tron_quota": s.usdtTronQuotaWord(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

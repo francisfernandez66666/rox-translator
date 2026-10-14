@@ -10,6 +10,7 @@ package api
 // ========================================
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,23 +18,15 @@ import (
 	"strings"
 
 	"translator/internal/fileproc"
+	"translator/internal/observability"
 )
 
-// 翻译文件支持的类型白名单（与 fileproc.ExtractTexts 提取逻辑一致）
-var translateExtWhitelist = map[string]bool{
-	".docx": true,
-	".pptx": true,
-	".xlsx": true,
-	".pdf":  true, // 提取后产物降级 xlsx 对照表
-	".txt":  true,
-	".csv":  true,
-	".srt":  true,
-	".vtt":  true,
-	".md":   true,
-	".json": true,
-	".yaml": true,
-	".yml":  true,
-}
+// 翻译文件支持的类型白名单（★ 2026-10-14 #43：唯一事实源在 `fileproc/formats.go`，这里只是薄委托）。
+//
+// 委托必须**每次新建一份**（TranslateRestoreFormatsCopy）而不是共享同一份 map：
+// 本变量的消费方 parseUpload 只读它，但工单建单那条腿历史上是"取本地清单再往里补 anydoc 键"的写法，
+// 谁哪天照旧写法把这一份当本地用，抬起来的就是全站共享的那道闸门。
+var translateExtWhitelist = fileproc.TranslateRestoreFormatsCopy()
 
 // kbExtWhitelist 知识库导入支持的类型白名单（与 kb/parse.go 解析逻辑一致）
 var kbExtWhitelist = map[string]bool{
@@ -50,21 +43,32 @@ var tmxExtWhitelist = map[string]bool{
 	".xml": true,
 }
 
-// 上传大小上限（字节）
+// 上传大小上限（字节）——★ 2026-10-14 #43：40MiB 这一档的字面量只许写在
+// `fileproc.MaxUploadBytes` 一处（原先本文件两份 ＋ api_openapi_tasks.go 一份，
+// 再加上 Caddy 那层的 `max_size 40MB` 共三处 conf，四处数字靠注释维持一致）。
 const (
-	translateUploadMax = 40 << 20 // 翻译文件 40MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
-	kbUploadMax        = 20 << 20 // KB 导入 20MB（表格文件通常远小于此）
+	translateUploadMax = fileproc.MaxUploadBytes // 翻译文件 40MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
+	kbUploadMax        = 20 << 20                // KB 导入 20MB（表格文件通常远小于此；与翻译上限是**两档**，刻意不同源）
 
 	// ★ 性能优化（不换库 Phase A1）：PDF 在低配机器（1G 内存）上走 pdf2docx+LibreOffice
 	// 转换极易 OOM/超时。前置拦截：体积或页数超限则直接友好拒绝，提示先转 docx 再上传。
-	pdfUploadSizeLimit = 40 << 20 // 40MB：与翻译文件总上限对齐（PDF 转换高峰期仍可能顶满内存）
-	pdfPageHardLimit   = 120      // 120 页：超出建议先转为 docx
+	pdfUploadSizeLimit = fileproc.MaxUploadBytes // 与翻译文件总上限对齐（PDF 转换高峰期仍可能顶满内存）
+	pdfPageHardLimit   = 120                     // 120 页：超出建议先转为 docx
 )
 
 // checkPdfLimits 对 PDF 做前置安全拦截：过大或页数过多会在文件转换阶段（pdf2docx+LibreOffice）
 // 触发 OOM / 超时。提前友好拒绝并提示转 docx，避免后台工单卡死。
 // 非 PDF 或无 read 权限/解析失败（加密件等）一律放行，不误伤正常请求。
-func checkPdfLimits(path, filename string) error {
+//
+// ★ 2026-10-14 #43「页数读数取不到」这一档的**方向与出声**两条一起对齐（方向不变、出声补上）：
+//
+//	派发侧（`fileproc.TryDispatch`）遇到读数取不到是**判不派**（宁窄勿宽，本地那条路今天就是好的），
+//	这一侧遇到它是**判放行**（加密件、畸形件都读不出页数，拿"读不出"当超限去拒客户，
+//	代价方向比"少拦一道 120 页的墙"更坏）。两条方向相反、都是刻意的，
+//	但**两侧都必须吭声**——旧形态这一侧是 `err == nil && n > limit`，
+//	解析失败顺从地走进"放行"分支且一行日志都没有，于是"墙从没生效"与"件本来就小"在日志里同形。
+//	两侧共用同一个短语「页数读数取不到」，一条 grep 能同时抓到两条腿（判据锁见 upload_formats_gate_test.go L6）。
+func checkPdfLimits(ctx context.Context, path, filename string) error {
 	if strings.ToLower(filepath.Ext(filename)) != ".pdf" {
 		return nil
 	}
@@ -73,7 +77,12 @@ func checkPdfLimits(path, filename string) error {
 			float64(fi.Size())/1024/1024, pdfUploadSizeLimit/1024/1024)}
 	}
 	n, err := pdfPageCount(path)
-	if err == nil && n > pdfPageHardLimit {
+	if err != nil {
+		observability.Warn(ctx, "[upload] PDF 页数读数取不到 ⇒ 前置拦截放行（不误伤正常请求）",
+			"file", filepath.Base(filename), "err", err.Error())
+		return nil
+	}
+	if n > pdfPageHardLimit {
 		return &apiErr{fmt.Sprintf("PDF 页数过多（%d 页，上限 %d 页）。低配环境转换容易失败/超时，请先转存 docx 再上传", n, pdfPageHardLimit)}
 	}
 	return nil

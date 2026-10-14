@@ -132,9 +132,10 @@ export default function PricingPage() {
         © 2026 {brand} · {t('land.pFootPlatform')} · <a href="/docs/terms">{t('land.fTerms')}</a> · <a href="/docs/privacy">{t('land.fPrivacy')}</a>
         {/* ★ 2026-10-13 用户令②：品宣尾注——用户点名「所有有页脚的页面」都要有这一条，
             报价页这类对外门面尤其（访客在这里比的正是"值不值"，AI 赋能那半句是决策信息）。
-            固定英文、不进词典、不随租户改名：见 components/BrandTagline.tsx 文件头三条口径。 */}
+            固定英文、不进词典、不随租户改名：见 components/BrandTagline.tsx 文件头四条口径
+            （★ 2026-10-14 第四条＝高亮样式也只有一个出处，本页原先内联的 fontWeight:600 已收回组件）。 */}
         {' · '}
-        <BrandTagline style={{ fontWeight: 600 }} />
+        <BrandTagline />
       </footer>
     </div>
   )

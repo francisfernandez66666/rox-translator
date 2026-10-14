@@ -3,8 +3,10 @@
 // 包含 srt/vtt 字幕、md Markdown、json、yaml、txt/csv 文本的提取。
 // 全部复用 Extractor 的去重与规整逻辑；输出为待翻译文本片段列表。
 // ★ md 的「哪一段可译、哪一段是骨架」判定不在本文件，统一在 md_structure.go（提取与写回共用）。
-// 另提供 WriteComparisonXlsx：无原格式回写能力的格式（pdf/txt/csv/srt/vtt/md/json/yaml）
-// 统一降级生成「源文+译文」xlsx 对照表作为翻译产物。
+// 另提供 WriteComparisonXlsx：**只有** srt/vtt/json/yaml/yml（无原格式回写能力的那一族）
+// 以「源文+译文」xlsx 对照表作为唯一交付形态（设计如此，非降级）。
+// ⚠️ pdf/txt/csv/md **有**原位写回，不走这张对照表；它们写回失败后的兜底是纯文案 .md
+// （判据只有一处：engine/file.go 的 writebackDelivery，锁＝engine/file_gate_test.go）。
 // =============================================
 package fileproc
 

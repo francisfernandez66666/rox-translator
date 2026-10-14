@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Badge, BellIcon, EmptyState } from '@/ui/langcross/src'
 import { notificationsUnread, notifications, notificationRead, notificationsReadAll } from '@/api'
 import { fmtTime } from '@/lib/ui'
+import { noticeLandingFor } from '@/lib/noticeRouting'
 import { t } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
@@ -43,7 +44,7 @@ export default function Bell() {
   // 于是 refresh 引用不再随 open 翻转而更换（旧版靠 open 进 deps 重建 refresh，
   // 才连带产生「toggle 里调的是旧闭包」的 stale-refresh，见 toggle 注释）
   const openRef = useRef(false)
-  const { gotoPanel, isSuper, openFeedback } = useAdmin() // 后台跳转与超管判定都取自 admin store，铃铛自己不管路由
+  const { gotoPanel, openFeedback, myLevel } = useAdmin() // 后台跳转与等级取自 admin store，铃铛自己不管路由（落点见 lib/noticeRouting.ts）
   const timerRef = useRef<number | null>(null) // 30s 轮询句柄：用 ref 而非 state，改它不该触发重渲染
   const wrapRef = useRef<HTMLDivElement>(null) // 「点击外部」判定基准：铃铛钮 + 浮层都在这层里
 
@@ -132,17 +133,18 @@ export default function Bell() {
     void refresh()
   }
 
-  // 点击通知：先标记已读，再按类型跳转（feedback→超管反馈面板，其余→工单页）
+  // 点击通知：先标记已读，再按 ref_type 落点表跳转（★ #46，2026-10-14：落点从 Bell 里那一条
+  // 硬编码分支收成 lib/noticeRouting.ts 的唯一表，与后端 store.NotifyRefTypes 跨语言等值）
   function onItemClick(n: NoticeItem) {
     void markRead(n.id) // 不 await：跳转要立刻发生，已读失败不该把用户卡在铃铛里
-    // feedback 类通知 → 超管打开反馈处理面板；其余跳转工单
     // ref_id 的含义随 ref_type 变（feedback=反馈单 ID、ticket=工单 ID、quota=组织/租户 ID、kb_scrape=0），
-    // 只有 feedback 分支会真的读它，所以强转写在这一行里；非超管打不开反馈面板，退化成工单列表
-    // 注：gotoPanel / openFeedback 都来自 admin store，落点是后台 /admin 的工单面板
-    //     （store 内 set panel + navigate('/admin')），不是前台 /tickets；跳转也不带 ref_id，
-    //     所以除 feedback 外的通知只做到「把你送到工单面板」，不定位到具体那条工单。
-    if (isSuper && n.ref_type === 'feedback') openFeedback(n.ref_id as number)
-    else gotoPanel('tickets')
+    // 只有 feedback 落点会真的读它，所以强转写在那一分支里。
+    // 注：gotoPanel / openFeedback 都来自 admin store，落点是后台 /admin 的面板
+    //     （store 内 set panel + navigate('/admin')），不是前台 /tickets；跳转不带 ref_id，
+    //     所以除 feedback 外的落点只做到「把你送到那个面板」，不定位到具体那条记录。
+    const landing = noticeLandingFor(n.ref_type, myLevel)
+    if (landing.kind === 'feedback') openFeedback(n.ref_id as number)
+    else gotoPanel(landing.panel)
     setOpen(false) // 收起浮层：已在后台时点通知不会触发路由跳转，浮层得自己收，否则一直盖在内容上
   }
 

@@ -148,8 +148,12 @@ func atLeastOne(n int64) int64 {
 // estimateUnitCount 出参 sentences 的读数（纯展示，不进任何金额/积分算式）。
 // 参数 req: 已解析入参。返回: 句数（有正文时）或段数（文件场景），至少 1。
 //
-// ⚠️ 这里**仍然**用 countSentences，但只当读数：countSentences 还服务「余额≈句数」换算
-// 与免费额度发放，本批不动它的判据（改一处连带那两处口径），只把它从成本公式里摘出来。
+// ⚠️ 这里**仍然**用 countSentences，但只当读数：预估的积分一律走 engine.EstimateChatTokens，
+// 句数不进成本公式（本函数只是出栈给客户看的「大约几句」）。
+// ⚠️ 归因订正（2026-10-13 实读代码核正）：旧注释写着"它还服务「余额≈句数」换算与免费额度发放，
+// 所以本批不动它的判据"——那两个读点其实**都不读这里**（余额句数走 balancePayload 的 rate 除法，
+// 试用额度按请求计次，套餐额度取 packages.sentences 固定值）。所以切分判据已在 sentence_count.go 重做，
+// 不必再为那两处把这一维锁死；改动只在展示读数这一维生效。
 func estimateUnitCount(req estimateReq) int64 {
 	n := req.SegmentCount
 	if req.Text != "" {

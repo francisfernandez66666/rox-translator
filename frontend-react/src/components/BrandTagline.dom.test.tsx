@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import { setLang, translateIn, ensureLocale, LANG_OPTIONS, type Lang } from '@/i18n'
-import { BRAND_TAGLINE, BrandTagline } from './BrandTagline'
+import { BRAND_TAGLINE, BrandTagline, TAGLINE_STYLE } from './BrandTagline'
 
 // SiteFooter 的唯一外部数据来源是平台级页脚链接配置；给一个可控替身，
 // 免得这条锁的形态跟着超管配没配链接而变（这里判的是尾注，不是链接）。
@@ -91,5 +91,33 @@ describe('页脚品宣尾注（运行时）', () => {
     // 而尾注在这两档下都仍是那串固定英文：界面本地化了，这一行**故意不跟着走**
     expect(BRAND_TAGLINE).not.toBe(arManual)
     expect(BRAND_TAGLINE.includes('能言'), '汉字品牌名不许混进这串标识').toBe(false)
+  })
+
+  // ★ 2026-10-14 用户后令「这个页脚的句子能不能提亮并且做重点提示」⇒ 运行时这一档也要有脸。
+  //   静态 G 段比的是"源码里那八个维度等不等值"，它判不了**这一身有没有真的落到渲染出的那个节点上**
+  //   （样式挪到外层 wrapper、被父级 style 覆盖、组件被换成裸 span 而样式留在常量里，源码侧都照样绿）。
+  it('⑤ 提亮那一档真的落在渲染出的节点上（八维逐个点名 + 面色取实心白档，不取文字档灰）', async () => {
+    setLang('zh')
+    render(<SiteFooter />)
+    await waitFor(() => expect(taglineEl()).toBeTruthy())
+    const el = taglineEl()!
+    const got: Record<string, string> = {}
+    for (const [k, v] of Object.entries(TAGLINE_STYLE as Record<string, string | number>)) {
+      // jsdom 保留 var(...) 原样（实测 el.style.background === 'var(--lc-fill-white)'），
+      // 所以这里能按**值**钉，而不是只能钉属性名在不在。
+      got[k] = String((el.style as unknown as Record<string, unknown>)[k] ?? '')
+      expect(got[k], `${k} 没落到页脚那个节点上（值 ${JSON.stringify(String(v))} 丢了）`).toBe(String(v))
+    }
+    // 交付真值点名（等值锁，不是"更亮一档"）：面色＝实心白填充档、字色＝反相黑。
+    // 拿 var(--lc-text) / #E7E9EA 做整块填充就是"白色显脏、偏蓝"那条老根因，这里按令牌名直接挡掉。
+    expect(el.style.background, '尾注面色必须是实心白档').toBe('var(--lc-fill-white)')
+    expect(el.style.color, '白底必须配反相黑字').toBe('var(--lc-invert-fg)')
+    expect(el.style.background).not.toMatch(/(lc-text|#E7E9EA)/i)
+    // ★ 字号／行高不设：继承所在页脚那一行（全站 15px／报价·对照 14px），统一抬档属未授权的规格改动。
+    expect(el.style.fontSize, '尾注不许自带字号档').toBe('')
+    expect(el.style.lineHeight, '尾注不许自带行高档').toBe('')
+    // 反证对照：这一档若整条丢掉（有人把 spread 写成 style 覆盖），上面第一条就会红；
+    // 这里再钉一次"节点确实是内联样式而不是 class"，免得将来改成 class 时本判据静默空转。
+    expect(el.getAttribute('style'), '样式应以内联形态落在这个节点上').toContain('--lc-fill-white')
   })
 })

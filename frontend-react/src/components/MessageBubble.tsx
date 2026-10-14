@@ -16,6 +16,12 @@ import { fmtPoints } from '@/utils/points' // ★ 14.4（2026-10-10）：气泡�
 import { SkillBadge } from './SkillBadge'
 // ★ D2 #24：进行态加载动效（划掉错词→亮起正词），与 App 加载页/落地页共用同一实现
 import WordSwap from './WordSwap'
+// ★ P3 译文朗读（api/chatVoice.ts 是自包含模块，删掉本行与 SpeakButton 即回退到无语音形态）
+import { speakAloud } from '@/api/chatVoice'
+import { toastWarn } from '@/lib/toastBus'
+// ★ 语音失败文案的唯一取词口（改造方案 §六 第 9 条）：按后端 reason 档位取当前界面语言的词典键，
+//   绝不要把后端那句中文话术 toast 给非中文访客。
+import { voiceFailText } from '@/lib/voiceFail'
 
 // ============ 本文件职责中文说明 ============
 // 聊天气泡组件：渲染单条消息（Markdown、译文表、附件预览、反馈入口）。
@@ -43,6 +49,62 @@ function getFileTypeLabel(path: string): string {
 function isImage(path: string): boolean {
   return /\.(png|jpg|jpeg|gif|webp|bmp)$/i.test(path)
 }
+// SpeakButton 译文朗读（★ P3，2026-10-14）。三态：idle（朗读）→ loading（请求中）→ playing（停止朗读）。
+// ★ 译文第一的工程落点：**朗读失败只在按钮上消掉这一件**（toast 一次 + 按钮回到 idle），
+//   翻译结果一个字节都不动——语音是择优产出，永远不是交付的前提条件。
+// ★ 单条封面：多目标语时朗读**首语言**那一份（`transRows[0]`）——同时出几种语言的声音
+//   只会互相盖住，选择权交给用户更合适（译文本身照样全在）。
+function SpeakButton({ text, lang }: { text: string; lang: string }) {
+  const urlRef = useRef<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle')
+
+  // 卸载时必须同时做两件事：暂停 + 释放 blob URL。只做前者会把整段音频留在内存里
+  // （每个 blob URL 都持有一份引用，十条译文就是十个副本）。
+  useEffect(() => () => {
+    try { audioRef.current?.pause() } catch { /* 忽略 */ }
+    if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+    urlRef.current = null
+  }, [])
+
+  async function play() {
+    if (!text) return
+    if (state === 'playing') {
+      try { audioRef.current?.pause() } catch { /* 忽略 */ }
+      setState('idle')
+      return
+    }
+    setState('loading')
+    try {
+      const blob = await speakAloud(text, lang)
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current)
+      const url = URL.createObjectURL(blob)
+      urlRef.current = url
+      const audio = new Audio(url)
+      audioRef.current = audio
+      audio.onended = () => setState('idle')
+      audio.onerror = () => setState('idle')
+      await audio.play()
+      setState('playing')
+    } catch (e) {
+      setState('idle')
+      // ★ 界面上这句必须来自词典，不是后端那句中文话术（改造方案 §六 第 9 条）：
+      //   后端给的是分档名＋运维可读的一句话，访客要的是**自己那门语言**的一句人话。
+      //   「该语种没有语音」与「服务器读不出语音」必须分开说——前者译文照常，后者才可能稍后再试。
+      toastWarn(voiceFailText(e))
+    }
+  }
+
+  const label = state === 'playing' ? t('chat.speakStop') : state === 'loading' ? t('chat.micWorking') : t('chat.speak')
+  return (
+    <button type="button" className="msg-act-btn" data-testid="speak-translation"
+      aria-label={label} title={label} disabled={state === 'loading' || !text}
+      onClick={() => { void play() }}>
+      {label}
+    </button>
+  )
+}
+
 // isDocx 判断路径是否以 .docx 结尾（Word 文档）
 function isDocx(path: string): boolean {
   return path.toLowerCase().endsWith('.docx')
@@ -478,13 +540,15 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
             查看原文/反馈/消耗在同一行」）：气泡尾部的四个小控件归到**同一行、同一字号档**。
             改前的形态正是投诉本体——反馈＋模式/消耗在译文表里右对齐、meta 12px，
             查看原文＋复制在它下面另起一行、左对齐 14px（两排两档两种高低）。
-            现在四个控件同排同档（14px 由 .msg-actions 一处声明，子件一律 font:inherit，
+            现在这些控件同排同档（14px 由 .msg-actions 一处声明，子件一律 font:inherit，
             谁都不再写内联字号＝不会再各走一档），层级只靠颜色分档（text-1 动作 / text-3 读数）。
+            ★ 2026-10-14 P3 译文朗读（SpeakButton）落进的就是这一排，所以它从「四件」变成「五件」，
+            判据跟着从"数件数"翻成**派生式**（点名件都在＋谁都不许是第三类／被再包一层），见 e2e 那条理由。
             展开面板从 <details> 改成状态驱动：details 嵌在 flex 行里，展开会把整行顶高，
             恰好破坏「同一行、同一高低」这一条，所以面板做成行下方的兄弟节点。
             真值见 UI-ANNOTATIONS §6「气泡尾部操作行」；
             锁＝MessageBubble.dom.test.tsx ④⑦⑧⑧b⑨⑩（结构＋行内零内联样式＋源码级 CSS 等值＋五枚反证）
-            ＋ e2e/translate_flow.spec.ts TF4（真浏览器量四件字号一律 14px、垂直中心同带）。 */}
+            ＋ e2e/translate_flow.spec.ts TF4（真浏览器量这一排每一件字号一律 14px、垂直中心同带）。 */}
         {isAssistant && (source || copyText || hasTranslations) && (
           <div className="msg-actions-wrap">
             <div className="msg-actions" data-testid="msg-actions">
@@ -505,6 +569,12 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                   ⚠️ 模式**不在这里重复**——同一个词在译文表头已经是一枚带色的胶囊（.mode-badge），
                   meta 再念一遍纯文本就是「同屏两处一模一样、还各是一档字号」，正是本条要统一掉的东西；
                   能力一项未减：读的是同一个 modeBadge，只是只出栈一次。 */}
+              {hasTranslations && (
+                <SpeakButton
+                  text={transRows.length === 1 ? transRows[0].v : (transRows[0]?.v || '')}
+                  lang={transRows[0]?.lc || ''}
+                />
+              )}
               {hasTranslations && (
                 <button type="button" className="msg-act-btn msg-fb-btn" title={t('fb.entryTip')} onClick={() => onFeedback?.(message)}>
                   {t('fb.entry')}

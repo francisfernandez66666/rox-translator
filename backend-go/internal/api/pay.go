@@ -431,16 +431,12 @@ func (s *Server) handlePayManualConfirm(w http.ResponseWriter, r *http.Request) 
 	// ★ 站内信通知平台超管：超管铃铛即时可见待确认订单
 	//   注意：CreateNotification 依赖自增序列取主键；若序列失步（如 pg 迁移/回放后
 	//   seq 落后于实际行数）会撞主键失败——务必打日志而非静默吞错，便于及时发现。
-	// ★ F-33（2026-09-25 UAT 修复批）：原只按字面 role='admin' 圈人，而权限判定侧
-	//   RoleLevel>=4 认 admin/super_admin 双值、建号/提权实际写 super_admin——
-	//   投递与判定两套口径导致真超管收不到站内信；改为双角色合并遍历。
-	recipients := append(s.Store.ListUsersByRole(0, "admin"), s.Store.ListUsersByRole(0, "super_admin")...)
-	for _, sa := range recipients {
-		if err := s.Store.CreateNotification(sa.ID, "静态码支付待人工确认",
-			fmt.Sprintf("租户 #%d 订单 %s%s 用户已付款，请尽快查看并开通", tid, o.OrderNo, rebateNote), "pay_manual", req.OrderID); err != nil {
-			log.Printf("[pay-manual-confirm] 站内信通知超管(id=%d)失败: %v", sa.ID, err)
-		}
-	}
+	// ★ F-33（2026-09-25 UAT 修复批）→ ★ #46（2026-10-14 收敛批）：F-33 当时把
+	//   单一角色字面量扩成 admin＋super_admin 双份合并，仍是「投递面自有一套名单」；
+	//   现在全仓只有 notify_recipients.go 一处圈超管，口径取自鉴权侧同一个谓词。
+	s.notifySuperAdmins("静态码支付待人工确认",
+		fmt.Sprintf("租户 #%d 订单 %s%s 用户已付款，请尽快查看并开通", tid, o.OrderNo, rebateNote),
+		store.NotifyRefPayManual, req.OrderID)
 	// 邮件通知超管（收件人 alert_email，抄送 alert_email_cc）
 	s.notifyAlert("静态码支付待人工确认（请尽快开通）", msg)
 	s.Store.LogAudit(tid, u.ID, "pay_manual_confirm", "orders", o.OrderNo)

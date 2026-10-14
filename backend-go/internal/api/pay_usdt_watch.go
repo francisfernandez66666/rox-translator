@@ -249,14 +249,95 @@ func (s *Server) usdtWatchHealthWord() string {
 	return usdtWatch.word(true, cfg.Chains)
 }
 
-// usdtWatchAllowsAutoPromise 收银台能不能对客户承诺"自动入账"：开关开着 **且** 监听自己是健康的。
+// ============ #42 额度档位（2026-10-14 用户令）============
+//
+// ⑮ 解决的是"监听已经死了，别再承诺自动入账"。它留了一个更前面的洞：
+// **监听现在活着，但它跑在公共端的匿名额度上**——TronGrid 对无 Key 的调用有速率上限，
+// 现网实证（《USDT收款自动化_现网核查结论与待办_20261013》④）：`TRONGRID_API_KEY`
+// 在 env／system_config／unit 文件三处**全部不存在**，也就是说这条腿今天就是裸奔状态。
+//
+// 裸奔的失效模式不是"慢"，是**高峰被限流**：被限流那一刻监听翻 failing、承诺当场停用，
+// 而"已经把钱打进来、正在等入账"的客户是在承诺还生效的时候付的款。
+// ⇒ 收银台那句"达到确认数后自动入账"要的是**可持续的能力**，不是"此刻这一轮恰好探到了链头"。
+// 所以这一维单独成判据，并且**不并进状态词**（状态词管"活没活"，这一维管"这活能不能长期承诺"，
+// 混成一个词就再也分不开"监听坏了"与"没配额度"两种处置：前者查端点，后者补 Key）。
+//
+// ⚠️ 射程只到 TRON（trc20）这一条链：erc20/bep20 走的是 USDT_ETH_RPC / USDT_BSC_RPC，
+// 那是运维自己指定的端点（没配就是不通），本仓**没有**"公共 RPC 额度被打满"的现网读数，
+// 所以这一批不给没测过的维度装判据（§三：判据要问真走到过的那条路）。
+// ==========================================================
+
+// 额度档状态词（对外排障契约，同 usdt_watch 那四档的纪律：**只出状态词，绝不出 Key／端点域名**）
+const (
+	usdtQuotaConfigured = "configured" // 有专用额度（配了 TRONGRID_API_KEY）
+	usdtQuotaAnonymous  = "anonymous"  // 匿名额度 ⇒ 收银台不许承诺自动入账
+	usdtQuotaNotListed  = "not_listed" // TRON 不在启用链清单里 ⇒ 这一维与这台无关
+)
+
+// usdtTronQuotaAnonymous 判这台此刻是不是在 TronGrid 的**匿名额度**上拉 TRON 链上数据。
+//
+// 两条放行支（都要有，方向不同）：
+//
+//	① 配了 Key ⇒ 专用额度，不判裸奔；
+//	② 没配 Key 但显式把 USDT_TRON_BASE 指向**非 TronGrid** 的端点（自建节点/第三方网关）⇒
+//	   那里没有"公共额度被限流"这个失效模式，拿它当裸奔会把健康的部署打成不健康。
+//	   判"是不是 TronGrid"用子串而不是整串等值：默认值是 https://api.trongrid.io，
+//	   运维也可能写成带路径或带端口的形态，整串比对会在这些形态上假判裸奔。
+func usdtTronQuotaAnonymous() bool {
+	if strings.TrimSpace(os.Getenv("TRONGRID_API_KEY")) != "" {
+		return false
+	}
+	base := strings.ToLower(strings.TrimSpace(os.Getenv("USDT_TRON_BASE")))
+	if base == "" {
+		return true // 没配 base＝用的就是默认公共端点 api.trongrid.io
+	}
+	return strings.Contains(base, "trongrid")
+}
+
+// usdtQuotaAllowsAutoPromise 该链的额度档允不允许对客承诺自动入账。
+// 参数 chain: 订单所在链（trc20/erc20/bep20）。非 TRON 一律放行（见上面那段射程说明）。
+func usdtQuotaAllowsAutoPromise(chain string) bool {
+	if payment.NormalizeChain(chain) != "trc20" {
+		return true
+	}
+	return !usdtTronQuotaAnonymous()
+}
+
+// usdtTronQuotaWord /api/health 的额度档读数（只读）。
+// 开关关着也照实报这一维：运维要在开闸之前就知道自己有没有裸奔。
+func (s *Server) usdtTronQuotaWord() string {
+	if s.Store == nil {
+		return usdtQuotaNotListed
+	}
+	cfg := s.Store.GetUSDTCfg()
+	listed := false
+	for _, c := range cfg.Chains {
+		if payment.NormalizeChain(c) == "trc20" {
+			listed = true
+		}
+	}
+	if !listed {
+		return usdtQuotaNotListed
+	}
+	if usdtTronQuotaAnonymous() {
+		return usdtQuotaAnonymous
+	}
+	return usdtQuotaConfigured
+}
+
+// usdtWatchAllowsAutoPromise 收银台能不能对客户承诺"自动入账"：
+// 开关开着 **且** 监听自己是健康的 **且**（★ #42）这一链不是跑在匿名额度上。
 // unknown/failing 一律不承诺——拿"刚启动还没探过"当"没问题"，就是把 ⑮ 的假承诺原样重写一遍。
-func (s *Server) usdtWatchAllowsAutoPromise() bool {
+// 匿名额度同理：它今天探得到链头，但"探得到"这件事没有额度保证。
+func (s *Server) usdtWatchAllowsAutoPromise(chain string) bool {
 	if s.Store == nil {
 		return false
 	}
 	cfg := s.Store.GetUSDTCfg()
 	if !cfg.Enabled || !cfg.AutoSettle {
+		return false
+	}
+	if !usdtQuotaAllowsAutoPromise(chain) {
 		return false
 	}
 	return usdtWatch.word(true, cfg.Chains) == usdtWatchOK
@@ -267,10 +348,16 @@ func (s *Server) usdtWatchAllowsAutoPromise() bool {
 func (s *Server) usdtWatchReportRound(chain string, err error) {
 	if usdtWatch.note(chain, err) && s.Store != nil {
 		// message 不含上游域名与收款地址：这条会进管理台告警中心
-		_ = s.Store.CreateAlert(0, "critical", usdtWatchAlertKind,
-			fmt.Sprintf("USDT 链上到账监听已连续 %d 轮取不到 %s 链头，自动入账实际未在工作："+
-				"收银台已停用自动入账承诺，请核对链上端点配置（env USDT_TRON_BASE / USDT_*_RPC）",
-				usdtWatchFailAlert, chain))
+		msg := fmt.Sprintf("USDT 链上到账监听已连续 %d 轮取不到 %s 链头，自动入账实际未在工作："+
+			"收银台已停用自动入账承诺，请核对链上端点配置（env USDT_TRON_BASE / USDT_*_RPC）",
+			usdtWatchFailAlert, chain)
+		// ★ #42：失败**且**这一链正跑在匿名额度上 ⇒ 把根因那一半一起说清。
+		// 不追加就是让下一位排查的人从"端点配置"起查，而真凶（没 Key ⇒ 高峰被限流）
+		// 在另一张清单上；补了这行，告警自己就能把"查端点"和"补 Key"两种处置分开。
+		if payment.NormalizeChain(chain) == "trc20" && usdtTronQuotaAnonymous() {
+			msg += "；且当前未配置 TRONGRID_API_KEY＝TronGrid 匿名额度，高峰期易被限流（补专用 Key 才是根治）"
+		}
+		_ = s.Store.CreateAlert(0, "critical", usdtWatchAlertKind, msg)
 		observability.Error(context.Background(), "USDT 到账监听连续失败达阈值",
 			"chain", chain, "rounds", usdtWatchFailAlert)
 	}

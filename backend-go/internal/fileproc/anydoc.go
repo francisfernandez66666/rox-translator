@@ -3,7 +3,13 @@
 // 工单「纯文案模式」（delivery=text）的提取层：doc/xls/ppt 老格式、odt/ods/odp、
 // rtf/epub 等 anydoc 独占格式经此转为干净 GFM 后进入既有 MD 翻译管线。
 // 边界（刻意不做）：① 无 MD→office 反向转换（版式/字体必丢，保真度劣于原生原位回写）；
-// ② 无 hosted OCR（文档出境与私有化承诺冲突）——扫描版 PDF 返回友好错误。
+// ② **这一腿自己不做文字识别**，也**绝不接第三方 hosted OCR**（文档出境与私有化承诺冲突）。
+//
+//	★ 2026-10-14 口径更新（旧注释「无 OCR」易读成"平台没有 OCR"，那是对外说谎）：
+//	识别能力在 fileproc 自己的 ocr.go（本机 onnx 模型资产，文档不出境），
+//	图片件与"文本层为空"的扫描 PDF 都走那一条；anydoc 只负责**已有文字层**的办公文档转 MD。
+//	该节点没部署模型资产时 OcrAvailable() 为假，扫描件由上层按"节点未启用识别"给友好错误，不把整单判死。
+//
 // 调用方式：Python binding（venv firecrawl-anydoc）经 anydoc_md.py 子命令壳，
 // 复用 runSubprocess 治理（资源闸 + nice + 超时整组击杀）。
 // =============================================
@@ -98,7 +104,10 @@ func friendlyAnydocError(stderr string) string {
 	case "EncryptedError":
 		return "文件已加密或带密码，无法提取文案，请解除密码后重试"
 	case "NeedsOcrError":
-		return "扫描版/图片型文档：服务器不提供文字识别（OCR），无法提取文案，请转存为 Word 后重试"
+		// ★ 2026-10-15 P1b 口径更新：OCR 已接入，图片（png/jpg/jpeg/bmp/tif/tiff/webp/heic）
+		//   现已可直接上传识别；扫描版 Word/PDF 请转存为图片或扫描件 PDF 后重试，
+		//   或确认服务器已部署 OCR 模型资产（assets/ocr/*.onnx，取权重步骤见 assets/ocr/README.md）。
+		return "扫描版/图片型文档：图片（png/jpg 等）现已支持文字识别（OCR）直接上传即可；若为扫描版 Word/PDF，请先转存为图片或扫描件 PDF 后重试，或确认服务器已部署 OCR 模型资产"
 	case "MalformedError", "MissingPartError":
 		return "文件结构损坏：未能提取到有效内容"
 	case "UnsupportedError", "ValueError":

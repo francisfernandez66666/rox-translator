@@ -1,0 +1,58 @@
+# ============================================================================
+# translator.socket — 主站 HTTP 监听 socket 的**属主单元**（★ #41 零停机第一阶段 S1）
+#
+# 这份单元解决的是什么（因果链，改动前必读）：
+#   今天 `systemctl restart translator` 那一跳，监听 socket 随进程消失，
+#   内核对新连接直接回 RST ⇒ Caddy 拿 502 ⇒ 访客看到「页面没能加载起来」。
+#   把 socket 的属主交给 systemd 之后：restart 期间 socket 恒在 listen，
+#   连接进内核 backlog 排队，进程回来 accept ⇒ **连接不再被拒**。
+#
+# ★★ 启用顺序是硬约束，不是建议：**必须先上线认识 fd 的二进制（S2），再 enable 这一份单元。**
+#   反过来的后果是**服务起不来**，不是"少一点优化"：
+#     · socket 单元一 enable，127.0.0.1:8787 就归 systemd 持有；
+#     · 旧二进制不认识 `LISTEN_FDS`，仍然自己 bind 同一地址 ⇒ EADDRINUSE ⇒ 进程当场退出 ⇒ 停站。
+#   （方案文档《零停机发版方案_亚秒级第一阶段_20261013.md》§S1 那句"S1 可安全先行、独立验收"
+#    是按"socket 在 listen 但没人 accept ⇒ 连接排队"推的，它漏了**旧二进制还在自己 bind** 这一半，
+#    2026-10-14 复核时按上面这条改成硬顺序；装配脚本 `deploy/install_socket_activation.sh`
+#    里那道 BINARY_MARKER 预检就是这一条的机械防线。）
+#
+# ★ 必须诚实写在这里的边界（别拿这份单元当"亚秒达成"）：
+#   socket activation 消除的是**连接被拒**，不是**响应延迟**。排队仍要等进程起来才被服务，
+#   所以第一阶段的验收是双判据：窗口内 5xx 归零 **＋** P99 < 1s。后一半靠 S3（启动路径瘦身）。
+#
+# ★ 回滚不依赖回滚代码（这一条是风险表 R5 的答案）：
+#   `systemctl disable --now translator.socket` ＋ `systemctl restart translator`
+#   ⇒ 立刻回到今天形态（进程自己 bind）。S2 的回退分支保证那一跳不需要换二进制。
+#
+# 安装（默认只干跑，落位要显式下令；见装配脚本）：
+#   bash deploy/install_socket_activation.sh              # 只读预检＋逐文件 sha 等值
+#   bash deploy/install_socket_activation.sh --apply      # 落位＋enable＋重启＋三条验收
+#   bash deploy/install_socket_activation.sh --status     # 只读：谁持有 8787/8789
+# ============================================================================
+
+[Unit]
+Description=Translator HTTP listener (socket activation owner)
+# ★ 与 service 同 base 名（translator.socket ↔ translator.service）：
+#   socket 在、service 挂掉时 systemd 会按 activation 关系重新拉起 service。
+# ★ 绝不可写 Accept=yes：那是"每连接 fork 一个进程实例"的 inetd 形态，
+#   本项目是常驻 HTTP 服务（带内存态配置快照、后台 worker、计量缓冲），fork-per-conn 会当场把语义打碎。
+
+[Socket]
+# 与 service 的 `-addr` 实参**逐字一致**（现网主站＝127.0.0.1:8787，由 Caddy 反代对外）。
+# ⚠️ 换成 0.0.0.0 等于绕过 Caddy 直接对外裸奔，禁止。
+# ⚠️ 这里的地址与 service 那一份不一致时（比如单位写 8787、service 写 8788），
+#    socket activation 会让进程"接管 8787、又想自绑 8788"，两半各活一半＝最难查的形态。
+ListenStream=127.0.0.1:8787
+# Backlog＝重启期间能排队多少连接。太小会溢出成 SYN 被丢 ⇒ "502 归零"这件事根本不成立；
+# 而它溢出的表现是**偶发**（只在高并发窗口溢出），比原来的必现更难归因，所以按内核 somaxconn 量级给足。
+Backlog=2048
+# TCP_NODELAY：小包响应（健康检查、预估接口）不等 Nagle 攒批。
+NoDelay=true
+# 显式点名被触发的 service，不靠 base 名推断——
+# 主站与演示站两份 socket 同目录时，靠推断容易把两个单元配到同一条 service 上。
+Service=translator.service
+
+[Install]
+# sockets.target 而不是 multi-user.target：socket 属主要比业务进程更早常驻，
+# 挂在 multi-user 下会晚一拍，那一拍里的连接照样被拒。
+WantedBy=sockets.target

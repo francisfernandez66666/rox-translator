@@ -8,6 +8,10 @@
 //	★ (53) 2026-10-10 补的三条腿：换件／重启之后才好的那一族也必须收敛遗留告警（恢复腿有两条）、
 //	每进程只核一次（不许每 30s 查库）、没跑过／链清单空／清单外仍有失败计数这三种形态宁可不收敛。
 //
+//	★ #42 2026-10-14 补的第二维（额度档）：监听**活着**却跑在 TronGrid 匿名额度上时，
+//	收银台仍不许承诺自动入账。这一维与上面那四档**分列出栈、分列判据**（见
+//	TestUsdtAutoPromiseBlockedOnAnonymousQuota）——合成一个词就再也分不开"查端点"与"补 Key"。
+//
 // 反证口径见各用例注释；本批现网实证：裸打 /v1/blocks 恒 404、8 天零成功而界面照旧承诺自动入账。
 // =============================================
 package api
@@ -32,8 +36,15 @@ import (
 // ★ 进出各清一次进程级监听状态：usdtWatch 是包级单例，用例共享它——
 //
 //	不归零就是「上一个用例的失败计数决定这一个用例的状态词」，同族假绿/假红。
+//
+// ★ #42 配套：这里钉一把**专用额度**的 TRONGRID_API_KEY。
+// 理由不是「绕过判据」，而是这一族用例测的是⑮那一维（监听活没活），
+// 额度维若不钉死，夹具就同时受两个维度影响——现网默认没有 Key ⇒ 本文件那几条
+// 「允许承诺」的正向断言会集体判红，而红的原因是额度、不是⑮的判据。
+// 额度维自己的判据由 TestUsdtAutoPromiseBlockedOnAnonymousQuota 专测（含反证与对照）。
 func newUsdtWatchServer(t *testing.T) *Server {
 	t.Helper()
+	t.Setenv("TRONGRID_API_KEY", "uat-test-dedicated-key")
 	s := newProbeStoreServer(t)
 	for k, v := range map[string]string{
 		"usdt_enabled":           "1",
@@ -89,7 +100,7 @@ func TestUsdtWatchHealthWordFourTiers(t *testing.T) {
 	if got := s.usdtWatchHealthWord(); got != usdtWatchDisabled {
 		t.Fatalf("关闸应回 %q，实得 %q", usdtWatchDisabled, got)
 	}
-	if s.usdtWatchAllowsAutoPromise() {
+	if s.usdtWatchAllowsAutoPromise("trc20") {
 		t.Fatal("关闸时不许承诺自动入账")
 	}
 	// ② 开闸、第一 tick 未到 ⇒ unknown（"刚启动"不是"没问题"）
@@ -99,7 +110,7 @@ func TestUsdtWatchHealthWordFourTiers(t *testing.T) {
 	if got := s.usdtWatchHealthWord(); got != usdtWatchUnknown {
 		t.Fatalf("未跑过应回 %q，实得 %q", usdtWatchUnknown, got)
 	}
-	if s.usdtWatchAllowsAutoPromise() {
+	if s.usdtWatchAllowsAutoPromise("trc20") {
 		t.Fatal("unknown 档不许承诺自动入账（拿没探过当没问题＝⑮ 假承诺的原始形态）")
 	}
 	// ③ 一轮全链成功 ⇒ ok
@@ -107,7 +118,7 @@ func TestUsdtWatchHealthWordFourTiers(t *testing.T) {
 	if got := s.usdtWatchHealthWord(); got != usdtWatchOK {
 		t.Fatalf("成功一轮应回 %q，实得 %q", usdtWatchOK, got)
 	}
-	if !s.usdtWatchAllowsAutoPromise() {
+	if !s.usdtWatchAllowsAutoPromise("trc20") {
 		t.Fatal("ok 档应允许承诺自动入账")
 	}
 	// ④ 失败一轮 ⇒ 立刻 failing（对客承诺这一档就停）
@@ -115,7 +126,7 @@ func TestUsdtWatchHealthWordFourTiers(t *testing.T) {
 	if got := s.usdtWatchHealthWord(); got != usdtWatchFailing {
 		t.Fatalf("失败一轮应回 %q，实得 %q", usdtWatchFailing, got)
 	}
-	if s.usdtWatchAllowsAutoPromise() {
+	if s.usdtWatchAllowsAutoPromise("trc20") {
 		t.Fatal("failing 档不许承诺自动入账")
 	}
 	// 告警腿在这一档**还没**触发（3 轮才判死，见下一个用例）
@@ -289,6 +300,150 @@ func TestUsdtCheckoutPromiseFollowsWatch(t *testing.T) {
 	}
 	if p2.AutoSettleLive {
 		t.Fatal("failing 档必须把 live 翻成 false，收银台据此降级为人工核销文案")
+	}
+}
+
+// TestUsdtAutoPromiseBlockedOnAnonymousQuota ★ #42 本体：额度裸奔时不许承诺自动入账。
+//
+// 这一维与 ⑮ 那四档**刻意分列**：⑮ 问"监听此刻活不活"，#42 问"这份活有没有额度保证"。
+// 现网实证（《USDT收款自动化_现网核查结论与待办_20261013》④）：TRONGRID_API_KEY 在
+// env／system_config／unit 文件三处全不存在，而对账器完全可以一直探到链头回 ok——
+// 于是 ⑮ 修完之后仍有一条假承诺活着：**今天活着，但随时可能被限流**，
+// 而"已经把钱打进来、正在等入账"的客户是在承诺还生效时付的款。
+//
+// 反证口径：
+//  1. 把 usdtQuotaAllowsAutoPromise 里的 `return !usdtTronQuotaAnonymous()` 改成恒 true
+//     （或整块判据摘掉）⇒ 本用例第二段"裸奔不许承诺"当场红；
+//  2. 把这一维**并进**状态词（让匿名额度也把 usdt_watch 报成 failing）⇒
+//     本用例"两维分开"那条（health 仍 ok 而承诺已 false）当场红——
+//     合词的真实代价是运维再分不清"查端点"与"补 Key"两种处置；
+//  3. 把"非 TRON 一律放行"写成"一律判裸奔"⇒ 第五段 bep20 对照红（把没测过的维度
+//     拿来降级一条有专用 RPC 的链，属于反向误伤）；
+//  4. 把 TrimSpace 漏在某一条腿上⇒ 第四段"空串／纯空格都算裸奔"红。
+func TestUsdtAutoPromiseBlockedOnAnonymousQuota(t *testing.T) {
+	s := newUsdtWatchServer(t) // 夹具已钉专用 Key：本用例从"健康且不裸奔"这一基线出发
+	s.usdtWatchReportRound("trc20", nil)
+	if got := s.usdtWatchHealthWord(); got != usdtWatchOK {
+		t.Fatalf("前置：拨一轮成功应 %q，实得 %q", usdtWatchOK, got)
+	}
+	if got := s.usdtTronQuotaWord(); got != usdtQuotaConfigured {
+		t.Fatalf("前置：配了 Key 应 %q，实得 %q", usdtQuotaConfigured, got)
+	}
+	if !s.usdtWatchAllowsAutoPromise("trc20") {
+		t.Fatal("前置：健康＋专用额度必须允许承诺（否则后面的红分不清是判据还是前置坏了）")
+	}
+
+	// ① 摘掉 Key ⇒ 匿名额度：承诺立刻停用，但状态词**仍是 ok**（两维分开）
+	t.Setenv("TRONGRID_API_KEY", "")
+	if !usdtTronQuotaAnonymous() {
+		t.Fatal("Key 置空应判裸奔")
+	}
+	if s.usdtWatchAllowsAutoPromise("trc20") {
+		t.Fatal("匿名额度不许承诺自动入账（⑮ 活着≠额度够）")
+	}
+	if got := s.usdtWatchHealthWord(); got != usdtWatchOK {
+		t.Fatalf("额度维不许改写监听状态词，应仍 %q，实得 %q", usdtWatchOK, got)
+	}
+
+	// ② /api/health 出额度档，且只出状态词（无 Key、无端点域名——本端点无鉴权）
+	quotaWord := func() string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		s.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+		var body map[string]interface{}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("health 出参非法 JSON: %v", err)
+		}
+		v, ok := body["usdt_tron_quota"].(string)
+		if !ok {
+			t.Fatalf("health 缺 usdt_tron_quota 字段：%s", rec.Body.String())
+		}
+		switch v {
+		case usdtQuotaConfigured, usdtQuotaAnonymous, usdtQuotaNotListed:
+		default:
+			t.Fatalf("额度档出现名单外的状态词 %q（对外契约三档，见 usdtQuota* 常量）", v)
+		}
+		raw := strings.ToLower(rec.Body.String())
+		for _, bad := range []string{"trongrid", "://", "uat-test-dedicated-key", "T" + strings.Repeat("a", 33)} {
+			if strings.Contains(raw, strings.ToLower(bad)) {
+				t.Fatalf("health 出参不得出现 %q，实得 %s", bad, rec.Body.String())
+			}
+		}
+		return v
+	}
+	if got := quotaWord(); got != usdtQuotaAnonymous {
+		t.Fatalf("裸奔时 health 应回 %q，实得 %q", usdtQuotaAnonymous, got)
+	}
+
+	// ③ 空串与纯空格同档：判据两侧都得先 TrimSpace，漏一处就会把 "  " 当成"配好了"
+	t.Setenv("TRONGRID_API_KEY", "   ")
+	if !usdtTronQuotaAnonymous() {
+		t.Fatal("Key 为纯空格仍应判裸奔（TrimSpace 漏了就是假configured）")
+	}
+	if got := s.usdtTronQuotaWord(); got != usdtQuotaAnonymous {
+		t.Fatalf("空格值应 %q，实得 %q", usdtQuotaAnonymous, got)
+	}
+
+	// ④ 对照：没配 Key 但把 base 指向自建网关 ⇒ 不判裸奔（公共额度这一失效模式不在那台身上）
+	t.Setenv("TRONGRID_API_KEY", "")
+	t.Setenv("USDT_TRON_BASE", "https://tron-rpc.our-own-gateway.internal")
+	if usdtTronQuotaAnonymous() {
+		t.Fatal("自建端点被判裸奔 ⇒ 把健康的部署打成不健康，收银台会无故降级")
+	}
+	if !s.usdtWatchAllowsAutoPromise("trc20") {
+		t.Fatal("自建端点＋监听健康 ⇒ 应允许承诺")
+	}
+	// 同一台把 base 指回 TronGrid（带路径也算）⇒ 立刻回到裸奔档
+	t.Setenv("USDT_TRON_BASE", "https://api.trongrid.io/wallet/v1")
+	if !usdtTronQuotaAnonymous() {
+		t.Fatal("base 含 trongrid 字样应判裸奔（整串等值会在带路径形态上假判健康）")
+	}
+
+	// ⑤ 射程对照：bep20 走 USDT_BSC_RPC，不受这一维约束
+	t.Setenv("USDT_TRON_BASE", "")
+	t.Setenv("TRONGRID_API_KEY", "")
+	if !s.usdtWatchAllowsAutoPromise("bep20") {
+		t.Fatal("非 TRON 链不该被匿名额度维压住（本批只给实测过的 trc20 装这一判据）")
+	}
+	if !s.usdtWatchAllowsAutoPromise("erc20") {
+		t.Fatal("erc20 同上")
+	}
+
+	// ⑥ 链清单里没有 trc20 ⇒ 这一维报 not_listed，不许报 anonymous 误导运维去配一个用不上的 Key
+	mustSetCfg(t, s, "usdt_chains", "bep20")
+	mustSetCfg(t, s, "usdt_addr_bep20", "0x"+strings.Repeat("b", 40))
+	if got := s.usdtTronQuotaWord(); got != usdtQuotaNotListed {
+		t.Fatalf("TRON 不在启用链清单应 %q，实得 %q", usdtQuotaNotListed, got)
+	}
+	if got := quotaWord(); got != usdtQuotaNotListed {
+		t.Fatalf("health 该档应 %q，实得 %q", usdtQuotaNotListed, got)
+	}
+
+	// ⑦ 告警文案：裸奔达阈值 ⇒ 那条 critical 必须点名"补 Key 才是根治"，
+	//    否则下一位排查的人只会顺着"核对端点配置"查一整晚（现网那 8 天正是这么过去的）。
+	t.Setenv("TRONGRID_API_KEY", "")
+	t.Setenv("USDT_TRON_BASE", "")
+	for i := 0; i < usdtWatchFailAlert; i++ {
+		s.usdtWatchReportRound("trc20", errors.New("链头 404"))
+	}
+	alerts := openWatchAlerts(t, s)
+	if len(alerts) == 0 {
+		t.Fatal("达阈值应有 open 告警行")
+	}
+	if !strings.Contains(alerts[0].Message, "TRONGRID_API_KEY") {
+		t.Fatalf("裸奔形态的告警必须点名额度根因，实得：%s", alerts[0].Message)
+	}
+	// 对照：配了 Key 的那一台，同一告警**不许**提额度（提了就是把运维往错的方向支走）
+	s2 := newUsdtWatchServer(t)
+	for i := 0; i < usdtWatchFailAlert; i++ {
+		s2.usdtWatchReportRound("trc20", errors.New("链头 404"))
+	}
+	a2 := openWatchAlerts(t, s2)
+	if len(a2) == 0 {
+		t.Fatal("对照台达阈值也应有告警行")
+	}
+	if strings.Contains(a2[0].Message, "TRONGRID_API_KEY") {
+		t.Fatalf("有专用额度时不许提额度这一条，实得：%s", a2[0].Message)
 	}
 }
 

@@ -203,15 +203,18 @@ const errInsufficientCode = string(errors.OpenAPIInsufficient)
 // openAPITaskMaxFiles 单次文件任务数量上限
 const openAPITaskMaxFiles = 20
 
-// openAPITaskMaxBytes 单次文件任务总体积上限（40MB；Caddy 该路径放宽至 40MB）
-const openAPITaskMaxBytes = 40 << 20
+// openAPITaskParseBufferBytes multipart 的**内存缓冲**档位（超过部分 Go 自动落临时文件，不是拒绝阈值）。
+// 它与 openAPITaskMaxBytes（真正的体积闸）是两件事，★ #43 起分开命名，
+// 免得下一个读代码的人在这三条数字（缓冲 32 / 闸门 40 / 文案 30）里挑一个当对外承诺。
+const openAPITaskParseBufferBytes = 32 << 20
 
-// openAPITaskExtWhitelist 文件任务扩展名白名单（与内部文件工单一致）
-var openAPITaskExtWhitelist = map[string]bool{
-	".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
-	".txt": true, ".csv": true, ".srt": true, ".vtt": true,
-	".md": true, ".json": true, ".yaml": true, ".yml": true,
-}
+// openAPITaskMaxBytes 单次文件任务总体积上限（★ #43：字面量收成 `fileproc.MaxUploadBytes` 一处，
+// 与内部工单/即时翻译上传同一道闸；Caddy 那层的 `max_size 40MB` 由 upload_formats_gate_test.go L4 现读比对）
+const openAPITaskMaxBytes = fileproc.MaxUploadBytes
+
+// openAPITaskExtWhitelist 已删除（★ 2026-10-14 #43）：OpenAPI 文件建单的格式判定改走
+// `fileproc.IsTranslateFormat` 那一个口。留一份"与内部工单一致"的副本本身就是本批要收掉的东西——
+// 一致性靠注释维持、不靠红灯，将来给某一处加格式就是「上传口能建、执行口判不支持」的下一次。
 
 // gateErrorCode 把底层配额/计费错误归一为对外 error_code（key_quota_exceeded / insufficient_balance 等），
 // 供开放 API 响应体使用；未命中已知关键词时返回通用码。
@@ -309,8 +312,13 @@ func (s *Server) enqueueAPITask(t *store.Ticket, mode string, ak *store.APIKey) 
 // openAPITaskCreateFiles 创建文件批量任务（multipart）。
 func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, tid int64, ak *store.APIKey) {
 	r.Body = http.MaxBytesReader(w, r.Body, openAPITaskMaxBytes)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "文件解析失败或超过 30MB 总量上限")
+	// 解析缓冲阈值 32MB 是**内存缓冲档位**而不是闸门（超过部分 Go 落临时文件，不报错）：
+	// 真正拒请求的是上面那道 MaxBytesReader（40MiB）。这一档单独命名（★ #43），
+	// 因为同一路径上"32 的缓冲 / 40 的闸 / 文案里的 30"三个数各说各话，
+	// 读代码的人会挑一个当承诺抄进文档——本文件下面那句错误文案现在只取对外承诺那一个数。
+	if err := r.ParseMultipartForm(openAPITaskParseBufferBytes); err != nil {
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest),
+			fmt.Sprintf("文件解析失败或超过 %dMB 总量上限", fileproc.OpenAPIDocLimitMB))
 		return
 	}
 	var headers []*multipart.FileHeader
@@ -331,24 +339,26 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	}
 	// ★ 工单双模式（2026-09-13）：delivery=text 纯文案模式（anydoc 提取交付 .md，额外准入老格式/ODF/RTF/EPUB）
 	delivery := normalizeTaskDelivery(r.FormValue("delivery"))
-	textExt := map[string]bool{}
-	if delivery == "text" {
-		for k := range fileproc.AnydocFormats {
-			textExt[k] = true
-		}
-	}
-	// 逐文件扩展名白名单校验；delivery=text 时额外放行 anydoc 老格式（须服务器装有转换依赖）
+	textMode := delivery == "text"
+	// 逐文件扩展名白名单校验；delivery=text 时额外放行 anydoc 老格式（须服务器装有转换依赖）。
+	// ★ 2026-10-14 #43：判据走 `fileproc.IsTranslateFormat`（唯一事实源），
+	// 本处不再自带清单字面量、也不再本地拼一份 anydoc 副本 —— 与内部工单建单同一把尺子。
+	//
+	// ⚠️ 这一句**拒绝文案**刻意保持改造前的字面量（只列那十二项），不跟着文案函数走：
+	// 对外文档面（`admin_openapi.go` 的「支持 docx/xlsx/pptx/…」中英两处）本来就只承诺这十二项，
+	// 运行时消息突然多列一族＝在没改文档的那一刻先造出第二个对外口径
+	// （§一·11 那一族：同一件事两处各说一份）。要不要把纯文案模式那批老格式写进对外承诺，
+	// 属对外口径决策，本批只**保持现状**并把它挂在锁里（upload_formats_gate_test.go L3 逐字钉旧句子），
+	// 改的那一天这条锁会红，红得其所。
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
-		if !openAPITaskExtWhitelist[ext] {
-			if delivery == "text" && textExt[ext] {
-				if !fileproc.AnydocAvailable() {
-					writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译")
-					return
-				}
-				continue
-			}
-			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), "不支持的格式: "+hdr.Filename+"（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）")
+		if !fileproc.IsTranslateFormat(ext, textMode) {
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest),
+				"不支持的格式: "+hdr.Filename+"（仅支持 "+fileproc.FormatHintBase()+"）")
+			return
+		}
+		if textMode && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
+			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest), hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译")
 			return
 		}
 	}
@@ -399,7 +409,7 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝（纯文案模式不走转换链，跳过）
 	if delivery != "text" {
 		for _, f := range saved {
-			if perr := checkPdfLimits(f.path, f.name); perr != nil {
+			if perr := checkPdfLimits(r.Context(), f.path, f.name); perr != nil {
 				for _, cleanup := range saved {
 					os.Remove(cleanup.path)
 				}
@@ -435,9 +445,10 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 		"type": "files", "status": "queued",
 		"file_count": len(saved),
 	}
-	// 任一 PDF 为图像重负载（扫描件，走 OCR 慢链路）时打标，提示客户端处理耗时较长
+	// 任一 PDF 为图像重负载（扫描件，走 OCR 慢链路）或图片格式（P1a，天然走 OCR）时打标，提示客户端处理耗时较长
 	for _, f := range saved {
-		if strings.EqualFold(filepath.Ext(f.name), ".pdf") && delivery != "text" && fileproc.PdfImageHeavy(f.path) {
+		fext := strings.ToLower(filepath.Ext(f.name))
+		if fileproc.IsImageFormat(fext) || (fext == ".pdf" && delivery != "text" && fileproc.PdfImageHeavy(f.path)) {
 			respBody["image_heavy"] = true
 			break
 		}

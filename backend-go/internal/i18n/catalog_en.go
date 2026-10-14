@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（430 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（437 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -220,6 +220,8 @@ var exactEN = map[string]string{
 	"当前状态不可执行：仅待处理/排队中/被驳回的工单可以运行": "Cannot run in current state: only pending/queued/rejected tickets can execute",
 	"当前网络今天用得比较多，注册后额度按账号计算":       "This network has used a lot of trials today; registering puts the quota on your account",
 	"当前订阅套餐已下架，请先选择其他套餐":           "Current subscribed plan is delisted; choose another plan first",
+	"录音数据格式无法解析（或超出上限）":            "Could not decode the audio recording (or it exceeds the size limit)",
+	"录音暂存失败":      "Failed to stage the recording on the server",
 	"手册下载仅支持 GET": "Manual download supports GET only",
 	"手册地址形如 /docs/manual/<语种码>.pdf（例：/docs/manual/zh.pdf）": "Manual URLs look like /docs/manual/<lang>.pdf (e.g. /docs/manual/zh.pdf)",
 	"手册文件格式异常（非 PDF），已停止下载":                                "The manual file is not a valid PDF; the download was stopped",
@@ -289,7 +291,8 @@ var exactEN = map[string]string{
 	"权限不足：需要该知识库包的只读授权":    "Insufficient permission: read-only grant on this knowledge pack required",
 	"条目不存在或无权操作":           "Entry not found or no permission",
 	"此接口为租户自助视图，平台账号请使用超管 TM 审核台": "This is the tenant self-service view; platform accounts should use the super-admin TM review console",
-	"注册已关闭，请联系管理员开通":              "Registration is disabled; contact an administrator",
+	"没有可朗读的内容":       "There is no content to read aloud",
+	"注册已关闭，请联系管理员开通": "Registration is disabled; contact an administrator",
 	"注销申请已生效：今日仍可使用，明日 00:00 起无法登录；名下 API Key 已全部停用。数据保留，如需撤回请联系管理员重新启用。": "Deactivation scheduled: usable until today, login blocked from tomorrow 00:00; all your API keys are disabled. Data is retained; to revoke, ask an administrator to re-enable.",
 	"状态仅支持 active/disabled": "status supports active/disabled only",
 	"生成 xlsx 失败":            "Failed to generate xlsx",
@@ -335,6 +338,7 @@ var exactEN = map[string]string{
 	"缺少分片内容":                   "Chunk content missing",
 	"缺少券 ID":                   "Coupon ID missing",
 	"缺少工单 id":                  "Ticket id missing",
+	"缺少录音文件":                   "No recording file was provided",
 	"缺少文件":                     "File missing",
 	"翻译技能未加载":                  "Translation skill not loaded",
 	"翻译技能未加载（未传入 -kb）":         "Translation skill not loaded (-kb not passed)",
@@ -385,6 +389,9 @@ var exactEN = map[string]string{
 	"该邮箱已被其他账号绑定":                                      "This email is already bound to another account",
 	"该邮箱已被用于邀请注册奖励，无法换绑":                               "This email has been used for referral rewards and cannot be rebound",
 	"该邮箱未开通账号，请联系管理员":                                  "This email has no account; contact your administrator",
+	"语音产物暂存失败":                                         "Failed to stage the audio result on the server",
+	"语音产物读取失败":                                         "Failed to read the audio result",
+	"请以 multipart/form-data 提交录音":                      "Please submit the recording as multipart/form-data",
 	"请先切换到目标租户":                                        "Switch to the target tenant first",
 	"请先登录":                                             "Please log in first",
 	"请先通过租户切换器选择目标租户再保存配额":                             "Select the target tenant in the switcher before saving quotas",

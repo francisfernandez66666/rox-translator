@@ -16,7 +16,7 @@ import {
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp, TicketQuality, QAReportIssue } from '@/api/tickets'
-import { TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
+import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
 import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
@@ -278,9 +278,18 @@ export default function TicketsPage() {
   const [files, setFiles] = useState<File[]>([])
   const [langs, setLangs] = useState<string[]>(['en'])
   const [creating, setCreating] = useState(false)
-  // 「图片过多」提示横幅的显隐位：本文件内除这里的 false 初值外没有置 true 的路径，
-  // 故下面那段 imageHeavyHint 分支当前恒不渲染（关闭逻辑保留可用）。别去别处找触发点——它是本页局部 state。
-  const [imageHeavyHint, setImageHeavyHint] = useState(false)
+  // 「媒介产物说明」横幅：图片/音频进翻译管线时，告诉客户系统要做什么、产物是什么格式。
+  // ★ 2026-10-14 P1c 接线：后端已经分别为两类素材跑了 OCR（P1a）与 ASR 转写（P2），
+  //   但**交付形态不是原格式**（图片不回填合成图、音频不改音轨，分别给译文 .md / .srt+.md）。
+  //   不说清楚，客户下载完会以为"翻错了/少了一页"。这类"交付即误会"比功能缺陷更难发现。
+  const mediaHint = (() => {
+    const exts = files.map((f) => '.' + (f.name.split('.').pop() || '').toLowerCase())
+    const img: readonly string[] = IMAGE_EXTS
+    const aud: readonly string[] = AUDIO_EXTS
+    if (exts.some((e) => img.includes(e))) return { kind: 'image' as const, key: 'tk.mediaHintImage' }
+    if (exts.some((e) => aud.includes(e))) return { kind: 'audio' as const, key: 'tk.mediaHintAudio' }
+    return null
+  })()
   // ★ 缩翻（任务7）：勾选后输入最长字符限制，提示模型精简输出
   const [condenseOn, setCondenseOn] = useState(false)
   const [condenseMax, setCondenseMax] = useState(200)
@@ -555,10 +564,9 @@ export default function TicketsPage() {
 
       {/* ===== 创建工单 ===== */}
       <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
-        {imageHeavyHint && (
+        {mediaHint && (
           <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 14 }}>
-            <Icon n="alert" /> {t('tk.imageHeavyHint')}
-            <Link onClick={() => setImageHeavyHint(false)} aria-label={t('common.close')}><Icon n="close" /></Link>
+            <Icon n="alert" /> {t(mediaHint.key)}
           </div>
         )}
         <h3 style={{ margin: '0 0 10px' }}>{t('tk.createTitle')}</h3>

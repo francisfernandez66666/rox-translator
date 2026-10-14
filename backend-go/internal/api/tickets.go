@@ -172,6 +172,14 @@ func (s *Server) estConfigFloat(key string, def float64, allowZero bool) float64
 //   - 纯文本（.txt/.md/.csv/.srt 等）：字节≈字符，中文 UTF-8 约 3 字节/字 → /3；
 //   - 压缩文本容器（.docx/.xlsx/.pptx/.epub/.odt 等，XML 压缩）→ /6；
 //   - 图文混排二进制（.pdf/.doc/.ppt/.xls 等，图像/字体占大头）→ /12；
+//   - 图片（P1a，.png/.jpg 等）：经 OCR 后的可译文本密度远低于字节数（一张截图几十 KB
+//     可能只含数百字），取大分母 /30 避免把正常图片件按 /6 误估成数万字符而误拦；
+//   - 音频（P2，.mp3/.m4a/.wav 等）：压缩率比图片还极端——64kbps 的 mp3 一分钟约 480KB，
+//     而中文语音一分钟约 240 字（≈720 字节 UTF-8），即真实文本只有字节量的 1/660；
+//     分母统一取**远大于实测比**：有损容器（mp3/m4a/aac/opus/ogg）/2000、
+//     无损容器（wav/flac，未压缩 PCM 字节量再大 4 倍）/8000。
+//     ★ 这里刻意**往少估**：预检的作用只是拦「余额明显不够」，估低最多跑完才发现不够，
+//     估高则会在门口误伤正常件（图片 /30 那条是同一取舍，已实测纠错过一次）。
 //   - 未知：按 /6 折中。
 func estimateFileSourceChars(name string, size int64) int64 {
 	if size <= 0 {
@@ -183,6 +191,12 @@ func estimateFileSourceChars(name string, size int64) int64 {
 		denom = 3
 	case "pdf", "doc", "ppt", "xls", "pptm", "xlsm", "key", "pages", "numbers", "epub", "azw3", "mobi":
 		denom = 12
+	case "png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp", "heic", "heif", "gif":
+		denom = 30
+	case "mp3", "m4a", "aac", "opus", "ogg", "oga":
+		denom = 2000
+	case "wav", "flac", "aiff", "aif", "alac":
+		denom = 8000
 	default:
 		denom = 6
 	}
@@ -394,31 +408,25 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	// ★ 工单双模式（2026-09-13）：交付方式 delivery=restore 还原文件模式（默认）/ text 纯文案模式
 	//   （anydoc 提取→交付译文 .md，不还原版式；额外准入 doc/xls/ppt/odt/ods/odp/rtf/epub 等）。
 	delivery := normalizeTaskDelivery(r.FormValue("delivery"))
-	// 扩展名白名单（与 fileproc.ExtractTexts 支持的格式一致；逐文件校验）
-	allowed := map[string]bool{
-		".docx": true, ".xlsx": true, ".pptx": true, ".pdf": true,
-		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
-		".md": true, ".json": true, ".yaml": true, ".yml": true,
-	}
-	if delivery == "text" {
-		for k := range fileproc.AnydocFormats {
-			allowed[k] = true
-		}
-	}
+	// 扩展名白名单：★ 2026-10-14 #43 起判据在 `fileproc.IsTranslateFormat`（唯一事实源），
+	// 本处不再自带一份字面量。旧写法是"本地 map ＋ 纯文案模式往里补 anydoc 键"，
+	// 收成共享常量后那段补键代码会直接写进全局闸门，所以这里改判**函数**而不是拿共享 map。
+	textMode := delivery == "text"
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
-		if !allowed[ext] {
+		if !fileproc.IsTranslateFormat(ext, textMode) {
 			if delivery == "text" {
 				writeJSON(w, 400, map[string]interface{}{"success": false,
-					"message": "不支持的格式: " + hdr.Filename + "（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml 及 doc/xls/ppt/odt/ods/odp/rtf/epub）"})
+					"message": "不支持的格式: " + hdr.Filename + "（纯文案模式支持 " + fileproc.FormatHintBase() +
+						" 及 " + fileproc.FormatHintText() + "）"})
 				return
 			}
 			writeJSON(w, 400, map[string]interface{}{"success": false,
-				"message": "不支持的格式: " + hdr.Filename + "（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"})
+				"message": "不支持的格式: " + hdr.Filename + "（仅支持 " + fileproc.FormatHintBase() + "）"})
 			return
 		}
 		// 纯文案模式下 anydoc 独占格式需要依赖就绪（缺失时老 12 种仍可用，不受影响）
-		if delivery == "text" && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
+		if textMode && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
 			writeJSON(w, 400, map[string]interface{}{"success": false,
 				"message": hdr.Filename + " 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译（请管理员执行 pip install firecrawl-anydoc，或改用还原模式支持格式）"})
 			return
@@ -462,7 +470,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	//   纯文案模式跳过——不经 pdf2docx/LibreOffice 转换链，毫秒级提取无卡死风险。
 	if delivery != "text" {
 		for _, f := range saved {
-			if perr := checkPdfLimits(f.path, f.name); perr != nil {
+			if perr := checkPdfLimits(r.Context(), f.path, f.name); perr != nil {
 				for _, cleanup := range saved {
 					os.Remove(cleanup.path)
 				}
@@ -615,7 +623,8 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_enqueue", "tickets", t.TicketNo)
 	resp := map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "queued": true}
-	if strings.EqualFold(filepath.Ext(t.FilePath), ".pdf") && fileproc.PdfImageHeavy(t.FilePath) {
+	runExt := strings.ToLower(filepath.Ext(t.FilePath))
+	if fileproc.IsImageFormat(runExt) || (runExt == ".pdf" && fileproc.PdfImageHeavy(t.FilePath)) {
 		resp["image_heavy"] = true
 	}
 	writeJSON(w, 200, resp)

@@ -13,8 +13,11 @@
 //   ① 流终态触发刷新（useChat onDone/错误分支显式 loadBalance）——jsdom 锁在
 //     ChatWindow.dom.test.tsx（myPackage 桩真数据 + 流结束余额变）；
 //   ② 窄屏余额可见——Playwright 视口锁在 e2e/（等值锁）；
-//   ③ 本文件：**真模型端到端**验证「译文上屏（流终态）后 3s 内，余额/今日已耗
-//     至少一条发生翻动」——3s = 2s debounce + 1s 渲染余量，是被锁的契约不是拍脑袋。
+//   ③ 本文件：**真模型端到端**验证「译文上屏（流终态）后 3s 内，余额读数发生翻动」
+//     ——3s = 2s debounce + 1s 渲染余量，是被锁的契约不是拍脑袋。
+//     （★ 2026-10-14 口径收窄：原判据是"余额/今日已耗至少一条翻动"，「今日已耗」徽标
+//     已按用户令从界面撤下，翻动判据只剩余额这一条手；"这轮到底扣没扣"改由
+//     e2e/translate_flow 的 TF2-a 按轮气泡消耗读数负责，见下面的翻转说明。）
 //
 // 运行（指向任一真实配好模型路由的站点；账号需有可见余额的积分）：
 //   BASE_URL=https://langcross.lexicorn.cn E2E_USER=<用户名> E2E_PASS=<口令> \
@@ -45,18 +48,20 @@ async function readPoints(page: Page, testid: string): Promise<number> {
   return Number((m as RegExpMatchArray)[0].replace(/,/g, ''))
 }
 
-test('F-48③ 真模型：译文上屏后 3s 内余额/今日已耗必须翻动（顶栏不停旧值）', async ({ page }) => {
+test('F-48③ 真模型：译文上屏后 3s 内余额必须翻动（顶栏不停旧值）', async ({ page }) => {
   // 真模型一轮翻译可能 30s+，给足墙钟
   test.setTimeout(180_000)
   await login(page, USER, PASS)
   await page.goto(`${BASE}/`)
 
-  // 前置：余额/用量条在场（不在场=登录态或套餐数据有问题，探针自身先红，不误判成竞态回归）
+  // 前置：余额条在场（不在场=登录态或套餐数据有问题，探针自身先红，不误判成竞态回归）
   await expect(page.getByTestId('chat-balance'), '余额条未渲染（账号需有可见积分）')
     .toBeVisible({ timeout: 20000 })
-  await expect(page.getByTestId('chat-usage'), '今日已耗条未渲染').toBeVisible({ timeout: 20000 })
+  // ★ 2026-10-14 红框批翻转（理由同 e2e/translate_flow.spec.ts 头部那段，不重复第二份）：
+  //   「今日已耗」徽标已按用户令从界面撤下，本探针的翻动判据收敛为**余额条这一条**。
+  //   射程没有变窄：这条探针问的是"扣费后顶栏多久翻"，那一只手本来就是余额；
+  //   "扣没扣"由 e2e/translate_flow 的 TF2-a（本轮气泡消耗读数）负责，两面各管一段。
   const bal0 = await readPoints(page, 'chat-balance')
-  const used0 = await readPoints(page, 'chat-usage')
 
   // 发起一轮真实即时翻译（短文本，控消耗）
   const input = page.getByTestId('translate-input')
@@ -69,13 +74,24 @@ test('F-48③ 真模型：译文上屏后 3s 内余额/今日已耗必须翻动�
   const out = (await page.locator('.lang-text').last().innerText()).trim()
   expect(out.length, '译文为空，链路未走完').toBeGreaterThan(0)
 
-  // ★ 核心断言：从「译文上屏」这一刻起 3s 内，两条积分读数至少一条翻动。
+  // ★ 核心断言：从「译文上屏」这一刻起 3s 内，余额读数翻动。
   //   旧缺陷形态＝扣费慢一拍：length 触发点错过流终态 → 顶栏停旧值直到下一次发消息。
   //   expect.poll 每 250ms 读一次；超 3s 未翻动即红，红文案直给排查方向。
+  //
+  // ★★ 2026-10-14 追记（本批改锚时顺带查出的**结构性假绿**，与产品无关，是探针自伤）：
+  //   这一条原来写成 `() => `${readPoints(...)}:${readPoints(...)}``——回调里两个
+  //   **未 await 的 Promise** 被拼进模板串，于是每次 poll 的读数恒为字符串
+  //   `"[object Promise]:[object Promise]"`，而基线那一侧 `${bal0}:${used0}` 是真数字
+  //   （`"1200:35"`）⇒ 两侧**永远不相等** ⇒ `.not.toBe(...)` **恒真**。
+  //   换句话说：这条探针从写下那天起一次也没测过任何东西，而它看起来一直在跑、一直在绿。
+  //   ⇒ 硬口径（与记忆里「度量腿要先自证射程」同族，下次改这一族断言必读）：
+  //   **`expect.poll` 的回调必须返回已 await 的值**；回调里出现 `async` 函数调用而不 `await`，
+  //   判据就退化成了字符串形状比对。正向对照：本断言的基线是**真数字**，
+  //   若余额真没翻，poll 会读到同一个数字并判红——旧写法连"读到同一个值"都做不到。
   await expect
-    .poll(() => `${readPoints(page, 'chat-balance')}:${readPoints(page, 'chat-usage')}`, {
+    .poll(async () => await readPoints(page, 'chat-balance'), {
       timeout: 3_000,
-      message: '★ F-48 复现形态：真模型扣费后 3s 内顶栏未翻动（刷新触发点又回到流中途/发消息时）',
+      message: '★ F-48 复现形态：真模型扣费后 3s 内余额未翻动（刷新触发点又回到流中途/发消息时）',
     })
-    .not.toBe(`${bal0}:${used0}`)
+    .not.toBe(bal0)
 })

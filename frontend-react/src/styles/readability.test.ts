@@ -431,6 +431,24 @@ describe('G 白色填充档（主按钮/主 CTA/反白件 = 纯白 #FFFFFF）', 
     expect(got.length, '内联 background 形态变了，请同步本锁').toBeGreaterThan(0)
     expect(got.some(isPureWhite), `重试按钮底值 ${JSON.stringify(got)} 不是纯白`).toBe(true)
   })
+  // ★ 2026-10-14 用户后令「页脚那句品宣尾注能不能提亮并且做重点提示」⇒ 这一枚白底胶囊徽标进 G 段射程。
+  //   它不走 CSS 块解析：样式收在 components/BrandTagline.tsx 那份 TAGLINE_STYLE 内联对象里，五张面共用
+  //   （四面原先各内联一份 fontWeight 的漂移形态就是这次收回来的）。所以照上面 ErrorBoundary 的先例
+  //   按**内联形态**读源码。跨语言那一半（后端直出面同名规则的逐维等值）不在本文件射程，由
+  //   src/components/BrandTagline.lock.test.ts 的 G 段与 backend-go/internal/api/public_ui_test.go 各自钉住。
+  it('页脚品宣尾注徽标（BrandTagline.tsx 内联样式）底＝实心白档、字＝反相黑，不许退成文字档灰', () => {
+    const src = read('src/components/BrandTagline.tsx')
+    const bgs = [...src.matchAll(/background:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(bgs.length, '尾注内联 background 形态变了，请同步本锁').toBeGreaterThan(0)
+    expect(bgs.some(isPureWhite), `尾注底值 ${JSON.stringify(bgs)} 不是纯白`).toBe(true)
+    const colors = [...src.matchAll(/\bcolor:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(colors.length, '尾注内联 color 形态变了，请同步本锁').toBeGreaterThan(0)
+    expect(colors.some((v) => /^var\(--lc-invert-fg(,[^)]*)?\)$/i.test(v.replace(/\s+/g, ''))),
+      `白底必须配反相黑字档，实读 ${JSON.stringify(colors)}`).toBe(true)
+    // 负向（配上面那条正锁才有射程）：拿文字档灰做整块填充＝「白色显脏、偏蓝」那条老根因
+    expect(bgs.some((v) => /#E7E9EA|var\(\s*--lc-(text|text-1|success)\s*\)/i.test(v)),
+      `尾注底色取到了文字档：${JSON.stringify(bgs)}`).toBe(false)
+  })
   it('按钮/CTA/徽标/气泡类选择器不得再用文字档灰做整块填充', () => {
     const offenders: string[] = []
     for (const f of walkSrc('src')) {

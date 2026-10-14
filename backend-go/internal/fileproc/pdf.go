@@ -2,7 +2,11 @@
 // fileproc 包 PDF 文本提取实现。
 // 优先使用 pdftotext CLI（poppler-utils，完美支持 CJK）；
 // CLI 不可用时回退 ledongthuc/pdf（纯 Go，无 CGO）逐页读取文本。
-// PDF 无原格式回写能力，翻译产物由引擎层统一降级为 xlsx 对照表（见 engine/file.go 第3步）。
+// 本文件只做**文本提取**；PDF 的交付形态由引擎层判定，且 PDF **是有原格式回写能力的**：
+// 主链＝原版式覆盖写回（pdf_overlay.go／pdf_overlay.py，redact+overlay 只动文字层），
+// 失败降级版式重建（pdfwrite.go），再败退纯文案——见 engine/file.go 的 ".pdf" 分支。
+// ⚠️ 旧口径「PDF 无原位回写、产物统一降级 xlsx 对照表」已废止（xlsx 对照表只服务
+// srt/vtt/json/yaml/yml 那一族，判据见 engine/file.go 的 writebackDelivery，锁＝engine/file_gate_test.go）。
 // 加密/扫描件（图片型）无法提取文本时返回可读错误。
 // =============================================
 package fileproc
@@ -24,11 +28,29 @@ import (
 // 策略：优先 pdftotext CLI（poppler-utils），CJK 支持完善；
 //
 //	CLI 不可用或提取为空时回退 ledongthuc/pdf 逐页读取。
+//	★ P1a：两层都提取为空（扫描件/图片型 PDF）时尝试 OCR 降级——把 PDF 当图片识别文字；
+//	  OcrAvailable()==false（OCR 未部署）则保留原「未提取到文本」错误，不把整单判死。
 func extractPdfText(path string, e *Extractor) error {
+	var extractErr error
 	if _, lookErr := exec.LookPath("pdftotext"); lookErr == nil {
-		return extractPdfTextCLI(path, e)
+		extractErr = extractPdfTextCLI(path, e)
+	} else {
+		extractErr = extractPdfTextLib(path, e)
 	}
-	return extractPdfTextLib(path, e)
+	if len(e.Texts) > 0 {
+		return nil // 已提取到文字
+	}
+	// 空层：OCR 降级（扫描件/图片型 PDF）——译文第一，能识别就优先出译文资产。
+	if OcrAvailable() {
+		if oerr := ExtractImageOCR(context.Background(), path, e); oerr == nil && len(e.Texts) > 0 {
+			return nil
+		}
+		// OCR 失败或无文字：保留下方原错误，让上层按「空 PDF」处理
+	}
+	if extractErr != nil {
+		return extractErr
+	}
+	return fmt.Errorf("PDF 未提取到文本（且 OCR 不可用，无法识别扫描件）")
 }
 
 // extractPdfTextCLI 通过 poppler-utils 的 pdftotext 命令行工具提取全文。

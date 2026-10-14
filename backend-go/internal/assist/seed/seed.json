@@ -152,6 +152,26 @@
       "content": "支持的文件格式：①还原文件模式（默认）——docx/pptx/xlsx/pdf/txt/csv/md 直接输出译文文件，srt/vtt/json/yaml 以对照表（xlsx）交付，支持多目标语言打包下载；②纯文案模式——额外准入 doc/xls/ppt 老格式、odt/ods/odp、rtf/epub，交付纯文案译文 .md。翻译后版式尽量保持原样，回写失败会自动降级为纯文案 .md 附加交付，整单不会失败。"
     },
     {
+      "key": "image-ocr",
+      "category": "usage",
+      "title": "图片与扫描件里的文字能翻吗",
+      "keywords": "图片,扫描件,扫描,照片,截图,识别,图片文字,ocr,png,jpg,jpeg,bmp,tif,tiff,webp,heic,拍歪,手写",
+      "link_keys": "tickets",
+      "priority": 8,
+      "enabled": 1,
+      "content": "图片里的文字可以翻译，走的是「先识别再翻」：png、jpg、jpeg、bmp、tif、tiff、webp、heic 这类图片与扫描件、照片都能上传，系统先做文字识别（识别在本机完成，文件不出境），再把识别出的文字翻成目标语言，交付的是译文文本文件（.md），不会把译文排回原图画面。要带两句前提：①识别质量跟着图片清晰度走，模糊、手写、拍歪的那一类可能少识别几行，译文建议自己核对一遍；②想要更高准确率，有 Word 源文件就传源文件。整页都是图的 PDF 同样按这条走，不会整单失败。"
+    },
+    {
+      "key": "audio-transcribe",
+      "category": "usage",
+      "title": "录音、音频与译文朗读",
+      "keywords": "录音,音频,语音,说话,麦克风,转写,朗读,发音,mp3,m4a,wav,ogg,flac,aac,opus,字幕,srt",
+      "link_keys": "tickets,chat",
+      "priority": 8,
+      "enabled": 1,
+      "content": "音频能翻，走「先转成文字再翻译」：mp3、m4a、wav、ogg、flac、aac、opus 上传后系统做语音识别（识别在本机完成，录音不出境），交付三件——带原时间轴的译文字幕（srt）、原文与译文对照的文本文件、你上传的那份音频本身。即时翻译页还能直接用麦克风说话：说完先转成文字填进输入框，你改完再点翻译，不会一转完就自动扣费。译文也可以点「朗读」听声音，但能不能读取决于那门语种配没配音色，有些语种暂时没有语音——没有语音只影响听，译文照常交付、照常计费。前提一句：多人抢话或背景噪声重的片段，时间轴可能错位，字幕建议对着音频核一遍。视频画面里的内容目前不做抽取，要翻视频请先导出成音频文件。"
+    },
+    {
       "key": "two-modes",
       "category": "usage",
       "title": "还原文件模式 vs 纯文案模式怎么选",

@@ -220,7 +220,7 @@ export default function PriceComparePage() {
         {/* ★ 2026-10-13 用户令②：与报价页页脚同一条品宣尾注（固定英文、不进词典、不随租户改名；
             口径与反证见 components/BrandTagline.tsx 与 BrandTagline.lock.test.ts） */}
         {' · '}
-        <BrandTagline style={{ fontWeight: 600 }} />
+        <BrandTagline />
       </footer>
     </div>
   )

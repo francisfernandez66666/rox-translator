@@ -110,7 +110,10 @@ func (s *Server) usdtPayPayload(meta *store.USDTOrderMeta, cfg *store.USDTSettin
 		DeclaredTxHash: meta.ClientTxHash,
 		SettledTxHash:  meta.MatchedTxHash,
 		AutoSettleOn:   cfg.AutoSettle,
-		AutoSettleLive: s.usdtWatchAllowsAutoPromise(),
+		// ★ #42：承诺判据按**这一单的链**问，不是按"这台整体上活不活"问。
+		// 匿名额度只射程 TRON，bep20/erc20 单不该被它压住（压住＝把一个没测过的维度
+		// 变成对另外两条链的降级承诺）。
+		AutoSettleLive: s.usdtWatchAllowsAutoPromise(meta.Chain),
 	}
 	p.PayURI = "tron:" + meta.ToAddr + "?amount=" + p.Amount
 	if meta.Chain != "trc20" {

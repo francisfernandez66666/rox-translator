@@ -87,11 +87,17 @@ type FileTranslateData struct {
 
 // writebackDelivery 写回交付形态（纯函数，便于单测）：
 //   - 返回 "xlsx"：无原格式回写能力的格式（srt/vtt/json/yaml/yml），以 xlsx 对照表为唯一交付形态；
-//   - 返回 "inplace"：有原格式写回能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级 xlsx。
+//   - 返回 "image"：图片格式（P1a，经 OCR 投喂翻译）——无原格式可原位回写，产出译文 .md 文档；
+//   - 返回 "audio"：音频格式（P2，经 ASR 转写投喂翻译）——产出译文 .md + 译文 .srt（带原时间轴）；
+//   - 返回 "inplace"：有原格式写写能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级 xlsx。
 func writebackDelivery(ext string) string {
 	switch ext {
 	case ".srt", ".vtt", ".json", ".yaml", ".yml":
 		return "xlsx"
+	case ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic":
+		return "image"
+	case ".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus":
+		return "audio"
 	default:
 		return "inplace"
 	}
@@ -242,6 +248,30 @@ func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, la
 	return len(fixedLang)
 }
 
+// extractFailureReason 把「提取这一步没产出」收敛成该给客户看的那句话（★ 2026-10-15 OCR/ASR 批）。
+// 只有**图片／音频**这两条新腿放宽成「原样带出底层错误」，理由有三层：
+//   - fileproc 给这两族写的错误句子**本身就是可行动口径**（见 ocr.go / asr.go）：
+//     「图片文字识别（OCR）不可用：…未部署 OCR 模型资产（assets/ocr/*.onnx）…取权重步骤见
+//     assets/ocr/README.md」「ASR 未识别出语音内容（音频可能无人声、纯音乐或已损坏）」——
+//     前者告诉运维去哪投放权重，后者告诉客户换个文件重传，两句都比通用文案有用；
+//   - 旧形态把这两句压成「无法从文件提取文本或文件为空」（《改造方案》§85 行的原话：
+//     「这就是扫描件 PDF 今天的死法」），客户看到"文件为空"会去检查文件，而真正缺的是模型资产，
+//     工单轨迹里也只剩这一句，运维无从判断该装依赖还是该回客户；
+//   - 其余格式（Office／PDF／文本）的底层错误是第三方库的英文原文，可能夹带路径与堆栈片段，
+//     把它们投到客户屏幕既读不懂也不安全 ⇒ **旧那句一字未改**，改动面收到最小。
+//
+// err==nil 而 texts 为空（真空文件／全空白）也走这里的空串分支，由调用方保留旧文案。
+func extractFailureReason(extractPath string, err error) string {
+	if err == nil {
+		return ""
+	}
+	e := strings.ToLower(filepath.Ext(extractPath))
+	if fileproc.IsImageFormat(e) || fileproc.IsAudioFormat(e) {
+		return err.Error()
+	}
+	return ""
+}
+
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
 // ★B3（方案 A2）：新增逐段事件回调 emit（与 prog 同闭包风格，仅 SSE 文件通道注入；
 // 工单 worker / 非流式接口传 nil，事件层整体空转零开销）。事件协议与稳定键见 file_events.go。
@@ -266,23 +296,22 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// ★ 工单双模式（2026-09-13）：options["delivery"]=="text" → 纯文案模式（anydoc/原生提取，
 	//   交付译文 .md，不还原版式）；restore/空 → 还原文件模式（既有原位回写管线，行为不变）。
 	deliveryText := strings.EqualFold(strings.TrimSpace(optionString(options["delivery"])), "text")
-	// ★ 格式白名单与工单管道对齐（三期格式补齐）：Office 原格式回写；PDF 版式重建；
-	// 其余文本类（txt/csv/srt/vtt/md/json/yaml）统一降级 xlsx 对照表产物；
+	// ★ 格式白名单（三期格式补齐；★ 2026-10-14 #43 后清单的唯一事实源在 fileproc/formats.go）：
+	// Office 原格式回写；PDF 走三级降级链（原版式覆盖→版式重建→纯文案）；
+	// txt/csv/md 按原行对齐原位写回；srt/vtt/json/yaml/yml 以 xlsx 对照表为唯一交付形态。
+	// 交付形态的判据只有本文件的 writebackDelivery 一处（下方第 3 步产物生成）。
 	// 纯文案模式额外准入 anydoc 独占格式（doc/xls/ppt 老格式、odt/ods/odp、rtf/epub 等）。
-	allowedExt := map[string]bool{
-		".docx": true, ".pptx": true, ".xlsx": true, ".pdf": true,
-		".txt": true, ".csv": true, ".srt": true, ".vtt": true,
-		".md": true, ".json": true, ".yaml": true, ".yml": true,
-	}
-	if !allowedExt[ext] {
-		if !deliveryText || !fileproc.AnydocFormats[ext] {
-			if deliveryText {
-				return &FileTranslateResult{Skill: "translation",
-					Error: "不支持的格式（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/doc/xls/ppt/odt/ods/odp/rtf/epub 等）"}
-			}
+	// ★ 2026-10-14 #43：这份清单原本在本包与 internal/api 各有一份字面量（共四份），
+	//   唯一事实源现在是 `fileproc.IsTranslateFormat`。这里为什么必须一起收：
+	//   它是**执行口**的第二道判定——上传口放行、这一口判不支持时，
+	//   客户看到的是"单建起来了、跑一半报不支持"，而且钱已经扣了。
+	if !fileproc.IsTranslateFormat(ext, deliveryText) {
+		if deliveryText {
 			return &FileTranslateResult{Skill: "translation",
-				Error: "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml）"}
+				Error: "不支持的格式（纯文案模式支持 " + fileproc.FormatHintBase() + "/" + fileproc.FormatHintText() + " 等）"}
 		}
+		return &FileTranslateResult{Skill: "translation",
+			Error: "不支持的格式（支持 " + fileproc.FormatHintBase() + "）"}
 	}
 	// 显式判一次可读性：落盘件可能已被保留期清理删掉，提前拦下才能给出「文件不存在」
 	// 这种用户可行动的文案，而不是把底层 open 错误原样抛进工单轨迹。
@@ -340,17 +369,25 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 	var texts []string
 	var err error
+	extractFrom := filePath // 实际被提取的那个路径（纯文案模式下可能是 anydoc 落盘的 .md 副本）
 	if mdAlignPath != "" {
+		extractFrom = mdAlignPath
 		texts, err = fileproc.ExtractTexts(mdAlignPath)
 	} else {
 		texts, err = fileproc.ExtractTexts(filePath)
 	}
 	if err != nil || len(texts) == 0 {
+		// ★ 2026-10-15：图片/音频两条新腿把 fileproc 那句**可行动的**原因原样带出去
+		//   （判据与理由见 extractFailureReason）；其余格式继续走下面那句既有文案，一字未改。
+		if reason := extractFailureReason(extractFrom, err); reason != "" {
+			return &FileTranslateResult{Skill: "translation", Error: reason}
+		}
 		return &FileTranslateResult{Skill: "translation", Error: "无法从文件提取文本或文件为空"}
 	}
 	// ★ PDF（2026-09-18 新链）：原地替换（redact+overlay）——原版式/原字体/不越界。
 	//   提取键与写回目标完全一致（同一矢量栅格切分口径），不再产出 pdf2docx 缓存 DOCX。
-	//   图片内容按产品策略不翻译；纯文案模式不走此链（anydoc 提取，交付 .md）。
+	//   ★ 2026-10-14 OCR 恢复：扫描件/图片型内容降级走 extractImageOCR（见 fileproc/ocr.go）；
+	//   纯文案模式不走此链（anydoc 提取，交付 .md）。
 	if !deliveryText && strings.EqualFold(filepath.Ext(filePath), ".pdf") {
 		if t2, e2 := fileproc.ExtractTextsPdfOverlay(ctx, filePath); e2 == nil && len(t2) > 0 {
 			// 整体替换而非合并：新键的切分口径与写回目标严格同一（见 pdf_overlay.py 的
@@ -865,6 +902,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 		}
 	} else {
+		// ★ P2：音频入口：产物 srt 的时间轴是对**原音频**算的，用户拿回去要能直接挂载播放，
+		//   故把原始音频随产物一并交付（只拷一次，不随语言数放大；用展示名而非内部落盘名，
+		//   与其余产物同一取名口径）。拷贝失败不判死——字幕与译文才是翻译资产。
+		if writebackDelivery(ext) == "audio" {
+			audioSrc := filepath.Join(outputDir, sanitizeArtifactBaseName(baseName, ext)+ext)
+			if cerr := copyFileContents(filePath, audioSrc); cerr != nil {
+				// 走 observability 而不是标准库：AGENTS「日志与观测」那条口径，且存量 log.Printf 受棘轮只减不增约束。
+				observability.Warn(ctx, "音频原文件随产物拷贝失败（不影响字幕交付）", "error", cerr.Error(), "artifact", filepath.Base(audioSrc))
+			} else {
+				filesOut = append(filesOut, audioSrc)
+			}
+		}
 		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
 		for _, lc := range finalLangs {
 			tr := langTranslations[lc]
@@ -886,6 +935,45 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 				filesOut = append(filesOut, outPath)
 				langArtifact[lc] = outPath // 二进制对照表：保真闸门自动回落段级视图口径
+				continue
+			}
+			// ★ P1a：图片格式（经 OCR 投喂翻译）无原格式可原位回写，交付形态为译文 .md 文档。
+			// 产物名 {base}_{lang}.md（与 md 源码翻译同源 WriteTranslationMd，按提取顺序输出译文段）。
+			if writebackDelivery(ext) == "image" {
+				imgSuffix := fmt.Sprintf("_%s.md", lc)
+				imgPath := filepath.Join(outputDir, artifactBase(lc, imgSuffix)+imgSuffix)
+				if ierr := fileproc.WriteTranslationMd(imgPath, texts, tr); ierr != nil {
+					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], ierr.Error())}
+				}
+				filesOut = append(filesOut, imgPath)
+				langArtifact[lc] = imgPath // 译文 .md：保真比对应读它
+				continue
+			}
+			// ★ P2：音频格式（经 ASR 转写投喂翻译）同样没有「原位回写」这回事——译文是文本，
+			//   不可能塞回原音频。交付三件套：
+			//     ① {base}_{lang}.srt  译文字幕（**带原时间轴**，可直接挂到原音轨上播放）
+			//     ② {base}_{lang}.md   译文纯文案（便于阅读/校对/再加工）
+			//     ③ 原音频本体的一个副本已于上方一次性落 outputDir（见 copyOriginalAudio 一次调用）
+			//   —— srt 的时间轴是对着**原音频**算的，缺了它就点不齐，故必须随包交付；
+			//      每一语种都拷一份是本末倒置（同一份字节 × N 语言），只拷一次。
+			if writebackDelivery(ext) == "audio" {
+				cues := fileproc.AudioCues(filePath)
+				srtSuffix := fmt.Sprintf("_%s.srt", lc)
+				srtPath := filepath.Join(outputDir, artifactBase(lc, srtSuffix)+srtSuffix)
+				if serr := fileproc.WriteTranslationSrt(srtPath, cues, texts, tr); serr != nil {
+					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 字幕产物生成失败：%s", config.LangNames[lc], serr.Error())}
+				}
+				filesOut = append(filesOut, srtPath)
+				if len(cues) == 0 {
+					degraded = append(degraded, lc) // 时间轴未带上：srt 退化为无时间轴编号（译文不丢）
+				}
+				mdSuffix := fmt.Sprintf("_%s.md", lc)
+				audPath := filepath.Join(outputDir, artifactBase(lc, mdSuffix)+mdSuffix)
+				if merr := fileproc.WriteTranslationMd(audPath, texts, tr); merr != nil {
+					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], merr.Error())}
+				}
+				filesOut = append(filesOut, audPath)
+				langArtifact[lc] = audPath // 译文 .md：保真比对应读它
 				continue
 			}
 			// ★ 2026-09-09 产品决策：写回失败不降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），

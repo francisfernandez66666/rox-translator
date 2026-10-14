@@ -549,7 +549,7 @@ func (s *Server) handleTranslateFileStream(w http.ResponseWriter, r *http.Reques
 	defer os.Remove(savePath)
 
 	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
-	if perr := checkPdfLimits(savePath, header.Filename); perr != nil {
+	if perr := checkPdfLimits(r.Context(), savePath, header.Filename); perr != nil {
 		fmt.Fprint(w, sseEvent("error", map[string]interface{}{"error": perr.Error()}))
 		if flusher != nil {
 			flusher.Flush()
@@ -802,7 +802,7 @@ func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
 	f.Close()
 	defer os.Remove(savePath)
 	// ★ 性能优化 Phase A1：PDF 前置拦截（大小/页数），超限直接友好拒绝
-	if perr := checkPdfLimits(savePath, header.Filename); perr != nil {
+	if perr := checkPdfLimits(r.Context(), savePath, header.Filename); perr != nil {
 		// ★ F-64②（批 I-10）：文件体积/页数超限是**客户端上传件本身不合格**（换个小文件即可成功）→ 400；
 		//   旧 200 壳让 OpenAPI/SDK 把它当提交成功。用 ErrFileTooLarge（映射 400，与
 		//   parseUpload 的体积拒绝同族），不改写 perr 的原话术（含「先转存 docx」的可行动指引）。

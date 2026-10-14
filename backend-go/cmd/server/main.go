@@ -58,6 +58,10 @@ func main() {
 	}
 	// ★ 结构化日志（工作流 C）：以 slog JSON 日志器替换默认 logger，全链路带 trace_id。
 	slog.SetDefault(observability.NewLogger())
+	// ★ #41 S3 第一步：启动阶段计时器必须在日志器之后、任何耗时步骤之前建立，
+	//   否则第一段会把「日志器初始化之前」的耗时算进后面某段（起点错，读数就全错）。
+	//   它只出声、不拦启动（见 boot_timer.go 口径②）。
+	boot := newBootStager()
 	// 命令行参数：监听地址、前端静态目录、KB 向量索引与 KB 缓存库路径
 	addr := flag.String("addr", "127.0.0.1:8787", "HTTP 监听地址（★ S1：开发默认回环；对外部署须显式绑定且 DB_DRIVER=postgres）")
 	frontend := flag.String("frontend", "", "前端 dist 目录（默认相对路径 ./frontend/dist）")
@@ -147,6 +151,10 @@ func main() {
 		log.Printf("[init] Redis 已启用: %s", cfg.RedisAddr)
 	}
 
+	// ★ #41 S3 读数：配置装载＋Redis 探活这一段是**纯网络往返**（PG 还没连），
+	//   现网 Redis 未配时这里应当接近 0ms；若这里就花掉几百毫秒，要查的是 DNS/连接而不是启动代码。
+	boot.stage("配置与Redis探活")
+
 	// 解析前端 dist 目录（默认 ../frontend/dist，存在 index.html 才启用）
 	distDir := *frontend
 	if distDir == "" {
@@ -182,6 +190,11 @@ func main() {
 			log.Printf("[migrate] 迁移单飞锁独立连接打开失败（跳过单飞，风险自负）: %v", lerr)
 		}
 	}
+	// ★ #41 S3 读数：这一段是「另开一条 PG 连接 ＋ 拿 session 级 advisory lock」
+	//   （顺带上面那次 dist 目录解析＝一次 os.Stat，量级可忽略，故不单开一段）。
+	//   双实例并发启动时第二台会在这里排队（R3 那条风险登记看的就是这个数），
+	//   平时应为一次连接往返的量级。
+	boot.stage("迁移单飞锁获取")
 
 	// 打开术语数据库
 	dbPath := *kbDB
@@ -201,6 +214,9 @@ func main() {
 			log.Printf("术语数据库已打开(SQLite): %s", dbPath)
 		}
 	}
+	// ★ #41 S3 读数：kb.Open 在建连之外还跑术语库的建表 DDL（持锁期间），
+	//   现网 schema 已是目标态时应当很轻；若这里几十上百毫秒，说明幂等补列在重复扫表。
+	boot.stage("术语库kb.Open")
 
 	// ★ 运维整改（2026-09-16）：PG 多实例滚动发布迁移单飞——kb/tenant/saas store 共享
 	//   同一连接，全部 schema 迁移在建连后立刻执行；两实例并发跑 CREATE INDEX/回填/
@@ -266,6 +282,10 @@ func main() {
 	if releaseMigLock != nil {
 		releaseMigLock() // 迁移单飞锁：迁移与种子全部完成后释放
 	}
+	// ★ #41 S3 读数：整段「租户迁移＋tenant.Store 播种＋store.New＋EnsureAdmin/EnsureBalance/
+	//   EnsureDefaultPackages×2」都在这一个数里，锁也在这一刻才释放。方案里的 S3-c（迁移短路）
+	//   要不要做，只看这一行现网的 ms——**不许**为把它压小去动 acquireMigrateLock 的语义。
+	boot.stage("租户与平台迁移播种")
 
 	// ★ P0 修复（2026-09-16 双实例 e2e 实测）：PG 生产方言下存储初始化失败必须 fail-fast。
 	//   旧行为退化启动（Store=nil）后：登录/鉴权全 500、USDT 等周期协程空指针 crash，
@@ -298,6 +318,10 @@ func main() {
 			log.Printf("知识库向量索引已加载: %d 条", len(idx.IDs))
 		}
 	}
+	// ★ #41 S3 读数：LoadNPZ 读的是本地 13.4 MB npz（解压＋解析全量 float32），
+	//   与上面那几段数据库步骤**没有数据依赖**——它若真的贵，S3-b（与迁移段并行）才值得做；
+	//   本阶段先按这一行读数决定，不在没有读数时动数据可见性（那是三步里唯一中风险的一步）。
+	boot.stage("向量索引LoadNPZ")
 
 	// 创建翻译引擎（挂载 DB 与向量索引）
 	eng := engine.NewEngine(cfg, db, kbIndex, ts)
@@ -308,6 +332,8 @@ func main() {
 	if st != nil {
 		eng.St = st
 	}
+	// ★ #41 S3 读数：引擎构造＋敏感词词包装载（本地文件，纯 CPU/IO）。
+	boot.stage("引擎与敏感词装载")
 
 	// 加载模型路由策略（system_config.model_routes，admin 可热更新）
 	if st != nil {
@@ -356,6 +382,11 @@ func main() {
 	if st != nil {
 		eng.Evals = evals.New(cfg, llm.NewClient(cfg), st, judgeKey)
 	}
+	// ★ #41 S3 读数：这一段＝model_routes 存量明文一次性加密回写＋LLM 三档来源水合＋评估器构造。
+	//   水合委托给 hydrateLLMKeys（内部走 llmsource.Resolve，与运行期热加载同一个构造函数），
+	//   它的成本是一次 system_config 读＋若干次解密，**不该是秒级**；若这里是秒级，
+	//   要查的是那次读库走的连接池，而不是启动代码。
+	boot.stage("LLM配置水合与评估器")
 
 	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
@@ -396,11 +427,34 @@ func main() {
 	// ★ 性能优化 B2/B3：启动实时计量批量落库（把逐 LLM 调用的写事务合并为周期批量），
 	//   彻底消除并发翻译下的 SQLITE_BUSY。
 	billing.InitGlobalSink(srv.Bill)
+	// ★ #41 S3 读数：到这里是「HTTP 服务装配＋计费钩子＋批量落库 sink」，纯构造、不该有网络腿；
+	//   这一段若贵，查的是构造期做了取数，而不是构造本身。
+	boot.stage("HTTP服务装配与计费钩子")
 
 	// 文件处理依赖健康检查（Python/LibreOffice）
-	fileproc.CheckHealth()
+	// ★ #41 S3-a（2026-10-14）：把这一腿挪出 bind 之前的关键路径。它内部串行 fork 4 次 Python
+	//   子进程做 import 探测（fpdf／pymupdf／pdf2docx／anydoc），是 1.6G 机器启动期最可疑的
+	//   秒级构成（方案 §四·S3-a 实测清单第 9 步；演示单元"约 3.4 秒才 bind"的嫌疑主体）。
+	//   ★ 为什么挪出去安全（读代码确认过，不是推测）：CheckHealth 自带 sync.Once，
+	//   运行期全部消费方（GetPythonPath／GetLibreOfficePath／anydoc.go 的 AnydocAvail）
+	//   都经由同一个入口，首次调用会阻塞等 Once 跑完 ⇒ 每个调用方看到的语义与串行时完全一致，
+	//   不存在"读到半成品"；异步化的同时把"环境缺依赖"这条告警从"挡启动"变成"只出声"。
+	//   ⚠️ 唯一可观测代价：`[fileproc-health]` 那几行现在出现在服务已监听之后（内容一字不变、
+	//   只是时点后移）——发版验收要认这条，别当回归查。
+	go func() {
+		hcStart := time.Now()
+		fileproc.CheckHealth()
+		// 后台腿用自己的起点，不与主流程的 stager 抢写 last（那是数据竞争）。
+		bootAsyncDone("fileproc依赖自检(后台)", hcStart)
+	}()
 
-	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s", *addr)
+	// ★ #41 S2（2026-10-14）：启动之前先问 systemd 有没有交来监听 fd。
+	//   顺序有讲究：这一句必须排在下面那条启动日志**之前**，因为那条日志要带上
+	//   "这一支到底走了接管还是自绑"——走了哪条分支必须由同一个读数说出口，
+	//   不许另起一行日志（log 棘轮按 cmd/ 行数计数，见 AGENTS §一·2）。
+	sdLn, sdHow := systemdSocketListener()
+
+	log.Printf("能言 v2.0.0-go 服务已启动: http://localhost%s（%s）", *addr, sdHow)
 	s := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),
@@ -485,7 +539,15 @@ func main() {
 		}()
 	}
 
-	if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	// ★ #41 S3 的**总判据读数**：这一行的 total_ms 就是「进程起点 → 能服务」，
+	//   也即 socket activation 下重启窗口里 backlog 排队的上限时长（方案 §四·S3 验收第 1 条）。
+	//   S3-b（LoadNPZ 并行）要不要做、S3-c（迁移短路）要不要做，只看这里与上面各段的 ms，
+	//   不许拿"读代码推的估计"当投入依据——那正是在最便宜的环节优化最贵地方的老路子。
+	boot.stage("可服务（listener就绪）")
+
+	// ★ #41 S2：有 systemd 交来的 fd 就用它 Serve，没有就回退今天的 ListenAndServe。
+	//   这一句是本批唯一的行为改动点，也是"停 socket 单元即刻回现状"的那条兜底腿。
+	if err := serveHTTP(s, sdLn); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP 服务启动失败: %v", err)
 	}
 }

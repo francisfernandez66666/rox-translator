@@ -694,7 +694,7 @@ func (s *Server) notifyTenantAdmins(tid int64, title, body string) {
 		if usr.Role != store.RoleTenantAdmin {
 			continue
 		}
-		_ = s.Store.CreateNotification(usr.ID, title, body, "tenant", tid)
+		_ = s.Store.CreateNotification(usr.ID, title, body, store.NotifyRefTenant, tid)
 		if emailOn == "1" && usr.Email != "" {
 			// 后台异步向成员发送租户通知邮件，避免阻塞循环
 			// ★ F-17（批E）口径：通知标题/正文由触发方中文字面量传入，语种维度本批不启用（传空=中文链路）

@@ -1,0 +1,40 @@
+# ============================================================================
+# translator-demo.socket — 演示站 HTTP 监听 socket 的**属主单元**
+# （★ #41 零停机第一阶段 S1；与 translator.socket 同构，只换端口与 service 名）
+#
+# 为什么必须**独立一份**而不是复用主站那份：
+#   两个单元是两个进程、两个端口（主站 8787／演示站 8789），backlog 与属主都要各算各的。
+#   ★★ 切勿让两份 socket 的 ListenStream 写同一个端口——那会变成"两个 service 抢同一端口"的
+#   **静默半可用形态**：先起来的那台拿到 fd，另一台要么起不来、要么拿到一份没人 accept 的 socket，
+#   表现是"某个域名偶尔 502"，比现状（必现、且日志明确写 bind failed）难查一个量级。
+#
+# 读演示单元的正确入口（别拿 demo 域去读，会读到主站）：
+#   `demo.lexicorn.cn` 在 Caddy 里**没有自己的站点块**，它落进 `*.lexicorn.cn` 通配块被反代到 **8787（主站）**；
+#   演示单元（8789）的真域名是 `rox-test.lexicorn.cn`。⇒ 验收这一份要按 8789 那一条读，
+#   拿 demo 域去读看到的是主站那份 socket 的读数，两站的接管状态会被读成"一样"。
+#
+# ★★ 启用顺序是硬约束（理由见 translator.socket 头注那一段，这里只留结论）：
+#   **先上线认识 LISTEN_FDS 的二进制（S2），再 enable 这一份**；反过来＝演示单元自己 bind 8789
+#   撞 EADDRINUSE ⇒ 当场起不来。装配脚本 `deploy/install_socket_activation.sh` 的 BINARY_MARKER
+#   预检会把这一条挡在干跑段。
+#
+# 回滚（一条命令、不需要回滚代码）：
+#   systemctl stop translator-demo.socket && systemctl restart translator-demo
+# ============================================================================
+
+[Unit]
+Description=Translator demo HTTP listener (socket activation owner)
+# ★ 绝不可写 Accept=yes（理由见 translator.socket 头注：常驻服务不是 inetd 形态）。
+
+[Socket]
+# 与 `translator-demo.service` 里 `-addr` 的实参**逐字一致**。
+# ⚠️ 地址/端口与 service 那一份不一致时，进程会"接管 8789、又想自绑另一个地址"，两半各活一半。
+ListenStream=127.0.0.1:8789
+# Backlog 与主站同档：演示单元同样被换源验收打，溢出的代价同样是 502。
+Backlog=2048
+NoDelay=true
+# 显式点名被触发的 service，不靠 base 名推断（两份文件同目录时"照主站那份抄"是真实的抄错路径）。
+Service=translator-demo.service
+
+[Install]
+WantedBy=sockets.target

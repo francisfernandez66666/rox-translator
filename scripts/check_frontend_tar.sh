@@ -13,9 +13,9 @@
 # 用法：
 #   bash scripts/check_frontend_tar.sh [tar 路径]        # 默认 /tmp/frontend-dist.tar.gz
 #   bash scripts/check_frontend_tar.sh --dist <dist 目录> # 直接验磁盘上的 dist（打包前用）
-#   退 0＝五档全过；退 1＝有 BAD（不许换源）；退 2＝参数/文件本身不成立（没东西可验）
+#   退 0＝全部判据过；退 1＝有 BAD（不许换源）；退 2＝参数/文件本身不成立（没东西可验）
 #
-# 五档判据（都只问"这批改动真送出去了吗"，不重复单测已证明的语义）：
+# 判据清单（都只问"这批改动真送出去了吗／送出去的东西能用吗"，不重复单测已证明的语义）：
 #   T1 brotli/gzip 侧车在位且数量对得上——省字节这件事的物理载体就是这两批文件；
 #   T2 macOS 脏文件为零（.DS_Store 与 ._ AppleDouble）——历史上两次公网可下载都源自 scp -r／tar 未排除；
 #   T3 入口 asset 原文体积 ≤ 上限——懒加载退化（词典被改回静态 import）在这里当场越界；
@@ -23,6 +23,9 @@
 #   T5 入口文件名带内容哈希且在 assets/ 下——长缓存与「文件真在才发」那条 Caddy 条件化的前提；
 #      2026-10-12 的 CACHE_BUST 逃生阀写法（`entryFileNames: undefined`）会把产物退成固定名 /index.js。
 #      判据形状见下方 entry_shape_ok，`FRONTEND_TAR_SELFTEST=1` 会把五种名字喂给同一个函数自证射程。
+#   T6 每一对侧车必须能解回原文（★ 2026-10-14 白屏事故新增，见下方那段的因果链）——
+#      T1 判"在不在"，T6 判"解不解得开"，两档不可替代。
+#      T5b／T6b 是两条判据自证腿：把合格与不合格的样本喂给**同一个**函数，两态读数都要有。
 # ============================================================================
 set -uo pipefail
 
@@ -164,6 +167,66 @@ if entry_shape_ok "assets/index-BBMceqr3.js" && entry_shape_ok "assets/index-202
   echo "  OK   T5b 入口名判据自证（2 例合格放行／固定名＋短哈希名 4 例判负）"
 else
   echo "  BAD  T5b 入口名判据自证没过 ⇒ T5 这一档的射程不可信"; RC=1
+fi
+
+# T6 侧车必须**解得回原文**（★ 2026-10-14 现网白屏事故立档）：
+#   上一代的侧车是用 `BROTLI_PARAM_LARGE_WINDOW=1` 压的，产物头字节里写了 WBITS>24，
+#   浏览器解码器窗口上限 16 MiB ⇒ Edge/Chrome 判 `ERR_CONTENT_DECODING_FAILED`
+#   ⇒ `<script type=module>` 载入失败 ⇒ 整页纯黑（标签能显示、界面一片黑、零提示）。
+#   而 T1 只问"侧车在不在、入口两份齐不齐"，对"能不能解开"完全无感；那一代坏侧车甚至比原文小得多，
+#   gzip／原文两档又都正常，于是 vite build／前端单测／T1–T5 全绿而现网白屏——
+#   本文件唯一能在换源前抓住它的一档就是这个解码往返。
+#   判据对**包里的每一对**侧车都跑（不抽查入口）：坏侧车由压缩参数造成，一坏就是全坏。
+T6_JS='
+const fs = require("fs"), path = require("path"), z = require("zlib");
+const root = process.argv[1];
+let checked = 0; const bad = [];
+(function walk(d) {
+  for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) { walk(p); continue; }
+    if (!/\.(br|gz)$/.test(e.name)) continue;
+    const orig = p.replace(/\.(br|gz)$/, "");
+    if (!fs.existsSync(orig)) continue;              // 不是侧车（真 .gz 资产没有同名原文）⇒ 不在射程
+    checked++;
+    const raw = fs.readFileSync(orig), enc = fs.readFileSync(p);
+    try {
+      const back = /\.br$/.test(e.name) ? z.brotliDecompressSync(enc) : z.gunzipSync(enc);
+      if (Buffer.compare(back, raw) !== 0) bad.push(p + " 解回后与原文不等（" + back.length + " B ≠ " + raw.length + " B）");
+    } catch (err) { bad.push(p + " 解不开（浏览器会判解码失败）：" + err.message); }
+  }
+})(root);
+console.log("  T6 明细：checked=" + checked + " bad=" + bad.length);
+for (const b of bad) console.log("       SIDECAR_BAD " + b);
+process.exit(checked > 0 && bad.length === 0 ? 0 : 1);
+'
+if ! command -v node >/dev/null 2>&1; then
+  echo "  BAD  T6 本机没有 node，侧车解码这一档**一行都没跑**（不许读成通过）"; RC=1
+else
+  node -e "$T6_JS" "$ROOT"; T6_RC=$?
+  if [ "$T6_RC" = "0" ]; then
+    echo "  OK   T6 包内每一对 br/gz 侧车都能解回原文"
+  else
+    echo "  BAD  T6 侧车解码往返没过（有解不开/不等的一份，或一份都没判到＝这一档没有射程）"; RC=1
+    echo "       ⇒ 重跑 node scripts/precompress_dist.mjs；核压缩参数里不许出现 BROTLI_PARAM_LARGE_WINDOW"
+  fi
+
+  # T6b 射程自证：现攒一份"解不开"的假侧车喂给**同一个**判据函数，必须先放行再判死。
+  # 只验"坏的能判死"不够——若整段压根没跑到（比如 root 传错），坏的也判不死；
+  # 所以两态都要有读数（同记忆里那条"新读数腿要双态自证"）。
+  T6_SELF=$(mktemp -d)
+  printf 'hello sidecar self test\nhello sidecar self test\n' > "$T6_SELF/a.txt"
+  node -e 'const z=require("zlib"),fs=require("fs");fs.writeFileSync(process.argv[1],z.brotliCompressSync(fs.readFileSync(process.argv[2])))' "$T6_SELF/a.txt.br" "$T6_SELF/a.txt" >/dev/null 2>&1
+  node -e "$T6_JS" "$T6_SELF" >/dev/null 2>&1; T6_GOOD=$?
+  # 再把它截断成浏览器解不开的那一类（魔数与"比原文小"都还在，只毁内容——正是 T1 抓不到的形态）
+  node -e 'const fs=require("fs");const b=fs.readFileSync(process.argv[1]);fs.writeFileSync(process.argv[1],b.subarray(0,Math.max(4,Math.floor(b.length/2))))' "$T6_SELF/a.txt.br" >/dev/null 2>&1
+  node -e "$T6_JS" "$T6_SELF" >/dev/null 2>&1; T6_BAD=$?
+  rm -rf "$T6_SELF"
+  if [ "$T6_GOOD" = "0" ] && [ "$T6_BAD" != "0" ]; then
+    echo "  OK   T6b 解码判据自证（好侧车放行／截断侧车判死）"
+  else
+    echo "  BAD  T6b 解码判据自证没过（good=$T6_GOOD bad=$T6_BAD）⇒ T6 这一档的射程不可信"; RC=1
+  fi
 fi
 
 echo

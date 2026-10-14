@@ -95,10 +95,11 @@ func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.regGuard.record("lead:" + ip) // 成功才计数（与 forgot/reset 同款 allow/record 语义）
 	// 超管触达：站内信（反馈 BBS 同款）+ 告警（复用邮件/群机器人链路，与 feedback 同级 warning）
-	for _, sa := range s.Store.ListUsersByRole(0, "admin") {
-		_ = s.Store.CreateNotification(sa.ID, "收到新的销售线索",
-			fmt.Sprintf("%s（%s）", company, email), "feedback", f.ID)
-	}
+	// ★ #46：这一支收敛前按角色字面量圈人——销售线索是**唯一客户入口**，
+	//   而只有 super_admin 账号的部署里它一条站内信都发不出去（邮件仍走 alert_email，所以现网难发现）。
+	s.notifySuperAdmins("收到新的销售线索",
+		fmt.Sprintf("%s（%s）", company, email),
+		store.NotifyRefFeedback, f.ID)
 	s.Store.CreateAlert(0, "warning", "lead",
 		fmt.Sprintf("新销售线索：%s｜%s｜意向语言：%s", company, email, orNone(langs)))
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "已收到，我们会尽快联系您"})

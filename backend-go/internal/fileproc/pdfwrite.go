@@ -5,8 +5,10 @@
 //   - 字体解析顺序（ResolvePDFFont）：system_config/env pdf_font_path → 常见系统 TTF → 内置
 //     assets/fonts/DroidSansFallbackFull.ttf（Apache 2.0，覆盖中日韩英）
 //   - 子进程控制：受 nice 低优先级 + 资源闸 + context 超时/取消约束
-//   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码），业界通行做法即版式重建；
-//     产物为可读性优先的译文 PDF，源文对照另有 xlsx 通道兜底
+//   - 说明：PDF 原生内容流无法安全替换文字（字体子集/CID 编码）曾是"只能版式重建"的理由，
+//     自 2026-09-18 起主链已换成**原版式覆盖写回**（pdf_overlay.go：redact+overlay 只动文字层），
+//     本文件是那条链的第二级兜底。⚠️ 旧口径「PDF 只能重建、源文对照另走 xlsx 通道」已废止：
+//     PDF 属**有原位回写能力**那一族，写回失败也不降级 xlsx 对照表（判据＝engine/file.go 的 writebackDelivery）。
 //
 // =============================================
 package fileproc
@@ -54,7 +56,8 @@ func bundledFontPath() string {
 //  2. 常见系统路径逐个探测
 //  3. 内置 DroidSansFallbackFull.ttf
 //
-// 返回空串表示无可用字体（调用方应降级 xlsx 对照表）。
+// 返回空串表示无可用字体⇒ 版式重建这一腿失败；调用方（engine/file.go 的 PDF 分支）
+// 此后的兜底是**纯文案 .md**，不是 xlsx 对照表（PDF 属有原位回写能力的那一族）。
 func ResolvePDFFont() string {
 	if p := os.Getenv("PDF_FONT_PATH"); p != "" {
 		if isUsableTTF(p) {
@@ -84,7 +87,8 @@ func isUsableTTF(p string) bool {
 // WriteTranslatedPDF 生成译文 PDF（版式重建）。
 // 参数：ctx=上下文（子进程超时/取消）；outPath=输出文件路径；srcTexts=按阅读顺序排列的源文段落；
 // translations=原文→译文映射（与引擎 langTranslations 同构：未命中的段落回退显示原文）。
-// 返回错误：无可用字体或写出失败；调用方应降级 xlsx 对照表。
+// 返回错误：无可用字体或写出失败；它是 PDF 三级降级链的第二级（原版式覆盖→**本函数**→纯文案 .md），
+// 失败后调用方（engine/file.go 的 ".pdf" 分支）退纯文案，不退 xlsx 对照表。
 func WriteTranslatedPDF(ctx context.Context, outPath string, srcTexts []string, translations map[string]string) error {
 	fontPath := ResolvePDFFont()
 	if fontPath == "" {
@@ -99,6 +103,8 @@ func WriteTranslatedPDF(ctx context.Context, outPath string, srcTexts []string, 
 }
 
 // WriteTranslatedPDFviaDocx PDF→DOCX→翻译→DOCX→PDF（保留排版/图表；图片内容按产品策略不翻译）。
+// ⚠️ **已退役**（2026-09-18：版式漂移/白块/字体探测等问题的源头，代码只留作回滚位，现网零调用方）：
+// 主链＝pdf_overlay 原版式覆盖，兜底＝本文件的 WriteTranslatedPDF。
 // 参数：ctx=子进程超时/取消上下文；outPath=输出 PDF 路径；inPath=输入 PDF 路径；
 //
 //	translations=原文→译文映射；lang=目标语言代码。
@@ -114,9 +120,15 @@ func WriteTranslatedPDFviaDocx(ctx context.Context, outPath, inPath string, tran
 }
 
 // ExtractTextsPdfDocx 经 pdf2docx 提取段落文本（键与替换目标完全一致，表格必中）。
+// ⚠️ **已退役**（与 WriteTranslatedPDFviaDocx 同批，2026-09-18 起现网零调用方，留作回滚位）：
+// 现役提取腿＝pdf_overlay 的矢量栅格切分 + pdftotext/纯 Go 库回退（见 engine/file.go 的 ".pdf" 分支）。
 // 参数：ctx=子进程超时/取消上下文；pdfPath=输入 PDF 路径。
 // 返回 (文本键列表, 缓存 DOCX 路径, 错误)；调用方负责删除缓存 DOCX。
-// 图片型文档按产品策略不做内容翻译——提取失败时由调用方降级 pdftotext/xlsx 对照表。
+// 这一退役腿自己**没有文字识别能力**：图片型 PDF 在它那里提取失败，由调用方回退 pdftotext 文本腿（**不是** xlsx 对照表）。
+// ⚠️ 旧注释那句「按产品策略不做内容翻译」是 2026-10-14 OCR 恢复前的策略口径，现已作废——
+//
+//	现役扫描件腿＝pdf.go 的 extractPdfText 在文本层为空时降级 ExtractImageOCR（见 ocr.go）。
+//
 // 上下文超时/取消贯通 + 创建缓存前清扫 >24h 崩溃残留。
 func ExtractTextsPdfDocx(ctx context.Context, pdfPath string) ([]string, string, error) {
 	sweepStalePdfDocxCache()
@@ -301,9 +313,15 @@ func writePDFViaGoFpdf(outPath string, fontPath string, srcTexts []string, trans
 	return pdf.OutputFileAndClose(outPath)
 }
 
-// PdfImageHeavy 判定图片型 PDF：平均每页文本层字符 < 200（引导用户改传 Word 源文件）。
+// PdfImageHeavy 判定图片型 PDF：平均每页文本层字符 < 200。
 // 参数：pdfPath=待检测 PDF 路径。
 // 返回 true 表示文本层稀薄，疑似扫描件/图片型 PDF。
+// ★ 2026-10-14 OCR 恢复后这一判定的用途已换档（旧注释「引导用户改传 Word 源文件」作废）：
+//
+//	文字层稀薄不再意味着"翻不了"——文本层为空时 PDF 走 OCR 降级识别（见 pdf.go 的 extractPdfText），
+//	这里只服务两处**提示与计费**读点：工单详情/OpenAPI 任务出 image_heavy 标记（给客户一条"识别件请核对"的横幅），
+//	以及建单预估按识别件分档（扫描件的提取字数与原件字数不是一个量级）。
+//
 // 外部工具调用加 30s 超时（FILEPROC_SUB_TIMEOUT_SEC 可调）。
 func PdfImageHeavy(pdfPath string) bool {
 	sctx, scancel := context.WithTimeout(context.Background(), subTimeout())

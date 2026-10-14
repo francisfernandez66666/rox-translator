@@ -537,6 +537,24 @@ T.update({
 "缺少 id 参数": "Missing id parameter",
 })
 
+# —— P3 语音两件套盘点（2026-10-15）：chat_audio.go（/api/chat/asr、/api/chat/tts）新增的写死中文。
+#   这批由闸门 TestAPICnMessageLiteralsCovered 当场报缺（属**暴露**不是回归：新端点合进来时没随批补词条），
+#   英文界面访客点开语音按钮撞上的就是这七句。措辞口径两条：
+#   ① 这三条是**协议/入参**类失败（401/405/400/500 走 writeError），不是能力性失败——
+#      能力不可用那句走的是「译文第一」的 200＋{error,reason} 形态，由前端 voiceFail.ts 取词典文案，
+#      不经这张表（见《改造方案_OCR与ASR接入》§六 第 9 条）；
+#   ② 「暂存/读取失败」两句刻意不写"重试"承诺：录音落盘与产物读取失败多因磁盘/权限，
+#      让人重试只会再失败一次（对外诚实优先于文案好听）。
+T.update({
+"录音数据格式无法解析（或超出上限）": "Could not decode the audio recording (or it exceeds the size limit)",
+"请以 multipart/form-data 提交录音": "Please submit the recording as multipart/form-data",
+"缺少录音文件": "No recording file was provided",
+"录音暂存失败": "Failed to stage the recording on the server",
+"没有可朗读的内容": "There is no content to read aloud",
+"语音产物暂存失败": "Failed to stage the audio result on the server",
+"语音产物读取失败": "Failed to read the audio result",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 

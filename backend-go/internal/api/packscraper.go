@@ -19,6 +19,7 @@ import (
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
 	"translator/internal/observability"
+	"translator/internal/store"
 )
 
 // startPackScraper 启动数据采集调度器（由 startWatchdog 调用）。
@@ -106,10 +107,12 @@ func (s *Server) runPackScrapeOnce() error {
 	if done > 0 {
 		if pending := s.Store.ScrapeStagedSummary().PendingEntries; pending > 0 {
 			s.notifySuperAdmins("行业/语言文化包采集完成",
-				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。另有 "+itoa(pending)+" 条待审数据可前往「数据源」面板查看。")
+				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。另有 "+itoa(pending)+" 条待审数据可前往「数据源」面板查看。",
+				store.NotifyRefKbScrape, 0)
 		} else {
 			s.notifySuperAdmins("行业/语言文化包采集完成",
-				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。可前往「数据源」面板按「已通过」筛选查看/驳回/改正。")
+				"本次采集已完成并自动清洗/审批/通过，新数据已热加载到正式库。可前往「数据源」面板按「已通过」筛选查看/驳回/改正。",
+				store.NotifyRefKbScrape, 0)
 		}
 	}
 	return nil
@@ -142,21 +145,9 @@ func (s *Server) lowOccupancyForScrape() bool {
 	return true
 }
 
-// notifySuperAdmins 向全部超管（role='super_admin' 或 admin）发送站内信。
-// 参数 title/body：通知标题与正文。
-func (s *Server) notifySuperAdmins(title, body string) {
-	rows, err := db.Query(s.Store.DB(), db.CurrentDialect(), "SELECT id FROM users WHERE role IN ('super_admin','admin')")
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var uid int64
-		if rows.Scan(&uid) == nil && uid > 0 {
-			_ = s.Store.CreateNotification(uid, title, body, "kb_scrape", 0)
-		}
-	}
-}
+// ★ #46（2026-10-14）：本文件原有的一份 notifySuperAdmins（按角色字面量裸 SQL 圈人，
+// 不看 tenant_id 也不看账号状态，停用号照发）已删除，采集通知改走
+// notify_recipients.go 的唯一写点——收件人口径与鉴权侧同源，见那里的文件头说明。
 
 // itoa 便捷 int→string（strconv 薄包装，通知文案拼接用）。
 func itoa(v int) string {
