@@ -62,7 +62,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$REPO/deploy/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$CONF" | head -1)"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$CONF" | head -1)"
-[ -n "$HOST" ] || { echo "ABORT=1 主机没解析出来（读 $CONF）"; exit 2; }
+[ -n "$HOST" ] || { echo "ABORT=1 主机没解析出来（读 ${CONF}）"; exit 2; }
 [ -n "$PORT" ] || PORT=22
 SSH="ssh -p $PORT -o ConnectTimeout=20 -o BatchMode=yes root@$HOST"
 
@@ -77,7 +77,7 @@ TENANT_URL="https://rox.lexicorn.cn"         # 租户通配块 translator-tenant
 
 # ── 本机侧事实（远端与公网都拿它做等值对照；**现读现算，不写死任何数字**）──
 DIST="$REPO/frontend-react/dist"
-[ -d "$DIST" ] || { echo "ABORT=1 本机没有 dist（$DIST）——先 npx vite build && node scripts/precompress_dist.mjs"; exit 2; }
+[ -d "$DIST" ] || { echo "ABORT=1 本机没有 dist（${DIST}）——先 npx vite build && node scripts/precompress_dist.mjs"; exit 2; }
 ENTRY=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' "$DIST/index.html" 2>/dev/null | head -1)
 [ -n "$ENTRY" ] || { echo "ABORT=1 dist/index.html 里取不到入口 asset 名"; exit 2; }
 [ -f "$DIST/$ENTRY" ] || { echo "ABORT=1 dist 里没有 $ENTRY"; exit 2; }
@@ -126,7 +126,7 @@ for u in translator translator-demo ai-assist caddy; do
 done
 for p in 8787 8789; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:$p/api/health" || echo 000)
-  [ "$code" = "200" ] && ok "127.0.0.1:$p/api/health = 200" || bad "127.0.0.1:$p/api/health = $code（8787=主站 8789=演示单元）"
+  [ "$code" = "200" ] && ok "127.0.0.1:$p/api/health = 200" || bad "127.0.0.1:$p/api/health = ${code}（8787=主站 8789=演示单元）"
 done
 # 挂件健康面是 /health，不是 /api/health（这两个 unit 的日志也不落 journal，一律落文件）
 AC=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8790/health || echo 000)
@@ -139,7 +139,7 @@ for w in /opt/translator/web /opt/translator-demo/web; do
   n=$(find "$w/assets" -maxdepth 1 -name '*.br' 2>/dev/null | wc -l | tr -d ' ')
   g=$(find "$w/assets" -maxdepth 1 -name '*.gz' 2>/dev/null | wc -l | tr -d ' ')
   if [ "$n" = "$WANT_BR_TOTAL" ] && [ "$g" = "$WANT_GZ_TOTAL" ]; then
-    ok "$w 侧车落盘 br=$n gz=$g（与本机 $WANT_BR_TOTAL/$WANT_GZ_TOTAL 一致）"
+    ok "$w 侧车落盘 br=$n gz=${g}（与本机 $WANT_BR_TOTAL/$WANT_GZ_TOTAL 一致）"
   else
     bad "$w 侧车落盘 br=$n/$WANT_BR_TOTAL gz=$g/$WANT_GZ_TOTAL 不等 ⇒ 该站没收到本批侧车（tar 前没跑预压缩，或换源只换了半站）"
   fi
@@ -182,9 +182,9 @@ for p in 8787 8789; do
   if [ "$code" = "401" ] && [ "${ct%%;*}" = "application/json" ]; then
     ok "127.0.0.1:$p /api/notifications 匿名=$code 且 application/json（路由在、鉴权在、没落进 SPA 兜底）"
   elif echo "$head" | grep -q '^<!DOCTYPE\|^<html'; then
-    bad "127.0.0.1:$p /api/notifications 回的是 HTML（code=$code ct=$ct）⇒ 这条路由压根没被后端接住"
+    bad "127.0.0.1:$p /api/notifications 回的是 HTML（code=$code ct=${ct}）⇒ 这条路由压根没被后端接住"
   else
-    bad "127.0.0.1:$p /api/notifications 匿名=$code ct=$ct（期望 401 application/json）"
+    bad "127.0.0.1:$p /api/notifications 匿名=$code ct=${ct}（期望 401 application/json）"
   fi
 done
 
@@ -192,7 +192,7 @@ echo
 echo "----- E 磁盘脏文件与 dotfile 负向（换源链的旧坑）-----"
 for w in /opt/translator/web /opt/translator-demo/web; do
   d=$(find "$w" \( -name .DS_Store -o -name '._*' \) 2>/dev/null | wc -l | tr -d ' ')
-  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=$d（必须 0：scp -r 会把 .DS_Store 带进 web 根，Caddy 对磁盘上真存在的 dotfile 不拦）"
+  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=${d}（必须 0：scp -r 会把 .DS_Store 带进 web 根，Caddy 对磁盘上真存在的 dotfile 不拦）"
 done
 echo "  两站 assets 文件数=$(find /opt/translator/web/assets -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d '') / $(find /opt/translator-demo/web/assets -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d '')"
 
@@ -330,7 +330,7 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   # 档一：br, gzip ⇒ 必须 br，且下载体逐字节等于本机 .br
   pd_fetch "$TMPB" "$TMPH" "$u/$ENTRY" -H 'Accept-Encoding: br, gzip'
   if pd_complete && [ "$ENC" = "br" ] && [ "$SHA" = "$L_BR_SHA" ]; then
-    echo "  OK   $u/$ENTRY content-encoding=br 且下载体 sha＝本机 .br（${SIZE} B code=$CODE）"
+    echo "  OK   $u/$ENTRY content-encoding=br 且下载体 sha＝本机 .br（${SIZE} B code=${CODE}）"
   else
     echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} sha=${SHA:0:16} size=$SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} —— 期望 br/${L_BR_SHA:0:16}（${L_BR_SIZE} B）⇒ 侧车没发出／CDN 剥了 br／磁盘是旧代（curl_rc≠0 或 code=000＝这一跳没走完，不是配置问题，但要人工确认）"
     PUB_RC=1
@@ -345,7 +345,7 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   #     的半截体（传输被切断而状态码照旧 200），旧判据会把它读成"回落链活着"＝假绿。
   pd_fetch "$TMPB" "$TMPH" "$u/$ENTRY" -H 'Accept-Encoding: gzip'
   if pd_complete && [ "$ENC" = "gzip" ] && [ "${SIZE:-0}" -gt 0 ] && [ "${SIZE:-0}" -lt "$L_SIZE" ]; then
-    echo "  OK   $u/$ENTRY 只给 gzip 时回压缩档（size=$SIZE < raw=$L_SIZE；体的 sha=${SHA:0:16} 是 CF 边缘重压后的字节，不与本机 .gz 等值——等值看源站段 F-2）"
+    echo "  OK   $u/$ENTRY 只给 gzip 时回压缩档（size=$SIZE < raw=${L_SIZE}；体的 sha=${SHA:0:16} 是 CF 边缘重压后的字节，不与本机 .gz 等值——等值看源站段 F-2）"
   else
     echo "  BAD  $u/$ENTRY enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} —— 期望 enc=gzip 且 0<size<raw 且完整收完 ⇒ 回落链那一半没接上（侧车缺／CDN 把档换成原文／这一跳没走完）"
     PUB_RC=1
@@ -369,9 +369,9 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   pd_small "$TMPB" "$TMPH" "$u/"
   b=$(grep -c '__BRANDING__' "$TMPB" 2>/dev/null || true)
   if pd_complete && [ "$CODE" = "200" ] && [ "$b" = "1" ]; then
-    echo "  OK   $u/ 首页 __BRANDING__ 命中=1（${SIZE} B code=$CODE）"
+    echo "  OK   $u/ 首页 __BRANDING__ 命中=1（${SIZE} B code=${CODE}）"
   else
-    echo "  BAD  $u/ __BRANDING__ 命中=$b（应为 1；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}）"; PUB_RC=1
+    echo "  BAD  $u/ __BRANDING__ 命中=${b}（应为 1；code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}）"; PUB_RC=1
   fi
   # ★ content_type 含空格 ⇒ 先整段取出值、再按 ; 切第一格，不拿 awk 的裸词序读
   #   ★★ 两条"判据自己撒谎"的形态都在这里（2026-10-12 启动链黑屏批实测）：
@@ -397,7 +397,7 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   cc=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | awk 'tolower($1)=="cache-control:"{sub(/^[^:]*:[ \t]*/,"");print}' | head -1)
   cfs=$(tr -d '\r' <"$HDR_OUT" 2>/dev/null | awk 'tolower($1)=="cf-cache-status:"{print toupper($2)}' | head -1)
   if pd_complete && [ "$CODE" = "404" ] && ! echo "$cc" | grep -q 'immutable\|31536000'; then
-    echo "  OK   $u 的 /assets 404 不带长缓存头（cache-control=${cc:-<无>} cf=$cfs code=$CODE）"
+    echo "  OK   $u 的 /assets 404 不带长缓存头（cache-control=${cc:-<无>} cf=$cfs code=${CODE}）"
   else
     echo "  BAD  $u 的 /assets 404 cache-control=${cc:-<无>}（含 immutable/31536000 ⇒ 一次探针就能把 404 在边缘钉一年，本批事故就是这么发生的）code=$CODE cf=$cfs curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}"
     PUB_RC=1
@@ -408,7 +408,7 @@ rm -f "$TMPB" "$TMPH"
 
 echo
 echo "----- G 体积对账读数（不参与判定，只留这一批的现场数字）-----"
-echo "  入口 raw=${L_SIZE} B → br=${L_BR_SIZE} B（省 $(( L_SIZE - L_BR_SIZE )) B）；侧车总数 br=$L_BR_TOTAL gz=$L_GZ_TOTAL；语种 chunk=$L_LOCALE_CHUNKS 份"
+echo "  入口 raw=${L_SIZE} B → br=${L_BR_SIZE} B（省 $(( L_SIZE - L_BR_SIZE )) B）；侧车总数 br=$L_BR_TOTAL gz=${L_GZ_TOTAL}；语种 chunk=$L_LOCALE_CHUNKS 份"
 echo "  ⚠️ 本批前的入口是 2,633 kB 量级（词典静态打进入口），改懒加载后 raw 见上；两个数是**不同尺度**的对账，别把 2633 当基准写进判据。"
 
 echo
@@ -419,7 +419,7 @@ echo
 REMOTE_RC="$SSH_RC"   # 合并前先把远端那半的原始退码留住：255（链路没通）／1（远端有 BAD 行）／0 是三种不同的事，
                       # 合并成最终码之后屏幕上必须还能分辨是哪一种，否则排障时又得回到"只知道不绿"。
 if [ "$PUB_RC" != "0" ] && [ "$SSH_RC" = "0" ]; then SSH_RC=1; fi
-if [ "$SSH_RC" = "0" ]; then echo "POSTDEPLOY_ALL_OK=1"; else echo "POSTDEPLOY_FAIL=1（远端段=$REMOTE_RC 公网段=$PUB_RC 最终=$SSH_RC）"; fi
+if [ "$SSH_RC" = "0" ]; then echo "POSTDEPLOY_ALL_OK=1"; else echo "POSTDEPLOY_FAIL=1（远端段=$REMOTE_RC 公网段=$PUB_RC 最终=${SSH_RC}）"; fi
 echo POSTDEPLOY_EXIT=$SSH_RC
 # ★ 255＝链路没通，必须照样红（绝不被读成"现网没问题"）
 exit "$SSH_RC"
