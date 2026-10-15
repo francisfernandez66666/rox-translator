@@ -60,10 +60,24 @@ fail() { echo "PURGE FAIL=$*"; exit 1; }
 if [ "$MODE" = "--status" ]; then
   if git rev-parse --verify -q "refs/purged/$BR" >/dev/null; then
     echo "purged 引用=在位（$(git rev-parse --short "refs/purged/$BR")）"
-    if [ "$(git rev-parse "refs/purged/$BR^{tree}")" = "$(git rev-parse "$REMOTE/$BR^{tree}")" ]; then
-      echo "顶端树与原顶端等价=是"
+    # 与**建链时那条基线**比树（这才是"没误伤内容"的正确对照），再单独回答
+    # "基线还等不等于当前远端顶端"（不等＝链已过期，要重跑 --build，不是"内容被改坏"）。
+    # ⚠️ 首版把这两个读数合成一句"顶端树与原顶端等价"，于是远端一旦再往前走一步
+    #    （哪怕只是又推了一件纯代码），这里就吐"**否（别推）**"——把人往错误方向指。
+    if git rev-parse --verify -q "refs/purged-base/$BR" >/dev/null; then
+      BASE_TIP=$(git rev-parse "refs/purged-base/$BR")
+      if [ "$(git rev-parse "refs/purged/$BR^{tree}")" = "$(git rev-parse "$BASE_TIP^{tree}")" ]; then
+        echo "顶端树与建链基线（$(git rev-parse --short "$BASE_TIP")）等价=是"
+      else
+        echo "顶端树与建链基线等价=**否（内容被改坏，别推）**"
+      fi
+      if [ "$BASE_TIP" = "$(git rev-parse "$REMOTE/$BR")" ]; then
+        echo "基线仍是当前远端顶端=是（可直接 --force-push）"
+      else
+        echo "基线仍是当前远端顶端=**否**（远端已前进到 $(git rev-parse --short "$REMOTE/$BR")；重跑 --build 再推，脚本会在 force-push 档自己拦这一条）"
+      fi
     else
-      echo "顶端树与原顶端等价=**否（别推）**"
+      echo "基线引用=缺失（老版本建的链；重跑 --build）"
     fi
   else
     echo "purged 引用=未构建"
@@ -178,6 +192,8 @@ lookup_tip=$(awk -v k="$TIP_SHA" '$1==k{print $2; exit}' "$MAPFILE" 2>/dev/null)
 [ -n "$lookup_tip" ] || fail "重建完没拿到新顶端（映射表里查不到 $TIP_SHA）"
 NEW_TIP="$lookup_tip"
 git update-ref "refs/purged/$BR" "$NEW_TIP" || fail "写 refs/purged/$BR 失败"
+# 同时记下**这次建链对着的远端顶端**：--status 拿它当对照，force-push 拿它当防线C 的判据。
+git update-ref "refs/purged-base/$BR" "$TIP_SHA" || fail "写 refs/purged-base/$BR 失败"
 echo "重建完成：$COUNT/$TOTAL 条；新顶端=$(git rev-parse --short "$NEW_TIP")"
 
 # ---- 自证（任一不过即判红，且不推）----------------------------------------
