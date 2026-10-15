@@ -194,7 +194,7 @@ Format support:
 | Layout-restored | docx, pptx, xlsx, pdf, txt, csv, md | Same-format translated file |
 | Bilingual table | srt, vtt, json, yaml, etc. | Source/translation xlsx |
 | Text only | legacy doc/ppt/xls family, odt/ods/odp, rtf, epub | Translated .md |
-| Recognized first | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, speech-to-text) | Translated .md; audio also ships a translated .srt on the original timeline plus a copy of the source audio |
+| Recognized first | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, speech-to-text) | Images: translated .md plus an in-place translated image (the translation is written back over the original layout; if rendering fails only the .md ships); audio also ships a translated .srt on the original timeline plus a copy of the source audio |
 
 Limits:
 

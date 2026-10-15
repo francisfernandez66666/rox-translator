@@ -194,7 +194,7 @@
 | 可還原版式 | docx、pptx、xlsx、pdf、txt、csv、md | 同格式譯文檔案 |
 | 對照表交付 | srt、vtt、json、yaml 等 | 原文/譯文對照 xlsx |
 | 僅純文字 | doc、ppt、xls 系老格式、odt/ods/odp、rtf、epub | 譯文 .md |
-| 識別後進翻譯鏈 | png、jpg、jpeg、bmp、tif、tiff、webp、heic（圖片，文字識別）；mp3、m4a、wav、ogg、flac、aac、opus（音訊，語音轉寫） | 譯文 .md；音訊件另附帶原時間軸的譯文 .srt 與原音訊副本 |
+| 識別後進翻譯鏈 | png、jpg、jpeg、bmp、tif、tiff、webp、heic（圖片，文字識別）；mp3、m4a、wav、ogg、flac、aac、opus（音訊，語音轉寫） | 圖片＝譯文 .md ＋ 原位翻譯圖（譯文按原圖位置回寫；渲染不出來時只出 .md）；音訊件另附帶原時間軸的譯文 .srt 與原音訊副本 |
 
 限制與說明：
 

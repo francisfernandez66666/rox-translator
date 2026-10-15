@@ -194,7 +194,7 @@ Formats pris en charge :
 | Mise en forme restituée | docx, pptx, xlsx, pdf, txt, csv, md | Fichier traduit dans le même format |
 | Livrable en tableau comparatif | srt, vtt, json, yaml, etc. | xlsx source/traduction en vis-à-vis |
 | Texte seul uniquement | anciens formats doc, ppt, xls, odt/ods/odp, rtf, epub | Traduction en .md |
-| Reconnaissance puis traduction | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR) ; mp3, m4a, wav, ogg, flac, aac, opus (audio, transcription) | Traduction en .md ; pour l'audio, aussi un .srt calé sur la piste originale et une copie de l'audio source |
+| Reconnaissance puis traduction | png, jpg, jpeg, bmp, tif, tiff, webp, heic (images, OCR) ; mp3, m4a, wav, ogg, flac, aac, opus (audio, transcription) | Images : traduction en .md plus une image traduite en place (la traduction est réécrite à l’emplacement d’origine dans l’image ; si le rendu échoue, seul le .md est livré) ; pour l'audio, aussi un .srt calé sur la piste originale et une copie de l'audio source |
 
 Limites et précisions :
 

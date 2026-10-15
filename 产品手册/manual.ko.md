@@ -194,7 +194,7 @@
 | 서식 복원 가능 | docx、pptx、xlsx、pdf、txt、csv、md | 동일 형식 번역 파일 |
 | 대조표 전달 | srt、vtt、json、yaml 등 | 원문/번역문 대조 xlsx |
 | 텍스트만 지원 | doc、ppt、xls 레거시 형식 계열, odt/ods/odp, rtf, epub | 번역문 .md |
-| 인식 후 번역 | png, jpg, jpeg, bmp, tif, tiff, webp, heic(이미지·문자 인식); mp3, m4a, wav, ogg, flac, aac, opus(오디오·음성 전사) | 번역문 .md. 오디오는 원 타임코드가 유지된 번역 .srt와 원본 오디오 사본도 함께 전달 |
+| 인식 후 번역 | png, jpg, jpeg, bmp, tif, tiff, webp, heic(이미지·문자 인식); mp3, m4a, wav, ogg, flac, aac, opus(오디오·음성 전사) | 이미지＝번역문 .md ＋ 원위치 번역 이미지(번역문을 원본 이미지 위치에 덮어씁니다. 렌더링이 안 되면 .md만 제공). 오디오는 원 타임코드가 유지된 번역 .srt와 원본 오디오 사본도 함께 전달 |
 
 제한 및 설명:
 

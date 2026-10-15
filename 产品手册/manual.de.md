@@ -194,7 +194,7 @@ Unterstützte Dateiformate:
 | Layout wiederherstellbar | docx, pptx, xlsx, pdf, txt, csv, md | Übersetzungsdatei im selben Format |
 | Gegenüberstellungstabelle | srt, vtt, json, yaml usw. | Ausgangstext/Übersetzung als xlsx-Gegenüberstellung |
 | Nur Text | Altformate doc, ppt, xls, odt/ods/odp, rtf, epub | Übersetzung als .md |
-| Erst erkannt, dann übersetzt | png, jpg, jpeg, bmp, tif, tiff, webp, heic (Bilder, OCR); mp3, m4a, wav, ogg, flac, aac, opus (Audio, Transkription) | Übersetzung als .md; bei Audio zusätzlich .srt auf der Original-Zeitachse plus Kopie der Originalaudiodatei |
+| Erst erkannt, dann übersetzt | png, jpg, jpeg, bmp, tif, tiff, webp, heic (Bilder, OCR); mp3, m4a, wav, ogg, flac, aac, opus (Audio, Transkription) | Bilder: Übersetzung als .md plus ein übersetztes Bild an Originalposition (die Übersetzung wird an der ursprünglichen Stelle in das Bild geschrieben; schlägt das Rendering fehl, wird nur die .md geliefert); bei Audio zusätzlich .srt auf der Original-Zeitachse plus Kopie der Originalaudiodatei |
 
 Grenzen und Hinweise:
 

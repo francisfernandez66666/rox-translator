@@ -194,7 +194,7 @@ Suporte a formatos de arquivo:
 | Com restauração de layout | docx, pptx, xlsx, pdf, txt, csv, md | Arquivo traduzido no mesmo formato |
 | Entrega em tabela bilíngue | srt, vtt, json, yaml etc. | Xlsx com original/tradução lado a lado |
 | Somente texto | formatos legados da família doc, ppt, xls, odt/ods/odp, rtf, epub | .md traduzido |
-| Reconhecimento primeiro | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imagens, OCR); mp3, m4a, wav, ogg, flac, aac, opus (áudio, transcrição) | .md com a tradução; em áudio, também um .srt com a linha do tempo original e uma cópia do áudio |
+| Reconhecimento primeiro | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imagens, OCR); mp3, m4a, wav, ogg, flac, aac, opus (áudio, transcrição) | Imagens: .md com a tradução e uma imagem traduzida no lugar (a tradução é escrita na posição original da imagem; se a renderização falhar, apenas o .md é entregue); em áudio, também um .srt com a linha do tempo original e uma cópia do áudio |
 
 Limites e observações:
 

@@ -194,7 +194,7 @@
 | レイアウト復元可 | docx、pptx、xlsx、pdf、txt、csv、md | 同一形式の訳文ファイル |
 | 対照表で納品 | srt、vtt、json、yaml など | 原文/訳文対照 xlsx |
 | プレーンテキストのみ | doc、ppt、xls の旧形式、odt/ods/odp、rtf、epub | 訳文 .md |
-| 認識後に翻訳 | png、jpg、jpeg、bmp、tif、tiff、webp、heic（画像・文字認識）；mp3、m4a、wav、ogg、flac、aac、opus（音声・文字起こし） | 訳文 .md。音声は元のタイムコード付き訳文 .srt と音声コピーも同梱 |
+| 認識後に翻訳 | png、jpg、jpeg、bmp、tif、tiff、webp、heic（画像・文字認識）；mp3、m4a、wav、ogg、flac、aac、opus（音声・文字起こし） | 画像＝訳文 .md ＋ 原位翻訳画像（訳文を元の画像の位置に書き戻します。レンダリングできない場合は .md のみ）。音声は元のタイムコード付き訳文 .srt と音声コピーも同梱 |
 
 制限と説明：
 

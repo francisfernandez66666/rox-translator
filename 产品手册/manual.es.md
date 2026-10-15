@@ -194,7 +194,7 @@ Formatos admitidos:
 | Con restauración de maquetación | docx, pptx, xlsx, pdf, txt, csv, md | Archivo traducido en el mismo formato |
 | Entrega en tabla comparativa | srt, vtt, json, yaml, etc. | xlsx original/traducción |
 | Solo texto | familia heredada doc, ppt, xls; odt/ods/odp, rtf, epub | .md con la traducción |
-| Reconocimiento previo | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imágenes, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, transcripción) | .md con la traducción; en audio se añade un .srt con los tiempos originales y una copia del audio |
+| Reconocimiento previo | png, jpg, jpeg, bmp, tif, tiff, webp, heic (imágenes, OCR); mp3, m4a, wav, ogg, flac, aac, opus (audio, transcripción) | Imágenes: .md con la traducción y una imagen traducida en su lugar (la traducción se escribe en la posición original de la imagen; si el renderizado falla, solo se entrega el .md); en audio se añade un .srt con los tiempos originales y una copia del audio |
 
 Límites y notas:
 
