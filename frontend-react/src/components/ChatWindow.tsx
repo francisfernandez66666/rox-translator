@@ -45,9 +45,10 @@ import ModeToggle from '@/components/ModeToggle'
 import { intlLocale, fmtDateTime } from '../lib/format'
 // ★ F-52②（批 I-8）：「文本过长」本地闸（上限由本页 loadBalance 从 /api/me/package 喂养）
 import { setChatMaxChars } from '../lib/chatLimit'
-// ★ P3 语音两件套（麦克风录音 / 译文朗读）：全部家当在 api/chatVoice.ts，
-//   不想用语音能力时删掉本处 import 与下面那一段引用即可，不留下半截状态。
-import { asrTranscribe, micSupported, startMicRecording } from '@/api/chatVoice'
+// ★ P3 语音两件套（麦克风录音 / 译文朗读）：录放链路在 api/chatVoice.ts；
+//   识别引擎（服务端 / 端侧 WASM）的可插拔接缝在 api/asrEngines.ts（P4）。
+import { micSupported } from '@/api/chatVoice'
+import { getAsrEngine, ServerAsrEngine, type AsrSession } from '@/api/asrEngines'
 // ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
 import { slowVerdict } from '../lib/slowEstimate'
 
@@ -389,40 +390,50 @@ export default function ChatWindow() {
   //   而一条自动发出去的错原文既费积分又没法挽回。
   // 可用性：浏览器不支持就直接**不渲染这颗按钮**（不给一个点了必然报错的入口）。
   const canMic = micSupported()
-  const micRef = useRef<{ stop: () => Promise<Blob | null>; cancel: () => void } | null>(null)
+  const micRef = useRef<AsrSession | null>(null)
   const [micOn, setMicOn] = useState(false)
   const [micBusy, setMicBusy] = useState(false)
 
   async function startMic() {
     if (!canMic || micBusy) return
-    const ctrl = startMicRecording((why) => {
-      setMicOn(false)
-      toast({ title: why === 'mic-denied' ? t2('chat.micDenied') : t2('chat.micFailed'), tone: 'warn' })
+    // ★ P4 接缝：自动优先端侧 WASM（资产就绪才选），否则回落服务端——行为对 P3 透明。
+    let engine
+    try {
+      engine = await getAsrEngine()
+    } catch {
+      // 极端情况（localStorage 不可达等）退回服务端，不阻断录音入口
+      engine = new ServerAsrEngine()
+    }
+    const session = engine.start({
+      onState: (s) => {
+        if (s === 'denied' || s === 'failed') {
+          setMicOn(false)
+          toast({ title: s === 'denied' ? t2('chat.micDenied') : t2('chat.micFailed'), tone: 'warn' })
+        }
+      },
     })
-    if (!ctrl) { toast({ title: t2('chat.micUnsupported'), tone: 'warn' }); return }
-    micRef.current = ctrl
+    micRef.current = session
     setMicOn(true)
   }
 
   async function stopMic() {
-    const ctrl = micRef.current
+    const session = micRef.current
     micRef.current = null
     setMicOn(false)
-    if (!ctrl) return
-    const blob = await ctrl.stop()
-    if (!blob || blob.size === 0) return
+    if (!session) return
+    session.stop()
     setMicBusy(true)
     try {
-      const text = await asrTranscribe(blob)
-      if (text.trim()) {
+      const text = await session.final
+      if (text && text.trim()) {
         setInput((prev) => (prev.trim() ? prev.trim() + ' ' + text.trim() : text.trim()))
         expandFromEntry()
         setTimeout(autoResize, 0)
       }
     } catch {
-      // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：asrTranscribe 抛的是 VoiceError，
-      //   它的 message 是**后端给运维看的那句中文**，直接 toast 就成了「俄语界面里一句中文」。
-      //   ASR 失败在客户侧只有一个可行动作——重试或改用键盘输入，而这句话典里本来就有。
+      // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：服务端引擎抛的是 VoiceError，
+      //   message 是后端给运维看的中文，直接 toast 即「俄语界面里一句中文」。
+      //   ASR 失败在客户侧只有一个可行动作——重试或改用键盘输入，那句本就在词典里。
       toast({ title: t2('chat.micFailed'), tone: 'warn' })
     } finally {
       setMicBusy(false)

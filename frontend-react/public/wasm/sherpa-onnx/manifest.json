@@ -1,0 +1,38 @@
+{
+  "engine": "sherpa-onnx-asr",
+  "version": "1.13.x",
+  "source": "https://modelscope.cn/studios/k2-fsa/web-assembly-asr-sherpa-onnx-zh-en/summary",
+  "license": "Apache-2.0",
+  "runtime": {
+    "glue": "sherpa-onnx-asr.js",
+    "main": "sherpa-onnx-wasm-main-asr.js",
+    "wasm": "sherpa-onnx-wasm-main-asr.wasm",
+    "modelData": "sherpa-onnx-wasm-main-asr.data",
+    "sha256": {
+      "sherpa-onnx-asr.js": "d51ae8e8b756ee5e53423ffada0c9702973f154f561aca7984fe0b12f4060178",
+      "sherpa-onnx-wasm-main-asr.js": "864bd45b63586a752c2d26a02dfb3e40d4f2e15839aa85b7e84af0ccc1b5619e",
+      "sherpa-onnx-wasm-main-asr.wasm": "d0c15c3042fd61ca2a158a1eeb8b8c2099201f7580945efc8f729d2830cf746d",
+      "sherpa-onnx-wasm-main-asr.data": "90b04a9403e4bae9b23a0a3c00dbac8603e183361105a52cc03f053217490863"
+    }
+  },
+  "defaultModel": "zipformer-bilingual-zh-en",
+  "models": {
+    "zipformer-bilingual-zh-en": {
+      "label": "官方 wasm 包内置流式 zipformer（中英双语，打包于 .data）",
+      "modelType": "transducer",
+      "bakedIn": "sherpa-onnx-wasm-main-asr.data",
+      "sampleRate": 16000,
+      "featureDim": 80,
+      "tokens": "./tokens.txt",
+      "encoder": "./encoder.onnx",
+      "decoder": "./decoder.onnx",
+      "joiner": "./joiner.onnx",
+      "decodingMethod": "greedy_search",
+      "maxActivePaths": 4,
+      "rule1": 2.4,
+      "rule2": 1.2,
+      "rule3": 20
+    }
+  },
+  "note": "运行时三件套（glue/main/wasm 约 14MB）随构建进 git；模型 .data（199MB）超 GitHub 单文件 100MB 限，gitignore，由 scripts/fetch_sherpa_assets.sh 在有网部署机落盘（sha256 校验）。isAvailable() 对 wasm+data 双 HEAD，缺一即回落服务端。"
+}

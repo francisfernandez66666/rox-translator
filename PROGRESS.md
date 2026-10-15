@@ -2317,9 +2317,11 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
    只有前者有入口。根因：工单交付形态判据 `writebackDelivery` 只分「原位写回／xlsx 对照表」两档，音频交付是第三档。
    为什么不直接修：动它＝动对外交付契约（客户看到的产物集合变了），要先定"谁付这个钱"（TTS 是否计入积分）。
    前置＝`store.PointsFromTokens` 那条换算口给音频一个系数，或明确"朗读只在聊天侧、工单不出声"。
-2. **`tk.imageHeavyHint` 有字段零消费点**——现象：建单预检算出了"这张件以图为主"的提示，但没有任何出栈点读它。
-   根因：#43 收的是"判据形状一把尺子"，展示面不在那一跳。为什么不直接修：提示文案是对外文案面，
-   加了就要 12 语种同步补译＋locale 全量词典加键。前置＝定文案与语种集，再随二进制生效。
+2. ~~**`tk.imageHeavyHint` 有字段零消费点**~~ **已闭合（2026-10-15 收口批）**：`TicketsPage.tsx` 现派生 `mediaHint`
+   （`TicketsPage.tsx:285`，按选中文件扩展名判 image/audio 两档），出栈键改为 `tk.mediaHintImage`／`tk.mediaHintAudio`，
+   12 语种齐备。⚠️ `tk.imageHeavyHint`（图片型表格那条）**仍是零消费点**——它与新键不是同一件事
+   （一个判"文件里图片多不多"，一个判"选中的是不是图片/音频"），留着不删是因为它可能在预检口径里还有用；
+   若确认无用，按「删 12 份词典同键」一并清掉，别只删一份。
 3. **`errorstyle`／`logratchet` 基线未下调**——现象：`TestErrorStyleRatchet` 基线仍 485／log.Printf 仍 176+69。
    根因：本批只保证"不新增"。修法＝再迁一批并同步改基线数字（AGENTS §一·2 明令别只改数字）。
 4. **现网 assist 库缺 `image-ocr`／`audio-transcribe` 两行功能卡**——现象：改完代码挂件不会提这两个能力。
@@ -2335,16 +2337,144 @@ UAT 基建加固（本批踩坑沉淀）：`dblib.sh` sqlite3 加 `.timeout 5000
 9. **本批新暴露的一族覆盖缺口**：新增端点没随批补词条、既有断言钉死了旧清单长度、写死件数锁被新控件顶红——
    三条同一形态＝**判据替旧口径说话**。已就位的机械防线＝`translateFormats.lock.test.ts` P0 射程腿＋
    `translateFlowE2eLock.test.ts`；未做的＝"新增能力必须同时动哪几张清单"目前没有一张总表可查。
-10. **图片「原位写回」只有能力腿、没有交付腿**——现象：`fileproc/ocr_image.go` 的 `RenderTranslatedImage`
-    （把译文按坐标块画回原图）与 `ImageBoxes` 在全仓**零调用方**（连测试都没有），而同一批的 `RememberImageBoxes`
-    有真调用方（`ocr.go:157`）＝框坐标在缓存、没人来取。根因：v2 的分期里这是 **P4**，P1a/P2 只交付了
-    「识别后进翻译链、出译文 .md」这一半。为什么不直接修：交付形态是**对外契约**（客户拿到的产物集合会从「一个 .md」
-    变成「一张翻译过的图」），且 `writebackDelivery` 需要新增一档；`ImageBoxes` 是进程内 map，跨实例/重启即失效，
-    写回链路要么在同一次请求内完成要么换持久载体。前置＝拍板「图片要不要出图」＋若出图，字形与字体（`assets/fonts/`
-    那份 DroidSansFallback）按语种怎么取。⚠️ 已把这条诚实写进 `ocr_image.go` 头注释（旧注释声称
-    「engine/file.go 里有那一个分支」＝注释凭空指路，AGENTS §一·14 那一族）。
+10. ~~**图片「原位写回」只有能力腿、没有交付腿**~~ **已闭合（2026-10-15 P4 收口）**：`fileproc/ocr_image.go` 的
+    `RenderTranslatedImage`（把译文按坐标块画回原图）已由 `engine/file.go` 的 image 分支调用（`file.go:955`），
+    `ImageBoxes` 由它内部取用（`ocr_image.go:139`），上游 `RememberImageBoxes` 的调用点在 `ocr.go:158`——
+    三处都有真调用方。`writebackDelivery` 的 image 档（`file_gate_test.go` 的 `TestWritebackDelivery` 已加 audio 档
+    与 `.md` 反向对照）与 `assets/fonts/DroidSansFallbackFull.ttf` 字形一并落定。**择优产出**：渲染失败
+    （缺中文字体／坐标没缓存住／行长溢出）只跳过该产物并 `observability.Warn` 记一行，产物回到「译文 .md」，
+    不判整单失败。回退口径＝删 `ocr_image.go`＋删 `ocr_translate_image.py`＋删 file.go 那个 if 块＋删 defer 释放行。
+    ⚠️ `ImageBoxes` 是**进程内 FIFO map**（上限 32、键＝源文件路径）。**收口批更正了一处被高估的风险**：
+    旧注释写「跨实例/重启即失效 ⇒ 要持久载体」，但提取（`file.go` L375/377/392）与写回（L955）在**同一个
+    `HandleFile` 调用内**，中间只隔 LLM 调用 ⇒ 不存在「提到 A 进程、写回 B 进程」的形态，持久载体是多余件。
+    真正会挤掉坐标的是**同实例并发**（`WORKER_CONCURRENCY` 默认 4，另有两条同步 HTTP 路径），已用
+    「在途钉」修掉：`RememberImageBoxes` 钉住 → `ReleaseImageBoxes` 在 `HandleFile` 返回前 defer 释放，
+    淘汰优先挑未钉住的；在途数超过 32 时退化为淘汰最旧一条（那件退回仅 .md，择优产出不是数据丢失）。
 11. **《产品手册》的 PDF 交付物仍是旧口径**——现象：12 份 `manual.*.md` 已按新格式表改写，但
     `产品手册/pdf/` 里那份预置 PDF（注册欢迎邮件的附件，`manual_pdf_path` 默认
     `/opt/translator/data/manual.pdf`）**不会随 md 源稿自动重生成**——仓内没有 md→PDF 工具链（v2 §六 第 7 条已写明）。
     根因：PDF 是外部渠道产物。后果＝新注册用户邮件里那份手册还写着「图片内的文字不翻译」，与网页版手册相对立。
     前置＝决定「走外部渠道重导一份并替换 `data/manual.pdf`」还是「邮件改挂在线手册链接」（后者要动邮件模板与发送链）。
+
+---
+
+## 十五、OCR/ASR 形状契约批（2026-10-15）：六个「健康面全绿而一进去就坏」的运行时形状错，＋把它们锁进发布闸门
+
+> 这一节紧接 §十四 的 P1a/P2/P4 能力批。§十四 记的是"能力建起来了"，本节记的是
+> **"能力建起来了但形状是错的"**——六个缺陷没有一个能在源码里 grep 出对错，
+> 也没有一个会让 `/api/health` 变红，只有真跑一单才暴露（AGENTS §一·12 那一族的第二次现形）。
+
+### 一、六处形状修（`ocr_recognize.py` / `asr_transcribe.py`）
+
+| 缺陷 | 症状（现网/本机实测） | 修法 |
+|---|---|---|
+| CTC blank 记在**末位** | 检测框照常出、字数对、置信度 0.94，**每个字错开一格** | blank＝**类 0**；官方词典无空首行⇒前插一格，社区包自带空首行⇒不重复插；类别数比表长逐位补空格 |
+| 检测输入没对齐 **32** 的倍数 | onnxruntime 内核期抛 `Shape mismatch … {1,96,20,96}`，被兜底 except 收成「图片识别过程出错」，根因指不到尺寸 | `_resize_for_det` 缩放后两轴各取整到 `DET_STRIDE`（对齐 PaddleOCR 自己的 DetResizeForTest） |
+| 缺 **unclip** 外扩 | 40px 行高被裁成 20px，「翻译工作台 2026 测试」→「秘圣作台测订」 | `d = area*ratio/perimeter`（包围盒近似 `A=w*h`、`P=2(w+h)`、闭区间 `bw=x1-x0+1`），`DET_UNCLIP_RATIO=1.5` 随权重 yml |
+| 坐标按单一 scale 反算 | 图越大偏得越多，末行掉到图外 | 按**概率图自身尺寸**逐轴除（既缩过又对齐过，两轴比例本就不等） |
+| 归一没做 **BGR** 翻转 | 把红通道当蓝通道，掉哪几个框不可预测、零报错 | `_normalize_numpy(bgr=True)` 先翻通道再减均值除标准差 |
+| cls 档位写死 48×192 | 换上 v5 的 80×160 权重⇒**整单 OCR 失败** | `_static_hw` 从模型输入形状读，非静态/读不到才回落旧档 |
+| ASR 用 `sherpa_onnx.read_wave` | 现网 **1.13.8 没有 read_wave**（只有 write_wave）⇒每条音频第一步退 `ERR:Decode`，而 probe 回 OK、`asr_ready=true` | 读取腿落到标准库 `wave`＋numpy（只认 8/16/32-bit PCM；24-bit⇒`ERR:Unsupported`、非 wav⇒`ERR:AudioCorrupt`、采样率未归一⇒`ERR:FFmpeg` 不静默降采样）；将来真有 `read_wave` 仍优先用它并把 int16 量级归一 |
+
+### 二、闸门（本轮实跑读数，判绿只认内标记行）
+
+- `capability_shape_selftest.py`：**13 条腿**全过 ⇒ `CAPSHAPE_ALL_OK=1 legs=13`
+  （假 session＋合成 score map＋手搓 RIFF wav，**零模型权重、零网络、零 GPU**；
+  本机 `python3` 与 venv `python3` 两侧各跑一次同读数）。
+- `capability_shape_gate_test.go`（`go test ./internal/fileproc/` 即进发布闸门）：
+  L01–L13 **逐腿一枚变异反证**（13 枚，每枚锚点先现读核"恰好命中一处"）
+  ＋ 腿**全集**射程锁（删一条腿即红；锚点必须 `^@leg\("` 限行首，
+  因为装饰器自己的 docstring 里写着 `@leg("L01")` 例子，不限行首会被它冒充成第二条实现——本批首跑真红过一次）
+  ＋ **「原样拷贝仍全绿」对照支**（证明红来自变异而不是拷贝机制本身）。
+- 整轮回归：`go build ./... && go vet` 绿；`gofmt` 首跑点名两件（`cmd/capability-smoke/main.go`＋
+  `capability_shape_gate_test.go`）⇒ `gofmt -w` 后复跑绿；全仓 45 包 `ALLPKGS2_EXIT=0`；
+  `internal/fileproc` 单独 `-race` 存档 `ok 16.555s`（**必须带 `FILEPROC_PYTHON_BIN`**，
+  且本机那个 venv 本批补装了 `numpy`+`Pillow`——原先只有 pymupdf，缺了会让新闸门在正式链里判红而不是跳过）。
+- 注释闸：`find backend-go -name '*.go' -not -name '*_test.go'` 一次传 **315 个文件** ⇒
+  `TOTAL 0 declarations`（注意：喂目录得 0 文件＝恒空假绿，§二 那条纪律；`xargs` 分片会让 tail 只看见最后一片，
+  所以这里一次性传全并显式打扫描文件数）。
+
+### 三、现网投放与就绪位翻档时刻（两站同批）
+
+```
+/opt/translator/bin/assets/ocr/  cls.onnx 1,019,454｜det.onnx 4,826,518｜rec.onnx 16,534,782｜ppocr_keys_v1.txt 74,012（18,383 行，首行「丨」非空）
+/opt/translator/bin/assets/asr/  model.int8.onnx 239,233,841｜tokens.txt 315,894
+```
+- 演示站 `/opt/translator-demo/bin/assets/` 同批逐文件在位。
+- **就绪位不会自己翻**：`fileproc.CheckHealth` 是 `healthCheckOnce sync.Once`，
+  投放权重后必须 `systemctl restart translator.service`（演示站 `translator-demo.service`）；
+  重启后两站 `/api/health` 现读 `{'anydoc_ready': true, 'asr_ready': true, 'ocr_ready': true, 'tts_ready': false}`
+  （`tts_ready=false`＝TTS 权重与默认音色未取，属待决策，见 §十四·五 第 6 条）。
+- 真件实跑读数（2 核机、纯 CPU、单件串行）：OCR 密集 A4 **≈3.7 s/页**（62 框）、普通截图 0.58 s、
+  扫描件 PDF 单页 0.91 s；ASR 单件 2.6–17 s（模型加载 ≈2 s），mp3（ffmpeg 归一）3.58 s。
+
+### 四、推送账（★ 这一节记的是**分支纪律**，不是代码）
+
+- 代码提交＝`4c2a784`（**7 个文件**，全部按显式路径 `git add`：`.gitignore`、
+  `scripts/sync_fileproc_assets.sh`、`fileproc/{ocr_recognize,asr_transcribe,capability_shape_selftest}.py`、
+  `fileproc/capability_shape_gate_test.go`、`cmd/capability-smoke/main.go`），落在 `autosales`。
+- 纯代码推送＝`3c6342a`（父提交恰为推送前的 `origin/autosales=afbd35a`，普通 fast-forward、**零 force**，
+  带上去的文件恰为上面那 7 个、`.md` 计数 **0**）。
+- ★ **为什么没跑 `push_code_only.sh --apply`**：本节工作期间，**同一个工作树里有另一条批次在途**
+  （`engine/file.go`、`fileproc/{ocr,ocr_image,tts,tts_speak.py,tts_p3_test}.go/py`、`api/stream.go`、
+  12 份 i18n、`PROGRESS.md`、三份方案稿、`scripts/dispatch_*.sh` 等 **40 个未提交改动**，
+  实测 mtime 距我提交仅 90 秒＝正在被写）。该脚本的工作形态是
+  `git checkout -b <临时分支> origin/<分支>` ＋ 逐文件 `git checkout <本地分支> -- <f>`，
+  前提（AGENTS §一·9）是**工作区只剩未跟踪件**；在这种状态下它要么在建分支那一步中止，
+  要么把别人未提交的半成品按"目标状态"整体打成一个提交推上 `origin/autosales`。两条都不能接受。
+  ⇒ 做法：**沿用同一把尺子、换不换工作区的执行方式**——用隔离索引（`GIT_INDEX_FILE=.git/tmp-push-index`
+  ＋ `read-tree origin/<分支>` ＋ 逐文件 `update-index --cacheinfo` 取本地提交里的 blob）
+  在**不碰工作区一个字节**的前提下构造纯代码提交，脚本的三道校验逐条照跑
+  （① 干跑清单＝7 件零文档；② `git diff 纯代码提交 本地分支 -- EXCL` 必须空；③ 提交内文件清单零 `.md`），
+  并额外核"父提交＝远端 tip"保证快进。推完 `git fetch` 回读远端 tip 复核。
+  ⚠️ **并轨那一步（`git merge origin/<分支>`）刻意没做**：它同样要动工作区。
+  本地 `autosales` 因此仍"领先"远端（文档提交＋本节这条），是本仓常态（记忆：本地恒 ahead 不是漏推）。
+  下次工作区干净时跑一次 `bash scripts/push_code_only.sh`，它应当念「✅ 没有代码改动需要推送」
+  ——那一行就是这次推送的机械复证。
+- **`sync_fileproc_assets.sh` 本批刻意没跑**：它同步的是「当前工作树里 fileproc 下全部 `*.py`＋`assets/` 树」，
+  在那 40 个未提交改动在位时跑＝把别人的 `tts_speak.py`／`ocr_translate_image.py` 半成品推到两站。
+  ⇒ 现网那份 `asr_transcribe.py` 与本仓库的差别**只有注释两处**（投放的是 `b082aa98…`，仓库现 `9df71f1b…`，
+  行为一字未变），随下一次干净发版的同步自然对齐。
+
+### 五、本批新增的待决策（现象→根因→为什么不直接修→前置）
+
+1. **挂件那句「.txt 对照文本」和实际产物不符**——现象：canned/承诺面写"可给 .txt 对照文本"，
+   而工单实际交付是 `.md`（`writebackDelivery` 的纯文案档）。根因：对外文案面与交付形态判据两处各写各的。
+   为什么不直接修：改文案＝对外承诺改动，且 12 语种同步补译；改判据＝改客户拿到的产物集合。
+   前置＝拍板"要不要真出 .txt"（要＝`file.go` 加一档并随二进制上线；不要＝把 12 份文案翻成 .md）。
+2. **OCR 的 60 s 超时是"整件共用"而不是"按页给"**——现象：`ocrTimeout`（env `OCR_TIMEOUT_SEC`）默认 60 s，
+   实测密集扫描 ≈3.7 s/页 ⇒ **约 16 页**就到顶线，而 30 页扫描件会整单超时（不是慢，是失败）。
+   为什么不直接修：按 `PdfPageCount` 给预算＝把单件资源占用上限抬高（2G 机器上排队与内存都有代价），
+   要先定"给客户等多久"。前置＝定并发与时长档，再把 `fileproc/ocr.go` 那一个读点改成页数控。
+3. **ASR 并发档零读数**——现象：§三 那串性能数字全是**单件串行**实测。根因：没有并发样张。
+   前置＝要一个"两单同时打 ASR"的实测（2G 机器上每次推理各吃一份权重），
+   才谈要不要给音频件限并发；别把 §三 那串数当吞吐上限用。
+4. **TTS 仍是 `tts_ready=false`**——见 §十四·五 第 6 条，等用户单独下令（依赖 `torch`/`resemble-perth`/
+   `transformers` ＋ Chatterbox ONNX ＋ 默认音色来源三件都要拍）。
+
+## 十六、端侧 WASM 真实激活批（2026-10-15）：官方预编译运行时进仓 ＋ 模型部署期补拉 ＋ 可插拔双引擎
+
+### 一、做了什么
+- **官方资产寻源**（HF 全挂背景下的唯一稳定源 = k2-fsa 官方 ModelScope Studio Space
+  `web-assembly-asr-sherpa-onnx-zh-en`，Apache-2.0，流式 zipformer 中英双语）：
+  - 运行时三件套进 git：`sherpa-onnx-asr.js`（glue 53,867B）＋ `sherpa-onnx-wasm-main-asr.js`
+    （emscripten main 82,690B）＋ `sherpa-onnx-wasm-main-asr.wasm`（13,150,239B）。
+  - **sha256 与官方清单逐件比对一致**（记录于 `public/wasm/sherpa-onnx/manifest.json`）。
+- **模型**：官方把流式 zipformer 模型用 `--preload-file` 烘焙进 `sherpa-onnx-wasm-main-asr.data`
+  （199,059,238B）——超 GitHub 单文件 100MB 硬限，**gitignore**；部署机跑
+  `scripts/fetch_sherpa_assets.sh` 补拉（modelscope 源、sha256 校验、`--force` 重拉）。
+- **自建接线**：`public/wasm/sherpa-onnx/asr-worker.js`（Worker：getUserMedia→AudioContext(16k)
+  →acceptWaveform→decode→getResult，partial/final/state 协议对齐 `asrEngines.ts`；paraformer
+  句末补零分支内置）＋ `manifest.json`（资产清单/官方 sha/默认模型配置）。
+- **真实性闸门**：`WasmAsrEngine.isAvailable()` 对 manifest / wasm / .data 三者各发 HEAD，
+  缺一即 false 自动回落服务端（P3 行为零回归，绝不谎报已激活）。
+
+### 二、排查结论备忘（为何此前"待部署丢包"）
+npm `sherpa-onnx` 仅含 nodejs wasm；GitHub releases 只发原生包；`k2-fsa.github.io` 无预编译
+wasm 可下；HF（含 Kroko space 与 k2-fsa wasm spaces）直连 502/000。浏览器版 wasm 只能从
+官方 demo 站或 ModelScope Studio Space 取——后者是唯一可编程访问的稳定源。
+
+### 三、本机完成度
+`.data` 已在本沙箱断点续传拉齐（199,059,238B，sha256 `90b04a94…` 与官方一致）——**本环境
+即具备端侧 WASM 全套资产**，isAvailable() 可为 true；部署到其他机器时跑一次 fetch 脚本即可。
+验证：tsc exit 0；go build exit 0；`bash -n fetch_sherpa_assets.sh` OK。
