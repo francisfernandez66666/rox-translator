@@ -173,5 +173,34 @@ if [ "$FAIL" -ne 0 ]; then
   bad "指纹核对未通过：这批资产没真正落到位。修好再往下走（此刻若触发一单 PDF，仍会降级交付）。"
   exit 6
 fi
+
+# ---------------------------------------------------------------- 能力权重在场读数（只报不判死）
+# ★ 为什么这一档**刻意不抬进 FAIL**：本脚本的同步对象是「仓库里有的东西」（*.py ＋ assets/ 树），
+#   而 OCR/ASR/TTS 的模型权重**按口径不进 git**（几百 MB，由部署负责人在部署机一次取好、就地投放）。
+#   把「没取权重」判成本脚本失败，会让人误以为它能装能力——它物理上不能。
+#   但它必须**出声**：2026-10-15 现网实测「12 语种手册与挂件已对外承诺图片/音频可翻，
+#   而 /api/health 的 ocr_ready/asr_ready 恒 false」正是这么静默躺过去的
+#   （同 D5 那一族：有降级链、产物能打开、没人知道能力腿没落地）。
+cap_count() { # $1=能力子目录 $2=扩展名（不带点）→ 目标机上该目录里该扩展名的文件数
+  local rel="$DEST_BIN/assets/$1"
+  if [ "$MODE" = "local" ]; then
+    ls -1 "$rel"/*."$2" 2>/dev/null | wc -l | tr -d ' '
+  else
+    ssh "${SSH_OPTS[@]}" "$SSH_HOST" "ls -1 '$rel'/*.$2 2>/dev/null | wc -l" | tr -d ' '
+  fi
+}
+log "能力权重在场读数（缺＝「没取过」而不是「没同步上」；取法见各 assets/<能力>/README.md）"
+for cap in ocr asr tts; do
+  n_onnx="$(cap_count "$cap" onnx)"
+  n_txt="$(cap_count "$cap" txt)"
+  if [ "${n_onnx:-0}" -gt 0 ]; then
+    ok "$cap：${n_onnx} 份 ONNX 在位（附带 .txt 词表/词典 ${n_txt:-0} 份）"
+  else
+    warn "$cap：目标机上没有 ONNX 权重 ⇒ /api/health 的 ${cap}_ready=false（依赖装好也没用，识别/转写会整条降级）"
+  fi
+done
+log "★ 提醒：**权重刚落盘不会让就绪位自己翻**——CheckHealth 是 sync.Once，"
+log "  必须 systemctl restart translator.service（演示站 translator-demo.service）才重探一次；"
+log "  翻档后还要用 cmd/capability-smoke 逐件真跑（就绪位只回答「依赖＋权重」，证明不了整条腿）。"
 log "同步完成且逐文件指纹等值。"
 log "下一步：跑 deploy_check.sh，并起一单真实大 PDF —— 验收判据是日志里出现「PDF 原地替换完成」，不是只出现「转换成功」。"

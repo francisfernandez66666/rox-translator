@@ -6,7 +6,9 @@
   transcribe <path>  音频 → 带时间戳文本，stdout 打 JSON {"text": ..., "segments": [...], "language": ...}
 
 依赖（**导入名**，与 fileproc/asr.go 的 asrPythonModules 同源维护）：
-  sherpa_onnx（wav 读取走内置 read_wave；mp3/m4a 等容器由部署机 ffmpeg 预转 16k 单声道 wav）。
+  sherpa_onnx（识别器本体）。★ wav 读取**不走它**：实测 sherpa_onnx 1.13.8 里没有 read_wave
+  （只有 write_wave），所以 PCM wav 由标准库 wave + numpy 读，见 _read_wave 的原因说明；
+  mp3/m4a 等容器仍由部署机 ffmpeg 预转 16k 单声道 wav。
 
 模型（P2 定稿形态，资产随 sync_fileproc_assets.sh 落盘）：
   SenseVoice-Small（中/英/日/韩/粤，int8 ~240MB）为主力；
@@ -66,18 +68,70 @@ def _uses_non_whisper(tokens_path: Path) -> bool:
     return tokens_path.exists()
 
 
+def _read_wave(path: str, sherpa_module):
+    """读 PCM wav → (一维 float32 样本数组, 采样率)。
+
+    ★ 为什么不能直接用它曾经依赖的那一行 `sherpa_onnx.read_wave`：
+      实测现网装的 **sherpa_onnx 1.13.8 根本没有 read_wave**（`dir()` 里只有 `write_wave`，
+      `sherpa_onnx.utils` 里也没有），于是每一条音频都在转写第一步就退
+      `ERR:Decode:module 'sherpa_onnx' has no attribute 'read_wave'`——
+      依赖装好了、权重落盘了、probe 也回 OK，**只有真跑一单才暴露**，
+      这正是本仓「有自动降级的链路，产物能打开不算验收」那一族（同 §一·12 的派发死腿）。
+      ⇒ 读取本体落到**标准库 wave + numpy**（零第三方音频库，且 `_ensure_wav` 已把
+      任何容器砸成 16k 单声道 s16 PCM，形状完全确定）；
+      若将来的版本又导出 read_wave，仍优先用它（它读的是模型侧同款解析），
+      读回来的样本一律归一成 numpy float32，下游 `samples.size`/`accept_waveform` 一字不改。
+    """
+    import wave
+
+    import numpy as np
+
+    reader = getattr(sherpa_module, "read_wave", None)
+    if callable(reader):  # 兼容有 read_wave 的版本（旧 0.x/未来版都走这条）
+        samples, rate = reader(path)
+        arr = np.asarray(samples, dtype=np.float32)
+        # read_wave 历史上给过 [-1,1] 浮点，也直接给过 int16 语义；按量级判一次，
+        # 免得某个版本换了口径就把音量放大 32768 倍（表现是识别成乱码而不是报错）。
+        if arr.size and float(np.max(np.abs(arr))) > 2.0:
+            arr = arr / 32768.0
+        return arr, int(rate)
+
+    try:
+        with wave.open(path, "rb") as wf:
+            n_ch, samp_w, n_frames = wf.getnchannels(), wf.getsampwidth(), wf.getnframes()
+            rate = wf.getframerate()
+            raw = wf.readframes(n_frames)
+    except Exception as exc:  # 非 PCM（A-law/IEEE float/24-bit）都从这里出
+        raise RuntimeError("ERR:AudioCorrupt:wav 不是标准库可读的 PCM 形态（%s）" % exc)
+    if samp_w == 2:
+        arr = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
+    elif samp_w == 1:
+        # 8-bit PCM 是**无符号**且以 128 为零点（CCITT G.711 线性化形态），不是补码。
+        arr = (np.frombuffer(raw, dtype=np.uint8).astype(np.float32) - 128.0) / 128.0
+    elif samp_w == 4:
+        arr = np.frombuffer(raw, dtype="<i4").astype(np.float32) / 2147483648.0
+    else:
+        raise RuntimeError("ERR:Unsupported:wav 位深 %d-bit 不支持（只认 8/16/32-bit PCM）" % (samp_w * 8))
+    if n_ch > 1:
+        # 兜底只取第一声道：_ensure_wav 有 ffmpeg 时必然给单声道，
+        # 走到这里说明机器没 ffmpeg 而原始 wav 是多声道——取第一声道比整单失败好
+        #（识别质量略降但译文出得来；不静默做混音，避免把"少了一步归一"藏进声道平均）。
+        arr = arr.reshape(-1, n_ch)[:, 0]
+    return arr, int(rate)
+
+
 # ------------------------------------------------------------ 音频预处理
 
 def _ensure_wav(path: Path) -> Path:
     """把任意音频容器转成 16kHz 单声道 PCM wav，返回临时文件路径（调用方负责清理）。
 
-    ★ 为什么必须走这一步：mp3/m4a/aac/opus 是**容器里的有损编码**，sherpa_onnx.read_wave
+    ★ 为什么必须走这一步：mp3/m4a/aac/opus 是**容器里的有损编码**，本文件的读取腿 _read_wave
       只认 PCM wav；与其在 Go 侧判断「哪些扩展名要先转」（那份清单会随格式准入面反复漂移，
       见 fileproc/formats.go 的 #43），不如让 Python 侧无条件归一 —— 反正 ffmpeg 对已经是
       目标形态的输入几乎零成本，不存在「多转一次」的浪费。
     """
     if shutil.which("ffmpeg") is None:
-        # read_wave 能吃纯 PCM wav；没有 ffmpeg 时至少让 wav 直通，别的容器如实报错。
+        # _read_wave 能吃纯 PCM wav；没有 ffmpeg 时至少让 wav 直通，别的容器如实报错。
         if path.suffix.lower() == ".wav":
             return path
         raise RuntimeError("ERR:FFmpeg:系统未安装 ffmpeg，无法解码 %s 容器" % path.suffix)
@@ -211,7 +265,14 @@ def cmd_transcribe(path: str) -> int:
             wav = _ensure_wav(src)
             if wav != src:
                 tmp = wav
-            samples, sample_rate = sherpa_onnx.read_wave(str(wav))
+            samples, sample_rate = _read_wave(str(wav), sherpa_onnx)
+            # SenseVoice/Parakeet/Whisper 全系都按 16k 训练，_ensure_wav 在有 ffmpeg 的机器上必然给出 16k。
+            # 走到不一致这一档＝这台**没有 ffmpeg** 而原始 wav 是 44.1k/48k（或反过来：ffmpeg 的参数漂了）。
+            # ⇒ 如实报「缺 ffmpeg 归一」这条可行动文案，**不做静默降采样**——
+            #   把「依赖没装好」藏成「识别质量差」是本仓最贵的一类缺陷（同 §一·12 派发死腿那族）。
+            if sample_rate != TARGET_SAMPLE_RATE:
+                raise RuntimeError("ERR:FFmpeg:音频采样率 %d Hz 未归一到 %d Hz，需在服务器安装 ffmpeg" %
+                                   (sample_rate, TARGET_SAMPLE_RATE))
             if samples.size == 0:
                 print("ERR:Empty:音频无有效采样（时长为零或纯静音）", file=sys.stderr)
                 return 2

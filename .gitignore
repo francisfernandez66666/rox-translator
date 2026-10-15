@@ -59,3 +59,20 @@ ai-assist/assist-server
 # 也极易被一次 `git add -A` 误送进仓库（32M 二进制一旦进了历史，清理要改写已推送提交）。
 # 按 §一·9「远端只放代码」的精神，产物一律不入版本库，这里从机制上兜住。
 backend-go/*-linux
+
+# ============ OCR/ASR/TTS 模型权重与词典（★ 2026-10-15 入册，防一次 `git add -A` 把几百 MB 送进历史）============
+# 口径同 assets/{ocr,asr,tts}/README.md：**权重不进 git**，由部署负责人在部署机一次取好，
+# 随 scripts/sync_fileproc_assets.sh 落到 /opt/translator/bin/assets/ 并逐文件核对 sha256。
+# README.md 与 LICENSE-NOTE.txt 必须继续跟踪（它们是「该放什么、从哪取、什么许可」的唯一说明面），
+# 故这里只按**扩展名**点名，不整目录忽略。
+backend-go/internal/fileproc/assets/ocr/*.onnx
+backend-go/internal/fileproc/assets/ocr/*.txt
+backend-go/internal/fileproc/assets/asr/*.onnx
+backend-go/internal/fileproc/assets/asr/*.txt
+backend-go/internal/fileproc/assets/asr/*.json
+backend-go/internal/fileproc/assets/tts/*.onnx
+backend-go/internal/fileproc/assets/tts/*.safetensors
+backend-go/internal/fileproc/assets/tts/voices/*.wav
+backend-go/internal/fileproc/assets/tts/voices/*.mp3
+# 探针/冒烟的一次性 Linux 交叉编译产物（源码在 cmd/capability-smoke，产物不落仓库）
+backend-go/bin-probe/
