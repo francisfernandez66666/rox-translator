@@ -77,7 +77,7 @@ warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 
 [ -n "$FPD_SSH" ] || { bad "必须给 FPD_SSH=fpd@<ip>（派发专用账号，不是管理员账号）"; exit 2; }
 [ -f "$FPD_KEY" ] || { bad "私钥不存在：$FPD_KEY"; exit 2; }
-[ -d "$FPD_LOCAL_BIN" ] || { bad "主站 bin 目录不存在：$FPD_LOCAL_BIN（本脚本须在主站执行）"; exit 2; }
+[ -d "$FPD_LOCAL_BIN" ] || { bad "主站 bin 目录不存在：${FPD_LOCAL_BIN}（本脚本须在主站执行）"; exit 2; }
 [ -x "$FPD_LOCAL_PY" ] || FPD_LOCAL_PY="$(command -v python3 || true)"
 [ -n "$FPD_LOCAL_PY" ] || { bad "主站找不到 python3（G2/G4 需要它现读版本与跑样张）"; exit 2; }
 
@@ -117,11 +117,11 @@ if [ -s "$FPD_KNOWN_HOSTS" ]; then
   if [ -n "$SVC_USER" ] && [ "$SVC_USER" != "root" ] && ! as_svc test -r "$FPD_KNOWN_HOSTS"; then
     bad "known_hosts $FPD_KNOWN_HOSTS 对服务账号 $SVC_USER 不可读 ⇒ 服务进程钉不住远端主机键"
   else
-    ok "凭据面：远端主机键钉在 $FPD_KNOWN_HOSTS（$(grep -cvE '^[[:space:]]*$|^[[:space:]]*#' "$FPD_KNOWN_HOSTS" 2>/dev/null || echo 0) 条），ssh 与预检同用一个文件"
+    ok "凭据面：远端主机键钉在 ${FPD_KNOWN_HOSTS}（$(grep -cvE '^[[:space:]]*$|^[[:space:]]*#' "$FPD_KNOWN_HOSTS" 2>/dev/null || echo 0) 条），ssh 与预检同用一个文件"
   fi
 else
   warn "没有可用的 known_hosts（$FPD_KNOWN_HOSTS 不存在或为空）⇒ 本次预检走首见即信（accept-new）。"
-  warn "  ⚠️ 服务账号（$SVC_USER）没有家目录且 unit 开了 ProtectHome=yes，accept-new 在生产上**记不下任何键**，"
+  warn "  ⚠️ 服务账号（${SVC_USER}）没有家目录且 unit 开了 ProtectHome=yes，accept-new 在生产上**记不下任何键**，"
   warn '     等于「谁给的主机键都认」。开闸前请先跑 dispatch_apply.sh 的 ①c 段把指纹铺好并带外核对。'
 fi
 
@@ -347,9 +347,9 @@ PY
 )"
         case "$VERDICT" in
           EQUAL*) ok "G4 两侧 extract 段数与逐段内容相等（${VERDICT#EQUAL } 段）" ;;
-          SEGCOUNT_DIFF*) bad "G4 两侧**段数不等**（$VERDICT）⇒ 版式切分口径已经漂了，产物必然不同" ;;
-          SEG_DIFF*) bad "G4 两侧段内容不等（$VERDICT）⇒ 同一份件在不同机器上读出了不同的段" ;;
-          *) bad "G4 两侧 extract 输出无法解析（$VERDICT）" ;;
+          SEGCOUNT_DIFF*) bad "G4 两侧**段数不等**（${VERDICT}）⇒ 版式切分口径已经漂了，产物必然不同" ;;
+          SEG_DIFF*) bad "G4 两侧段内容不等（${VERDICT}）⇒ 同一份件在不同机器上读出了不同的段" ;;
+          *) bad "G4 两侧 extract 输出无法解析（${VERDICT}）" ;;
         esac
       fi
     fi
@@ -401,7 +401,7 @@ else
     if [ "$G5_PUT_OK" = "1" ] && [ -n "$LOCAL_SHA" ] && [ "$PUT_SHA" = "$LOCAL_SHA" ] && [ "$PUT_SIZE" = "$LOCAL_SIZE" ]; then
       ok "G5① 上传 $LOCAL_SIZE B 用 ${PUT_MS}ms，远端回执 sha256 与本地**逐字节等值**"
     else
-      bad "G5① 上传后远端回执与本地不等（本地 size=$LOCAL_SIZE sha=${LOCAL_SHA:0:12}… / 远端 size=$PUT_SIZE sha=${PUT_SHA:0:12}…，ok 回执=$G5_PUT_OK）"
+      bad "G5① 上传后远端回执与本地不等（本地 size=$LOCAL_SIZE sha=${LOCAL_SHA:0:12}… / 远端 size=$PUT_SIZE sha=${PUT_SHA:0:12}…，ok 回执=${G5_PUT_OK}）"
       bad "    ⇒ 这一条不判就等于把客户的原件改坏了还交给客户（上传腿没有哈希比对是 09-29 前的形态）"
     fi
   fi
@@ -456,8 +456,8 @@ PY
         APPLY_LINE="$(tail -1 "$G5/run.out")"
         G5_RUN_OK=1
         case "$APPLY_LINE" in
-          *"replaced="*) ok "G5② 远端写回成功（${RUN_MS}ms，$APPLY_LINE）" ;;
-          *) bad "G5② 远端写回退出码 0 但没吐统计行 ⇒ 「原地替换完成」这条判据在远端侧无从核对（日志：$APPLY_LINE）" ;;
+          *"replaced="*) ok "G5② 远端写回成功（${RUN_MS}ms，${APPLY_LINE}）" ;;
+          *) bad "G5② 远端写回退出码 0 但没吐统计行 ⇒ 「原地替换完成」这条判据在远端侧无从核对（日志：${APPLY_LINE}）" ;;
         esac
         # 读写闭环判据（G4 只比了"读"，这条比"读出来的键能不能写回去"）：
         #   ★ 不能拿 replaced 去等**提取段数**——extract 的 texts 是**去重后**的键表
@@ -469,7 +469,7 @@ PY
         if [ -n "$REQUESTED" ] && [ "$REQUESTED" != "0" ] && [ "$REPLACED" != "$REQUESTED" ]; then
           bad "G5② 恒等映射下 replaced=$REPLACED ≠ requested=$REQUESTED ⇒ 提取键与写回键不同源，真译文会整段漏嵌"
         elif [ -z "$REPLACED" ] && [ -n "$NSEG" ] && [ "$NSEG" != "0" ]; then
-          bad "G5② 写回执里读不到 replaced/requested 计数（$APPLY_LINE）⇒ 闭环判据无从执行"
+          bad "G5② 写回执里读不到 replaced/requested 计数（${APPLY_LINE}）⇒ 闭环判据无从执行"
         fi
       fi
     fi
@@ -507,7 +507,7 @@ PY
             if [ "$GOT_SIZE" = "$WANT_SIZE" ] && [ "$GOT_SHA" = "$WANT_SHA" ] && [ "$MAGIC" = "%PDF" ]; then
               ok "G5④ 取回 $GOT_SIZE B 用 ${GET_MS}ms，sha256 与远端**逐字节等值**（PDF 魔数在位）"
             else
-              bad "G5④ 取回件与远端不等（远端 size=$WANT_SIZE sha=${WANT_SHA:0:12}… / 主站 size=$GOT_SIZE sha=${GOT_SHA:0:12}… magic=$MAGIC）"
+              bad "G5④ 取回件与远端不等（远端 size=$WANT_SIZE sha=${WANT_SHA:0:12}… / 主站 size=$GOT_SIZE sha=${GOT_SHA:0:12}… magic=${MAGIC}）"
               bad "    ⇒ 客户会拿到坏文件；这一条不判就是把『传输被截断』当成上传成功（老实现 4MB 缓冲静默截断的同族）"
             fi
             # 定档读数（★ 阈值按**产物尺寸**算：09-29 实测产物可达输入 3.4 倍，按输入定档会低估回传）
@@ -535,5 +535,5 @@ if [ "$FAIL" -eq 0 ]; then
   echo "✅ preflight 全过（$PASS 项）：两侧环境一致 **且传输腿真机往返过一次**，可以走 scripts/dispatch_apply.sh 开闸"
   exit 0
 fi
-echo "❌ preflight 未过（通过 $PASS / 失败 $FAIL）⇒ **保持派发关闭**，先修再开"
+echo "❌ preflight 未过（通过 $PASS / 失败 ${FAIL}）⇒ **保持派发关闭**，先修再开"
 exit 1

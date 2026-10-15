@@ -369,7 +369,7 @@ elif [ "$cred_state" != "yes" ]; then
   PF_RC=2
   add_reason "credentials_missing"
   : >"$PF_OUT"
-  echo "凭据现值取不到（$cred_state），未拨远端" >"$PF_OUT"
+  echo "凭据现值取不到（${cred_state}），未拨远端" >"$PF_OUT"
 else
   # ★ 样张缺不缺都跑：预检的 G5 在缺样张时**判红不判跳过**是既有硬口径（09-29 事故本体），
   #   这里绝不为了"让闹钟绿"把 FPD_SAMPLE 换成一份凑数的文件或不传——不传正是让它自己红。

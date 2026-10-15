@@ -48,7 +48,7 @@ if [ "$MODE" = "--if-expired" ]; then
   if [ -z "$EXPIRE" ] || [ "$TODAY" \< "$EXPIRE" ]; then
     exit 0
   fi
-  log "已到期（到期日 $EXPIRE，今天 $TODAY）⇒ 自动关闸"
+  log "已到期（到期日 ${EXPIRE}，今天 ${TODAY}）⇒ 自动关闸"
 fi
 
 [ "$(id -u)" = "0" ] || { bad "必须以 root 执行"; exit 2; }

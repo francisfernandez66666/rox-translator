@@ -136,7 +136,7 @@ pdf_pages() {
 
 MODE="干跑"
 [ "$APPLY" = 1 ] && MODE="执行"
-say "===== 每日派发探针安装器（$MODE）====="
+say "===== 每日派发探针安装器（${MODE}）====="
 say "档位：体积 ≥ ${MIN_MB}MiB（来源：${MIN_MB_SRC}） 页数 ≥ ${MIN_PAGES}（来源：${MIN_PAGES_SRC}）"
 say "写点：bin=$BIN_DIR unit=$UNIT_DIR work=$WORK_DIR"
 
@@ -147,7 +147,7 @@ for pair in "$PROBE_SCRIPT:$REPO_ROOT/scripts/$PROBE_SCRIPT" "$PREFLIGHT_SCRIPT:
   dst="$BIN_DIR/$name"
   if [ ! -f "$src" ]; then bad "仓库里找不到 $src ⇒ 无法安装（先核 scripts/ 是否完整）"; continue; fi
   if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
-    ok "$name 已在位且与仓库逐字节一致（$dst）"
+    ok "$name 已在位且与仓库逐字节一致（${dst}）"
   else
     say "  待办：$name $( [ -f "$dst" ] && echo '在位但与仓库不一致（漂移）' || echo '<不在位>' ) ⇒ 从 $src 落位并 chmod 0755"
     need_apply=1
@@ -193,7 +193,7 @@ if [ -n "$SAMPLE_SRC" ]; then
       bad "样张页数不够档：$pg < $MIN_PAGES ⇒ 同上（派发资格＝体积 ∧ 页数，两条同时成立才派）"
     else
       sample_ok=1
-      say "  待办：把这份够档的样张放到 $SAMPLE（属主 translator，权限 0644）"
+      say "  待办：把这份够档的样张放到 ${SAMPLE}（属主 translator，权限 0644）"
       need_apply=1
     fi
   fi
@@ -209,7 +209,7 @@ else
       need_apply=1
     fi
   else
-    say "  待办：样张缺失（$SAMPLE）⇒ 没有样张这只闹钟**每天判红**，所以本安装器默认不 enable"
+    say "  待办：样张缺失（${SAMPLE}）⇒ 没有样张这只闹钟**每天判红**，所以本安装器默认不 enable"
     say "        造一份够档的合成件（不经模型、只压传输与转换两条腿）：仓库 1001_08AF 那批的"
     say "        make_probe_pdf.py，或用现网任意一份够档真实件复制到 $SAMPLE"
     need_apply=1
@@ -262,7 +262,7 @@ fi
 #   而 dry-run 早把"复制到 $UNIT_DIR"写成待办放行——测试形态跑不到落位判据，
 #   就等于这条安装链从没被跑过（现网实测：10-10 首跑）。
 mkdir -p "$BIN_DIR" "$UNIT_DIR" "$WORK_DIR" \
-  || { bad "建写点目录失败（$BIN_DIR / $UNIT_DIR / $WORK_DIR）"; exit 2; }
+  || { bad "建写点目录失败（$BIN_DIR / $UNIT_DIR / ${WORK_DIR}）"; exit 2; }
 for pair in "$PROBE_SCRIPT:$REPO_ROOT/scripts/$PROBE_SCRIPT" "$PREFLIGHT_SCRIPT:$REPO_ROOT/scripts/$PREFLIGHT_SCRIPT"; do
   name="${pair%%:*}"; src="${pair#*:}"
   [ -f "$src" ] || continue
