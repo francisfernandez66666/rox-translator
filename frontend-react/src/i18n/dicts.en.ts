@@ -294,7 +294,7 @@ export const baseEn: Record<string,string> = {
   'tk.confirmDeleteAction': 'Confirm Delete',
   'tk.cancelConfirm': 'Cancel job {no}? Billing and output will stop; credits already consumed will not be refunded.',
   'tk.imageHeavyHint': 'Image-based tables detected: text inside images will be recognized by OCR and then translated. Recognition accuracy depends on image clarity, so please review the translation; upload the Word source for higher accuracy.',
-  "tk.mediaHintImage": "Image selected: text in the image is recognized (OCR) first, then translated. Deliverable is a translated Markdown file (the image itself is not re-rendered).",
+  "tk.mediaHintImage": "Image selected: text in the image is recognized (OCR) first, then translated. Deliverables are a translated Markdown file plus an in-place translated image (the translation is written back over the original layout; if rendering fails only the Markdown is delivered).",
   "tk.mediaHintAudio": "Audio selected: speech is transcribed first, then translated. Deliverables are translated subtitles (.srt with the original timing) plus a translated Markdown file.",
   'menu.adminConsole': 'Admin Console',
   'menu.backWorkbench': 'Back to Workspace',

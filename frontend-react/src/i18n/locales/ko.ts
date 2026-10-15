@@ -2702,7 +2702,7 @@ export const dict: Record<string, string> = {
   "tk.filesCount": "{n}개 파일 선택됨",
   "tk.filesDone": "파일 {done}/{total}개 완료",
   "tk.imageHeavyHint": "이미지 기반 표가 감지되었습니다: 이미지 안의 텍스트는 OCR로 인식한 뒤 번역합니다. 인식 정확도는 이미지 선명도에 좌우되므로 번역문을 확인해 주세요. 더 높은 정확도가 필요하면 Word 원본을 업로드하세요.",
-  "tk.mediaHintImage": "이미지를 선택했습니다: 먼저 OCR로 이미지 속 텍스트를 인식한 뒤 번역합니다. 결과물은 번역된 Markdown 파일입니다(이미지 자체는 다시 만들지 않습니다).",
+  "tk.mediaHintImage": "이미지를 선택했습니다: 먼저 OCR로 이미지 속 텍스트를 인식한 뒤 번역합니다. 결과물은 번역된 Markdown 파일과 원위치 번역 이미지입니다(번역문을 원본 이미지 위치에 덮어씁니다. 렌더링이 안 되면 Markdown만 나옵니다).",
   "tk.mediaHintAudio": "오디오를 선택했습니다: 먼저 음성을 전사한 뒤 번역합니다. 결과물은 번역된 자막 .srt(원본 타임라인 유지)와 번역된 Markdown 파일입니다.",
   "tk.langsLabel": "대상 언어",
   "tk.langsPlaceholder": "대상 언어를 쉼표로 구분 입력 (기본값 en)",

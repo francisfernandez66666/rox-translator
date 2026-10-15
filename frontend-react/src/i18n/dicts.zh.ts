@@ -401,7 +401,7 @@ export const baseZh: Record<string,string> = {
   'tk.confirmDeleteAction': '确认删除',
   'tk.cancelConfirm': '确认取消工单 {no}？翻译中将停止后续计费与产出；已消耗的积分不会退还。',
   'tk.imageHeavyHint': '检测到图片型表格：图片中的文字将通过 OCR 识别后翻译，识别准确率受图片清晰度影响，请核对译文；如需更高准确率可上传 Word 源文件。',
-  "tk.mediaHintImage": "已选择图片：系统会先用 OCR 识别图中文字再翻译，产物为译文 Markdown（不做原图回填）。",
+  "tk.mediaHintImage": "已选择图片：系统会先用 OCR 识别图中文字再翻译，产物为译文 Markdown ＋ 原位翻译图（译文按原图位置抹写回去；渲染不出来时只出 Markdown）。",
   "tk.mediaHintAudio": "已选择音频：系统会先做语音转写再翻译，产物为译文字幕 .srt（沿用原时间轴）＋译文 Markdown。",
   'menu.adminConsole': '进入管理后台',
   'menu.backWorkbench': '返回工作台',

@@ -12,14 +12,15 @@
 //	合成失败时，调用方的动作是"这一次没有语音、别的照常"，译文与工单状态一个字节都不动。
 //	因此本能力不可用**不影响任何主链**：探测为红只代表「没有语音」，不代表故障。
 //
-// ★ 现役射程（2026-10-15 核正，旧注释这里写错了两处，都是"注释声称有个事实源而它不存在"那一族）：
-//   - 合成入口的真名是 **SpeakToWav**（本文件），不叫 SpeakText；
-//   - 现在**唯一的调用方**是即时翻译工作台的朗读端点 `internal/api/chat_audio.go` 的 handleChatTTS
-//     （POST /api/chat/tts，前端 `src/api/chatVoice.ts` 的 speakAloud）。
-//     工单侧的音频交付形态是「译文字幕 .srt ＋译文 .md ＋原音频副本」（见 engine/file.go 的 audio 分支），
-//     **不含**合成语音；本文件头此前那句"跳过音频 + GateWarnings 明示"因此不成立——
-//     工单链里压根没有这一步，GateWarnings 也就收不到这一条。要不要给工单产物再加一份译文语音 mp3
-//     是产品决策（现网模型资产 assets/tts/*.onnx 尚未投放，接了也是恒跳过），已记入待决策账。
+// ★ 现役射程（2026-10-15 核正）：
+//   - 合成入口两个，都在本文件：**SpeakToWav**（单段，即时翻译朗读用）与
+//     **SpeakLines**（多段批量缝合，工单音频产物用）。
+//   - 调用方：`internal/api/chat_audio.go` 的 handleChatTTS（POST /api/chat/tts，前端
+//     `src/api/chatVoice.ts` 的 speakAloud）走 SpeakToWav；`internal/engine/file.go` 的
+//     audio 分支走 SpeakLines，产出 `{base}_{lang}.mp3`（择优：语种覆盖才产）。
+//     计费口径见 v2 方案 §3.5——识别与合成都**不单独立项**，TTS 算力视为获客成本。
+//   - ⚠️ 现网 `assets/tts/*.onnx` 与默认音色尚未投放（`sync_fileproc_assets.sh` 没跑过），
+//     所以工单侧这条腿当前是**恒跳过**态：接了线但产物出不来，按设计降级、不影响译文。
 //
 // 边界（刻意不做）：不建任务类型/队列/状态机；不联网下载模型与音色（私有化机器可能无外网）。
 // =============================================
@@ -27,6 +28,7 @@ package fileproc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -170,6 +172,84 @@ func SpeakToWav(ctx context.Context, text, lang, outPath string) error {
 			return &TTLError{Reason: ttsReasonForVariant(variant), Message: friendlyTtsError(string(stderr)), Err: err}
 		}
 		return &TTLError{Reason: TtsReasonFailed, Message: fmt.Sprintf("TTS 合成失败: %v\n%s", err, truncateTail(stderr)), Err: err}
+	}
+	if info, serr := os.Stat(outPath); serr != nil || info.Size() == 0 {
+		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 产出了空音频（模型未产出有效采样）", Err: serr}
+	}
+	return nil
+}
+
+// ===== P2 工单侧：多段批量合成（音频工单的「译文配音」产物） =====
+
+// ttsBatchTimeout 批量合成的墙钟预算。与单段 60s 分开设：
+// 单段那条线按"HTTP 请求等得起"定，批量这条线跑在工单后台任务里，没有浏览器在等，
+// 但 Chatterbox 0.5B 在 CPU 上 1~3s/句，一段 10 分钟的音轨可能有上百段 ⇒ 默认放到 900s
+// （与 asrTimeout 同档，两条腿都是"识别/合成一整条音轨"的量级）。
+func ttsBatchTimeout() time.Duration {
+	if v := os.Getenv("TTS_BATCH_TIMEOUT_SEC"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 900 * time.Second
+}
+
+// SpeakLines 把多段译文按顺序合成并缝合到 outPath（wav 或 .mp3，由后缀决定）。
+// ★ 译文第一（最高优先级）：与 SpeakToWav 同一纪律——返回错误只代表"这次没有语音"，
+//
+//	调用方必须据此**跳过音频继续交付译文**，绝不能把翻译结果一起判死。
+//
+// ★ 为什么不复用 SpeakToWav 循环 N 次：模型加载才是耗时大头（ONNX 权重 + 分词器），
+//
+//	N 次调用就付 N 次加载；而且 N 个临时 wav 还要在 Go 侧拼音频——那是把音频工序
+//	搬进 Go。改为脚本侧一次加载、逐段合成、静音缝合，Go 只负责把段列表喂过去。
+//
+// ★ 段列表走临时文件而不是命令行：行译文可很长（命令行有长度上限），
+//
+//	且 argv 会出现在 `ps` 里把客户内容漏给同机其他进程（同 RenderTranslatedImage 的理由）。
+func SpeakLines(ctx context.Context, lines []string, lang, outPath string) error {
+	kept := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			kept = append(kept, ln)
+		}
+	}
+	if len(kept) == 0 {
+		return &TTLError{Reason: TtsReasonEmpty, Message: "没有可朗读的内容"}
+	}
+	if !TtsAvailable() {
+		return &TTLError{Reason: TtsReasonCapabilityMissing, Message: "译文语音合成（TTS）不可用：服务器未安装所需依赖、模型资产或默认音色（assets/tts/），投放步骤见 assets/tts/README.md"}
+	}
+	if _, err := os.Stat(ttsScriptPath()); err != nil {
+		return &TTLError{Reason: TtsReasonCapabilityMissing, Message: fmt.Sprintf("TTS 脚本缺失：tts_speak.py 未随二进制部署到 %s", filepath.Dir(os.Args[0]))}
+	}
+	if dir := filepath.Dir(outPath); dir != "" {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	tmp, err := os.CreateTemp("", "tts-lines-*.json")
+	if err != nil {
+		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 临时文件创建失败: " + err.Error(), Err: err}
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if encErr := json.NewEncoder(tmp).Encode(kept); encErr != nil {
+		tmp.Close()
+		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 段列表写出失败: " + encErr.Error(), Err: encErr}
+	}
+	if closeErr := tmp.Close(); closeErr != nil {
+		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 临时文件关闭失败: " + closeErr.Error(), Err: closeErr}
+	}
+	argv := []string{ttsScriptPath(), "speakfile", tmpPath, "--out", outPath}
+	if strings.TrimSpace(lang) != "" {
+		argv = append(argv, "--lang", strings.TrimSpace(lang))
+	}
+	bin, args := wrapNice(pyBin(), argv)
+	_, stderr, rerr := runSubprocess(ctx, ttsBatchTimeout(), bin, args, nil)
+	if rerr != nil {
+		if variant := ttsErrVariant(string(stderr)); variant != "" {
+			return &TTLError{Reason: ttsReasonForVariant(variant), Message: friendlyTtsError(string(stderr)), Err: rerr}
+		}
+		return &TTLError{Reason: TtsReasonFailed, Message: fmt.Sprintf("TTS 合成失败: %v\n%s", rerr, truncateTail(stderr)), Err: rerr}
 	}
 	if info, serr := os.Stat(outPath); serr != nil || info.Size() == 0 {
 		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 产出了空音频（模型未产出有效采样）", Err: serr}

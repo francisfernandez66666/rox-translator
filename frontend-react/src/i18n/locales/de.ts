@@ -2702,7 +2702,7 @@ export const dict: Record<string, string> = {
   "tk.filesCount": "{n} Dateien ausgewählt",
   "tk.filesDone": "{done}/{total} Dateien abgeschlossen",
   "tk.imageHeavyHint": "Bildbasierte Tabellen erkannt: Text in Bildern wird per OCR erkannt und anschließend übersetzt. Die Erkennungsgenauigkeit hängt von der Bildschärfe ab, bitte Übersetzung prüfen; für höhere Genauigkeit die Word-Quelldatei hochladen.",
-  "tk.mediaHintImage": "Bild ausgewählt: Der Text wird zuerst per OCR erkannt und dann übersetzt. Ergebnis ist eine übersetzte Markdown-Datei (das Bild selbst wird nicht neu erzeugt).",
+  "tk.mediaHintImage": "Bild ausgewählt: Der Text wird zuerst per OCR erkannt und dann übersetzt. Ergebnisse sind eine übersetzte Markdown-Datei sowie ein übersetztes Bild an Originalposition (die Übersetzung wird an der ursprünglichen Stelle in das Bild geschrieben; schlägt das Rendering fehl, wird nur die Markdown-Datei geliefert).",
   "tk.mediaHintAudio": "Audio ausgewählt: Die Sprache wird zuerst transkribiert und dann übersetzt. Ergebnisse sind übersetzte Untertitel (.srt mit originaler Zeitachse) plus eine übersetzte Markdown-Datei.",
   "tk.langsLabel": "Zielsprachen",
   "tk.langsPlaceholder": "Zielsprachen, durch Komma getrennt (Standard: en)",

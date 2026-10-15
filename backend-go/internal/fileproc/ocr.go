@@ -125,6 +125,7 @@ func ExtractImageOCR(ctx context.Context, path string, e *Extractor) error {
 }
 
 // parseOcrJSON 把 ocr_recognize.py 的 stdout JSON 解析为提取器文本行。
+// 参数 srcPath：被识别的图片路径，仅用于把「行↔坐标」写进 P4 原位回填缓存（见 RememberImageBoxes）。
 func parseOcrJSON(out string, e *Extractor, srcPath string) error {
 	out = strings.TrimSpace(out)
 	// 容错：脚本可能在前缀打印非 JSON 日志，取最后一个 {…} 块
@@ -154,16 +155,10 @@ func parseOcrJSON(out string, e *Extractor, srcPath string) error {
 			}
 			boxes = append(boxes, OcrBox{Text: ln, Box: res.Boxes[i]})
 		}
-		RememberImageBoxes(ocrPathOfLastRun, boxes)
+		RememberImageBoxes(srcPath, boxes)
 	}
 	return nil
 }
-
-// ocrPathOfLastRun 供 parseOcrJSON 回填坐标缓存用的「本次识别的图片路径」。
-// 为什么是包级变量而不是参数：parseOcrJSON 的签名被 ExtractImageOCR 与单测共用，
-// 为了加一个纯可选的旁路缓存去改所有调用点不划算；它是**单线程写入、紧邻读取**的
-// 短生命周期值，语义上等价于一次调用的上下文。
-var ocrPathOfLastRun string
 
 // friendlyOcrError 解析 ocr_recognize.py stderr 的 ERR:<Variant>:<msg> 行 → 面向用户话术；
 // 无法识别时返回 ""（由调用方给原始错误）。

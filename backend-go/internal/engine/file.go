@@ -293,6 +293,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return &FileTranslateResult{Skill: "translation", Error: err.Error()}
 	}
 	ext := strings.ToLower(filepath.Ext(filePath))
+	// ★ P4：图片件的 OCR 坐标缓存在提取期入列并**钉住**（在途），这里用 defer 保证
+	//   **任何返回路径都解除钉住**——包括第 3 步写回中途 return 的错误路径。
+	//   为什么必须 defer 而不是循环后调：语言循环里有多个 return（字幕/文档生成失败即整单失败），
+	//   循环后那一行会被它们跳过，在途钉就漏在缓存里，高并发下最终全员钉住、淘汰退化成纯 FIFO。
+	//   放在这里（ext 一定值）而不是图片分支里：提取发生在第 1 步，比第 3 步的 image 分支早得多。
+	if writebackDelivery(ext) == "image" {
+		defer fileproc.ReleaseImageBoxes(filePath)
+	}
 	// ★ 工单双模式（2026-09-13）：options["delivery"]=="text" → 纯文案模式（anydoc/原生提取，
 	//   交付译文 .md，不还原版式）；restore/空 → 还原文件模式（既有原位回写管线，行为不变）。
 	deliveryText := strings.EqualFold(strings.TrimSpace(optionString(options["delivery"])), "text")
@@ -947,6 +955,16 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 				filesOut = append(filesOut, imgPath)
 				langArtifact[lc] = imgPath // 译文 .md：保真比对应读它
+				// ★ P4「图片原位翻译」：在**同一份 OCR 坐标**上把译文画回原图，随 .md 一起交付。
+				//   它是**择优产出**：渲染不出来（缺中文字体 / 坐标没缓存住 / 行长溢出）就退回
+				//   “只有译文 .md”的既有形态——译文已经翻好，绝不能让“图没画出来”把整单判死。
+				inPlaceSuffix := fmt.Sprintf("_%s%s", lc, ext)
+				inPlacePath := filepath.Join(outputDir, artifactBase(lc, inPlaceSuffix)+inPlaceSuffix)
+				if rerr := fileproc.RenderTranslatedImage(ctx, filePath, inPlacePath, tr); rerr != nil {
+					observability.Warn(ctx, "图片原位回填跳过（退回仅译文 .md）", "error", rerr.Error(), "artifact", filepath.Base(inPlacePath))
+				} else {
+					filesOut = append(filesOut, inPlacePath)
+				}
 				continue
 			}
 			// ★ P2：音频格式（经 ASR 转写投喂翻译）同样没有「原位回写」这回事——译文是文本，
@@ -973,7 +991,39 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], merr.Error())}
 				}
 				filesOut = append(filesOut, audPath)
-				langArtifact[lc] = audPath // 译文 .md：保真比对应读它
+				langArtifact[lc] = audPath // 译文 .md：保真比应对读它
+				// ★ P2 收口：④ {base}_{lang}.mp3 译文配音（择优产出，v2 方案 §4.3 第 3 件）。
+				//   语种越界（Chatterbox 23 语之外）或合成失败 ⇒ 跳过并在 GateWarnings 明示，
+				//   工单仍 completed——语音是增值，译文三件套（.srt/.md/原音频）才是资产。
+				//   缝合顺序按 cues（＝srt 的顺序），没有 cues 时退化为 texts 顺序，与 srt 同源。
+				ttsLines := make([]string, 0, len(cues))
+				if len(cues) > 0 {
+					for _, c := range cues {
+						if v, ok := tr[c.Text]; ok && strings.TrimSpace(v) != "" {
+							ttsLines = append(ttsLines, v)
+						}
+					}
+				} else {
+					for _, t := range texts {
+						if v, ok := tr[t]; ok && strings.TrimSpace(v) != "" {
+							ttsLines = append(ttsLines, v)
+						}
+					}
+				}
+				if len(ttsLines) == 0 {
+					// 一段译文都没拿到（不该发生：上面已判 len(tr)==0 就 continue）——不合成，也不报警。
+				} else {
+					mp3Suffix := fmt.Sprintf("_%s.mp3", lc)
+					mp3Path := filepath.Join(outputDir, artifactBase(lc, mp3Suffix)+mp3Suffix)
+					if terr := fileproc.SpeakLines(ctx, ttsLines, lc, mp3Path); terr != nil {
+						observability.Warn(ctx, "译文配音跳过（不影响字幕与译文交付）",
+							"lang", lc, "error", terr.Error(), "artifact", filepath.Base(mp3Path))
+						gateWarnings = append(gateWarnings, fmt.Sprintf(
+							"%s 未生成译文配音（%s）；字幕与译文已完整交付", config.LangNames[lc], terr.Error()))
+					} else {
+						filesOut = append(filesOut, mp3Path)
+					}
+				}
 				continue
 			}
 			// ★ 2026-09-09 产品决策：写回失败不降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），

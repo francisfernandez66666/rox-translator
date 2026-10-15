@@ -2702,7 +2702,7 @@ export const dict: Record<string, string> = {
   "tk.filesCount": "{n} archivos seleccionados",
   "tk.filesDone": "Se han completado {done}/{total} archivos",
   "tk.imageHeavyHint": "Se detectaron tablas basadas en imágenes: el texto dentro de las imágenes se reconocerá mediante OCR y luego se traducirá. La precisión del reconocimiento depende de la nitidez de la imagen, revisa la traducción; para mayor precisión sube el archivo fuente de Word.",
-  "tk.mediaHintImage": "Imagen seleccionada: el texto se reconoce primero (OCR) y después se traduce. El resultado es un archivo Markdown traducido (la imagen no se reconstruye).",
+  "tk.mediaHintImage": "Imagen seleccionada: el texto se reconoce primero (OCR) y después se traduce. Los resultados son un archivo Markdown traducido y una imagen traducida en su lugar (la traducción se escribe en la posición original de la imagen; si el renderizado falla, solo se entrega el Markdown).",
   "tk.mediaHintAudio": "Audio seleccionado: la voz se transcribe primero y después se traduce. Los resultados son subtítulos traducidos (.srt con la línea de tiempo original) más un archivo Markdown traducido.",
   "tk.langsLabel": "Idiomas de destino",
   "tk.langsPlaceholder": "Idiomas de destino, separados por comas (predeterminado: en)",

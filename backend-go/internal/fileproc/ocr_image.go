@@ -7,14 +7,13 @@
 //	ocr.go 那条腿的交付是**文本**（投喂翻译引擎，产出译文 .md）；
 //	本文件的交付是**图**（在原图上回填译文）。同一个 OCR 上游，两条不同的产出形态。
 //
-//	★★ **本文件目前是「只有能力腿、没有交付腿」的形态（2026-10-15 收口批实读）**：
-//	`RenderTranslatedImage` 与 `ImageBoxes` 在全仓**零调用方**（连测试都没有），
-//	engine/file.go 里**不存在**那个 image_inplace 分支——写回链只在计划稿 §五 的 P4 里，
-//	尚未实施（同一批的 `RememberImageBoxes` 有真调用方＝`ocr.go:157`，所以框坐标缓存那条腿是活的，
-//	只是暂时没人来取）。所以这里的回退口径就是最朴素的"删本文件＋删 `ocr_translate_image.py`"，
-//	**不需要**动 engine（没有分支可动）。别把这段当成"分支被谁摘掉了"去找，它从没长出来过。
-//	⇒ 排障口径：现网图片件的产物只有译文 .md（P1a 形态），不是缺陷；
-//	  要拿到"译好的图"是**对外交付契约改动**（客户看到的产物集合变了），已进《PROGRESS》§十四 待决策账等拍板。
+//	★★ **交付腿已接线（2026-10-15 P4 收口）**：`engine/file.go` 的 image 分支在译文 .md 之后
+//	追加调用 `RenderTranslatedImage`（`file.go:955`），`ImageBoxes` 由它内部取用（`ocr_image.go:139`），
+//	上游那端 `RememberImageBoxes` 的调用点在 `ocr.go:158`——三处都有真调用方，不再是"没人来取"。
+//	所以回退口径升级为：删本文件＋删 `ocr_translate_image.py`＋删 file.go 里那个 if 块，
+//	三处一起删才回到 P1a 形态（只删前两处会留下一个编译不过的调用点）。
+//	⇒ 排障口径：原位图是**择优产出**，渲染失败（缺中文字体／坐标没缓存住／行长溢出）只跳过该产物，
+//	  `observability.Warn` 记一行，产物回到「译文 .md」（P1a 既有形态），**不判整单失败**——译文第一。
 //
 // ★ 为什么要有每坐标缓存（imageBoxCache，形制照 asr.go 的 asrCueCache）：
 //
@@ -75,11 +74,20 @@ type OcrBox struct {
 }
 
 // ===== 提取期坐标缓存（形制与语义照 asr.go 的 asrCueCache，不再重复论证） =====
+
+// imageBoxCacheMax 缓存条数上限。32 是按 worker 并发默认 4（api/server.go 的 WORKER_CONCURRENCY）
+// 留的 8 倍余量；真正保证"在途件不被挤掉"的是下面的 pinned 标记，不是这个数字——
+// 调大 WORKER_CONCURRENCY 时不必同步改它，pinned 会兜住。
 const imageBoxCacheMax = 32
 
 // imageBoxCache 是「提取期算好的 OCR 行坐标」这份进程内缓存：
 // 提取（OCR）与回填（绘制）是两个调用口，坐标只该算一次；同 asr.go 那份缓存一样
 // 只在内存留最近 imageBoxCacheMax 条，不落库、跨进程不共享（回填失败宁可重算也不许拿旧坐标画新图）。
+// ★ 为什么**不需要**持久载体：提取与回填在同一个函数调用里（engine/file.go 的 HandleFile，
+//
+//	L375/377/392 提取 → L942 回填），中间只隔 LLM 调用，不存在"提到 A 进程、写回 B 进程"的形态。
+//	早期注释写的"跨实例即失效"是把还没发生过的部署形态当成现存风险——真正会挤掉坐标的是
+//	**同实例并发**（另一个工单也在提取），那条由 pinned 标记解决。
 var (
 	imageBoxMu    sync.Mutex // 保护下面这片 slice（并发建单/并发回填都会碰）
 	imageBoxCache []imageBoxEntry
@@ -87,27 +95,66 @@ var (
 
 // imageBoxEntry 一条缓存：某图片路径 → 它那一版 OCR 的行坐标与原文。
 type imageBoxEntry struct {
-	path string   // 图片在本机的绝对路径（缓存键）
-	box  []OcrBox // 与提取期那次读数同序，回填时按序号对齐译文行
+	path   string   // 图片在本机的绝对路径（缓存键）
+	box    []OcrBox // 与提取期那次读数同序，回填时按序号对齐译文行
+	pinned bool     // 是否在途（已提取、尚未写完回）——在途条目不参与淘汰
 }
 
-// RememberImageBoxes 记一份某图片的 OCR 行坐标（覆盖同 key 旧值，超上限淘汰最早的一条）。
+// RememberImageBoxes 记一份某图片的 OCR 行坐标，并**钉住**它（标记在途）。
+// 钉住而不是只入列：提取与写回之间隔着一整轮 LLM 调用，期间同实例其他工单也在提取，
+// 若按纯 FIFO 淘汰，>imageBoxCacheMax 个在途图片就会把还没写回的坐标挤掉——
+// 表现是那张图静默退回「仅译文 .md」（不判整单失败，但产物少一件）。
 func RememberImageBoxes(path string, boxes []OcrBox) {
 	imageBoxMu.Lock()
 	defer imageBoxMu.Unlock()
 	for i := range imageBoxCache {
 		if imageBoxCache[i].path == path {
 			imageBoxCache[i].box = boxes
+			imageBoxCache[i].pinned = true
 			return
 		}
 	}
-	imageBoxCache = append(imageBoxCache, imageBoxEntry{path: path, box: boxes})
-	if len(imageBoxCache) > imageBoxCacheMax {
-		imageBoxCache = imageBoxCache[1:]
+	imageBoxCache = append(imageBoxCache, imageBoxEntry{path: path, box: boxes, pinned: true})
+	evictImageBoxesLocked()
+}
+
+// evictImageBoxesLocked 超上限时淘汰。**优先淘汰未钉住的**（已写完回的旧条目）；
+// 全是钉住条目时仍淘汰最旧的一条——那一条大概率是更早的在途件，牺牲它换边界，
+// 而牺牲的代价只是那一张图退回仅 .md（择优产出，不是数据丢失）。调用方须持锁。
+func evictImageBoxesLocked() {
+	for len(imageBoxCache) > imageBoxCacheMax {
+		idx := -1
+		for i := range imageBoxCache {
+			if !imageBoxCache[i].pinned {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			idx = 0 // 没有可淘汰的未钉住条目：退化为淘汰最旧一条，保住内存边界
+		}
+		imageBoxCache = append(imageBoxCache[:idx], imageBoxCache[idx+1:]...)
+	}
+}
+
+// ReleaseImageBoxes 解除某图片的在途钉（写回阶段结束后调用）。
+// 不调也不会漏数据，只会让那条记录一直占着"不可淘汰"名额 ⇒ 高并发下最终拖到全员钉住、
+// 淘汰退化成纯 FIFO。所以它是**资源释放**而不是正确性依赖，调用方在 defer 里调最稳。
+func ReleaseImageBoxes(path string) {
+	imageBoxMu.Lock()
+	defer imageBoxMu.Unlock()
+	for i := range imageBoxCache {
+		if imageBoxCache[i].path == path {
+			imageBoxCache[i].pinned = false
+			return
+		}
 	}
 }
 
 // ImageBoxes 取回某图片已识别出的行坐标（写回阶段用）；未命中返回 nil。
+// ★ 只读不销账：多目标语言时写回分支会对同一张图调用多次（每语言一次），
+//
+//	所以这里不能"取一次就释放"——释放由调用方在语言循环结束后统一做（ReleaseImageBoxes）。
 func ImageBoxes(path string) []OcrBox {
 	imageBoxMu.Lock()
 	defer imageBoxMu.Unlock()

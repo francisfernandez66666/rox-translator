@@ -5,6 +5,10 @@
   probe                      自检依赖与资产；stdout 打状态行 "OK: ..." / "MISSING: ..."（退出码 0 / 3）
   voices                     列出 assets/tts/voices/ 下可用参考音色（JSON 数组打 stdout）
   speak <text> [--lang xx] [--out file]   译文 → 音频文件（无 stdout；失败见 stderr）
+  speakfile <lines.json> [--lang xx] [--out file]
+                            **多段批量合成**（P2 工单音频产物用）。lines.json 是 JSON 字符串数组，
+                            逐段合成后用 0.25s 静音缝成一段，只加载一次模型（加载才是耗时大头）。
+                            为什么不用 argv 传多段：行译文可很长，命令行有长度上限，且 `ps` 会泄露客户内容。
 
 依赖（**导入名**，与 fileproc/tts.go 的 ttsPythonModules 同源维护）：
   onnxruntime / transformers / soundfile / resemble_perth / pkuseg / pykakasi / lameenc。
@@ -93,8 +97,14 @@ def _pick_voice(explicit: str | None) -> Path:
     raise RuntimeError("ERR:Voice:assets/tts/voices/ 下没有可用的参考音频")
 
 
-def _try_chatterbox(_text: str, _lang: str, _voice: Path, _out: Path):  # pragma: no cover
-    """主力引擎钩位（尚未落地，见文件头说明）。返回 None 表示"本壳不支持，退通用加载器"。"""
+def _try_chatterbox(_text: str, _lang: str, _voice: Path):
+    """主力引擎钩位（尚未落地，见文件头说明）。
+
+    返回 None 表示"本壳不支持，退通用加载器"；落地后返回 (samples, sample_rate)。
+    ★ 签名刻意**返回采样而不是写文件**：`speak` 与 `speakfile` 两条路都要用它，
+      写文件的形态下批量路要么给每段起临时文件再读回，要么悄悄绕过主力引擎——
+      前者难看，后者是"主力上线了批量路却不用它"的静默分歧。
+    """
     return None
 
 
@@ -223,6 +233,17 @@ def _to_mp3_if_needed(wav_path: Path, out: Path) -> None:
         raise RuntimeError("ERR:Encode:mp3 编码失败 %s（已生成 wav：%s）" % (exc, wav_path))
 
 
+def _synth_one(tts, text: str):
+    """合成单段 → (samples, sample_rate)。失败抛 RuntimeError(ERR:<Variant>)。"""
+    try:
+        audio = tts.generate(text, sid=0, speed=1.0)
+    except Exception as exc:
+        raise RuntimeError("ERR:ModelLoad:合成失败 %s" % exc)
+    if audio is None or len(audio.samples) == 0:
+        raise RuntimeError("ERR:Empty:模型未产出有效采样")
+    return audio.samples, audio.sample_rate
+
+
 def cmd_speak(text: str, lang: str, out_path: str, voice_arg: str | None) -> int:
     if not text.strip():
         print("ERR:Empty:文本为空", file=sys.stderr)
@@ -236,9 +257,11 @@ def cmd_speak(text: str, lang: str, out_path: str, voice_arg: str | None) -> int
 
     # 主力钩位：Chatterbox 到位后在这里接管，产出成功即返回
     try:
-        if _try_chatterbox(text, lang, voice, out) is True:
-            if out.exists() and out.stat().st_size > 0:
-                return 0
+        got = _try_chatterbox(text, lang, voice)
+        if got is not None:
+            samples, sr = got
+            _write_wav(samples, sr, out)
+            return 0
     except RuntimeError as exc:
         msg = str(exc)
         if msg.startswith("ERR:"):
@@ -249,20 +272,87 @@ def cmd_speak(text: str, lang: str, out_path: str, voice_arg: str | None) -> int
 
     tts, kind = _build_tts(ASSETS_DIR)
     try:
-        audio = tts.generate(text, sid=0, speed=1.0)
-    except Exception as exc:
-        raise RuntimeError("ERR:ModelLoad:合成失败 %s" % exc)
-    if audio is None or len(audio.samples) == 0:
-        print("ERR:Empty:模型未产出有效采样", file=sys.stderr)
+        samples, sr = _synth_one(tts, text)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-    _write_wav(audio.samples, audio.sample_rate, out)
+    _write_wav(samples, sr, out)
+    return 0
+
+
+# 批量缝合时两段之间的静音时长（秒）。给 0 而不是留白：相邻字幕的译文会首尾粘成一个词，
+# 听起来像模型漏了半句。0.25s 是"听得出一段结束"的最小值，再长整篇节奏会拖。
+BATCH_GAP_SEC = 0.25
+
+
+def cmd_speakfile(lines_path: str, lang: str, out_path: str, voice_arg: str | None) -> int:
+    """多段合成 → 缝合 → 单一音频文件（P2 工单音频的译文配音产物）。
+
+    ★ 择优产出：某一段合成失败只跳过那一段（stderr 记一行），其余段照常缝。
+      全段都失败才判错——与"这一整片没有语音"是同一件事。
+    """
+    if not ASSETS_DIR.is_dir() or not sorted(ASSETS_DIR.glob("*.onnx")):
+        print("ERR:Asset:assets/tts/*.onnx 缺失", file=sys.stderr)
+        return 2
+    try:
+        raw = json.loads(Path(lines_path).read_text(encoding="utf-8"))
+    except Exception as exc:
+        print("ERR:Usage:lines.json 读取或解析失败 %s" % exc, file=sys.stderr)
+        return 2
+    if not isinstance(raw, list) or not raw:
+        print("ERR:Empty:lines.json 不是非空数组", file=sys.stderr)
+        return 2
+    lines = [str(x) for x in raw if str(x).strip()]
+    if not lines:
+        print("ERR:Empty:lines.json 里没有非空行", file=sys.stderr)
+        return 2
+
+    voice = _pick_voice(voice_arg)
+    out = Path(out_path)
+
+    import numpy as np
+    import sherpa_onnx  # noqa: F401  导入失败由下面的通用异常处理包住
+
+    tts, kind = _build_tts(ASSETS_DIR)
+    chunks: list = []
+    sample_rate = 0
+    skipped = 0
+    for idx, line in enumerate(lines):
+        try:
+            samples, sr = _synth_one(tts, line)
+        except RuntimeError as exc:
+            skipped += 1
+            print("[speakfile] 第 %d 段跳过：%s" % (idx + 1, exc), file=sys.stderr)
+            continue
+        if sample_rate == 0:
+            sample_rate = sr
+        elif sr != sample_rate:
+            # 同一模型不会变采样率；真变了就重采样对齐，不让缝合结果变调。
+            samples = np.asarray(samples, dtype="float32")
+            n = int(round(len(samples) * sample_rate / sr))
+            if n > 0 and len(samples) > 1:
+                samples = np.interp(
+                    np.linspace(0, len(samples) - 1, n),
+                    np.arange(len(samples)),
+                    samples,
+                ).astype("float32")
+        if chunks:
+            chunks.append(np.zeros(int(sample_rate * BATCH_GAP_SEC), dtype="float32"))
+        chunks.append(np.asarray(samples, dtype="float32"))
+
+    if not chunks:
+        print("ERR:Empty:所有段都合成失败", file=sys.stderr)
+        return 2
+    if skipped:
+        print("[speakfile] 共跳过 %d/%d 段（译文文本照常在 .md/.srt 里）" % (skipped, len(lines)), file=sys.stderr)
+    _write_wav(np.concatenate(chunks), sample_rate, out)
     return 0
 
 
 def main() -> int:
     argv = sys.argv[1:]
     if not argv:
-        print("ERR:Usage:probe|voices|speak <text> [--lang xx] [--out file] [--voice id.wav]", file=sys.stderr)
+        print("ERR:Usage:probe|voices|speak <text>|speakfile <lines.json> [--lang xx] [--out file] [--voice id.wav]", file=sys.stderr)
         return 2
     cmd = argv[0]
     rest = argv[1:]
@@ -271,9 +361,9 @@ def main() -> int:
         return cmd_probe()
     if cmd == "voices":
         return cmd_voices()
-    if cmd == "speak":
+    if cmd in ("speak", "speakfile"):
         if not rest:
-            print("ERR:Usage:speak <text> [--lang xx] [--out file]", file=sys.stderr)
+            print("ERR:Usage:%s <%s> [--lang xx] [--out file]" % (cmd, "text" if cmd == "speak" else "lines.json"), file=sys.stderr)
             return 2
         text = rest[0]
         lang, out_path, voice = "", "", None
@@ -291,10 +381,12 @@ def main() -> int:
             else:
                 i += 1
         if not out_path:
-            print("ERR:Usage:speak 必须带 --out <file>", file=sys.stderr)
+            print("ERR:Usage:%s 必须带 --out <file>" % cmd, file=sys.stderr)
             return 2
         try:
-            return cmd_speak(text, lang, out_path, voice)
+            if cmd == "speak":
+                return cmd_speak(text, lang, out_path, voice)
+            return cmd_speakfile(text, lang, out_path, voice)
         except RuntimeError as exc:
             msg = str(exc)
             if not msg.startswith("ERR:"):
@@ -304,7 +396,7 @@ def main() -> int:
         except Exception as exc:
             print("ERR:ModelLoad:%s" % exc, file=sys.stderr)
             return 2
-    print("ERR:Usage:probe|voices|speak <text> [--lang xx] [--out file]", file=sys.stderr)
+    print("ERR:Usage:probe|voices|speak <text>|speakfile <lines.json> [--lang xx] [--out file]", file=sys.stderr)
     return 2
 
 

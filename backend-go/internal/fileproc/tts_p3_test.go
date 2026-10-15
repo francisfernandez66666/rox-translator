@@ -13,9 +13,11 @@ package fileproc
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestSpeakToWavInputGuards ① 空/超长文本拦在创建临时文件之前。
@@ -88,5 +90,82 @@ func TestFriendlyTtsError(t *testing.T) {
 	}
 	if got := friendlyTtsError("没有 ERR 前缀的普通 stderr"); got != "" {
 		t.Errorf("非 ERR: 行应返回空串，实际 %q", got)
+	}
+}
+
+// ===== P2 收口：SpeakLines（工单音频的译文配音） =====
+
+// TestSpeakLinesInputGuards 与 TestSpeakToWavInputGuards 同族，但**故意不设长度护栏**：
+// 批量路跑在工单后台任务里，没有浏览器在等，且它本身就是为"超出单段上限的长音轨"而生的
+// （ttsMaxChars 那条线按 HTTP 请求等得起定，套到批量上会让长音频永远拿不到配音）。
+// 这里要守的只剩一条：**空列表必须在建临时文件之前被拒**。
+func TestSpeakLinesInputGuards(t *testing.T) {
+	cases := []struct {
+		name  string
+		lines []string
+	}{
+		{"nil 列表", nil},
+		{"空切片", []string{}},
+		{"全是空白行", []string{"   ", "\n\t", ""}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := filepath.Join(t.TempDir(), "never.mp3")
+			err := SpeakLines(context.Background(), c.lines, "en", out)
+			if err == nil {
+				t.Fatalf("%s：应被护栏拒绝，实际返回 nil", c.name)
+			}
+			if strings.Contains(err.Error(), "TTS 合成失败") || strings.Contains(err.Error(), "TTS 脚本缺失") {
+				t.Fatalf("%s：这一形态不该走到子进程，实际错误：%v", c.name, err)
+			}
+		})
+	}
+}
+
+// TestSpeakLinesGuardHasRealRange 反向对照：非空列表必须**穿过**护栏
+// （否则上一条的"拒绝"可能只是判据恒红——空列表报错、非空也报错，护栏就白设了）。
+func TestSpeakLinesGuardHasRealRange(t *testing.T) {
+	lines := []string{"第一段译文", "第二段译文"}
+	out := filepath.Join(t.TempDir(), "should-pass-guard.mp3")
+	err := SpeakLines(context.Background(), lines, "en", out)
+	if err == nil {
+		return // 环境真装了依赖并合成成功
+	}
+	// 走到这里必须是护栏之外的失败形态。与上一条**互补**：这里若出现
+	// "没有可朗读的内容"，说明护栏把非空列表也拦了 ⇒ 射程画错。
+	if strings.Contains(err.Error(), "没有可朗读的内容") {
+		t.Fatalf("非空列表（%d 段）被空列表护栏误拦：%v", len(lines), err)
+	}
+}
+
+// TestTtsBatchTimeoutEnvOverride 批量超时必须可配且只认正整数。
+// 为什么单独立这条：它与 ttsTimeout 是**两个独立旋钮**，误共用会让"调大单段超时"
+// 悄悄改掉批量预算（反之亦然），而两者量级差一个数量级（60s vs 900s）。
+func TestTtsBatchTimeoutEnvOverride(t *testing.T) {
+	const env = "TTS_BATCH_TIMEOUT_SEC"
+	old, had := os.LookupEnv(env)
+	defer func() {
+		if had {
+			os.Setenv(env, old)
+		} else {
+			os.Unsetenv(env)
+		}
+	}()
+
+	os.Unsetenv(env)
+	if got := ttsBatchTimeout(); got != 900*time.Second {
+		t.Errorf("默认批量超时应为 900s，实际 %v", got)
+	}
+	os.Setenv(env, "120")
+	if got := ttsBatchTimeout(); got != 120*time.Second {
+		t.Errorf("TTS_BATCH_TIMEOUT_SEC=120 应得 120s，实际 %v", got)
+	}
+	// 非正数与垃圾值一律回落默认：解析失败时用 0 会让子进程立即超时，
+	// 表现是"所有配音都失败"，排查时很难联想到是环境变量写错了。
+	for _, bad := range []string{"0", "-5", "abc", ""} {
+		os.Setenv(env, bad)
+		if got := ttsBatchTimeout(); got != 900*time.Second {
+			t.Errorf("TTS_BATCH_TIMEOUT_SEC=%q 应回落 900s，实际 %v", bad, got)
+		}
 	}
 }

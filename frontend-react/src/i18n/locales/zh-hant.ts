@@ -2702,7 +2702,7 @@ export const dict: Record<string, string> = {
   "tk.filesCount": "已選 {n} 個檔案",
   "tk.filesDone": "已完成 {done}/{total} 個檔案",
   "tk.imageHeavyHint": "偵測到圖片型表格：圖片中的文字將透過 OCR 辨識後翻譯，辨識準確率受圖片清晰度影響，請核對譯文；如需更高準確率可上傳 Word 原始檔案。",
-  "tk.mediaHintImage": "已選擇圖片：系統會先以 OCR 辨識圖中文字再翻譯，產物為譯文 Markdown（不做原圖回填）。",
+  "tk.mediaHintImage": "已選擇圖片：系統會先以 OCR 辨識圖中文字再翻譯，產物為譯文 Markdown ＋ 原位翻譯圖（譯文按原圖位置抹寫回去；渲染不出來時只出 Markdown）。",
   "tk.mediaHintAudio": "已選擇音訊：系統會先進行語音轉寫再翻譯，產物為譯文字幕 .srt（沿用原時間軸）＋譯文 Markdown。",
   "tk.langsLabel": "目標語言",
   "tk.langsPlaceholder": "目標語言，逗號分隔（預設 en）",

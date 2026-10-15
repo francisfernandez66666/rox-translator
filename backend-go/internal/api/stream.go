@@ -918,6 +918,15 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 		".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		".pdf":  "application/pdf",
+		// ★ P2 音频工单产物三件套的下载面（v2 方案 §4.4）。这三个不补的后果不是"难看"：
+		//   .mp3/.wav 回落 octet-stream 时浏览器不当音频播，.srt 更会被当成二进制直接下载，
+		//   而字幕的全部价值就是"点开就能看/挂载"。
+		".mp3": "audio/mpeg", ".wav": "audio/wav",
+		".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac",
+		".srt": "text/plain; charset=utf-8", ".vtt": "text/vtt; charset=utf-8",
+		".md": "text/markdown; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+		".csv": "text/csv; charset=utf-8", ".json": "application/json", ".yaml": "text/yaml; charset=utf-8",
+		".yml": "text/yaml; charset=utf-8",
 	}
 	ct, ok := contentTypes[ext]
 	if !ok {

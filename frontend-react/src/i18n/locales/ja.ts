@@ -2702,7 +2702,7 @@ export const dict: Record<string, string> = {
   "tk.filesCount": "{n} 個のファイルを選択中",
   "tk.filesDone": "{done}/{total} 個のファイル完了",
   "tk.imageHeavyHint": "画像内の表を検出しました。画像の中のテキストは OCR で認識してから翻訳します。認識精度は画像の鮮明さに左右されるため、訳文をご確認ください。より高い精度が必要な場合は Word の原本をアップロードしてください。",
-  "tk.mediaHintImage": "画像が選択されています：まず OCR で画像内の文字を認識してから翻訳します。成果物は訳文 Markdown です（画像そのものの再生成は行いません）。",
+  "tk.mediaHintImage": "画像が選択されています：まず OCR で画像内の文字を認識してから翻訳します。成果物は訳文 Markdown と原位翻訳画像です（訳文を元の画像の位置に書き戻します。レンダリングできない場合は Markdown のみが出ます）。",
   "tk.mediaHintAudio": "音声が選択されています：まず音声を文字起こししてから翻訳します。成果物は訳文字幕 .srt（元のタイムラインを保持）と訳文 Markdown です。",
   "tk.langsLabel": "対象言語",
   "tk.langsPlaceholder": "対象言語を入力（カンマ区切り、既定は en）",
