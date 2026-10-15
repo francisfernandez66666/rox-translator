@@ -27,8 +27,12 @@ import {
   VoiceError,
 } from './chatVoice'
 
+// 引擎档位：server＝录完上传服务端识别；wasm＝端侧 sherpa-onnx-web 实时识别
 export type AsrKind = 'server' | 'wasm'
 
+// 识别过程中的回调面（两种引擎必须同构，UI 只认这一份契约）：
+//   onState 报「正在录/被拒/失败/就绪」四档，供 UI 切录音钮形态；
+//   onPartial 只服务 WASM 的实时字幕，服务端引擎不触发（它一次给终稿）。
 export interface AsrHandlers {
   // 'recording' | 'denied' | 'failed' | 'ready'
   onState?: (s: 'recording' | 'denied' | 'failed' | 'ready') => void
@@ -36,12 +40,16 @@ export interface AsrHandlers {
   onPartial?: (text: string) => void
 }
 
+// 一次识别会话：final 是**唯一**的成稿出口（stop() 后 resolve，出错 reject），
+// stop()＝正常收尾（等识别结果），cancel()＝放弃（不产出、不报错）。
 export interface AsrSession {
   readonly final: Promise<string>
   stop(): void
   cancel(): void
 }
 
+// 引擎接口（可插拔接缝的本体）：kind 用于日志与埋点区分，isAvailable 决定能否被选中，
+// start 开麦并返回会话。上层（选择逻辑）只依赖这个面，不认具体实现。
 export interface AsrEngine {
   readonly kind: AsrKind
   isAvailable(): Promise<boolean>
@@ -105,6 +113,7 @@ export class ServerAsrEngine implements AsrEngine {
 // ---------------------------------------------------------------------------
 const WASM_BASE = '/wasm/sherpa-onnx'
 
+// 端侧 WASM 引擎：资产（manifest/wasm/.data）三件齐了才可选，否则 isAvailable=false。
 export class WasmAsrEngine implements AsrEngine {
   readonly kind = 'wasm' as const
 
@@ -178,6 +187,8 @@ export class WasmAsrEngine implements AsrEngine {
 // ---------------------------------------------------------------------------
 let cached: Promise<AsrEngine> | null = null
 
+// 选出这一轮用哪个引擎（auto：端侧就绪优先，否则服务端；asr_engine_pref='server' 强制服务端）。
+// 结果**缓存**在模块级，避免每次点录音都发一次 manifest HEAD。
 export function getAsrEngine(): Promise<AsrEngine> {
   if (cached) return cached
   cached = (async () => {
@@ -196,6 +207,7 @@ export function getAsrEngine(): Promise<AsrEngine> {
   return cached
 }
 
+// 清掉引擎缓存（排障与「刚放下模型想让端侧立刻生效」时调用）。
 export function resetAsrEngineCache(): void {
   cached = null
 }

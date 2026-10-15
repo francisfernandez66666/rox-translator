@@ -764,15 +764,20 @@
 }
 .lc-statusbar__glyph { font-size: 13px; font-weight: 400; color: var(--lc-text-2); }
 .lc-mob-topbar {
-  height: var(--lc-mob-topbar-h);
+  /* ★ 2026-10-15：假状态栏退役后，本件成为外壳最顶一件 → 用 min-height + safe-area 上内边距
+     让刘海/挖孔区（standalone/PWA）自动让位；safe-area=0 时实测高恰 = --lc-mob-topbar-h(52)。 */
+  min-height: var(--lc-mob-topbar-h);
   flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--lc-mob-pad);
+  padding: env(safe-area-inset-top, 0px) var(--lc-mob-pad) 0;
   border-bottom: 1px solid var(--lc-border-faint);
 }
-.lc-mob-topbar__title { font-size: 17px; font-weight: 700; color: var(--lc-text); }
+/* ★ 2026-10-15：标题栏成为移动壳唯一顶件后，长页名（如英文 Instant Translation）必须单行省略，
+   不许换行把 52 高的标题栏撑高、把右侧三件挤下去（中文档短，英文/其他语种档长）。 */
+.lc-mob-topbar__title { flex: 1 1 auto; min-width: 0; font-size: 17px; font-weight: 700; color: var(--lc-text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lc-mob-topbar__icon { font-size: 20px; line-height: 1; color: var(--lc-text); background: none; border: 0; cursor: pointer; padding: 0; }
 .lc-mob-topbar__dot { width: 20px; height: 20px; border-radius: 50%; background: var(--lc-raised); border: 1.2px solid var(--lc-border-card); flex: none; }
 .lc-mob-body {
@@ -804,6 +809,9 @@
   align-items: center;
   gap: 3px;
   min-width: 62px;
+  /* ★ 2026-10-15：长语种标签（英文 Upload Knowledge Base 等）不得把胶囊撑宽或折成两三行——
+     单行省略由 __label 承担，这里给每项一个上限让 flex 有空间收缩。 */
+  max-width: 84px;
   padding: 8px 10px;
   border-radius: 28px;
   font-family: var(--lc-font);
@@ -814,6 +822,8 @@
   border: 0;
   cursor: pointer;
 }
+/* ★ 2026-10-15：TabBar 文字单行省略（超出按 …，不换行撑高胶囊）。 */
+.lc-tabbar__label { display: block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* ★ 批2：TabBar 选中项 = 白底黑字反相胶囊（§1.6），不再用 --lc-success */
 .lc-tabbar__item--active { background: var(--lc-invert-bg); color: var(--lc-invert-fg); font-weight: 600; }
 .lc-tabbar__icon { font-size: 17px; line-height: 1; }

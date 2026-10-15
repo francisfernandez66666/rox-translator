@@ -79,3 +79,6 @@ backend-go/bin-probe/
 # P4 端侧 WASM：官方流式模型包 199MB 超 GitHub 单文件 100MB 硬限，部署期用
 # scripts/fetch_sherpa_assets.sh 落盘（sha256 见 manifest.json）；运行时三件套仍进 git
 frontend-react/public/wasm/sherpa-onnx/sherpa-onnx-wasm-main-asr.data
+# ★ xbot 备料产物（运行输出，每天重新生成，不入库）
+scripts/xbot/out/prep/
+scripts/xbot/ledger.jsonl

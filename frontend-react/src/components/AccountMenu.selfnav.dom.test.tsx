@@ -77,3 +77,36 @@ describe('AccountMenu · 自助入口并入下拉（#7）', () => {
     expect(screen.getByText('退出')).toBeTruthy()
   })
 })
+
+// ★ 2026-10-15 用户令：① 通知铃铛退役，改以「通知中心」菜单项收进本下拉（点开弹浮层）；
+//   ② 侧栏「我的账号」项删除，入口收进本下拉（onGotoMy）。两条都只在前台档露出。
+describe('AccountMenu · 通知中心与我的账号（★ 2026-10-15 用户令）', () => {
+  it('showNotify：菜单露出「通知中心」，点开渲染通知浮层（复用 Bell 的 NotifyPanel）', () => {
+    openMenu({ showNotify: true })
+    expect(screen.getByText('通知中心')).toBeTruthy()
+    fireEvent.click(screen.getByText('通知中心'))
+    // 浮层落点＝.am-notice 内（开在触发器上沿，账号菜单贴左栏底缘不能向下开）
+    expect(document.querySelector('.am-notice .bell-panel')).toBeTruthy()
+    expect(screen.getByText('全部已读')).toBeTruthy()
+    expect(screen.getByText('暂无通知')).toBeTruthy()
+  })
+
+  it('onGotoMy（selfNav 缺省）：露出「我的账号」，点击走回调', () => {
+    const my = vi.fn()
+    openMenu({ onGotoMy: my })
+    fireEvent.click(document.querySelector('.am-trigger') as Element)
+    fireEvent.click(screen.getByText('我的账号'))
+    expect(my).toHaveBeenCalledTimes(1)
+  })
+
+  it('selfNav 与 onGotoMy 同时传（移动档形态）：我的账号只出现一次，不撞重名', () => {
+    openMenu({ selfNav: vi.fn(), onGotoMy: vi.fn() })
+    expect(screen.getAllByText('我的账号').length).toBe(1)
+  })
+
+  it('缺省两参（后台/未升级外壳）：通知中心与我的账号都不露', () => {
+    openMenu({})
+    expect(screen.queryByText('通知中心')).toBeNull()
+    expect(screen.queryByText('我的账号')).toBeNull()
+  })
+})

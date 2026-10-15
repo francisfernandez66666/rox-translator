@@ -1,0 +1,66 @@
+{
+  "date": "2026-10-14",
+  "day": 1,
+  "note": "场景化版式演示数据：3 条分别用 chat / bill / quote 版式",
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A03",
+      "text": "「这一版目录全乱了，甲方说明周一要交。」\n\n目录乱不是因为翻译，是因为重排。\n\n能言 LangCross：原版式直出，目录页码图注都不动。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s1",
+      "image_text": {
+        "layout": "chat",
+        "main": "这一版目录全乱了，甲方说明周一要交",
+        "brand": "能言 LangCross",
+        "sub1": "重排的活儿不该你干"
+      },
+      "checks": {}
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "成本",
+      "topic_id": "C04",
+      "text": "外包翻译一年花了多少钱？\n\n算算等译的天数、返工的人天、术语返修的次数——这三项都没进过报价单。\n\n能言 LangCross：成本约为人工翻译的 1/8，账单逐笔可查。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s2",
+      "image_text": {
+        "layout": "bill",
+        "main": "翻译账单",
+        "items": [
+          [
+            "等译 3 天 × 4 轮",
+            "12 天"
+          ],
+          [
+            "返工重排版式",
+            "3 人天"
+          ],
+          [
+            "术语不一致返修",
+            "2 次"
+          ],
+          [
+            "客户催单",
+            "4 次"
+          ]
+        ],
+        "sub2": "以上都没进过报价单",
+        "total": "隐性成本"
+      },
+      "checks": {}
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "术语",
+      "topic_id": "B05",
+      "text": "客户其实不看译文准不准，他看译文像不像原件。\n\n原版式没动过，才叫「像原件」；格式重排过的，他一眼就知道是机器做的。\n\n能言 LangCross：Word / PPT / Excel / PDF 原版式直出。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s3",
+      "image_text": {
+        "layout": "quote",
+        "main": "客户不看译文准不准，他看译文像不像原件",
+        "sub1": "—— 一位做过五年本地化的朋友"
+      },
+      "checks": {}
+    }
+  ]
+}

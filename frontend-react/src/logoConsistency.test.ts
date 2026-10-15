@@ -43,8 +43,12 @@ describe('全站 logo 统一（#8）· 同源静态锁', () => {
     expect(html).toMatch(/<link\s[^>]*rel="icon"[^>]*href="\/logo\.svg"/)
   })
 
-  it('消费点口径：App 顶栏与后台侧栏默认用 Icon n="brand"，旧圆点 BrandMark 已退役', () => {
-    expect(read('src/App.tsx')).toContain('<Icon n="brand"')
+  it('消费点口径：前台左栏/移动顶栏与后台侧栏默认用 Icon n="brand"，旧圆点 BrandMark 已退役', () => {
+    // ★ 2026-10-15：前台这两处品牌位随「固定组件化」迁出 App.tsx（同一份品牌口径，
+    //   只是换了出处）——左栏 FrontSideNav 与移动顶栏 FrontMobileTopBar。判据一字未改，
+    //   换的是取源文件（改口径方向时不许只删断言，见 AGENTS §一·5 〇-L）。
+    expect(read('src/components/frontshell/FrontSideNav.tsx')).toContain('<Icon n="brand"')
+    expect(read('src/components/frontshell/FrontMobileTopBar.tsx')).toContain('<Icon n="brand"')
     const admin = read('src/components/admin/AdminDashboard.tsx')
     expect(admin).toContain('<Icon n="brand"')
     expect(admin).toContain('branding.brandLogo ?') // 有独立品牌 Logo 的租户仍走自家 Logo（除外条款）

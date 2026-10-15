@@ -1045,8 +1045,15 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
 		base, key, model = b2, k2, m2
 	}
-	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 2048, false, e.Cfg.FallbackTemp)
+	// ★ 2026-10-15 截断修复：同 ReviewTranslation——预算按待产出译文定档（旧写死 2048），
+	//   且读回 finish_reason，被截断即丢弃（本腿产物同样会覆盖客户手上那版译文）。
+	content, finishReason, err := e.LLM.CallChat(ctx, base, key, model, messages, translateOutputBudget(zhText), false, e.Cfg.FallbackTemp)
 	if err != nil || strings.TrimSpace(content) == "" {
+		return ""
+	}
+	if finishReason == "length" {
+		observability.Warn(ctx, "译文改写腿产物被上游截断（finish_reason=length），已丢弃改写结果保留上一版",
+			"lang", targetLang, "stage", stage, "out_bytes", len(content), "budget", translateOutputBudget(zhText))
 		return ""
 	}
 	// ★ 0AR 第 8 波（㊶②）：这一腿的产物同样会**覆盖**客户手上那版译文，
@@ -1071,6 +1078,30 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 //	（等值锁＝TestChatLegFixedTokensDeriveFromRealPrompts）。
 const reviewPromptFmt = "你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s"
 
+// translateOutputBudget 按输入文本估算「输出侧」token 预算（★ 2026-10-15 截断修复）。
+// 参数 text: 用于定档的文本（取要被产出的那一版译文长度最贴合）。
+// 返回: 至少 2048、至多 16384 的 token 预算。
+//
+// 为什么要有这一档：审校腿（ReviewTranslation）与改写腿（translateWithFeedbackEx）的产物
+// 会**覆盖**客户手上那版初翻，而它们旧形态把 max_tokens 写死 2048 —— 长译文的审校输出
+// 到 2048 就被上游截断，调用方又照收（finish_reason 被 `_` 丢弃）⇒ 客户拿到一版**比初翻更短
+// 且中间断掉**的译文。这与 singleLangRaw 的初翻预算（2048 + 行数×384，且按字符数放大）
+// 是同一个尺子，故抽出来共用，禁止任一条覆盖腿再写第二个固定值。
+func translateOutputBudget(text string) int {
+	chars := len([]rune(text))
+	budget := 2048 + strings.Count(text, "\n")*384
+	if chars*4 > budget {
+		budget = chars * 4
+	}
+	if budget < 2048 {
+		budget = 2048
+	}
+	if budget > 16384 {
+		budget = 16384
+	}
+	return budget
+}
+
 // ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）。
 // 参数 stage: 流程阶段（默认 config.StageReview）。
 func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
@@ -1093,8 +1124,16 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
 		base, key, model = b2, k2, m2
 	}
-	content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, 2048, false, e.Cfg.FallbackTemp)
+	// ★ 2026-10-15 截断修复：预算按待产出译文的长度定档（旧形态写死 2048，长译文的审校
+	//   输出被截断），并读回 finish_reason —— 仍被截断就丢弃，让调用方保留完整初翻
+	//   （半截译文覆盖满版初翻，正是现网「译文中间断掉」的形态）。
+	content, finishReason, err := e.LLM.CallChat(ctx, base, key, model, messages, translateOutputBudget(translation), false, e.Cfg.FallbackTemp)
 	if err != nil || strings.TrimSpace(content) == "" {
+		return ""
+	}
+	if finishReason == "length" {
+		observability.Warn(ctx, "审校腿产物被上游截断（finish_reason=length），已丢弃审校结果保留初翻",
+			"lang", targetLang, "stage", stage, "out_bytes", len(content), "budget", translateOutputBudget(translation))
 		return ""
 	}
 	// ★ 0AR 第 8 波（㊶ 的本体修法）：审校腿的产物在 text.go 的校对环节会**直接覆盖**初翻，
@@ -1684,6 +1723,19 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	if maxTokens < 2048 {
 		maxTokens = 2048
 	}
+	// ★ 2026-10-15 截断修复（工作台「译文中间断掉」）：本函数对「finish_reason=length」是
+	//   **递归自调**（见下方 length 分支），每次进来都会把 maxTokens 从这里**重算**一遍。
+	//   旧形态在分支里写 `maxTokens *= 2` 再递归，重算当场把它抹平 ⇒ 翻倍是死代码，
+	//   长文被截断后重试仍是同一配额、照样截断（注释自称「翻倍重试」与实现不符）。
+	//   现按 attempt 真扩容：attempt=1 ⇒ ×2、attempt=2 ⇒ ×4，上限 16384。
+	//   ⚠️ 占位符重翻（singleLangProtected）也会带 attempt+1 进来——那里扩容同样安全
+	//   （令牌丢失时给更大配额只会更不容易再丢），故不另立第二个参数。
+	if attempt > 0 {
+		maxTokens <<= attempt
+		if maxTokens > 16384 {
+			maxTokens = 16384
+		}
+	}
 
 	// ★ 主模型熔断：Hunyuan 连续失败超阈值后直接走 fallback，冷却后自动恢复
 	mainOpen := e.breaker.IsOpen()
@@ -1745,12 +1797,9 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	}
 
 	// finish_reason=length 或空内容 → 翻倍 max_tokens 重试
+	// ★ 2026-10-15：翻倍不再在这里对局部变量做乘法（递归会重算抹平，见上方 attempt 段），
+	//   而是靠 attempt 在预算推导处生效；本分支只负责触发下一次递归。
 	if (finishReason == "length" || content == "") && attempt < 2 {
-		// ★ 2026-09-03 长文本丢内容修复：上限由 8192 提到 16384——
-		//   长文一次调用 maxTokens 可能已到 8192，翻倍被旧上限钳制无法扩容，译文被截断在中段。
-		if maxTokens*2 <= 16384 {
-			maxTokens *= 2
-		}
 		return e.singleLangRaw(ctx, zhText, targetLang, examples, sourceLang, stage, attempt+1)
 	}
 

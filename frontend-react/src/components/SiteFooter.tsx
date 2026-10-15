@@ -14,7 +14,10 @@ import { BrandTagline } from './BrandTagline' // ★ 2026-10-13 用户令②：�
 //   本文件不再保留 #575F6C、#8a9099、#5f6b7a 这批提亮/浅色遗留字面值，页脚条颜色一律取真值档。
 
 // 默认导出组件：全站页脚，按访问域名解析品牌并展示平台级页脚链接（无链接时回退默认协议入口）
-export default function SiteFooter() {
+// ★ 2026-10-15 用户令（第五批）：`bare` 档给「收进抽屉」的那一份用——去掉 auto 上边距 /
+//   深色面 / 自成一条的顶缘分隔线（那三样是「贴在外壳列尾」的形态，摆进抽屉会多出一条缝和一块深色），
+//   字号也收到抽屉次要档。默认档（桌面常驻）一字不动。调用点：App.tsx（移动档 <SiteFooter bare />）。
+export default function SiteFooter({ bare = false }: { bare?: boolean } = {}) {
   const [lang] = useT()
   const branding = useBranding()
   // 品牌名三级兜底：域名解析出的租户品牌 → 按语言的内置默认名（中文站用中文名、英文站用 LangCross）
@@ -43,19 +46,19 @@ export default function SiteFooter() {
     <footer
       style={{
         // 粘性页脚：App 外壳是 minHeight:100vh 的 flex 列，auto 上边距把页脚顶到列尾，
-        // 内容不足一屏时也不会半途悬着
-        marginTop: 'auto',
-        padding: '14px 20px',
+        // 内容不足一屏时也不会半途悬着（bare 档无列可贴，故不走 auto）。
+        marginTop: bare ? 0 : 'auto',
+        padding: bare ? '12px 0 0' : '14px 20px',
         // 配色对齐 UI 真值页脚条：面 #050607（--lc-surface-4）、文字 12px #536471、
         // 顶缘一条常规分隔线档（--npz-line：★ 〇-P 起为交付灰阶 #464C58）
-        borderTop: '1px solid var(--npz-line)',
-        background: '#050607',
+        borderTop: bare ? 'none' : '1px solid var(--npz-line)',
+        background: bare ? 'transparent' : '#050607',
         color: 'var(--lc-text-4)', /* ★ 批2：野值 #536471 收编 → text-4 档（页脚 meta/装饰说明专用档） */
-        fontSize: 15,
+        fontSize: bare ? 13 : 15,
         display: 'flex',
         flexWrap: 'wrap',
         alignItems: 'center',
-        gap: 8,
+        gap: bare ? '6px 8px' : 8,
       }}
     >
       <span>{tpl('footer.copyright', { brand })}</span>

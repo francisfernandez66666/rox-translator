@@ -113,6 +113,15 @@ function MicGlyph({ active }: { active: boolean }) {
   )
 }
 
+// 收起图标（langcross 无等价，按组件库线性风格内联：向下的 V 形箭头，示意「缩下去」）
+function CollapseGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M4 6.2 8 10l4-3.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // 默认导出组件：前台即时翻译工作台（输入与结果同框）
 export default function ChatWindow() {
   const [lang, t2] = useT()
@@ -146,13 +155,12 @@ export default function ChatWindow() {
   // 拖拽闭包里要读最新高度，state 异步更新会读到旧值——旁挂 ref 同步
   const dialogHRef = useRef(dialogH)
   function setDialogHeight(h: number) { dialogHRef.current = h; setDialogH(h) }
-  // ★ 决策⑩：手动展开闩——**只有用户点过入口条**才保持展开。
-  // ★ 2026-10-14 红框批改口径（用户报「输入过内容后，清空输入框不会回缩大小」）：
-  //   旧形态把「打过字」也当成一次展开请求（onChange 里 setExpandedLatch(true)），于是这一闩
-  //   在第一次按键后就永久为真——清空输入时卡片既回收不起（闩挡着），用户看到的就是一张空卡占着半屏。
-  //   「清空后又弹回收起是打扰」这句原话仍然成立，但打扰只发生在**用户明确点开过这张卡**的场合；
-  //   普通「输一段、发不出去或删干净」不该被永久钉在展开档。所以闩只由 expandFromEntry 置位。
-  const [expandedLatch, setExpandedLatch] = useState(false)
+  // ★ 决策⑩（2026-10-10）：对话框收起闩——**默认展开**，只有用户点框头的「收起」钮才进收起档。
+  // ★ 2026-10-15 用户令（覆盖决策⑩的「空态自动收起」那一半）：「聊天框打开后自动最小化了，啥也看不到」
+  //   ——空态（无输入、无会话）不再自动收成单行入口条，必须点「收起」钮才收。原形态
+  //   `!expandedLatch && input 空 && 无会话` 让任何人一进来就看到一条窄条。收起仍保留（用户可选），
+  //   展开＝点入口条。
+  const [collapsedLatch, setCollapsedLatch] = useState(false)
 
   // ★ 余额 / 用量（2026-09-19 全积分口径：API 出参即积分，前端零换算）
   const [balance, setBalance] = useState<{ points: number; approx: number } | null>(null)
@@ -348,32 +356,39 @@ export default function ChatWindow() {
     try { localStorage.removeItem(CW_DIALOG_H_KEY) } catch { /* ignore */ }
   }
 
-  // ★ 决策⑩：空态整卡收起为单行入口条。口径＝决策⑩拍板档：**空输入且无会话**才整卡收；
-  //   有会话时只收输入框（历史可见性优先，不做整卡最小化）。搜索条与错误提示在场时也不收，
-  //   否则会把用户正要看的东西藏进收起态里。
+  // ★ 2026-10-15 用户令：默认展开——收起只由「用户点过收起钮」（collapsedLatch）触发；
+  //   只要输入非空／有会话／搜索条开着／有错误提示，就自动回到展开（历史可见性优先，绝不给空条）。
   const hasSession = chat.messages.length > 0 || chat.isLoading
-  const collapsed = !expandedLatch && input.trim() === '' && !hasSession && !searchOpen && !chat.errorMessage
+  const collapsed = collapsedLatch && input.trim() === '' && !hasSession && !searchOpen && !chat.errorMessage
   // ★ 2026-10-13 用户令①：只有「用户拖过」（记忆高度 >0）且当前不是收起态时，才进入覆盖档
   //   .cw-resized（flex:0 0 auto）——否则 flex:1 1 0 会把内联 height 直接吃掉，拖拽手柄形同失效。
   const resized = dialogH > 0 && !collapsed
-  // ★ 2026-10-14 红框批：口径收窄成「用户点过才叫展开」。
-  //   collapsed 里那一条 `!expandedLatch` 现在只代表**手动点开**，不再被打字顺带置位——
-  //   否则闩会在第一次按键后永久为真，清空输入也回不了单行入口条（用户报的那条缺陷本体）。
-  // 点击入口条展开并聚焦输入框（点过之后本回合不再自动收起，避免边打字边抽走工具条）
+  // 点击入口条展开并聚焦输入框（展开后本回合不再收起，避免边打字边抽走工具条）
   function expandFromEntry() {
-    setExpandedLatch(true)
+    setCollapsedLatch(false)
     setTimeout(() => inputRef.current?.focus(), 0)
+  }
+  // 点框头「收起」钮：空态（无输入、无会话）才允许收起，避免把用户正看着的会话藏进收起档
+  function collapseDialog() {
+    setCollapsedLatch(true)
   }
 
   // ---- 发送 ----
   // 目标语言取聊天全局 selectedLangs（不在输入框里重复选）；源文先 trim 后再判空，
   // 但发送的是 rawText——已 trim，避免把纯空白当一次有效翻译请求计费
   async function handleSend() {
-    const rawText = input.trim()
+    sendNow(input.trim())
+  }
+
+  // ★ 2026-10-15 用户令「语音改成元宝那样：先发送→再识别→再翻译」：
+  //   发送逻辑抽成 sendNow(text)，供键盘发送与语音识别自动发送共用同一套守卫
+  //   （慢文本预检 / 忙碌拦截 / 缩翻 / 目标语言），避免两处各写一份口径。
+  function sendNow(rawText: string) {
     if (!rawText) return
     // ★ 决策⑪①「宁误拦」：预检判 reject（预计超 90s 时限）直接不发送——
     //   发出去大概率白等 90s 收一个 chat_timeout；工单链路是这段文本的正解。
-    if (slowV === 'reject') { toast({ title: t2('chat.slowReject'), tone: 'warn' }); return }
+    const verdict = slowVerdict(rawText.length, mode, estimate?.qd)
+    if (verdict === 'reject') { toast({ title: t2('chat.slowReject'), tone: 'warn' }); return }
     // 合并后文件入口不存在，进行中的翻译是唯一并发源：保留「忙」提示口径
     if (chat.isLoading) { toast({ title: t2('chat.busy'), tone: 'warn' }); return }
     setInput('')
@@ -385,9 +400,9 @@ export default function ChatWindow() {
   }
 
   // ---- ★ P3 麦克风录音（2026-10-14）----
-  // 口径：**录音只是另一种输入法**。录完识别出文本就填进输入框，由用户确认/改错后再照常发送。
-  //   刻意不做「识别完自动发送」——ASR 把专有名词听错在短句里并不罕见，
-  //   而一条自动发出去的错原文既费积分又没法挽回。
+  // ★ 2026-10-15 用户令（覆盖 P3 原「不自动发送」口径）：「语音改成元宝那样，先发送、再识别、再翻译」。
+  //   现在的口径＝**一次手势走完**：按下录音 → 松开 → 立即把识别文本发出去翻译，不再要求用户
+  //   在输入框里再点一次「翻译」。识别失败仍只提示、不发送（错原文发出去既费积分又没法挽回）。
   // 可用性：浏览器不支持就直接**不渲染这颗按钮**（不给一个点了必然报错的入口）。
   const canMic = micSupported()
   const micRef = useRef<AsrSession | null>(null)
@@ -426,9 +441,10 @@ export default function ChatWindow() {
     try {
       const text = await session.final
       if (text && text.trim()) {
-        setInput((prev) => (prev.trim() ? prev.trim() + ' ' + text.trim() : text.trim()))
+        // ★ 2026-10-15 用户令：识别出文本后直接发送翻译（元宝式一次手势走完），
+        //   不再回填输入框等用户手动再点「翻译」；输入框保持展开便于随后追问。
         expandFromEntry()
-        setTimeout(autoResize, 0)
+        sendNow(text.trim())
       }
     } catch {
       // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：服务端引擎抛的是 VoiceError，
@@ -518,8 +534,8 @@ export default function ChatWindow() {
           「一张占满除页眉页脚外整屏的对话框」的定档口径重新一致；
           顶缘手柄仍可拖 320px–90vh、双击回默认、高度记 localStorage（lc-cw-dialog-h），
           拖过之后进入覆盖档 .cw-resized（内联高度生效、不再被 flex 拉伸）；
-          空输入且无会话时整卡收成单行入口条（cw-collapsed：框头/滚动区/工具条隐藏，
-          只留输入行，点击展开——收起是 CSS 档不是卸载，DOM 归属口径与测试锁不冲突）。 */}
+          ★ 2026-10-15 用户令：默认展开；点框头「收起」钮且空输入无会话时才收成单行入口条
+          （cw-collapsed：框头/滚动区/工具条隐藏，点入口条展开——收起是 CSS 档不是卸载）。 */}
       <div
         ref={dialogRef}
         className={`cw-dialog${collapsed ? ' cw-collapsed' : ''}${resized ? ' cw-resized' : ''}`}
@@ -540,7 +556,9 @@ export default function ChatWindow() {
         {/* 框头：会话标题 + 工具（搜索 / 导出 / 清空）。★ 〇-LK：「原文/自动检测」标签
             跟着输入框挪到了底部 composer，框头只留会话级操作——顶部是历史，底部是输入。 */}
         <div className="cw-dialog-head">
-          <span style={{ fontSize: 15, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('app.tabWorkbench')}</span>
+          {/* ★ 2026-10-15 用户令：框头标题与工单/编辑器页的页标题（h2）同档——原先 15px
+             与左栏导航项同字阶，比其它 tab 的页标题小一大截。 */}
+          <span style={{ fontSize: 20, fontWeight: 600, color: '#E7E9EA', letterSpacing: '.04em' }}>{t('app.tabWorkbench')}</span>
           <span style={{ flex: 1 }} />
           {/* 纯图标按钮：title 给鼠标悬浮、aria-label 给读屏，二者缺一不可 */}
           <button type="button" className="cw-icon-btn" title={t('chat.searchPh')} aria-label={t('chat.searchPh')}
@@ -552,6 +570,12 @@ export default function ChatWindow() {
           </button>
           <button type="button" className="cw-icon-btn" title={t('chat.clearChat')} aria-label={t('chat.clearChat')} onClick={() => { chat.clearMessages() }}>
             <TrashIcon size={16} />
+          </button>
+          {/* ★ 2026-10-15 用户令：空态默认展开，收起改由用户显式点这颗钮触发（见 collapsedLatch 注释）。
+              收起后框头被 CSS 隐藏，展开靠点单行入口条（整卡可点）。 */}
+          <button type="button" className="cw-icon-btn" data-testid="cw-collapse"
+                  title={t('chat.collapse')} aria-label={t('chat.collapse')} onClick={collapseDialog}>
+            <CollapseGlyph />
           </button>
         </div>
 
@@ -646,9 +670,9 @@ export default function ChatWindow() {
                 </button>
               )}
               {chat.isLoading ? (
-                <Button variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
+                <Button className="cw-send" variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
               ) : (
-                <Button variant="primary" size="sm" disabled={!canSend || slowV === 'reject'} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
+                <Button className="cw-send" variant="primary" size="sm" disabled={!canSend || slowV === 'reject'} onClick={() => void handleSend()}>{t('chat.translate')}</Button>
               )}
             </div>
           </div>
@@ -697,8 +721,8 @@ const CW_CSS = `
 /* ★ 2026-10-13：覆盖档＝用户拖过（内联 height 才是最终高度）。必须撤掉 flex 的拉伸与收缩，
    否则 flex-grow 会把内联高度当摆设、手柄拖不动；90vh 上限与 JS 钳制同一把尺子。 */
 .cw-dialog.cw-resized{flex:0 0 auto;max-height:90vh}
-/* ★ 决策⑩：空态整卡收成单行入口条——收起是 CSS 档（display:none）而非卸载，
-   DOM 归属与既有结构锁不冲突；cursor:text 提示「点一下就能打字」。
+/* ★ 2026-10-15 用户令：空态默认展开，只有用户点框头「收起」钮才收成单行入口条——
+   收起是 CSS 档（display:none）而非卸载，DOM 归属与既有结构锁不冲突；cursor:text 提示「点一下就能打字」。
    收起档同样必须撤 flex 拉伸（单行条不该被撑满），高度交给内容。 */
 .cw-dialog.cw-collapsed{flex:0 0 auto;height:auto;min-height:0;cursor:text}
 .cw-dialog.cw-collapsed .cw-resize-handle,
@@ -742,6 +766,19 @@ const CW_CSS = `
   .cw-dialog{margin:8px 3% 10px}
   .cw-toolbar{padding-inline-end:40px}
   .cw-composer .cw-input{min-height:40px}
+  /* ★ 2026-10-15 用户令（第五批）「移动端的聊天内选择也做成元宝式，放在输入框上方」：
+     窄屏形态改成「选择行在上、输入行在下」，且麦克风/发送键回到输入行右端（元宝同款）。
+     只重排既有节点，DOM 与桌面档一字不动——桌面仍是一行（输入卡 90 / 工具条 48，pixel_uat P2b 量的就是它）。
+     做法：工具条 order:-1 提到输入框上方（它就是「选择行」）；麦克风与发送键绝对定位到输入行右端，
+     输入框右内垫让出这条通道（96px ≈ 麦克风 32 + 间距 8 + 发送 ~52）。
+     ⚠️ 与 AI 助手浮球（.na-fab，固定在视口右下）的关系：移动档页脚已收进抽屉 ⇒ 输入卡贴到视口底，
+     这一行正落在浮球带里。故 AiAssist 的 ≤640 档把浮球抬到 bottom:74px（见该文件），
+     让出「输入行」这一段；浮球只可能压住上方选择行的右端空白（弹性占位），不压任何按钮。 */
+  .cw-composer{position:relative}
+  .cw-toolbar{order:-1;padding:8px 8px 2px}
+  .cw-composer .cw-input{padding:6px 96px 12px 12px}
+  .cw-toolbar > [data-testid="mic-btn"]{position:absolute;right:70px;bottom:6px;z-index:1}
+  .cw-toolbar > .cw-send{position:absolute;right:8px;bottom:6px;z-index:1}
 }
 @media (prefers-reduced-motion: reduce){
   .cw-spin{animation:none}

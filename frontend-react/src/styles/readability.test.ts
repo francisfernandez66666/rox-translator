@@ -201,9 +201,11 @@ describe('C 工作台顶栏按 §2.2 真值', () => {
     expect(Number(m![2]), `Tab 字号 ${m![2]}px ≠ 〇-N 后档 15px`).toBe(15)
     expect(Number(m![1]), '胶囊档必须是全圆角 999，8px 方角属旧覆写层残留').toBe(999)
   })
-  // ★ 2026-10-10 批3（§七 #4 增补条款）：S 档（≤640）顶栏整体让位移动壳三件套，
-  // 高度档由三枚令牌承担——源码侧与 pixel/mobile e2e 的运行时读数同一把尺。
-  it('移动壳三件套高度令牌（statusbar 44 / mob-topbar 52 / tabbar 62 / 距底 20）', () => {
+  // ★ 2026-10-10 批3（§七 #4 增补条款）：S 档（≤640）顶栏整体让位移动壳，高度档由令牌承担——
+  // 源码侧与 pixel/mobile e2e 的运行时读数同一把尺。
+  // ★ 2026-10-15：移动壳简化为「标题栏 52 + 底部胶囊 62」两件套（假状态栏退役），
+  //   `--lc-statusbar-h` 仍保留在令牌表（组件库 Mobile.tsx 的 StatusBar 演示件仍引用），故一并锁住。
+  it('移动壳高度令牌（statusbar 44 / mob-topbar 52 / tabbar 62 / 距底 20）', () => {
     const t = (name: string) => {
       const m = KIT_TOKENS.match(new RegExp(`${name}:\\s*(\\d+)px`))
       expect(m, `tokens.css 缺 ${name} 的 px 字面值`).toBeTruthy()
@@ -431,23 +433,22 @@ describe('G 白色填充档（主按钮/主 CTA/反白件 = 纯白 #FFFFFF）', 
     expect(got.length, '内联 background 形态变了，请同步本锁').toBeGreaterThan(0)
     expect(got.some(isPureWhite), `重试按钮底值 ${JSON.stringify(got)} 不是纯白`).toBe(true)
   })
-  // ★ 2026-10-14 用户后令「页脚那句品宣尾注能不能提亮并且做重点提示」⇒ 这一枚白底胶囊徽标进 G 段射程。
-  //   它不走 CSS 块解析：样式收在 components/BrandTagline.tsx 那份 TAGLINE_STYLE 内联对象里，五张面共用
-  //   （四面原先各内联一份 fontWeight 的漂移形态就是这次收回来的）。所以照上面 ErrorBoundary 的先例
-  //   按**内联形态**读源码。跨语言那一半（后端直出面同名规则的逐维等值）不在本文件射程，由
-  //   src/components/BrandTagline.lock.test.ts 的 G 段与 backend-go/internal/api/public_ui_test.go 各自钉住。
-  it('页脚品宣尾注徽标（BrandTagline.tsx 内联样式）底＝实心白档、字＝反相黑，不许退成文字档灰', () => {
+  // ★ 2026-10-15 用户后令「plain muted text + tiny dot」⇒ 尾注由 10-14 的白底胶囊改回页脚灰字 + 小圆点。
+  //   它不走 CSS 块解析：样式收在 components/BrandTagline.tsx 的 TAGLINE_STYLE / TAGLINE_DOT_STYLE
+  //   两份内联对象里，五张面共用。所以照上面 ErrorBoundary 的先例按**内联形态**读源码。
+  //   本腿随之翻转：不再要求纯白底，而是钉住它**不许**退回白底反相徽标档、字色取页脚 meta 灰字档。
+  //   跨语言那一半（后端直出面两条规则的逐维等值）不在本文件射程，由 BrandTagline.lock.test.ts G 段钉住。
+  it('页脚品宣尾注（BrandTagline.tsx 内联样式）＝页脚灰字，不许退回白底反相徽标档', () => {
     const src = read('src/components/BrandTagline.tsx')
-    const bgs = [...src.matchAll(/background:\s*'([^']+)'/g)].map((m) => m[1])
-    expect(bgs.length, '尾注内联 background 形态变了，请同步本锁').toBeGreaterThan(0)
-    expect(bgs.some(isPureWhite), `尾注底值 ${JSON.stringify(bgs)} 不是纯白`).toBe(true)
     const colors = [...src.matchAll(/\bcolor:\s*'([^']+)'/g)].map((m) => m[1])
     expect(colors.length, '尾注内联 color 形态变了，请同步本锁').toBeGreaterThan(0)
-    expect(colors.some((v) => /^var\(--lc-invert-fg(,[^)]*)?\)$/i.test(v.replace(/\s+/g, ''))),
-      `白底必须配反相黑字档，实读 ${JSON.stringify(colors)}`).toBe(true)
-    // 负向（配上面那条正锁才有射程）：拿文字档灰做整块填充＝「白色显脏、偏蓝」那条老根因
-    expect(bgs.some((v) => /#E7E9EA|var\(\s*--lc-(text|text-1|success)\s*\)/i.test(v)),
-      `尾注底色取到了文字档：${JSON.stringify(bgs)}`).toBe(false)
+    expect(colors, `尾注字色应是页脚 meta 灰字档 var(--lc-text-3)，实读 ${JSON.stringify(colors)}`).toContain('var(--lc-text-3)')
+    // 负向（配正面那条正锁才有射程）：不许再有实心白底 / 反相黑字那一档（10-14 那枚胶囊用户已撤）。
+    const bgs = [...src.matchAll(/background:\s*'([^']+)'/g)].map((m) => m[1])
+    expect(bgs.some(isPureWhite), `尾注不许再有实心白底：${JSON.stringify(bgs)}`).toBe(false)
+    expect(src.includes('--lc-invert-fg'), '尾注不许再用反相黑字档（白底徽标已撤）').toBe(false)
+    // 正向对照（证明上面负向腿不是空转）：小圆点那枚实心件用 currentColor，是唯一允许的 background 值。
+    expect(bgs, '圆点底色应取 currentColor 跟字色走').toContain('currentColor')
   })
   it('按钮/CTA/徽标/气泡类选择器不得再用文字档灰做整块填充', () => {
     const offenders: string[] = []

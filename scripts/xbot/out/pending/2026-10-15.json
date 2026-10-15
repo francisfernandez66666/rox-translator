@@ -1,0 +1,113 @@
+{
+  "date": "2026-10-15",
+  "day": 1,
+  "note": "正文仍是唯一真正被读的东西；配图 2026-10-14 起改走 AI 生图（image_prompt），排版版式只作兜底。",
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A02",
+      "beats": [
+        {
+          "what": "周四 23 点客户回邮件",
+          "detail": "87 页 Word，目录页码是从原文复制的"
+        },
+        {
+          "what": "对照第 3 页和第 47 页",
+          "detail": "才知道差了多少"
+        }
+      ],
+      "story": {
+        "who": "我",
+        "when": "周四晚上 11 点",
+        "trigger": "客户回「目录和正文对不上」",
+        "detail": "87 页 Word"
+      },
+      "text": "周四晚上 11 点，客户回了一句：目录和正文对不上。\n\n附件 87 页 Word。译文没问题，但目录页码是从原文件复制的，正文重排后全错位。\n\n打开第 3 页和第 47 页，就知道差了多少。\n\n问题不是翻译质量。是交回来的是另一个文件。\n\n能言 LangCross：当场重翻，页码从原文走。\nhttps://langcross.lexicorn.cn?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s1",
+      "image_prompt": "A photorealistic cinematic still of a late-night worker at a desk, warm desk-lamp glow in a dark room, laptop screen showing a long document with a visibly misaligned table of contents, the person pressing fingers to their forehead, quiet frustration, shallow depth of field, subtle film grain, rich color.",
+      "image_text": {
+        "layout": "hero",
+        "main": "错的不是翻译质量",
+        "sub1": "是交回来的是另一个文件",
+        "sub2": "87 页 Word，页码从原文走"
+      }
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B04",
+      "beats": [
+        {
+          "what": "核对报价单时数出三种写法",
+          "detail": "朗克罗斯 / 朗克罗思 / Lang Cross"
+        },
+        {
+          "what": "客户一封邮件都没发过",
+          "detail": "他自己没发现"
+        }
+      ],
+      "story": {
+        "who": "我",
+        "when": "核对报价单的下午",
+        "trigger": "发现同一品牌三种写法",
+        "detail": "三种里一种自动翻的"
+      },
+      "text": "客户的德文手册里，同一个品牌名有三种写法。\n\n朗克罗斯。朗克罗思。Lang Cross。\n\n三种里一种翻译软件自动转的，一种同事手打的，一种三年前旧稿抄的。\n\n客户一封邮件都没发过。他自己没发现。\n\n是你核对报价单时数出来的。\n\n能言 LangCross：品牌名进术语库，当场锁死。\nhttps://langcross.lexicorn.cn?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s2",
+      "image_prompt": "Photorealistic cinematic overhead photograph: a person at a tidy desk scrutinizing a printed business document with a red pen, several inconsistent spellings of the same name circled in red ink, expression of disbelief and mild irritation, soft natural daylight, shallow depth of field, clean composition.",
+      "image_text": {
+        "layout": "list",
+        "main": "同一个品牌名的三种写法",
+        "items": [
+          "朗克罗斯（手打）",
+          "朗克罗思（自动翻）",
+          "Lang Cross（旧稿抄的）"
+        ]
+      }
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "交期",
+      "topic_id": "C01",
+      "beats": [
+        {
+          "what": "周三下午 4 点老板说这版明天要",
+          "detail": "然后是 11 个小时"
+        },
+        {
+          "what": "次日 9:20 附件还是昨天那版",
+          "detail": "11 小时没做任何翻译的事"
+        }
+      ],
+      "story": {
+        "who": "我",
+        "when": "周三下午 4 点",
+        "trigger": "老板说这版明天上午要",
+        "detail": "11 小时只在等"
+      },
+      "text": "周三下午 4 点，老板转了一句：这版明天上午要。\n\n然后是 11 个小时。这 11 个小时里你没做任何翻译的事，只是在等。\n\n次日 9:20，你准备发的邮件里，附件还是昨天的版本。这版根本没交出来。\n\n能言 LangCross：当场出原版式，等译从 11 小时算。\nhttps://langcross.lexicorn.cn?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s3",
+      "image_prompt": "Photorealistic cinematic photograph, late evening: a person slumped in an office chair, exhausted, staring at a smartphone with a worried look; a wall clock behind them reads late; an empty coffee cup on the desk. Blue-hour light from a window, low-key moody lighting, shallow depth of field, subtle film grain.",
+      "image_text": {
+        "layout": "bill",
+        "items": [
+          [
+            "等译 3 天 ×2",
+            "6 天"
+          ],
+          [
+            "返工排版",
+            "2 人天"
+          ],
+          [
+            "术语返修",
+            "1 次"
+          ]
+        ],
+        "sub2": "以上都没算进报价单",
+        "total": "8 人天 + 6 天"
+      }
+    }
+  ]
+}

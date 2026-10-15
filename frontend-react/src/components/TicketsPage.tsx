@@ -559,7 +559,9 @@ export default function TicketsPage() {
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 24px', width: '100%', minWidth: 0 }}>
       <style>{CSS_TK}</style>
-      <h2 style={{ margin: '0 0 4px' }}>{t('tk.entry')}</h2>
+      {/* ★ 2026-10-15 用户令：页标题统一 20px/600（与即时翻译框头、对照编辑页同档）——
+          此前靠 UA 默认 h2（24px 粗体），与聊天框头 15px 差一大截，同是「页标题」却两副面孔。 */}
+      <h2 style={{ margin: '0 0 4px', fontSize: 20, fontWeight: 600 }}>{t('tk.entry')}</h2>
       <p style={{ fontSize: 14, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}

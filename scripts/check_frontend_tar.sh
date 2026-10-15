@@ -26,6 +26,9 @@
 #   T6 每一对侧车必须能解回原文（★ 2026-10-14 白屏事故新增，见下方那段的因果链）——
 #      T1 判"在不在"，T6 判"解不解得开"，两档不可替代。
 #      T5b／T6b 是两条判据自证腿：把合格与不合格的样本喂给**同一个**函数，两态读数都要有。
+#   T7 部署期补拉的大模型资产（`sherpa-onnx-wasm-main-asr.data`，199 MB）**不得进包**——
+#      它 gitignore、由部署机 `scripts/fetch_sherpa_assets.sh` 就地拉取；本机 public/ 落过盘时
+#      vite build 会把它拷进 dist ⇒ tar 从 ~6.6 MB 变 ~215 MB，而界面照常、无任何症状（★ 2026-10-15 WASM 批）。
 # ============================================================================
 set -uo pipefail
 
@@ -68,12 +71,12 @@ if [ "$MODE" = "tar" ]; then
     [ -n "$found" ] && ROOT="$(dirname "$found")"
   fi
   list() { find "$ROOT" -type f 2>/dev/null; }
-  echo "=== 前端交付包自检（tar 模式：$TAR_PATH）==="
+  echo "=== 前端交付包自检（tar 模式：${TAR_PATH}）==="
 else
   [ -d "$DIST_DIR" ] || { echo "ABORT=2 找不到 dist 目录：$DIST_DIR（先 npx vite build）"; exit 2; }
   ROOT="$DIST_DIR"
   list() { find "$ROOT" -type f 2>/dev/null; }
-  echo "=== 前端交付包自检（磁盘模式：$DIST_DIR）==="
+  echo "=== 前端交付包自检（磁盘模式：${DIST_DIR}）==="
 fi
 
 [ -f "$ROOT/index.html" ] || { echo "ABORT=2 $ROOT 里没有 index.html，这不是一个前端包"; exit 2; }
@@ -116,7 +119,7 @@ if [ "$BR" -ge 1 ] && [ "$GZ" -ge 1 ] && [ -n "$ENTRY" ] \
    && [ -f "$ROOT/$ENTRY.br" ] && [ -f "$ROOT/$ENTRY.gz" ]; then
   echo "  OK   T1 brotli＋gzip 侧车在位（共 $BR/$GZ 份），入口两份侧车齐全"
 else
-  echo "  BAD  T1 侧车不齐（br=$BR gz=$GZ，入口 .br/.gz $([ -f "$ROOT/${ENTRY}.br" ] && echo 有 || echo 无)/$([ -f "$ROOT/${ENTRY}.gz" ] && echo 有 || echo 无)）" \
+  echo "  BAD  T1 侧车不齐（br=$BR gz=${GZ}，入口 .br/.gz $([ -f "$ROOT/${ENTRY}.br" ] && echo 有 || echo 无)/$([ -f "$ROOT/${ENTRY}.gz" ] && echo 有 || echo 无)）" \
     && RC=1
   echo "       ⇒ 换源后静态资源只能发原文；先跑 node scripts/precompress_dist.mjs，再 node scripts/precompress_dist.mjs --check"
 fi
@@ -153,7 +156,7 @@ fi
 # 现网来路（2026-10-12 真踩）：CACHE_BUST 逃生阀写成 `output: { entryFileNames: undefined }`，
 # 键存在但值为 undefined ⇒ Vite 不再补自己的默认 ⇒ Rollup 用默认 `[name].js` ⇒ 产物是根目录 `index.js`。
 if entry_shape_ok "$ENTRY"; then
-  echo "  OK   T5 入口名带内容哈希且在 assets/ 下（$ENTRY）"
+  echo "  OK   T5 入口名带内容哈希且在 assets/ 下（${ENTRY}）"
 else
   echo "  BAD  T5 入口名形态不合（=${ENTRY:-<取不到>}）⇒ 名字不随内容变，长缓存与按名校验都落空"; RC=1
   echo "       ⇒ 核 vite.config.ts 的 build：CACHE_BUST 未设时**整段 rollupOptions 都不许出现**（不是把值写成 undefined）"
@@ -225,8 +228,31 @@ else
   if [ "$T6_GOOD" = "0" ] && [ "$T6_BAD" != "0" ]; then
     echo "  OK   T6b 解码判据自证（好侧车放行／截断侧车判死）"
   else
-    echo "  BAD  T6b 解码判据自证没过（good=$T6_GOOD bad=$T6_BAD）⇒ T6 这一档的射程不可信"; RC=1
+    echo "  BAD  T6b 解码判据自证没过（good=$T6_GOOD bad=${T6_BAD}）⇒ T6 这一档的射程不可信"; RC=1
   fi
+fi
+
+# T7 部署期补拉的大模型资产不得进包（★ 2026-10-15 端侧 WASM 批立档）：
+#   `sherpa-onnx-wasm-main-asr.data`（199 MB）超 GitHub 单文件 100MB 硬限 ⇒ gitignore ＋ 部署机
+#   `scripts/fetch_sherpa_assets.sh` 就地拉取。它在本机 `public/` 落过盘时，`vite build` 会把它拷进 dist，
+#   于是这条链上**没有任何一处会报错**——只是 tar 从 ~6.6 MB 变 ~215 MB、跨境上传拖慢整条换源。
+#   判据问包内**有没有这份模型**（按路径），再配一条"单文件体积上限"兜住同族未来资产。
+T7_DATA=$(list | grep -cE '/wasm/sherpa-onnx/[^/]*\.data$' || true)
+T7_MAX_BYTES="${FRONTEND_SINGLE_FILE_MAX_BYTES:-104857600}" # 100 MiB
+T7_BIG=$(find "$ROOT" -type f -size +"${T7_MAX_BYTES}"c 2>/dev/null | wc -l | tr -d ' ')
+if [ "${T7_DATA:-0}" = "0" ] && [ "${T7_BIG:-0}" = "0" ]; then
+  echo "  OK   T7 包内无部署期补拉的模型 .data（无 >$((T7_MAX_BYTES / 1048576)) MiB 的单文件）"
+else
+  echo "  BAD  T7 包内有部署期补拉的模型资产（*.data=$T7_DATA 份；>${T7_MAX_BYTES} B 的单文件 $T7_BIG 份）⇒ tar 会被撑到 ~215 MB" && RC=1
+  echo "       ⇒ 打包加 --exclude='dist/wasm/sherpa-onnx/*.data'；模型由部署机跑 scripts/fetch_sherpa_assets.sh 就地拉取"
+fi
+
+# T7b 射程自证：同一条判据对"含 .data 的路径"必须命中、对普通 asset 必须不命中。
+if printf 'dist/wasm/sherpa-onnx/sherpa-onnx-wasm-main-asr.data\n' | grep -qE '/wasm/sherpa-onnx/[^/]*\.data$' \
+   && ! printf 'dist/assets/index-abc12345.js\n' | grep -qE '/wasm/sherpa-onnx/[^/]*\.data$'; then
+  echo "  OK   T7b 大模型资产判据自证（命中 .data／放行普通 asset）"
+else
+  echo "  BAD  T7b 大模型资产判据自证没过 ⇒ T7 这一档的射程不可信"; RC=1
 fi
 
 echo

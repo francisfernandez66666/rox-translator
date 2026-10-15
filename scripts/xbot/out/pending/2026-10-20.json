@@ -1,0 +1,75 @@
+{
+  "date": "2026-10-20",
+  "day": 1,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A02",
+      "text": "80 页 Word 交回来，目录、页码、图表编号全要手动重排。\n\n排这两小时的时间，本来能再写一版方案。\n\n能言 LangCross：Word / PPT / Excel / PDF 原版式直出，拿到手就能发。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s1",
+      "image_text": {
+        "main": "返工一次，这单白干",
+        "sub1": "Word / PPT / Excel / PDF 原版式直出",
+        "sub2": "拿到手就能发，不用再排一遍"
+      },
+      "checks": {
+        "ok": false,
+        "compliance": "pass",
+        "weighted_len": 187,
+        "first_sim": 1.0,
+        "whole_sim": 1.0,
+        "max_similarity": 1.0,
+        "reasons": [
+          "选题 A02 已于 2026-10-13T16:41:14+08:00 发过（60 天内不复用）",
+          "首句相似度 1.00 ≥ 0.7（撞车了）"
+        ]
+      },
+      "image": "out/2026-10-20/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B01",
+      "text": "同一份稿子里，公司名出现了三种译法。\n\n客户看到的时候，没生气——他在想你是不是在骗他。\n\n能言 LangCross：品牌名统一锁死，术语硬闸说不对就拦。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s2",
+      "image_text": {
+        "main": "同一份稿，三个译法",
+        "sub1": "品牌名与术语：不对就拦，不放行",
+        "sub2": "多轮质控 + 人工复核通道"
+      },
+      "checks": {
+        "ok": true,
+        "compliance": "pass",
+        "weighted_len": 163,
+        "first_sim": 0.043,
+        "whole_sim": 0.627,
+        "max_similarity": 0.627,
+        "reasons": []
+      },
+      "image": "out/2026-10-20/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C01",
+      "text": "一年翻译费花出去的，有多少是花在返工排版上的？\n\n没人算过这笔账。算完你会想砍掉点什么。\n\n能言 LangCross：成本约为人工翻译的 1/8，账单逐笔可查。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s3",
+      "image_text": {
+        "main": "先别看单价，看返工",
+        "sub1": "等待、返工、扯皮，都是翻译的隐性成本",
+        "sub2": "成本约为人工翻译的 1/8"
+      },
+      "checks": {
+        "ok": true,
+        "compliance": "pass",
+        "weighted_len": 167,
+        "first_sim": 0.103,
+        "whole_sim": 0.663,
+        "max_similarity": 0.663,
+        "reasons": []
+      },
+      "image": "out/2026-10-20/img-3.png"
+    }
+  ]
+}

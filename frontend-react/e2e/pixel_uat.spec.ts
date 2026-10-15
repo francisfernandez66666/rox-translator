@@ -238,26 +238,30 @@ test.describe('像素级 UAT', () => {
     const welcomeRgb = (welcomeColor.match(/\d+(\s*,\s*\d+){2}/) || [''])[0].replace(/\s/g, '');
     expect(TRUTH_RGB, `弱文字色不在真值灰阶内：${welcomeColor}`).toContain(welcomeRgb);
     expect(contrastOnCard(welcomeColor, '#000000'), `真值灰阶在页面底上不应低于 3.4:1（${welcomeColor}）`).toBeGreaterThanOrEqual(3.4);
-    // 顶栏按 §2.2 骨架的 〇-N 后档：行高仍是 38（骨架未加厚），字阶整体 +2 ⇒ 品牌 16 Bold、
-    // 导航 15px 胶囊、语种钮 14px。三条锁配对使用：字号等值防「调档」，实高 ≤38 防「折行/撑破行」，
-    // 行高本身防顶栏被改厚——字变大后最容易先崩的就是「一行放得下吗」这一条。
-    const headerH = await page.locator('.app-header').evaluate((el) => el.getBoundingClientRect().height);
-    expect(headerH, `顶栏实高 ${headerH}px ≠ §2.2 的 38px`).toBe(38);
-    const brand = page.locator('.app-header .brand').first();
-    // 品牌可能是图片 logo（此时 .brand 内只有 <img>），字号锁改为落在 img 的宿主上量，
+    // ★ 2026-10-15 用户令「元宝式布局」：桌面顶栏 .app-header（§2.2）随布局改造退役，
+    // 品牌/导航/语种钮等控件整体迁入左侧栏 .lc-sidebar。真值改为：左栏宽 = 令牌 --lc-sidebar-w（238），
+    // 品牌位 16/600、导航项 15、语种钮 14（仍是 〇-N 后档，字号未变，只是宿主从顶栏换到左栏）。
+    // 三条锁配对使用：字号等值防「调档」，实高 ≤38 防「折行/撑破行」，左栏可见防「选择器改名后假绿」。
+    const side = page.locator('.lc-sidebar');
+    await expect(side, '元宝式左栏未渲染（.app-header 退役后必须由 .lc-sidebar 承接）').toBeVisible();
+    const sideW = await side.evaluate((el) => Math.round(el.getBoundingClientRect().width));
+    expect(sideW, `左栏实宽 ${sideW}px ≠ --lc-sidebar-w 令牌 238px`).toBe(238);
+    const brand = page.locator('.lc-sidebar__logo').first();
+    await expect(brand, '左栏品牌位未渲染').toBeVisible();
+    // 品牌可能是图片 logo（此时 .lc-sidebar__logo 内只有 <img>），字号锁改为落在 img 的宿主上量，
     // 不能因为白标形态不同就假红。
     expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号 ≠ 〇-N 后档 16px').toBe(16);
-    const tab = page.locator('.app-header .app-tab').first();
-    // 三个工作台 Tab 共用同一条 .app-tab 规则，取首个即可代表该字阶档（不必逐个数）。
+    const navItem = page.locator('.lc-side-item').first();
+    // 导航项共用同一条 .lc-side-item 规则，取首个即可代表该字阶档（不必逐个数）。
     // 高度锁之前必须先断可见：隐藏元素 getBoundingClientRect() 恒为 0，
     // `<=38` 会静默通过——那正是「断言永远绿」一类的假绿，比翻红更危险。
-    await expect(tab, '工作台 Tab 未渲染').toBeVisible();
-    const tabFs = await tab.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-    expect(tabFs, `工作台 Tab 字号 ${tabFs}px ≠ 〇-N 后档 15px`).toBe(15);
-    const tabH = await tab.evaluate((el) => el.getBoundingClientRect().height);
-    expect(tabH, `工作台 Tab 实高 ${tabH}px ⇒ 文案已折行或控件被撑高`).toBeLessThanOrEqual(38);
-    const langBtn = page.locator('.app-header .lang-sel-btn').first();
-    await expect(langBtn, '顶栏语种下拉未渲染').toBeVisible();
+    await expect(navItem, '左栏导航项未渲染').toBeVisible();
+    const navFs = await navItem.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    expect(navFs, `左栏导航项字号 ${navFs}px ≠ 〇-N 后档 15px`).toBe(15);
+    const navH = await navItem.evaluate((el) => el.getBoundingClientRect().height);
+    expect(navH, `左栏导航项实高 ${navH}px ⇒ 文案已折行或控件被撑高`).toBeLessThanOrEqual(38);
+    const langBtn = page.locator('.lc-sidebar .lang-sel-btn').first();
+    await expect(langBtn, '左栏语种下拉未渲染').toBeVisible();
     // 语种钮同锁：#23 把二元 EN 切换换成 12 语种下拉后，中文语种名（如「简体中文」）
     // 一度把钮撑成两行，故字号真值与「单行实高」两条都要钉，缺一漏一半回归。
     const langH = await langBtn.evaluate((el) => el.getBoundingClientRect().height);
@@ -303,7 +307,7 @@ test.describe('像素级 UAT', () => {
       };
       const dialog = document.querySelector('.cw-dialog')!;
       const composer = dialog.querySelector('.cw-composer')!;
-      const chip = document.querySelector('.app-header .lang-sel-btn')!;
+      const chip = document.querySelector('.lc-sidebar .lang-sel-btn')!;
       return {
         dialog: probe(dialog), composer: probe(composer), chip: probe(chip),
         pageBg: getComputedStyle(document.body).backgroundColor,
@@ -505,10 +509,11 @@ test.describe('像素级 UAT', () => {
       // ★ 2026-09-22「至少读完三个语种再载入」：冷启动占位会顶住约 9s，
       //   旧写法只等 body 可见 ⇒ 截图截到换词动效、溢出检查也等于没做。
       //   改为等顶栏（占位撤销后才出现）+ 页面主体文案，再截图与量溢出。
-      //   闸门撤销的判据分两层：.app-header 证明「会话恢复闸门」已放行
-      //   （恢复期 Root 直接 return 占位组件，整个外壳含顶栏都还没挂载）；
-      //   随后的 body 文案锁再兜住「后端探活闸门」（那道闸门只替换 app-main 内容，顶栏已在）。
-      await expect(page.locator('.app-header'), `${path} 载入闸门未撤销`).toBeVisible({ timeout: 30000 });
+      //   闸门撤销的判据分两层：.lc-sidebar 证明「会话恢复闸门」已放行
+      //   （恢复期 Root 直接 return 占位组件，整个外壳含左栏都还没挂载；★ 2026-10-15 顶栏退役，
+      //   同功能的载体由 .app-header 换成元宝式左栏 .lc-sidebar）；
+      //   随后的 body 文案锁再兜住「后端探活闸门」（那道闸门只替换 app-main 内容，左栏已在）。
+      await expect(page.locator('.lc-sidebar'), `${path} 载入闸门未撤销`).toBeVisible({ timeout: 30000 });
       await expect(page.locator('body'), `${path} 应含页面主体`).toContainText(marker, { timeout: 30000 });
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2);
       expect(overflow, `${path} 横向溢出`).toBeFalsy();

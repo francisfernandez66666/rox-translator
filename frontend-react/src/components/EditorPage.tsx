@@ -371,7 +371,8 @@ export default function EditorPage() {
 
   return (
     <div style={{ maxWidth: 1100, margin: '0 auto', padding: 16, width: '100%', minWidth: 0 }}>
-      <h2 style={{ margin: '8px 0' }}>{t('tk.edTitle')}</h2>
+      {/* ★ 2026-10-15 用户令：页标题统一 20px/600（与即时翻译框头、翻译工单页同档）。 */}
+      <h2 style={{ margin: '8px 0', fontSize: 20, fontWeight: 600 }}>{t('tk.edTitle')}</h2>
       <div className="editor-toolbar" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <Input placeholder={t("tk.edIdPlaceholder")} value={ticketId} onChange={(e) => setTicketId(String(e.target.value))} style={{ width: 160 }} />
         {/* 语种下拉：空值项复用列头文案作占位。选空时后端 parseTicketIDLang 会回退到

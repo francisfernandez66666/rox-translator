@@ -141,7 +141,10 @@ read_dest_digest() {
   if [ "$MODE" = "local" ]; then
     [ -s "$dest" ] && DIGEST "$dest" || printf ''
   else
-    ssh "${SSH_OPTS[@]}" "$SSH_HOST" "command -v sha256sum >/dev/null 2>&1 && sha256sum '$dest' 2>/dev/null | awk '{print \$1}' || true"
+    # ★ 必须 < /dev/null：本函数在 `while read -r want rel; do … done <"$SHA_LOCAL_LIST"` 里被调用，
+    #   ssh 默认会读走那份重定向 stdin ⇒ 只校到第 1 个文件循环就提前结束（实读：16 个文件只核了 1 个，
+    #   且因为第 1 个恰好等值而全程无红灯——「静默少核」比「核错」更难发现）。
+    ssh "${SSH_OPTS[@]}" "$SSH_HOST" "command -v sha256sum >/dev/null 2>&1 && sha256sum '$dest' 2>/dev/null | awk '{print \$1}' || true" </dev/null
   fi
 }
 FAIL=0
@@ -194,9 +197,9 @@ for cap in ocr asr tts; do
   n_onnx="$(cap_count "$cap" onnx)"
   n_txt="$(cap_count "$cap" txt)"
   if [ "${n_onnx:-0}" -gt 0 ]; then
-    ok "$cap：${n_onnx} 份 ONNX 在位（附带 .txt 词表/词典 ${n_txt:-0} 份）"
+    ok "${cap}：${n_onnx} 份 ONNX 在位（附带 .txt 词表/词典 ${n_txt:-0} 份）"
   else
-    warn "$cap：目标机上没有 ONNX 权重 ⇒ /api/health 的 ${cap}_ready=false（依赖装好也没用，识别/转写会整条降级）"
+    warn "${cap}：目标机上没有 ONNX 权重 ⇒ /api/health 的 ${cap}_ready=false（依赖装好也没用，识别/转写会整条降级）"
   fi
 done
 log "★ 提醒：**权重刚落盘不会让就绪位自己翻**——CheckHealth 是 sync.Once，"

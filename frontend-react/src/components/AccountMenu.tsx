@@ -11,6 +11,7 @@ import type { MenuItem } from '@/ui/langcross/src'
 import { useAuth } from '@/stores/auth'
 import { useT } from '@/i18n'
 import { meContext } from '@/api'
+import { useNotify, NotifyPanel } from './Bell'
 import { PasswordModal, EmailBindModal, DeactivateModal, JobRoleModal } from './modals'
 
 // 菜单图标内联样式：基线对齐 + 与文案留 8px（图标 16×16，文案左对齐）
@@ -31,13 +32,21 @@ interface Props {
   selfNav?: (path: string) => void
   /** 邀请有礼入口仅个人用户可见（与 /invites 路由守卫同口径，企业用户点了会被弹回） */
   showInvites?: boolean
+  /** ★ 2026-10-15 用户令：传入即在菜单露出「我的账号」（侧栏那一项已删，入口收进此下拉） */
+  onGotoMy?: () => void
+  /** ★ 2026-10-15 用户令：传入即在菜单露出「消息(N)」，点开弹通知浮层（前台不再挂独立铃铛） */
+  showNotify?: boolean
 }
 
-/** 右上角账号菜单组件：进入后台、自助入口（套餐/账单/账号）、改密、换绑邮箱、注销与退出登录（前台与后台共用） */
-export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench, selfNav, showInvites }: Props) {
+/** 右上角账号菜单组件：进入后台、消息、我的账号、改密、换绑邮箱、注销与退出登录（前台与后台共用） */
+export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkbench, onGotoWorkbench, selfNav, showInvites, onGotoMy, showNotify }: Props) {
   const { user, logout } = useAuth()
   const { toast } = useToast()
   const [, t] = useT() // ★ E14：lang 未使用
+  // ★ 2026-10-15：通知数据层（未读轮询/列表/已读）与浮层，复用 Bell.tsx 的 useNotify/NotifyPanel
+  const notify = useNotify()
+  // 通知浮层开关：作为「消息(N)」菜单项的落点（菜单项选完即关，浮层另开）
+  const [notifyOpen, setNotifyOpen] = useState(false)
   // 当前用户邮箱，用于改密验证码与换绑弹窗
   const [curEmail, setCurEmail] = useState('')
   // 当前职业角色 code（2026-09-19）：与邮箱同一次 meContext 取回，供角色弹窗预置
@@ -51,6 +60,8 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
   const [menuOpen, setMenuOpen] = useState(false)
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
+  // 通知浮层的外点关闭基准：触发器 + 浮层都在这一层里
+  const wrapRef = useRef<HTMLDivElement>(null)
 
   // 读取当前邮箱，供改密验证码与换绑弹窗使用
   useEffect(() => {
@@ -66,21 +77,50 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     })()
   }, [user])
 
+  // 通知浮层的外点/Esc 关闭（与 ContextMenu 同一交互口径：点哪儿都能关是底线）
+  useEffect(() => {
+    if (!notifyOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setNotifyOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNotifyOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [notifyOpen])
+
   // 构建菜单项列表：
-  // 后台不展示「进入后台」；仅普通用户显示「注销」；其余为改密/换绑/退出
+  // 后台不展示「进入后台」；仅普通用户显示「注销」；其余为消息/账号/改密/换绑/退出
   const options = [
     // 后台专用：返回前台工作台
     ...(showWorkbench ? [{ content: <><Icon n="chat" style={MI} />{t('menu.backWorkbench')}</>, value: 'workbench', onClick: () => onGotoWorkbench?.() }] : []),
     // 前台专用：跳转后台管理控制台
     ...(showAdminConsole ? [{ content: <><Icon n="wrench" style={MI} />{t('menu.adminConsole')}</>, value: 'admin', onClick: () => onGotoAdmin?.() }] : []),
     // ★ 2026-09-24 〇-S（#7）：原汉堡抽屉四入口并入本下拉（selfNav 传入才露出，后台侧不露）；
-    //   取词复用 app.nav* 键（12 语种已全量），图标走组件库现成档：套餐=package 账单=card 账号=gear 邀请=chain
+    //   ★ 2026-10-15：桌面侧栏已承载套餐/余额/邀请，故桌面不再传 selfNav（只移动档传，移动无侧栏）
     ...(selfNav ? [
       { content: <><Icon n="package" style={MI} />{t('app.navPackages')}</>, value: 'nav-packages', onClick: () => selfNav('/packages') },
       { content: <><Icon n="card" style={MI} />{t('app.navBilling')}</>, value: 'nav-billing', onClick: () => selfNav('/billing') },
       ...(showInvites ? [{ content: <><Icon n="chain" style={MI} />{t('app.navInvites')}</>, value: 'nav-invites', onClick: () => selfNav('/invites') }] : []),
       { content: <><Icon n="gear" style={MI} />{t('app.navMy')}</>, value: 'nav-my', onClick: () => selfNav('/my') },
     ] : []),
+    // ★ 2026-10-15 用户令：消息(N) 收进本下拉（前台不再挂独立铃铛）。未读>0 时尾随计数。
+    ...(showNotify ? [{
+      content: (
+        <span style={{ display: 'inline-flex', alignItems: 'center', width: '100%' }}>
+          <Icon n="bell" style={MI} />{t('bell.title')}
+          {notify.unread > 0 && <span className="am-count">{notify.unread}</span>}
+        </span>
+      ),
+      value: 'notify',
+      onClick: () => { setNotifyOpen(true); notify.setOpen(true); void notify.loadList() },
+    }] : []),
+    // ★ 2026-10-15 用户令：我的账号（侧栏那一项已删）——落 /my（账号设置 + 职业角色）。
+    //   selfNav 已含 nav-my（移动档无侧栏），两者同时传会撞出两个同名项，故只在没走 selfNav 时补。
+    ...(onGotoMy && !selfNav ? [{ content: <><Icon n="gear" style={MI} />{t('app.navMy')}</>, value: 'my', onClick: () => onGotoMy() }] : []),
     // 修改密码：打开邮箱验证码 + 新密码弹窗
     { content: <><Icon n="lock" style={MI} />{t('pwd.title')}</>, value: 'pwd', onClick: () => setOpenPwd(true) },
     // 换绑邮箱：打开绑定/换绑邮箱弹窗
@@ -116,19 +156,28 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
   return (
     <>
       <style>{AM_CSS}</style>
-      <button
-        type="button"
-        ref={triggerRef}
-        className="am-trigger"
-        onClick={openMenu}
-        // 自绘触发按钮：下拉语义原先由 TDesign Dropdown 注入，改用原生 button 后必须自己补
-        // haspopup/expanded，否则读屏软件听不出「这是一个会展开菜单的按钮、当前是否已展开」
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
-      >
-        <Icon n="user" style={MI} />{user?.username || user?.display_name || ''}
-        <CaretDownIcon size={12} style={{ verticalAlign: '-2px', marginInlineStart: 4 }} />
-      </button>
+      {/* am-wrap 是通知浮层的定位基准（触发器与浮层同层，外点判定才能一眼判"点的是自己"） */}
+      <div className="am-wrap" ref={wrapRef}>
+        <button
+          type="button"
+          ref={triggerRef}
+          className="am-trigger"
+          onClick={openMenu}
+          // 自绘触发按钮：下拉语义原先由 TDesign Dropdown 注入，改用原生 button 后必须自己补
+          // haspopup/expanded，否则读屏软件听不出「这是一个会展开菜单的按钮、当前是否已展开」
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+        >
+          <Icon n="user" style={MI} />{user?.username || user?.display_name || ''}
+          <CaretDownIcon size={12} style={{ verticalAlign: '-2px', marginInlineStart: 4 }} />
+        </button>
+        {/* ★ 2026-10-15：通知浮层开在触发器**上方**（账号菜单贴着左栏底缘，向下开会溢出视口） */}
+        {notifyOpen && (
+          <div className="am-notice">
+            <NotifyPanel ctl={notify} />
+          </div>
+        )}
+      </div>
       <ContextMenu open={menuOpen} x={menuPos.x} y={menuPos.y} items={menuItems} onClose={() => setMenuOpen(false)} />
       {/* 密码修改弹窗 */}
       {openPwd && <PasswordModal email={curEmail} onClose={() => setOpenPwd(false)} />}
@@ -143,8 +192,14 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
 
 // —— 触发按钮（am- 前缀，避免与组件库类名重名）——
 const AM_CSS = `
+.am-wrap{position:relative;display:inline-flex}
 .am-trigger{display:inline-flex;align-items:center;gap:4px;background:transparent;border:0;color:var(--lc-text);
   font-size:15px;cursor:pointer;font-family:var(--lc-font);padding:6px 8px;border-radius:var(--lc-r-bar)}
 .am-trigger:hover{color:var(--lc-text);background:var(--lc-raised)}
 .am-trigger:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px}
+/* 消息浮层：贴着触发器上沿往右展开（账号菜单在左栏底部，向下开必溢出视口） */
+.am-notice{position:absolute;bottom:calc(100% + 6px);inset-inline-start:0;z-index:70}
+.am-notice .bell-panel{position:static;width:300px;max-height:min(420px,60vh)}
+.am-count{margin-inline-start:auto;padding:0 6px;border-radius:99px;background:var(--lc-invert-bg);
+  color:var(--lc-invert-fg);font-size:12px;font-weight:600;line-height:18px}
 `

@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-24",
+  "day": 5,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A14",
+      "text": "打出来发现某页超框了。\n\n客户拿到的是一份废纸，而这一天就这么过去了。\n\n能言 LangCross：原版式直出 + 多轮质控，交付前先验版式。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s1",
+      "image_text": {
+        "main": "超框那一页，是废纸的一页",
+        "sub1": "原版式直出 + 多轮质控",
+        "sub2": "打印前先验版式，不给客户废纸"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 150,
+        "max_similarity": 0.722,
+        "ok": true
+      },
+      "image": "out/2026-10-24/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B09",
+      "text": "计量单位在翻译时被顺手改错了。\n\n出了事，没人说得清是谁的责任。\n\n能言 LangCross：单位、数字、格式走原版式直出，一个符号都不动。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s2",
+      "image_text": {
+        "main": "多一个零，就不是小事了",
+        "sub1": "单位与数字：原版式直出，符号不动",
+        "sub2": "术语硬闸 + 多轮质控"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 151,
+        "max_similarity": 0.73,
+        "ok": true
+      },
+      "image": "out/2026-10-24/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C02",
+      "text": "几十万买一套翻译软件，用起来还不如人工。\n\n因为软件不解决术语，也不解决版式。\n\n能言 LangCross：成本随用量摊薄，术语与版式一次解决。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s3",
+      "image_text": {
+        "main": "贵的那套，解决的是错的问题",
+        "sub1": "术语与版式，才是真问题",
+        "sub2": "成本约为人工翻译的 1/8"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 155,
+        "max_similarity": 0.707,
+        "ok": true
+      },
+      "image": "out/2026-10-24/img-3.png"
+    }
+  ]
+}

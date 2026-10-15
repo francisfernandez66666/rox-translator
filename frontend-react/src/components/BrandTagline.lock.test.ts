@@ -31,7 +31,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BRAND_TAGLINE, TAGLINE_STYLE } from './BrandTagline'
+import { BRAND_TAGLINE, TAGLINE_STYLE, TAGLINE_DOT_STYLE } from './BrandTagline'
 
 // resolve() 而不是字符串相加：A 段要跨出包根去读后端直出面（../backend-go/…），
 // 裸拼接不会折叠 `..`，会直接 ENOENT（闸门自己失效比红更难发现）——与 readability.test.ts 同一口径。
@@ -106,24 +106,35 @@ const SURFACES: { name: string; file: string; kind: 'react' | 'go' }[] = [
 const IMPORT_LINE = `import { BrandTagline } from './BrandTagline'\n`
 
 // ---------------------------------------------------------------------------
-// G 段（★ 2026-10-14 尾注「提亮＋重点提示」）用的那套样式等值比对件。
+// G 段（★ 2026-10-15 用户后令「plain muted text + tiny dot」）用的那套样式等值比对件。
+// 尾注现在由**两个元素**构成、各有一条样式规则，两侧（React 内联对象 / Go 内嵌 CSS）都要逐维等值：
+//   · 容器 `.brand-tagline` ／ `TAGLINE_STYLE`：inline-flex 布局 + 字色 var(--lc-text-3)；
+//   · 圆点 `.brand-tagline-dot` ／ `TAGLINE_DOT_STYLE`：5px 实心圆取 currentColor。
 // 全部按**解析后的值**比对，两侧各自的令牌表来自各自那一份 CSS：
-//   · React 组件 → src/ui/langcross/css/tokens.css（--lc-fill-white / --lc-invert-fg）
-//   · 后端直出面 → public.go 自己内嵌的那份 :root（只有 --lc-white，**没有** --lc-fill-white）
-// 这一层"两张令牌表"是刻意的：两侧名字本来就不同，只有换成值才能判"同一档"，
-// 也只有换成值才能抓住「把前端令牌名照抄进直出面」这一族静默失效（见 G4 ④）。
+//   · React 组件 → src/ui/langcross/css/tokens.css（--lc-text-3）
+//   · 后端直出面 → public.go 自己内嵌的那份 :root（也有 --lc-text-3）
+// 这一层"两张令牌表"是刻意的：只有换成值才能抓住「把前端令牌名照抄进直出面」这一族静默失效（见 G4 ④）。
+// ⚠️ `currentColor` 与 `50%` 不是令牌名，两侧**逐字相同**即可，不经 tokenTable 解析。
 // ---------------------------------------------------------------------------
 
-/** 尾注这一档被点名的八个维度（少任何一维都算"某一侧把这条声明摘了"） */
+/** 容器那条规则被点名的六个维度（少任何一维都算"某一侧把这条声明摘了"） */
 const TAGLINE_DIMENSIONS = [
-  'background',
-  'border-radius',
+  'align-items',
   'color',
   'display',
-  'font-weight',
-  'padding',
+  'gap',
   'unicode-bidi',
   'white-space',
+]
+
+/** 圆点那条规则被点名的六个维度 */
+const TAGLINE_DOT_DIMENSIONS = [
+  'background',
+  'border-radius',
+  'display',
+  'flex',
+  'height',
+  'width',
 ]
 
 /** camelCase（React 内联样式）→ kebab-case（CSS），并统一小写：两侧键形状在这里归一 */
@@ -168,10 +179,16 @@ function undeclaredVarsIn(block: string, tokens: Record<string, string>): string
 }
 
 /** 组件那份样式对象 → CSS 声明串（不正则扫源码，直接吃导出的对象：删掉属性＝这里少一维，必红） */
-function reactTaglineCss(): string {
-  return Object.entries(TAGLINE_STYLE as Record<string, string | number>)
+function styleObjToCss(obj: Record<string, string | number>): string {
+  return Object.entries(obj)
     .map(([k, v]) => `${kebab(k)}:${v};`)
     .join('')
+}
+function reactTaglineCss(): string {
+  return styleObjToCss(TAGLINE_STYLE as Record<string, string | number>)
+}
+function reactDotCss(): string {
+  return styleObjToCss(TAGLINE_DOT_STYLE as Record<string, string | number>)
 }
 
 const reactTokens = () => tokenTable(read('src/ui/langcross/css/tokens.css'))
@@ -183,10 +200,18 @@ function goTokens(): Record<string, string> {
   return tokenTable(m ? m[1] : '')
 }
 
-/** 直出面尾注那条规则的声明正文；取不到回 ''（G5 负责把"取不到"报成红，而不是在这里静默合规） */
+/** 直出面尾注**容器**那条规则的声明正文；取不到回 ''（G5 负责把"取不到"报成红，而不是在这里静默合规）
+ *  ⚠️ 正则 `\.brand-tagline\s*\{` 不会误吃 `.brand-tagline-dot{`（后者 `tagline` 后紧跟 `-` 而非空白/花括号）。 */
 function goTaglineRule(): string {
   const raw = stripComments(read('../backend-go/internal/api/public.go'))
   const m = raw.match(/\.footer \.brand-tagline\s*\{([^}]*)\}/)
+  return m ? m[1] : ''
+}
+
+/** 直出面圆点那条规则的声明正文；取不到回 ''（同上） */
+function goTaglineDotRule(): string {
+  const raw = stripComments(read('../backend-go/internal/api/public.go'))
+  const m = raw.match(/\.footer \.brand-tagline-dot\s*\{([^}]*)\}/)
   return m ? m[1] : ''
 }
 
@@ -204,11 +229,16 @@ function styleDrift(a: Record<string, string>, b: Record<string, string>): strin
   return out
 }
 
-/** 现行真实形态的等值差（G1/G4⑤ 的靶子） */
+/** 现行真实形态的等值差（G1/G4⑤ 的靶子）：容器与圆点两条规则各自逐维比，前缀标明是哪条腿 */
 function taglineStyleDrift(): string[] {
-  const rule = goTaglineRule()
-  if (rule === '') return ['直出面取不到 .footer .brand-tagline 那条规则（样式腿不在＝这一整段只剩半条锁）']
-  return styleDrift(cssDecls(reactTaglineCss(), reactTokens()), cssDecls(rule, goTokens()))
+  const out: string[] = []
+  const cRule = goTaglineRule()
+  if (cRule === '') out.push('直出面取不到 .footer .brand-tagline 那条规则（容器样式腿不在）')
+  else out.push(...styleDrift(cssDecls(reactTaglineCss(), reactTokens()), cssDecls(cRule, goTokens())).map((d) => `容器 ${d}`))
+  const dRule = goTaglineDotRule()
+  if (dRule === '') out.push('直出面取不到 .footer .brand-tagline-dot 那条规则（圆点样式腿不在）')
+  else out.push(...styleDrift(cssDecls(reactDotCss(), reactTokens()), cssDecls(dRule, goTokens())).map((d) => `圆点 ${d}`))
+  return out
 }
 
 /**
@@ -234,22 +264,32 @@ function patchDecl(block: string, prop: string, value: string | null): string | 
   return out.join(';') + ';'
 }
 
-function withGoOverride(prop: string, value: string): string[] {
-  const patched = patchDecl(goTaglineRule(), prop, value)
+/** 尾注的两个组成部分（各有独立规则，反证要能点名改哪一条） */
+type TaglinePart = 'container' | 'dot'
+const taglinePart = (t: TaglinePart) =>
+  t === 'dot'
+    ? { goRule: goTaglineDotRule, reactCss: reactDotCss }
+    : { goRule: goTaglineRule, reactCss: reactTaglineCss }
+
+function withGoOverride(t: TaglinePart, prop: string, value: string): string[] {
+  const p = taglinePart(t)
+  const patched = patchDecl(p.goRule(), prop, value)
   if (patched === null) return ['反证夹具失效：那一侧的声明块里找不到目标维度（形态变了，请同步本段）']
-  return styleDrift(cssDecls(reactTaglineCss(), reactTokens()), cssDecls(patched, goTokens()))
+  return styleDrift(cssDecls(p.reactCss(), reactTokens()), cssDecls(patched, goTokens()))
 }
 
-function withReactOverride(prop: string, value: string): string[] {
-  const patched = patchDecl(reactTaglineCss(), prop, value)
+function withReactOverride(t: TaglinePart, prop: string, value: string): string[] {
+  const p = taglinePart(t)
+  const patched = patchDecl(p.reactCss(), prop, value)
   if (patched === null) return ['反证夹具失效：那一侧的声明块里找不到目标维度（形态变了，请同步本段）']
-  return styleDrift(cssDecls(patched, reactTokens()), cssDecls(goTaglineRule(), goTokens()))
+  return styleDrift(cssDecls(patched, reactTokens()), cssDecls(p.goRule(), goTokens()))
 }
 
-function withGoDrop(prop: string): string[] {
-  const patched = patchDecl(goTaglineRule(), prop, null)
+function withGoDrop(t: TaglinePart, prop: string): string[] {
+  const p = taglinePart(t)
+  const patched = patchDecl(p.goRule(), prop, null)
   if (patched === null) return ['反证夹具失效：那一侧的声明块里找不到目标维度（形态变了，请同步本段）']
-  return styleDrift(cssDecls(reactTaglineCss(), reactTokens()), cssDecls(patched, goTokens()))
+  return styleDrift(cssDecls(p.reactCss(), reactTokens()), cssDecls(patched, goTokens()))
 }
 
 describe('页脚品宣尾注（2026-10-13 用户令②）', () => {
@@ -278,7 +318,7 @@ describe('页脚品宣尾注（2026-10-13 用户令②）', () => {
     // ★ 2026-10-14 用户后令「提亮＋重点提示」后，这句外面多了一层胶囊 span（样式见 G 段），
     //   靶子跟着现行形态走；G 段那枚"夹具空替换"防线会兜住"形态又变了而靶子没同步"。
     expect(read('../backend-go/internal/api/public.go')).toContain(
-      `· <span class="brand-tagline">${BRAND_TAGLINE}</span><br>`,
+      `· <span class="brand-tagline"><span class="brand-tagline-dot" aria-hidden="true"></span>${BRAND_TAGLINE}</span><br>`,
     )
   })
 
@@ -354,50 +394,63 @@ describe('页脚品宣尾注（2026-10-13 用户令②）', () => {
   })
 
   // ==========================================================================
-  // G 段（★ 2026-10-14 用户后令「这个页脚的句子能不能提亮并且做重点提示」）
-  // —— 视觉档的跨语言等值锁。
+  // G 段（★ 2026-10-15 用户后令「plain muted text + tiny dot」）
+  // —— 视觉档的跨语言等值锁（容器 + 圆点两条规则）。
   //
   // 为什么要单独一段：这一族的文案有 A/B 两段管着，而**样式**原先散在四个调用点各写一份
-  // `fontWeight: 600`（第五面即后端直出，压根没有）。用户这次要改的正是样式，于是「改四面留一面」
-  // 的风险从假设变成了必走路径。G 段把这一档收成两半：
-  //   · 正向：组件那份 TAGLINE_STYLE 与后端那条 `.footer .brand-tagline{…}` **逐维等值**，
-  //     且等值比较吃的是 **var() 解析后的值**（不是源码里的令牌名）——
-  //     两侧本来就叫不同名字（前端 `--lc-fill-white`／直出面 `--lc-white`），
-  //     按名字比会红、按名字**不**比则会把「名字照抄、值没落地」那类静默失效放过去
-  //     （直出面 :root 里根本没有 --lc-fill-white：写成那个名字时 var() 解不开 ⇒ 面色退回
-  //     transparent、字色退回继承灰，界面照常渲染、零报错）。
+  // `fontWeight: 600`（第五面即后端直出，压根没有）。用户改了两次样式（10-14 白底胶囊 → 10-15
+  // 灰字+圆点），"改四面留一面"的风险每次都是必走路径。G 段把这一档收成两半：
+  //   · 正向：组件两份样式对象与后端那两条 `.footer .brand-tagline{…}` / `.brand-tagline-dot{…}`
+  //     **逐维等值**，且等值比较吃的是 **var() 解析后的值**（不是源码里的令牌名）——
+  //     只有换成值才能把「名字照抄、值没落地」那类静默失效（直出面 :root 里没有那个名字时
+  //     var() 解不开、字色退回继承灰、界面照常渲染零报错）抓出来。
   //   · 负向：四面调用**不许再带 style**（样式只许有组件那一个出处）。
   //
   // ⚠️ 这是**等值锁**，不是「只许更亮／更大」的单向锁（AGENTS §一·5「界面规格＝UI 交付真值」）：
-  //    真值来自 UI-ANNOTATIONS §2.3 的尾注档，四个维度全部取交付既有令牌、零新增色值。
-  //    要改这一档先改那份文档真值，再同步本段与 readability.test.ts G 段。
+  //    真值＝页脚灰字 var(--lc-text-3) + 5px 实心圆点，取交付既有令牌、零新增色值。
+  //    要改这一档先改 UI-ANNOTATIONS §6 的尾注真值，再同步本段与 readability.test.ts G 段。
   // ==========================================================================
 
-  it('G1 视觉档跨语言逐维等值：组件那份与后端那条规则，解析后每一维都相同', () => {
+  it('G1 视觉档跨语言逐维等值：容器与圆点两条规则，解析后每一维都相同', () => {
     const drift = taglineStyleDrift()
     expect(drift, `React 组件样式与后端直出面样式不一致：\n${drift.join('\n')}`).toEqual([])
-    // 射程正锁：两边都至少解析出这八个维度。少一维＝某一侧被摘掉声明，
+    // 射程正锁：两条规则各自的维度集合一个都不能少。少一维＝某一侧被摘掉声明，
     // 而"缺声明"在只做 Object.keys 并集的写法里可能被"两侧都缺"蒙过（同 A 段数覆盖面条数的手法）。
-    const react = cssDecls(reactTaglineCss(), reactTokens())
-    expect(Object.keys(react).sort()).toEqual(TAGLINE_DIMENSIONS.slice().sort())
-    expect(undeclaredVarsIn(reactTaglineCss(), reactTokens()).length, `组件样式里有令牌在 tokens.css 解析不到：${undeclaredVarsIn(reactTaglineCss(), reactTokens()).join(', ')}`).toBe(0)
+    const reactC = cssDecls(reactTaglineCss(), reactTokens())
+    const reactD = cssDecls(reactDotCss(), reactTokens())
+    expect(Object.keys(reactC).sort()).toEqual(TAGLINE_DIMENSIONS.slice().sort())
+    expect(Object.keys(reactD).sort()).toEqual(TAGLINE_DOT_DIMENSIONS.slice().sort())
+    for (const [name, css] of [['容器', reactTaglineCss()], ['圆点', reactDotCss()]] as const) {
+      expect(undeclaredVarsIn(css, reactTokens()).length, `${name}样式里有令牌在 tokens.css 解析不到：${undeclaredVarsIn(css, reactTokens()).join(', ')}`).toBe(0)
+    }
   })
 
-  it('G2 这一档的交付真值逐维点名（白底反相胶囊徽标；禁单向"更亮/更大"锁）', () => {
-    const react = cssDecls(reactTaglineCss(), reactTokens())
-    // 面色＝实心白填充档（#FFFFFF，**不是**文字档 #E7E9EA——白色两档不许混用那条）
-    expect(react['background'].toUpperCase()).toBe('#FFFFFF')
-    expect(react['color']).toBe('#000000') // 白底必须配反相黑字
-    expect(react['font-weight']).toBe('600')
-    expect(react['border-radius']).toBe('999px')
-    expect(react['padding']).toBe('1px 8px')
-    expect(react['display']).toBe('inline-block')
-    expect(react['white-space']).toBe('nowrap')
-    expect(react['unicode-bidi']).toBe('isolate')
+  it('G2 这一档的交付真值逐维点名（页脚灰字 + 小圆点；禁单向"更亮/更大"锁）', () => {
+    const reactC = cssDecls(reactTaglineCss(), reactTokens())
+    const reactD = cssDecls(reactDotCss(), reactTokens())
+    // 容器：页脚 meta 灰字档 #98A0A9（--lc-text-3 解析值），inline-flex 把圆点与文字排成一行
+    expect(reactC['color']).toBe('#98A0A9')
+    expect(reactC['display']).toBe('inline-flex')
+    expect(reactC['align-items']).toBe('center')
+    expect(reactC['gap']).toBe('6px')
+    expect(reactC['white-space']).toBe('nowrap')
+    expect(reactC['unicode-bidi']).toBe('isolate')
+    // 圆点：5px 实心圆，颜色取 currentColor 跟着上面那档字色走
+    expect(reactD['display']).toBe('inline-block')
+    expect(reactD['width']).toBe('5px')
+    expect(reactD['height']).toBe('5px')
+    expect(reactD['border-radius']).toBe('50%')
+    expect(reactD['background']).toBe('currentColor')
+    expect(reactD['flex']).toBe('0 0 auto')
+    // ★ 负向（配上面正锁才有射程）：不再是 10-14 那枚白底胶囊徽标——底色/描边/内垫/字重抬档一概不许回头
+    expect(reactC['background'], '尾注不许再有底色（用户判"像按钮"）').toBeUndefined()
+    expect(reactC['border-radius'], '尾注不许再有胶囊圆角').toBeUndefined()
+    expect(reactC['padding'], '尾注不许再有胶囊内垫').toBeUndefined()
+    expect(reactC['font-weight'], '尾注不许再抬字重').toBeUndefined()
     // ★ 字号／行高**刻意不设**：五张面的页脚字号档本就不同（全站 15px／报价·对照 14px），
-    //   统一抬档属未授权的规格改动。这一条是负向腿，必须有正向对照（下面那句"其他维度在位"）才不是空转。
-    expect(react['font-size'], '尾注不许自带字号档').toBeUndefined()
-    expect(react['line-height'], '尾注不许自带行高档').toBeUndefined()
+    //   统一抬档属未授权的规格改动。
+    expect(reactC['font-size'], '尾注不许自带字号档').toBeUndefined()
+    expect(reactC['line-height'], '尾注不许自带行高档').toBeUndefined()
   })
 
   it('G3 负向锁：四面调用一律不带 style（样式只许组件那一个出处）', () => {
@@ -414,40 +467,43 @@ describe('页脚品宣尾注（2026-10-13 用户令②）', () => {
     expect(offenders, `页脚尾注的样式只许写在 BrandTagline.tsx 的 TAGLINE_STYLE 里：\n${offenders.join('\n')}`).toEqual([])
   })
 
-  it('G4 反证：只改一侧、两侧同改成新值、摘掉声明、令牌名照抄但值没落地四种形态都要被抓', () => {
-    // ① 只改后端那一侧（用户/后人"顺手"把直出面字重抬成 700）⇒ 必须红，且点名那一维
-    const goOnly = withGoOverride('font-weight', '700')
-    expect(goOnly.some((d) => d.includes('font-weight')), `只改直出面字重却没红：${JSON.stringify(goOnly)}`).toBe(true)
-    // ② 只改组件那一侧（改前端忘了后端）⇒ 同样必须红
-    const reactOnly = withReactOverride('background', 'var(--lc-text)')
-    expect(reactOnly.some((d) => d.includes('background')), `只改组件面色却没红：${JSON.stringify(reactOnly)}`).toBe(true)
+  it('G4 反证：只改一侧、摘掉声明、令牌名照抄但值没落地三种形态都要被抓（容器＋圆点各一枚）', () => {
+    // ① 只改后端容器那一侧（后人"顺手"把直出面字色抬亮）⇒ 必须红，且点名那一维
+    const goOnly = withGoOverride('container', 'color', 'var(--lc-text)')
+    expect(goOnly.some((d) => d.includes('color')), `只改直出面容器的 color 却没红：${JSON.stringify(goOnly)}`).toBe(true)
+    // ② 只改组件圆点那一侧（改前端忘了后端）⇒ 同样必须红（证明圆点那条腿也有射程，不是只锁了容器）
+    const reactDot = withReactOverride('dot', 'width', '8px')
+    expect(reactDot.some((d) => d.includes('width')), `只改组件圆点 width 却没红：${JSON.stringify(reactDot)}`).toBe(true)
     // ③ 摘掉一侧的一整个维度（改成"由页脚继承"）⇒ 必须报"某一侧缺这一维"，不许静默少比一维
-    const dropped = withGoDrop('border-radius')
-    expect(dropped.some((d) => d.includes('border-radius') && d.includes('直出面缺')), `摘掉直出面圆角却没红：${JSON.stringify(dropped)}`).toBe(true)
+    const dropped = withGoDrop('container', 'gap')
+    expect(dropped.some((d) => d.includes('gap') && d.includes('直出面缺')), `摘掉直出面容器的 gap 却没红：${JSON.stringify(dropped)}`).toBe(true)
     // ④ ★ 本段存在的理由：**令牌名照抄、值没落地**。
-    //    把直出面写成前端那个名字（--lc-fill-white），而那一页的 :root 只有 --lc-white ⇒
-    //    var() 解不开、面色退回 transparent、字色退回继承灰，界面照常、零报错、两侧"名字"还完全一致。
-    //    按名字比的锁在这里恒绿；本锁按解析后的值比 ⇒ 一侧解出 #FFFFFF、另一侧解不出 ⇒ 必须红。
-    const nameOnlyCopied = withGoOverride('background', 'var(--lc-fill-white)')
-    expect(nameOnlyCopied.some((d) => d.includes('background')), `直出面抄了前端令牌名（该页 :root 没有它）却没红：${JSON.stringify(nameOnlyCopied)}`).toBe(true)
+    //    把直出面容器字色写成前端那个名字（--lc-fill-white），而那一页的 :root 只有 --lc-white ⇒
+    //    var() 解不开、字色退回继承灰，界面照常、零报错、两侧"名字"还完全对不上。
+    //    按名字比的锁在这里恒绿；本锁按解析后的值比 ⇒ 一侧解出 #98A0A9、另一侧解不出 ⇒ 必须红。
+    const nameOnlyCopied = withGoOverride('container', 'color', 'var(--lc-fill-white)')
+    expect(nameOnlyCopied.some((d) => d.includes('color')), `直出面抄了前端令牌名（该页 :root 没有它）却没红：${JSON.stringify(nameOnlyCopied)}`).toBe(true)
     // ⑤ 夹具自证：上面四枚反证走的都是同一个判据函数，所以必须先证明**当前真实形态喂进去是绿的**
     //    （否则"红"可能来自夹具本身坏了，而不是来自被改坏的那一维——本仓「反证恒红＝无射程」那一族）。
     expect(taglineStyleDrift(), `真实形态在本判据下就不绿，反证全失去意义（先看 G1 为什么红）`).toEqual([])
   })
 
-  it('G5 后端那条规则的在位性与唯一性（直出面样式没了＝本段只剩半条锁）', () => {
+  it('G5 后端两条规则的在位性与唯一性（直出面样式没了＝本段只剩半条锁）', () => {
     const raw = stripComments(read('../backend-go/internal/api/public.go'))
-    const rules = [...raw.matchAll(/\.footer \.brand-tagline\{([^}]*)\}/g)]
-    // 恰好一条：0 条＝规则被删/类名改了（B 段的 markup 与这里的类名是同一靶子，注释里已点名）；
-    // >1 条＝有人又抄了一份，那"唯一出处"就又不成立了。
-    expect(rules.length, `直出面里 .footer .brand-tagline 规则应恰好 1 条，实得 ${rules.length} 条`).toBe(1)
-    const goBlock = rules[0][1]
-    const go = cssDecls(goBlock, goTokens())
-    // 直出面那一侧的**维度覆盖数**也钉住：G1 只比"两边相同的维度等不等"，
-    // 两侧同时缺某一维时它是绿的；这一句保证八个维度在直出面侧一个都不能少。
-    expect(Object.keys(go).sort(), '直出面尾注规则的维度集合变了').toEqual(TAGLINE_DIMENSIONS.slice().sort())
-    expect(undeclaredVarsIn(goBlock, goTokens()).length, `直出面引用了本页 :root 没声明的令牌：${undeclaredVarsIn(goBlock, goTokens()).join(', ')}`).toBe(0)
-    // 组件那份必须被页脚 markup 真正挂上：类名在、span 没套类名＝规则成了死码而界面仍是灰字
-    expect(raw, '直出面页脚那句 span 必须带 brand-tagline 类，否则那条 CSS 规则是死码').toContain('<span class="brand-tagline">')
+    // 各恰好一条：0 条＝规则被删/类名改了（B 段的 markup 与这里的类名是同一靶子）；>1 条＝有人又抄了一份。
+    const containerRules = [...raw.matchAll(/\.footer \.brand-tagline\{([^}]*)\}/g)]
+    const dotRules = [...raw.matchAll(/\.footer \.brand-tagline-dot\{([^}]*)\}/g)]
+    expect(containerRules.length, `直出面里 .footer .brand-tagline 规则应恰好 1 条，实得 ${containerRules.length} 条`).toBe(1)
+    expect(dotRules.length, `直出面里 .footer .brand-tagline-dot 规则应恰好 1 条，实得 ${dotRules.length} 条`).toBe(1)
+    const goC = cssDecls(containerRules[0][1], goTokens())
+    const goD = cssDecls(dotRules[0][1], goTokens())
+    // 直出面那一侧的**维度覆盖数**也钉住：G1 只比"两边相同的维度等不等"，两侧同时缺某一维时它是绿的。
+    expect(Object.keys(goC).sort(), '直出面容器规则的维度集合变了').toEqual(TAGLINE_DIMENSIONS.slice().sort())
+    expect(Object.keys(goD).sort(), '直出面圆点规则的维度集合变了').toEqual(TAGLINE_DOT_DIMENSIONS.slice().sort())
+    expect(undeclaredVarsIn(containerRules[0][1], goTokens()).length, `直出面容器引用了本页 :root 没声明的令牌：${undeclaredVarsIn(containerRules[0][1], goTokens()).join(', ')}`).toBe(0)
+    expect(undeclaredVarsIn(dotRules[0][1], goTokens()).length, `直出面圆点引用了本页 :root 没声明的令牌：${undeclaredVarsIn(dotRules[0][1], goTokens()).join(', ')}`).toBe(0)
+    // 两条类名必须被页脚 markup 真正挂上：类名没套＝规则成了死码而界面仍是光秃秃一行
+    expect(raw, '直出面页脚容器 span 必须带 brand-tagline 类').toContain('<span class="brand-tagline">')
+    expect(raw, '直出面页脚圆点 span 必须带 brand-tagline-dot 类').toContain('<span class="brand-tagline-dot"')
   })
 })

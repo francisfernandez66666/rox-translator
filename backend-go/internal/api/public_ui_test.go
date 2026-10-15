@@ -162,13 +162,13 @@ func TestPublicDocPageFooterBrandTagline(t *testing.T) {
 			t.Errorf("/docs/%s 页脚品宣尾注不合格：%s", name, why)
 		}
 	}
-	const footerTaglineMarkup = ` · <span class="brand-tagline">` + brandTaglineForUITest + `</span>`
+	const footerTaglineMarkup = ` · <span class="brand-tagline"><span class="brand-tagline-dot" aria-hidden="true"></span>` + brandTaglineForUITest + `</span>`
 	// 反证（同一判据函数，证明上面三条不是摆设）：
 	// ① 页脚那句整条删掉 ⇒ 必须红。
-	//    ⚠️ 删除靶子必须按**现行形态**写：2026-10-14 用户后令「提亮＋重点提示」后，
-	//    这句外面套了一层 `span.brand-tagline`，旧夹具那串「· 句子」在正文里已经不存在，
-	//    Replace 变成 no-op ⇒ broken 仍等于原文 ⇒ 判绿 ⇒ 这条反证当场失效（本批实跑抓到，
-	//    记忆里那条「反证 new==old 时落地计数仍报 1＝空替换」同一形态）。所以靶子与现文同源。
+	//    ⚠️ 删除靶子必须按**现行形态**写：2026-10-15 用户后令「plain muted text + tiny dot」后，
+	//    这句外面套了一层 `span.brand-tagline`、文字前又多了一枚 `span.brand-tagline-dot`，
+	//    旧夹具那串在正文里已经不存在，Replace 变成 no-op ⇒ broken 仍等于原文 ⇒ 判绿 ⇒ 这条反证当场失效
+	//    （同记忆里那条「反证 new==old 时落地计数仍报 1＝空替换」）。所以靶子与现文同源。
 	broken := strings.Replace(pages["terms"], footerTaglineMarkup, "", 1)
 	if broken == pages["terms"] {
 		t.Fatal("反证夹具失效：没删掉任何东西（页脚形态又变了，请同步 footerTaglineMarkup）")
@@ -195,43 +195,48 @@ func TestPublicDocPageFooterBrandTagline(t *testing.T) {
 	}
 }
 
-// brandTaglinePillCSSRule 是后端直出面给品宣尾注那身「提亮＋重点提示」的**整条规则**（逐字靶子）。
-// 值与前端 components/BrandTagline.tsx 的 TAGLINE_STYLE **解析后等值**
-// （面 #FFFFFF、字 #000000、字重 600、圆角 999px、内垫 1px 8px），
-// 但**令牌名不同**：本页 :root 只有 --lc-white，没有前端的 --lc-fill-white/--lc-invert-fg。
-// ⚠️ 写成前端那两个名字会 var() 解析失败 ⇒ 面色退回 transparent、字色退回继承的页脚灰，
+// brandTaglineCSSRule / brandTaglineDotCSSRule 是后端直出面给品宣尾注那身
+// 「plain muted text + tiny dot」的**两条整规则**（逐字靶子）。
+// 值与前端 components/BrandTagline.tsx 的 TAGLINE_STYLE / TAGLINE_DOT_STYLE **解析后等值**
+// （容器 = 页脚灰字 var(--lc-text-3) + inline-flex；圆点 = 5px 实心圆取 currentColor）。
+// 本页 :root 也声明了 --lc-text-3，故两侧解析值相同。
+// ⚠️ 写成前端没有的令牌名会 var() 解析失败 ⇒ 字色退回继承灰——这类"名字照抄、值没落地"的静默失效
 //
-//	界面"照常显示"却一点没提亮——这类"名字照抄、值没落地"的静默失效是本仓的老坑，
-//	所以本锁比的是**规则整串**，跨语言那一侧的等值由 BrandTagline.lock.test.ts G 段按值钉。
-const brandTaglinePillCSSRule = `.footer .brand-tagline{display:inline-block;background:var(--lc-white);color:#000000;font-weight:600;border-radius:999px;padding:1px 8px;white-space:nowrap;unicode-bidi:isolate}`
+//	是本仓的老坑，所以本锁比的是**规则整串**，跨语言那一侧的等值由 BrandTagline.lock.test.ts G 段按值钉。
+//	⚠️ `currentColor` 与 `50%` 不是令牌名，两侧逐字相同即可。
+const brandTaglineCSSRule = `.footer .brand-tagline{display:inline-flex;align-items:center;gap:6px;color:var(--lc-text-3);white-space:nowrap;unicode-bidi:isolate}`
+const brandTaglineDotCSSRule = `.footer .brand-tagline-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:currentColor;flex:0 0 auto}`
 
-// TestPublicDocPageFooterBrandTaglineEmphasis ★ 2026-10-14 用户后令「页脚那句提亮并做重点提示」：
-// 后端直出这一面必须**带着那身白底黑字胶囊**，而且判据吃 publicLayout 拼完的那份 HTML
-// （前端静态锁只读源码，读不到服务端真正发出去的字节；同 brandTaglineForUITest 那半边的分工）。
+// TestPublicDocPageFooterBrandTaglineEmphasis ★ 2026-10-15 用户后令「plain muted text + tiny dot」：
+// 后端直出这一面必须**带着容器规则 + 圆点规则**（不再是 10-14 的白底胶囊），而且判据吃 publicLayout
+// 拼完的那份 HTML（前端静态锁只读源码，读不到服务端真正发出去的字节；同 brandTaglineForUITest 那半边的分工）。
 func TestPublicDocPageFooterBrandTaglineEmphasis(t *testing.T) {
 	page := publicDocPage("用户协议", "<p>正文</p>", "terms")
 	// 判据靶子一律建在**剥注释后**的正文上：注释里写着这句/这条规则不算落地（A/B 段真踩过的同一族）。
 	clean := stripCodeComments(page)
-	spanForm := `<span class="brand-tagline">` + brandTaglineForUITest + `</span>`
+	spanForm := `<span class="brand-tagline"><span class="brand-tagline-dot" aria-hidden="true"></span>` + brandTaglineForUITest + `</span>`
 
-	// ① 页脚正文里那句必须**包在胶囊 span 里**（只判"这句在"会放过"句子在、样式没了"那一形态）。
+	// ① 页脚正文里那句必须**包在容器 span 里、文字前带圆点 span**（只判"这句在"会放过"句子在、样式没了"那一形态）。
 	if !strings.Contains(clean, spanForm) {
-		t.Error("页脚那句没套胶囊 span ⇒ 用户要的「重点提示」在这一面没落地")
+		t.Error("页脚那句没套 brand-tagline 容器（或圆点 span 丢了）⇒ 用户要的「灰字+小圆点」在这一面没落地")
 	}
-	// ② 那身样式必须真在这份 HTML 的 <style> 里（规则整串等值）。
-	if !strings.Contains(clean, brandTaglinePillCSSRule) {
+	// ② 那两条样式必须真在这份 HTML 的 <style> 里（规则整串等值）。
+	if !strings.Contains(clean, brandTaglineCSSRule) {
 		t.Error("直出面缺 .footer .brand-tagline 那条规则（或任一值被改），与前端 TAGLINE_STYLE 不再等值")
 	}
+	if !strings.Contains(clean, brandTaglineDotCSSRule) {
+		t.Error("直出面缺 .footer .brand-tagline-dot 那条规则（或任一值被改），与前端 TAGLINE_DOT_STYLE 不再等值")
+	}
 	// ③ ★ 规则里引用的**每一个令牌都必须在直出面自己的 :root 里声明过**。
-	//    这一条才是「名字照抄、值没落地」那族的守卫级腿：把面色写成前端的 --lc-fill-white，
-	//    直出面 :root 没这个名字 ⇒ 浏览器把 var() 判成无效、面色退回 transparent、字色退回继承的页脚灰，
+	//    这一条才是「名字照抄、值没落地」那族的守卫级腿：把字色写成前端没有的令牌名，
+	//    直出面 :root 没这个名字 ⇒ 浏览器把 var() 判成无效、字色退回继承的页脚灰，
 	//    页面照常渲染、零报错、② 那条规则串也照样匹配不到（所以②只防改值，防不了"改完解不开"）。
 	if why := undeclaredCSSVars(clean); why != "" {
 		t.Errorf("直出面样式引用了未在本页 :root 声明的令牌：%s", why)
 	}
 
 	// 反证（四条坏形态各必须被抓，且对照组必须真走到"含"）：
-	// ④ 把 span 的类名摘掉（句子还在、样式没绑上）⇒ ① 必须红。这是本锁与存在性锁的**分工线**。
+	// ④ 把容器的类名摘掉（句子还在、样式没绑上）⇒ ① 必须红。这是本锁与存在性锁的**分工线**。
 	noClass := strings.Replace(page, `<span class="brand-tagline">`, `<span>`, 1)
 	if noClass == page {
 		t.Fatal("反证夹具失效：没摘掉类名（页脚 span 形态变了，请同步本靶子）")
@@ -239,22 +244,30 @@ func TestPublicDocPageFooterBrandTaglineEmphasis(t *testing.T) {
 	if strings.Contains(stripCodeComments(noClass), spanForm) {
 		t.Error("反证失效：摘掉类名后 span 判据仍判绿")
 	}
-	// ⑤ 整条样式规则删掉 ⇒ ② 必须红。
-	noRule := strings.Replace(page, brandTaglinePillCSSRule, "", 1)
+	// ⑤ 整条容器样式规则删掉 ⇒ ② 必须红。
+	noRule := strings.Replace(page, brandTaglineCSSRule, "", 1)
 	if noRule == page {
-		t.Fatal("反证夹具失效：没删掉样式规则（靶子与实文件不符，请同步 brandTaglinePillCSSRule）")
+		t.Fatal("反证夹具失效：没删掉样式规则（靶子与实文件不符，请同步 brandTaglineCSSRule）")
 	}
-	if strings.Contains(stripCodeComments(noRule), brandTaglinePillCSSRule) {
+	if strings.Contains(stripCodeComments(noRule), brandTaglineCSSRule) {
 		t.Error("反证失效：样式规则没了仍判绿")
 	}
-	// ⑥ ★ 把面色换成一个**本页没声明**的名字（就是③要抓的那一族）⇒ ③ 必须报红。
+	// ⑤b 整条圆点样式规则删掉 ⇒ ②（圆点那一句）必须红（证明圆点那条腿也有射程，不是只锁了容器）。
+	noDotRule := strings.Replace(page, brandTaglineDotCSSRule, "", 1)
+	if noDotRule == page {
+		t.Fatal("反证夹具失效：没删掉圆点规则（靶子与实文件不符，请同步 brandTaglineDotCSSRule）")
+	}
+	if strings.Contains(stripCodeComments(noDotRule), brandTaglineDotCSSRule) {
+		t.Error("反证失效：圆点规则没了仍判绿")
+	}
+	// ⑥ ★ 把字色换成一个**本页没声明**的名字（就是③要抓的那一族）⇒ ③ 必须报红。
 	//    不配这一枚，③ 与上面两条一样只是"现网恰好没写错"的读数，改坏了也不会红。
-	fakeVar := strings.Replace(page, "background:var(--lc-white)", "background:var(--lc-fill-white)", 1)
+	fakeVar := strings.Replace(page, "color:var(--lc-text-3)", "color:var(--lc-fill-white)", 1)
 	if fakeVar == page {
-		t.Fatal("反证夹具失效：没换掉面色令牌")
+		t.Fatal("反证夹具失效：没换掉字色令牌")
 	}
 	if why := undeclaredCSSVars(stripCodeComments(fakeVar)); why == "" {
-		t.Error("反证失效：面色换成未声明的令牌后③仍判绿（未声明探测器射程可疑）")
+		t.Error("反证失效：字色换成未声明的令牌后③仍判绿（未声明探测器射程可疑）")
 	} else if !strings.Contains(why, "--lc-fill-white") {
 		t.Errorf("③报到了别的令牌，没点到被换名的那一个：%q", why)
 	}

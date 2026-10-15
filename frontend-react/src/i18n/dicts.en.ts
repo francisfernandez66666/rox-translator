@@ -61,9 +61,11 @@ export const baseEn: Record<string,string> = {
   // ---- 工作台 ----
   'app.title': 'LangCross',
   'app.more': 'More',
+  'app.newTranslation': 'New translation',
   'app.pkgLineFmt': '{points} credits ≈ {approx} sentences (single lang)',
   'app.openNav': 'Open navigation menu',
   'app.langSwitch': 'Chinese',
+  'app.legalLinks': 'About & Legal',
 'app.navBilling':'My Balance',
 'app.navInvites':'My Invites',
 'app.navPackages':'My Plan',

@@ -50,6 +50,7 @@ export const zh: Record<string, string> = {
   // ---- 翻译工作台主界面 ----
 'chat.title':'翻译',
   'chat.clearChat': '清空对话',
+  'chat.collapse': '收起对话框',
   'chat.balance': '剩余 {n} 句',
   'chat.usedTokens': '今日已耗 {n} 积分',
   'chat.usedTip': '今日实际消耗（含不计费场景，账本全程留痕）；多语言翻译按语言数增加消耗',
@@ -317,6 +318,7 @@ export const en: Record<string, string> = {
   'chat.customLangPrefix': 'Translate into {l}: ',
   // ---- 2026-09 新增（对话工具条 / 检查点 / 知识库拖拽）----
   'chat.clearChat': 'Clear chat',
+  'chat.collapse': 'Collapse',
   'chat.usedTip': "Today's actual usage (incl. non-billed cases; fully logged); multi-language translation scales with the number of target languages",
   'chat.orgBudgetTip': 'Monthly credit budget for dept "{name}"; translation is blocked once exhausted',
   'chat.balanceTokens': 'Balance {n} credits ≈ {s} sentences',

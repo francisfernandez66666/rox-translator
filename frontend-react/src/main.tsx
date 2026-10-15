@@ -54,6 +54,10 @@ import './ui/langcross/css/components.css'
 import './ui/langcross/css/motion.css'
 // 移动端 / 窄屏自适应样式（叠加在最上层）
 import './styles/mobile.css'
+// ★ 2026-10-15 前台外壳布局方案样式（fs-* 一族唯一出处，配合 components/frontshell/）。
+// 必须晚于 components.css：.lc-mob-topbar.fs-mob-topbar 这类同权重覆写靠源序决胜
+// （本文件的选择器已加双类名兜底，此处顺序是第二道保险）。
+import './styles/frontshell.css'
 
 // 挂载应用到 DOM 节点，并开启严格模式
 // ToastProvider：@langcross/ui 全局提示容器，等价替换 TDesign 的 MessagePlugin

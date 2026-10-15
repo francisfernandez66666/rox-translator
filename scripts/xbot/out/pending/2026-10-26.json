@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-26",
+  "day": 7,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A19",
+      "text": "一批 30 个文件，人工一个一个排版，排到怀疑人生。\n\n而这活本来就不该由人做。\n\n能言 LangCross：批量上传，多语言并行，一次打包交付。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s1",
+      "image_text": {
+        "main": "30 个文件，不该排 30 遍",
+        "sub1": "批量处理 · 多语言并行",
+        "sub2": "一次上传，一次打包下载"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 153,
+        "max_similarity": 0.726,
+        "ok": true
+      },
+      "image": "out/2026-10-26/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B11",
+      "text": "翻译错误不会当场被发现。\n\n往往是客户那边出了事，你才知道。\n\n能言 LangCross：术语硬闸 + 多轮质控 + 人工复核通道。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s2",
+      "image_text": {
+        "main": "错误的代价，总是延后到账",
+        "sub1": "多轮质控 + 人工复核通道",
+        "sub2": "别等客户先发现问题"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 137,
+        "max_similarity": 0.778,
+        "ok": true
+      },
+      "image": "out/2026-10-26/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C13",
+      "text": "每次翻译都在重新花钱，公司却没沉淀下任何东西。\n\n五年后从零开始，术语还是那个坑。\n\n能言 LangCross：企业知识库私有沉淀，越用越省。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s3",
+      "image_text": {
+        "main": "年年翻译，年年从零开始",
+        "sub1": "企业知识库私有沉淀",
+        "sub2": "越用越准，越用越省"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 153,
+        "max_similarity": 0.758,
+        "ok": true
+      },
+      "image": "out/2026-10-26/img-3.png"
+    }
+  ]
+}

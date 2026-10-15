@@ -1,9 +1,10 @@
 // ============================================================================
-// ChatWindow.dialog.dom.test.tsx — ★ 对话框形态五态断言（2026-10-10 决策⑩，2026-10-13 用户令① 重钉）
+// ChatWindow.dialog.dom.test.tsx — ★ 对话框形态五态断言（2026-10-10 决策⑩，2026-10-13 用户令① 重钉，
+//   2026-10-15 用户令覆盖「空态自动收起」那一半）
 // 锁住：
-//   ① 空态收起：空输入且无会话 ⇒ 整卡收成单行入口条（cw-collapsed 档）；
-//   ② 点击入口条展开（收起是 CSS 档不是卸载：框体仍在、输入行仍在，收起档一撤全量结构即回）；
-//   ③ 有会话不收起（历史可见性优先，只收输入框不做整卡最小化）；
+//   ① 空态**默认展开**：空输入且无会话 ⇒ 也不进 cw-collapsed（2026-10-15 用户令：聊天框不该一进来就最小化）；
+//   ② 点框头「收起」钮才收成单行入口条；点入口条恢复完整三段式（收起是 CSS 档不是卸载）；
+//   ③ 有会话时即便点过收起也不收（历史可见性优先）；
 //   ④ 默认高度档＝**吃满页眉与页脚之间**：未拖过时 JS 不写内联高度，排版由 CSS 的
 //      `flex:1 1 0` 承担（★ 2026-10-13 用户令① 覆盖决策⑩ 的固定档 min(70vh,640px)——
 //      那档在高屏上留一大片黑，正是「对话框没占满上下区域」这条投诉的成因）；
@@ -11,7 +12,7 @@
 //      钳制 320px–90vh、松手记 localStorage、双击回默认并清记忆；
 //   ⑥ CW_CSS 的三档声明（默认/覆盖/收起）等值锁 + 固定档负向清零——jsdom 不做 flex 布局，
 //      运行时的「真吃满」由 e2e/pixel_uat.spec.ts P2b 的几何锁量，两侧同口径、缺一漏一半。
-// 形态沿革见 ChatWindow.tsx 文件头（〇-LK/〇-M 定档 ＋ 决策⑩ ＋ 2026-10-13 用户令①）。
+// 形态沿革见 ChatWindow.tsx 文件头（〇-LK/〇-M 定档 ＋ 决策⑩ ＋ 2026-10-13 用户令① ＋ 2026-10-15 用户令）。
 // 运行：npx vitest run src/components/ChatWindow.dialog.dom.test.tsx
 // ============================================================================
 // @vitest-environment jsdom
@@ -132,33 +133,38 @@ beforeEach(() => {
   ;(Element.prototype as any).scrollTo = (Element.prototype as any).scrollTo || vi.fn()
 })
 
-describe('对话框形态五态（决策⑩ ＋ 2026-10-13 用户令①）', () => {
-  it('① 空态收起：空输入且无会话 ⇒ 整卡收成单行入口条（cw-collapsed）', () => {
+describe('对话框形态五态（决策⑩ ＋ 2026-10-13 用户令① ＋ 2026-10-15 用户令：默认展开）', () => {
+  it('① 空态默认展开：空输入且无会话 ⇒ 也不进 cw-collapsed 档（用户令：不该一进来就最小化）', () => {
     const { container } = renderWindow()
     const dialog = container.querySelector('.cw-dialog')!
     expect(dialog).toBeTruthy()
-    expect(dialog.className).toContain('cw-collapsed')
-    // 收起档下输入行仍在（入口条本体就是 composer 的输入行），框头/滚动区被 CSS 藏起
-    expect(dialog.querySelector('[data-testid="translate-input"]')).toBeTruthy()
-    expect(dialog.querySelector('.cw-dialog-body')).toBeTruthy() // DOM 在、display:none（CSS 档）
-  })
-
-  it('② 点击入口条展开：收起档撤除、恢复完整三段式结构', () => {
-    const { container } = renderWindow()
-    const dialog = container.querySelector('.cw-dialog')!
-    expect(dialog.className).toContain('cw-collapsed')
-    act(() => { fireEvent.click(dialog) })
-    expect(dialog.className).not.toContain('cw-collapsed')
-    // 展开后输入行与工具条都可见（收起只是 CSS 档，展开即回完整结构）
+    expect(dialog.className, '空态必须默认展开').not.toContain('cw-collapsed')
+    // 展开档＝完整三段式：框头 / 滚动区 / 工具条都在
+    expect(dialog.querySelector('.cw-dialog-body')).toBeTruthy()
     expect(dialog.querySelector('.cw-toolbar')).toBeTruthy()
   })
 
-  it('③ 有会话不收起：空输入但消息流非空 ⇒ 不进 cw-collapsed 档（历史可见性优先）', () => {
+  it('② 点框头「收起」钮才收成入口条；点入口条恢复完整三段式结构', () => {
+    const { container } = renderWindow()
+    const dialog = container.querySelector('.cw-dialog')!
+    expect(dialog.className).not.toContain('cw-collapsed')
+    act(() => { fireEvent.click(container.querySelector('[data-testid="cw-collapse"]')!) })
+    expect(dialog.className, '点了收起钮必须进收起档').toContain('cw-collapsed')
+    // 收起档下输入行仍在（入口条本体就是 composer 的输入行），框头/滚动区被 CSS 藏起
+    expect(dialog.querySelector('[data-testid="translate-input"]')).toBeTruthy()
+    expect(dialog.querySelector('.cw-dialog-body')).toBeTruthy() // DOM 在、display:none（CSS 档）
+    act(() => { fireEvent.click(dialog) })
+    expect(dialog.className).not.toContain('cw-collapsed')
+    expect(dialog.querySelector('.cw-toolbar')).toBeTruthy()
+  })
+
+  it('③ 有会话不收起：点过收起钮但消息流非空 ⇒ 仍不进 cw-collapsed 档（历史可见性优先）', () => {
     mocks.chat.messages = [
       { id: 'u1', role: 'user', content: '早上好', timestamp: Date.now() },
       { id: 'a1', role: 'assistant', content: 'Good morning', timestamp: Date.now() },
     ]
     const { container } = renderWindow()
+    act(() => { fireEvent.click(container.querySelector('[data-testid="cw-collapse"]')!) })
     expect(container.querySelector('.cw-dialog')!.className).not.toContain('cw-collapsed')
   })
 
@@ -173,8 +179,7 @@ describe('对话框形态五态（决策⑩ ＋ 2026-10-13 用户令①）', () 
   it('⑤ 拖拽调高：起点取「实测高度」、进覆盖档、钳制 320–90vh、松手记 localStorage', () => {
     const { container } = renderWindow()
     const dialog = container.querySelector('.cw-dialog') as HTMLElement
-    // 先展开（空态默认收起；收起档内联高度不生效——见 ChatWindow.tsx 内联高度的条件）
-    fireEvent.click(dialog)
+    // 空态自 2026-10-15 起默认展开，无需再点入口条
     expect(dialog.className).not.toContain('cw-collapsed')
     // ★ 2026-10-13 用户令① 后，默认档高度由 flex 算出来，jsdom 不做布局 ⇒ clientHeight 恒 0。
     //   这里按真浏览器已排版的样子把 500px 钉在这个节点上，专门验「起点取实测」这条腿
@@ -201,7 +206,7 @@ describe('对话框形态五态（决策⑩ ＋ 2026-10-13 用户令①）', () 
   it('⑤b 量不到实测高度时回落估算档（jsdom／未排版完成那一支）', () => {
     const { container } = renderWindow()
     const dialog = container.querySelector('.cw-dialog') as HTMLElement
-    fireEvent.click(dialog)
+    // 空态默认展开（2026-10-15）
     // 不钉 clientHeight ⇒ jsdom 回 0 ⇒ 起点走 cwDefaultDialogH()＝min(768×0.7,640)=538
     const handle = container.querySelector('[data-testid="cw-resize-handle"]') as HTMLElement
     fireEvent.mouseDown(handle, { clientY: 500 })
@@ -227,10 +232,11 @@ describe('对话框形态五态（决策⑩ ＋ 2026-10-13 用户令①）', () 
     expect(dialogHeightViolations(R5).join('\n'), '判据吃了注释里的说明文字＝假绿形态').toContain('锁失明')
   })
 
-  it('⑦ 收起态不吃记忆高度：有 localStorage 记忆但当前是空态入口条 ⇒ 不写内联高度、不进覆盖档', () => {
+  it('⑦ 收起态不吃记忆高度：点收起后虽有 localStorage 记忆但当前是空态入口条 ⇒ 不写内联高度、不进覆盖档', () => {
     localStorage.setItem(H_KEY, '500')
     const { container } = renderWindow()
     const dialog = container.querySelector('.cw-dialog') as HTMLElement
+    act(() => { fireEvent.click(container.querySelector('[data-testid="cw-collapse"]')!) })
     expect(dialog.className).toContain('cw-collapsed')
     expect(dialog.className).not.toContain('cw-resized')
     expect(dialog.style.height, '单行入口条不许被记忆高度撑成半屏').toBe('')

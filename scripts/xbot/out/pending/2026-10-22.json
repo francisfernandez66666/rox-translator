@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-22",
+  "day": 3,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A08",
+      "text": "一个术语改错，整份 60 页的稿子重译一遍。\n\n更贵的是那句话没说出口：你早就提醒过他们了。\n\n能言 LangCross：术语硬闸在翻译时就把住，不给错误出门的机会。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s1",
+      "image_text": {
+        "main": "一个词，全篇重来",
+        "sub1": "术语硬闸：翻错即拦，不出门",
+        "sub2": "省掉的不只是重译，还有扯皮"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 173,
+        "max_similarity": 0.705,
+        "ok": true
+      },
+      "image": "out/2026-10-22/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B05",
+      "text": "法律条款里，一个词差一个字，责任就不在你的合同里了。\n\n这不是危言耸听，是常识。\n\n能言 LangCross：术语与条款走硬闸 + 人工复核通道。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s2",
+      "image_text": {
+        "main": "差一个字，责任就换了人",
+        "sub1": "术语硬闸 + 人工复核通道",
+        "sub2": "合同、条款、说明书：一个词都不许错"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 154,
+        "max_similarity": 0.708,
+        "ok": true
+      },
+      "image": "out/2026-10-22/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C20",
+      "text": "按一页 80 字算，一份 80 页文件，人工要多少钱？\n\n再算上排版、沟通、加急，算完再谈。\n\n能言 LangCross：成本约为人工翻译的 1/8，账单逐笔可查。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s3",
+      "image_text": {
+        "main": "算完这笔账再谈",
+        "sub1": "翻译、排版、沟通、加急，都是成本",
+        "sub2": "成本约为人工翻译的 1/8"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 163,
+        "max_similarity": 0.79,
+        "ok": true
+      },
+      "image": "out/2026-10-22/img-3.png"
+    }
+  ]
+}

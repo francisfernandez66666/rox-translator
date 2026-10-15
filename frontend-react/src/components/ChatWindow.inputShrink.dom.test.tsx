@@ -1,28 +1,18 @@
 // ============================================================================
-// components/ChatWindow.inputShrink.dom.test.tsx — 「输入过内容后清空，必须回缩」（★ 2026-10-14 红框批）
+// components/ChatWindow.inputShrink.dom.test.tsx — 「输入过内容后清空，必须回缩」（★ 2026-10-14 红框批；
+//   ★ 2026-10-15 用户令覆盖「空态自动收起」那一半：默认展开，收起改由用户点框头收起钮触发）
 //
-// 用户报的是**整张输入卡**（截图红框圈的是卡片，不是 textarea 那一行）：
+// 用户最先报的是**整张输入卡**（截图红框圈的是卡片，不是 textarea 那一行）：
 //   空态时整卡收成一行的入口条（.cw-collapsed），打过字之后卡片展开成完整三段式；
 //   旧形态把「打过字」也当成一次手动展开（onChange 里 setExpandedLatch(true)），这一闩此后再也不清，
 //   于是删空输入后卡片永久停在展开档——用户看到的「不会回缩」就是这一条。
-//   ⇒ 修法＝闩只由点击入口条（expandFromEntry）置位；打字不再置位，collapsed 重新由内容决定。
-//   决策⑩那半条口径仍然保留：**用户明确点开过**这张卡之后不再自动收起（边打字边抽走工具条才是打扰）。
 //
-// ★★ 归因订正（反证推翻了我先前的假设，留在这里防下一个人按错的因果改回去）：
-//   本批第一稿把缺陷记成「onChange 量到旧的 scrollHeight，所以 textarea 能长不能缩」。
-//   把修法摘掉、按旧形态跑一遍，jsdom 里清空那一枪**照样缩回 40px**——因为浏览器在 change 事件
-//   发出之前就已经把新值写进 DOM，量到的一直是当前内容。那条因果是错的。
-//   下面第一条（高度双向）因此**对本缺陷没有判别力**，它锁的是「高度只有一条驱动路径」这个契约；
-//   真正有射程的是第二条（整卡回缩）与第四条（源码接线）——反证只验这两条。
+// ★ 2026-10-15 用户令：空态**默认展开**（「聊天框打开后自动最小化了，啥也看不到」）。收起只有一条触发
+//   路径＝点框头「收起」钮（collapsedLatch）；只要输入非空／有会话就自动回到展开。所以本文件现在锁的是
+//   「收起闩在时内容驱动展开/收起」＋「闩的唯一写点是收起钮」两条。
 //
 // 替身读数：jsdom 不做排版，scrollHeight 恒 0，故给 HTMLTextAreaElement.prototype 装一个
 //   按当前 value 算的 getter（一行 40，与组件 `Math.max(40, …)` 下限同源）。
-//
-// ★ 反证实跑读数（2026-10-14 本批，两枚各自只点破自己那条腿）：
-//   M1 把 onChange 里的 `setExpandedLatch(true)` 装回旧形态 ⇒ ②⑤ 红、①③④ 全绿
-//      （③ 仍绿证明闩没被整个删掉，只是不再被打字顺带置位）；
-//   M2 把 `useEffect(…, [input])` 的依赖退回 `[]` ⇒ ①⑤ 红、②③④ 全绿
-//      （整卡回缩与这一维无关，两条腿互不遮蔽）。
 //
 // 运行：npx vitest run src/components/ChatWindow.inputShrink.dom.test.tsx
 // ============================================================================
@@ -118,10 +108,13 @@ describe('ChatWindow 输入卡回缩 · 高度双向 + 整卡收起', () => {
     await waitFor(() => expect(box().style.height).toBe('40px'), { timeout: 2000 })
   })
 
-  // ★★ 本文件的靶心：这一条在旧实现下**必红**（闩被打字永久置位）。
-  it('② 整卡回缩：打字展开 → 删空必须回到单行入口条（cw-collapsed）', async () => {
+  // ★★ 本文件的靶心：收起闩在时，内容驱动展开/收起（打字→展开、删空→回收起档）。
+  it('② 收起钮 → 打字自动展开 → 删空回收起档（闩在时内容驱动切换）', async () => {
     renderWindow()
-    expect(dialog().className, '空态本就该收起').toContain('cw-collapsed')
+    expect(dialog().className, '默认展开，不该自动收起').not.toContain('cw-collapsed')
+
+    act(() => { fireEvent.click(document.querySelector('[data-testid="cw-collapse"]')!) })
+    expect(dialog().className, '点了收起钮必须进收起档').toContain('cw-collapsed')
 
     fireEvent.change(box(), { target: { value: '随便打点字' } })
     await waitFor(() => expect(dialog().className).not.toContain('cw-collapsed'))
@@ -132,18 +125,16 @@ describe('ChatWindow 输入卡回缩 · 高度双向 + 整卡收起', () => {
     })
   })
 
-  it('③ 手动点开过之后不许因删空而收起（决策⑩那半条口径保留，防把闩整个删掉）', async () => {
+  it('③ 默认展开档：未点收起钮时，打字再删空仍保持展开（2026-10-15 用户令：不自动收起）', async () => {
     renderWindow()
-    const entry = dialog()
-    act(() => { fireEvent.click(entry) })
     expect(dialog().className).not.toContain('cw-collapsed')
 
     fireEvent.change(box(), { target: { value: '一段要删掉的草稿' } })
     await waitFor(() => expect(dialog().className).not.toContain('cw-collapsed'))
     fireEvent.change(box(), { target: { value: '' } })
     await waitFor(() => expect(box().style.height).toBe('40px'))
-    // 闩在：删空后仍保持展开（框头/工具条不抽走）
-    expect(dialog().className, '用户明确点开过这张卡，删空也不该把它弹回收起档').not.toContain('cw-collapsed')
+    // 没点过收起钮 ⇒ 删空后仍保持展开（框头/工具条不抽走）
+    expect(dialog().className, '默认展开档下删空不该把它弹回收起档').not.toContain('cw-collapsed')
   })
 
   it('④ 有会话时空输入不收起（历史可见性优先，这条与闩无关但同判据面）', () => {
@@ -152,7 +143,7 @@ describe('ChatWindow 输入卡回缩 · 高度双向 + 整卡收起', () => {
     expect(dialog().className).not.toContain('cw-collapsed')
   })
 
-  it('⑤ 接线锁：置闩只许有一个入口（点击展开），onChange 里不许再置位', async () => {
+  it('⑤ 接线锁：置闩只许有一个入口（框头「收起」钮），onChange 里不许再置位', async () => {
     // 摘掉 [input] 依赖或把 setExpandedLatch 塞回 onChange，上面的行为腿会红；
     // 这条源码级判据的作用是**把"为什么不能那么写"钉在文件里**，防下一个人顺手改回去。
     const { readFileSync, existsSync } = await import('node:fs')
@@ -170,21 +161,20 @@ describe('ChatWindow 输入卡回缩 · 高度双向 + 整卡收起', () => {
     }
     if (!here) throw new Error('接线锁读不到 ChatWindow.tsx（候选全落空）⇒ 判据没有射程，不许当它过了')
     const raw = readFileSync(here, 'utf8')
-    // ★ 判据必须先剥注释再看代码：本文件那几条说明注释里就写着 setExpandedLatch(true) 这个字样
-    //   （解释旧形态错在哪），不剥就会把"注释冒充实现"读成"第二处写点"，
-    //   而下一个改代码的人会顺着注释去找那个根本不存在的 onChange 置位点。
+    // ★ 判据必须先剥注释再看代码：本文件那几条说明注释里就写着 setCollapsedLatch(true) 这个字样
+    //   （解释触发路径），不剥就会把"注释冒充实现"读成"第二处写点"。
     const src = raw.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
     // 高度只由 [input] 的 effect 驱动（发送后清空／打字／换行共用同一条路径）
     expect(src).toMatch(/useEffect\(\(\) => \{ autoResize\(\) \}, \[input\]\)/)
-    // 闩的唯一写点＝expandFromEntry；出现第二处＝又有人把「打过字」当成「用户想展开」
-    const hits = src.match(/setExpandedLatch\(true\)/g) || []
-    expect(hits.length, `setExpandedLatch(true) 只许出现一次（点击展开），实读 ${hits.length} 次`).toBe(1)
-    expect(src.split('setExpandedLatch(true)')[0], '唯一置位点必须在 expandFromEntry 体内').toContain('function expandFromEntry() {')
-    // 反证射程自证：把 onChange 里那句置位装回去（模拟旧形态），计数判据必须翻红而不是静默通过
+    // 收起闩的唯一写点＝collapseDialog（框头「收起」钮）；出现第二处＝又有人把别的动作当成收起
+    const hits = src.match(/setCollapsedLatch\(true\)/g) || []
+    expect(hits.length, `setCollapsedLatch(true) 只许出现一次（框头收起钮），实读 ${hits.length} 次`).toBe(1)
+    expect(src.split('setCollapsedLatch(true)')[0], '唯一置位点必须在 collapseDialog 体内').toContain('function collapseDialog() {')
+    // 反证射程自证：往 onChange 里塞一句置位（模拟"打字也能收起"的错误形态），计数判据必须翻红
     const MUT = raw.replace('onChange={(e) => { setInput(e.target.value) }}',
-      'onChange={(e) => { setInput(e.target.value); if (e.target.value.trim()) setExpandedLatch(true) }}')
+      'onChange={(e) => { setInput(e.target.value); if (!e.target.value.trim()) setCollapsedLatch(true) }}')
     expect(MUT, '反证夹具没替换成功＝判据对象写漂了（onChange 那一行的形状变了）').not.toBe(raw)
     const mutSrc = MUT.replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '')
-    expect((mutSrc.match(/setExpandedLatch\(true\)/g) || []).length, '装回旧形态后仍判 1 处＝这条计数腿没有射程').toBe(2)
+    expect((mutSrc.match(/setCollapsedLatch\(true\)/g) || []).length, '装回第二处置位后仍判 1 处＝这条计数腿没有射程').toBe(2)
   })
 })

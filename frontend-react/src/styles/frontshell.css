@@ -1,0 +1,72 @@
+/* ============================================================================
+   frontshell.css — 前台外壳（FrontShell）布局方案样式（★ 唯一一份）
+   ----------------------------------------------------------------------------
+   本文件是「前台外壳」这一族类名（fs-*）的唯一样式出处，
+   与结构件配套（结构在 src/components/frontshell/，两处一一对应）：
+
+     FrontShell（App.tsx 内）
+       ├─ FrontSideNav      左栏：桌面常驻 / 移动档汉堡抽屉（同一节点两种形态）
+       └─ fs-main           右主列：FrontMobileTopBar（移动档）+ 余额横幅 + 路由出口 + 页脚
+
+   口径（★ 2026-10-15 用户令「参考元宝重做移动端」定稿）：
+     ① 除「会话区」外的一切都收进左栏：品牌 / 租户身份 / 语言 / 工作台 Tab /
+        自助入口 / 套餐积分 / 账号菜单（含通知中心）。桌面档左栏常驻，移动档（≤640）
+        左栏化为汉堡抽屉（.fs-sidebar--drawer），顶栏只剩「汉堡 + 品牌簇」。
+     ② 底部 TabBar 已撤除（.lc-tabbar 不再被本壳渲染，库件与令牌保留给后台移动壳用）。
+     ③ 页脚：桌面档常驻外壳列尾（SiteFooter 自带 marginTop:auto 贴列底）；
+        移动档收进抽屉尾部、以 <details> 折叠呈现（.fs-foot-fold）。
+     ④ 断点只有 ≤640 一档（与 components.css / mobile.css 的 S 档同口径）；
+        641–900 仍走桌面档——左栏用 .fs-sidebar 把位置钉回 static，
+        不吃 components.css 那段 ≤900 的「侧栏转抽屉」规则（否则 641–900 侧栏凭空消失）。
+     ⑤ 令牌一律 --lc-* / --npz-*，不新增裸色值（readability.test.ts 会扫本文件）。
+   ============================================================================ */
+
+/* ---- 左栏导航与信息带 ---- */
+/* 导航列：左栏内两处复用（中部工作台 Tab、底部自助入口） */
+.fs-nav { display: flex; flex-direction: column; gap: 2px; }
+/* 租户身份格（企业简称 / 个人版）：单行省略，不许把品牌名挤成竖排 */
+.fs-tenant { display: flex; align-items: center; min-width: 0; font-size: 14px; color: var(--lc-text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 底部账号行（账号菜单在其内） */
+.fs-footrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-top: 8px; }
+
+/* ---- 品牌区（logo 行）---- */
+/* ★ 用户令「logo 区域再做大点」：抬高内垫与图标；字阶只对中文放大
+   （英文品牌名放大反而显笨重，用户明令只改中文）⇒ 默认不动，中文档加 --zh 才到 18px。 */
+.lc-sidebar__logo { padding: 6px 8px 18px; }
+.lc-sidebar__logo--zh { font-size: 18px; }
+.lc-sidebar__logo .lc-sidebar__brand { gap: 10px; }
+/* 品牌项 flex:0 1 auto 允许省略号，身份项 flex:none 不收缩；身份格限宽截断长企业名 */
+.lc-sidebar__brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.lc-sidebar__brandname { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lc-sidebar__tools { display: flex; align-items: center; gap: 4px; flex: none; }
+.lc-sidebar__logo .fs-tenant { max-width: 120px; }
+
+/* ---- 语言行 ---- */
+/* 语言钮单独一行（logo 下方、导航上方）；下内垫 16px＝用户令「与下面的即时翻译再拉开点距离」 */
+.fs-langrow { display: flex; align-items: center; padding: 0 0 16px; }
+
+/* ---- 左栏的两种形态（桌面常驻 / 移动抽屉）---- */
+/* 桌面档：位置钉回静态。641–900 也走这条（本壳断点是 ≤640，不吃 components.css 的 ≤900 抽屉规则） */
+.lc-sidebar.fs-sidebar { position: static; transform: none; z-index: auto; box-shadow: none; }
+/* 移动档：抽屉。默认移出屏外，--open 时滑回；打开期间可纵向滚动（左栏内容长于屏高） */
+.lc-sidebar.fs-sidebar--drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 60;
+  transform: translateX(-100%); transition: transform .22s ease; box-shadow: none; overflow-y: auto; }
+.lc-sidebar.fs-sidebar--drawer.fs-sidebar--open { transform: none; box-shadow: 0 0 60px rgba(0, 0, 0, .7); }
+
+/* ---- 移动顶栏（汉堡 + 品牌簇）---- */
+/* 库件 .lc-mob-topbar 默认 space-between（leading/title/trailing 三段式，后台移动壳在用）；
+   本壳只有「汉堡 + 品牌」两件且要贴在一起，故改主轴为 flex-start（双类名保特异度，不吃顺序）。 */
+.lc-mob-topbar.fs-mob-topbar { justify-content: flex-start; }
+.fs-mob-brand { display: inline-flex; align-items: center; gap: 8px; margin-inline-start: 10px; min-width: 0; }
+.fs-mob-brand__name { font-size: 20px; font-weight: 600; letter-spacing: .2px; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- 抽屉内折叠页脚 ---- */
+/* 顶缘一条弱分隔 + 13px 次要档 summary；展开后页脚走 SiteFooter 的 bare 档（样式自带走） */
+.fs-foot-fold { margin-top: 12px; border-top: 1px solid var(--npz-line); padding-top: 10px; }
+.fs-foot-fold__sum { font-size: 13px; color: var(--lc-text-3); cursor: pointer; list-style: none;
+  display: flex; align-items: center; user-select: none; }
+.fs-foot-fold__sum::-webkit-details-marker { display: none; }
+.fs-foot-fold__sum::after { content: '⌄'; margin-inline-start: auto; font-size: 13px; opacity: .7; }
+.fs-foot-fold[open] .fs-foot-fold__sum::after { content: '⌃'; }

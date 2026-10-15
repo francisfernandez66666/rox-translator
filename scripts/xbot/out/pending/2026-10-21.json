@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-21",
+  "day": 2,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A06",
+      "text": "页眉、页脚、页码、图注——最容易整段漏译的地方。\n\n漏了没人发现，客户那边先发现。\n\n能言 LangCross：原版式直出，结构逐项守恒，漏不掉。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s1",
+      "image_text": {
+        "main": "漏在最不起眼的地方",
+        "sub1": "页眉页脚 / 页码 / 图注最易整段漏译",
+        "sub2": "原版式直出，结构逐项守恒"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 155,
+        "max_similarity": 0.677,
+        "ok": true
+      },
+      "image": "out/2026-10-21/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B03",
+      "text": "产品型号被音译了。\n\n海外客户在官网搜不到你的产品，于是买了别家的。\n\n能言 LangCross：型号、术语、品牌名按你的库统一，不许自由发挥。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s2",
+      "image_text": {
+        "main": "型号译对了，客户才搜得到",
+        "sub1": "品牌名与型号：统一锁死",
+        "sub2": "术语硬闸：翻错即拦截"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 155,
+        "max_similarity": 0.735,
+        "ok": true
+      },
+      "image": "out/2026-10-21/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C04",
+      "text": "客户要三天后交。\n\n而你要三天后才拿到译文，然后再排一天版。\n\n能言 LangCross：交期从「等三天」压到「等三分钟」。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s3",
+      "image_text": {
+        "main": "从等三天，到等三分钟",
+        "sub1": "多语言并行，一次打包交付",
+        "sub2": "交期压缩，省下的不只是钱"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 135,
+        "max_similarity": 0.699,
+        "ok": true
+      },
+      "image": "out/2026-10-21/img-3.png"
+    }
+  ]
+}

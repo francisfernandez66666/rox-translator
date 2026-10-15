@@ -64,9 +64,11 @@ export const baseZh: Record<string,string> = {
   'app.title': '能言',
   'app.more': '更多',
   // ★ F2：App 壳 UI 文案键
+  'app.newTranslation': '新建翻译',
   'app.pkgLineFmt': '{points} 积分 ≈ {approx} 句单语言',
   'app.openNav': '打开导航菜单',
   'app.langSwitch': '中文',
+  'app.legalLinks': '关于与协议',
 'app.navBilling':'我的余额',
 'app.navInvites':'我的邀请',
 'app.navPackages':'我的套餐',

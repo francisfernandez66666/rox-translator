@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>授权完成 · 能言 LangCross</title>
+<style>
+  :root{--bg:#000;--panel:#0E1014;--raised:#16181C;--bd:#424956;--bd-strong:#8B939F;
+        --text:#E7E9EA;--dim:#8B939F;--faint:#5A6270}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);
+       font-family:'PingFang SC',-apple-system,sans-serif;padding:48px 24px;line-height:1.7}
+  .wrap{max-width:640px;margin:0 auto}
+  h1{font-size:22px;margin-bottom:8px}
+  .sub{color:var(--dim);font-size:14px;margin-bottom:32px}
+  .card{background:var(--panel);border:1.2px solid var(--bd);border-radius:12px;padding:20px;margin-bottom:16px}
+  .code-box{background:var(--raised);border:1px solid var(--bd);border-radius:8px;
+            padding:14px;font-family:Menlo,monospace;font-size:13px;word-break:break-all;
+            margin:10px 0 14px;user-select:all}
+  .cmd{background:var(--raised);border:1px solid var(--bd);border-radius:8px;padding:14px;
+       font-family:Menlo,monospace;font-size:12.5px;white-space:pre-wrap;word-break:break-all;
+       margin:10px 0;color:var(--dim);user-select:all}
+  button{font:inherit;font-size:14px;padding:9px 18px;border-radius:8px;cursor:pointer;
+         background:var(--text);color:#000;border:none;font-weight:600}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--bd);font-weight:400}
+  .warn{border-left:3px solid #D29922;padding-left:12px;color:var(--dim);font-size:13.5px}
+  .ok{color:var(--text)}
+  .hide{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>授权完成</h1>
+  <p class="sub">这个页面只用于一次性换取凭据，不会保存任何内容。可以关掉了。</p>
+
+  <div class="card" id="box-ok">
+    <div class="ok">拿到授权码了。复制它，然后回到终端执行下面的命令：</div>
+    <div class="code-box" id="code">（未检测到 code）</div>
+    <button onclick="copyCode()">复制授权码</button>
+    <div class="cmd" id="cmd"></div>
+    <p class="warn">授权码只能用一次，而且几分钟内就过期。拿到后马上执行，别先干别的。</p>
+  </div>
+
+  <div class="card hide" id="box-err">
+    <div class="ok">没有检测到授权码。</div>
+    <p style="color:var(--dim);font-size:13.5px;margin-top:8px">
+      如果你看到的是「授权被拒绝 / Access denied」，请回去点 Authorize；
+      如果地址栏里有 <code>code=</code> 开头的参数，手动把它复制下来也一样能用。
+    </p>
+  </div>
+
+  <div class="card">
+    <div style="color:var(--dim);font-size:13px">
+      换到 token 之后，这个回调地址就再也不需要了。<br>
+      之后的每日发布只用 refresh_token 自动续期，<b>不需要任何本地服务，关机也不影响</b>。
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var q = new URLSearchParams(location.search);
+  var code = q.get('code') || '';
+  var err = q.get('error') || '';
+  var boxOk = document.getElementById('box-ok');
+  var boxErr = document.getElementById('box-err');
+
+  if (code) {
+    document.getElementById('code').textContent = code;
+    document.getElementById('cmd').textContent =
+      'cd /Users/zhangzifei/Desktop/翻译助手/scripts/xbot\n' +
+      'python3 xbot.py auth --code \'' + code + '\' --verifier \'<第5步的CodeVerifier>\'';
+    boxErr.classList.add('hide');
+  } else {
+    boxOk.classList.add('hide');
+    boxErr.classList.remove('hide');
+    if (err) {
+      boxErr.querySelector('.ok').textContent = '授权被拒绝：' + err;
+    }
+  }
+  window.copyCode = function () {
+    var t = document.getElementById('code').textContent;
+    navigator.clipboard.writeText(t).then(function () {
+      document.querySelector('#box-ok button').textContent = '已复制';
+    });
+  };
+})();
+</script>
+</body>
+</html>

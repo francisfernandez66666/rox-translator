@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-25",
+  "day": 6,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A17",
+      "text": "图表标题和坐标轴翻译错了，整张图的意思就反了。\n\n而图正是一份报告里最值钱的部分。\n\n能言 LangCross：术语硬闸盯住关键标签，原版式直出保住结构。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s1",
+      "image_text": {
+        "main": "标题错一个字，图的意思就反了",
+        "sub1": "术语硬闸盯住关键标签",
+        "sub2": "原版式直出保住整张图的结构"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 165,
+        "max_similarity": 0.738,
+        "ok": true
+      },
+      "image": "out/2026-10-25/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B20",
+      "text": "每次都要跟翻译公司解释一遍我们的术语。\n\n解释完这次，下次新来的翻译还是不懂。\n\n能言 LangCross：术语表沉淀进企业知识库，只讲一次。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s2",
+      "image_text": {
+        "main": "同一套术语，讲了第几遍了",
+        "sub1": "术语表沉淀进企业知识库",
+        "sub2": "只讲一次，之后都按这个来"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 153,
+        "max_similarity": 0.725,
+        "ok": true
+      },
+      "image": "out/2026-10-25/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C05",
+      "text": "加急费比翻译费还贵。\n\n因为你付的不是翻译费，是时间费。\n\n能言 LangCross：交期分钟级，加急这件事从根上消失。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s3",
+      "image_text": {
+        "main": "你付的不是翻译费，是时间费",
+        "sub1": "交期从「等三天」到「等三分钟」",
+        "sub2": "加急这件事，从根上消失"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 131,
+        "max_similarity": 0.762,
+        "ok": true
+      },
+      "image": "out/2026-10-25/img-3.png"
+    }
+  ]
+}

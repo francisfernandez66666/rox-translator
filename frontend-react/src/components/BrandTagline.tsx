@@ -20,9 +20,14 @@
 //    面色/字色/字重/圆角/内垫一律写在下面那份**导出的** `TAGLINE_STYLE` 里，四面调用**不带 style**；
 //    后端直出面（Go 那份 CSS）拿不到组件，只能同值重声明 `.footer .brand-tagline{…}`，
 //    等值由 `BrandTagline.lock.test.ts` G1–G5 钉住（**按 var() 解析后的实值逐维比，两侧各自的令牌表**，
-//    不是比令牌名——比名字恰好放过「名字照抄、值没落地」那一族静默失效：直出面 :root 只有 --lc-white）。
+//    不是比令牌名——比名字恰好放过「名字照抄、值没落地」那一族静默失效）。
 //    理由：这一族原本四面各内联一份 `fontWeight: 600`，改「提亮」就得同时改五处，
 //    而「改四面留一面」正是本仓页脚链接／手册入口那批反复出现过的漂移形态。
+// ⑤ ★ **2026-10-15 用户后令「改成 plain muted text + tiny dot」——覆盖 10-14 的白底胶囊徽标档**：
+//    现在的形态＝页脚 muted 灰字（`var(--lc-text-3)` #98A0A9，与页脚其余 meta 文同档）
+//    ＋ 文字前一枚**小圆点**（`TAGLINE_DOT_STYLE`：5px 实心圆、取 `currentColor` 跟着字色走）。
+//    不再有底色／描边／胶囊／字重抬档（那一档用户判「太丑、像按钮」）。两半样式各只有一个出处：
+//    容器 `TAGLINE_STYLE`、圆点 `TAGLINE_DOT_STYLE`，后端直出面同值重声明两条规则（G 段逐维等值）。
 //
 // RTL 说明：阿语等 RTL 语种下，纯拉丁短语在 RTL 段落里会被双向算法重排标点与顺序，
 // 故组件自带 dir="ltr" + isolate（隔离而非覆盖整行方向，前后的「·」分隔符仍随页面方向）。
@@ -32,46 +37,57 @@ import { CSSProperties } from 'react'
 /** 页脚品宣尾注的字面量（唯一事实源；不许本地化、不许替换成租户品牌名） */
 export const BRAND_TAGLINE = 'Powered by LangCross AI'
 
-/** ★ 2026-10-14 用户后令「这个页脚的句子能不能提亮并且做重点提示」⇒ 从「继承页脚灰字」升为**白底徽标档**。
+/** ★ 2026-10-15 用户后令「改成 plain muted text + tiny dot」⇒ 由 10-14 的**白底胶囊徽标档**
+ * 改为**页脚灰字 + 前置小圆点**（纯文字，不再像按钮）。
  *
- * 四个维度全部取交付既有令牌，**零新增色值**（这是本仓 §一·5「界面规格＝UI 交付真值」的硬要求：
- * 想要新形状只能从既有档位里挑，不能自己调一个十六进制）：
- *   面色 `var(--lc-fill-white)` ＝ #FFFFFF —— 实心白填充档，主按钮／「注册即送」徽标／白底 CTA 同档；
- *   字色 `var(--lc-invert-fg)` ＝ #000000 —— 反相面上的文字（白底必须配黑字，配 #E7E9EA 会显脏）；
- *   字重 600 —— 徽标档；圆角 999px ＝ 全站胶囊档（components.css `.lc-btn--pill` 同值）；
- *   内垫 `1px 8px` ＝ theme.css `.draft-stage` 那一族小胶囊的同值档。
+ * 两个维度仍全部取交付既有令牌，**零新增色值**（本仓 §一·5「界面规格＝UI 交付真值」的硬要求）：
+ *   字色 `var(--lc-text-3)` ＝ #98A0A9 —— 页脚 meta 辅助文档（与版权/链接同族的弱化档）；
+ *   小圆点 `currentColor` —— 跟着上面那档字色走，不另立第二个颜色。
+ *   ⚠️ 不再有底色／描边／胶囊（`background`/`border-radius`/`padding`/`font-weight` 一律不设），
+ *      这正是用户判「太丑、像按钮」的那部分。
  *
  * ⚠️ **字号与行高不指定**：字号继承所在页脚那一行（五张面的页脚字号档本就不同：全站页脚 15px、
  *    报价/对照页 14px），统一抬档属未授权的规格改动；行高不写是为了不给五张面各造一个新档。
- * ⚠️ 这一档由**等值锁**钉死（`BrandTagline.lock.test.ts` G1 跨语言逐维等值＋G2 交付真值点名＋
- *    G3 四面不带 style 负向＋G4 五枚反证＋G5 直出面在位性与令牌在位；另有
- *    `BrandTagline.dom.test.tsx` ⑤ 证明这一身确实落到渲染节点、`readability.test.ts` G 段管白档不许退成文字灰）——
+ * ⚠️ 这一档由**等值锁**钉死（`BrandTagline.lock.test.ts` G1 跨语言逐维等值（容器＋圆点两条规则）＋
+ *    G2 交付真值点名＋G3 四面不带 style 负向＋G4 反证＋G5 直出面在位性与令牌在位；另有
+ *    `BrandTagline.dom.test.tsx` ⑤ 证明这一身确实落到渲染节点、`readability.test.ts` G 段管尾注不许退回白底徽标档）——
  *    **禁止**把它写成「只许更亮／更大」的单向锁：历史上三批提亮（09-18 令牌批、#35、#67/#68）
  *    正是被单向锁一路推离交付稿，返工成本＝全站 50 文件。
  *    要改这一档，先改 UI-ANNOTATIONS §6「用户后令覆盖记录」里尾注那一行的真值，再同步上面那几条锁。 */
-// ★ 导出给闸门按**值**比对（不是正则扫源码）：BrandTagline.lock.test.ts 的 G 段拿这份对象
-//    与后端直出面那条 CSS 规则逐维等值，两侧谁改谁红。组件本体继续吃同一份，绝无第二处。
+// ★ 导出给闸门按**值**比对（不是正则扫源码）：BrandTagline.lock.test.ts 的 G 段拿这两份对象
+//    与后端直出面那两条 CSS 规则逐维等值，两侧谁改谁红。组件本体继续吃同一份，绝无第二处。
 export const TAGLINE_STYLE: CSSProperties = {
   unicodeBidi: 'isolate',
   whiteSpace: 'nowrap',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  color: 'var(--lc-text-3)',
+}
+
+/** 文字前那枚「小圆点」的样式（★ 2026-10-15 用户后令）。5px 实心圆、取 `currentColor`
+ *  跟着容器字色走；`flex: 0 0 auto` 保证窄屏 nowrap 时圆点不被压扁。 */
+export const TAGLINE_DOT_STYLE: CSSProperties = {
   display: 'inline-block',
-  background: 'var(--lc-fill-white)',
-  color: 'var(--lc-invert-fg)',
-  fontWeight: 600,
-  borderRadius: '999px',
-  padding: '1px 8px',
+  width: '5px',
+  height: '5px',
+  borderRadius: '50%',
+  background: 'currentColor',
+  flex: '0 0 auto',
 }
 
 /**
  * 页脚品宣尾注组件。
- * 调用方负责分隔符（`·`）与容器，本组件只出那一句固定文字**与它的那一身样式**，
+ * 调用方负责分隔符（`·`）与容器，本组件只出那枚小圆点 + 那一句固定文字**与它们的那一身样式**，
  * 这样后端直出面（Go 字符串）与 React 面的判据可以是同一条字面量，
- * 而「提亮/重点提示」这一档也只有一个写点（★ 2026-10-14：四面原先各内联一份 `fontWeight: 600`，
+ * 而这一档样式也只有一个写点（★ 2026-10-14：四面原先各内联一份 `fontWeight: 600`，
  * 已收回组件里——五张面里改四处留一处的漂移形态就是从这里长出来的，G 段把它钉成负向锁）。
+ * ⚠️ 小圆点是纯装饰（`aria-hidden`），不进 `textContent`，故 12 语种逐字比对仍是那句品牌串。
  */
 export function BrandTagline({ style }: { style?: CSSProperties }) {
   return (
     <span dir="ltr" data-testid="brand-tagline" style={{ ...TAGLINE_STYLE, ...style }}>
+      <span aria-hidden="true" data-testid="brand-tagline-dot" style={TAGLINE_DOT_STYLE} />
       {BRAND_TAGLINE}
     </span>
   )

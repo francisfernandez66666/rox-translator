@@ -17,7 +17,7 @@
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 import { render, cleanup, waitFor } from '@testing-library/react'
 import { setLang, translateIn, ensureLocale, LANG_OPTIONS, type Lang } from '@/i18n'
-import { BRAND_TAGLINE, BrandTagline, TAGLINE_STYLE } from './BrandTagline'
+import { BRAND_TAGLINE, BrandTagline, TAGLINE_STYLE, TAGLINE_DOT_STYLE } from './BrandTagline'
 
 // SiteFooter 的唯一外部数据来源是平台级页脚链接配置；给一个可控替身，
 // 免得这条锁的形态跟着超管配没配链接而变（这里判的是尾注，不是链接）。
@@ -93,31 +93,37 @@ describe('页脚品宣尾注（运行时）', () => {
     expect(BRAND_TAGLINE.includes('能言'), '汉字品牌名不许混进这串标识').toBe(false)
   })
 
-  // ★ 2026-10-14 用户后令「这个页脚的句子能不能提亮并且做重点提示」⇒ 运行时这一档也要有脸。
-  //   静态 G 段比的是"源码里那八个维度等不等值"，它判不了**这一身有没有真的落到渲染出的那个节点上**
+  // ★ 2026-10-15 用户后令「plain muted text + tiny dot」⇒ 运行时这一档也要有脸。
+  //   静态 G 段比的是"源码里那十几维等不等值"，它判不了**这一身有没有真的落到渲染出的那个节点上**
   //   （样式挪到外层 wrapper、被父级 style 覆盖、组件被换成裸 span 而样式留在常量里，源码侧都照样绿）。
-  it('⑤ 提亮那一档真的落在渲染出的节点上（八维逐个点名 + 面色取实心白档，不取文字档灰）', async () => {
+  it('⑤ 灰字+圆点那一档真的落在渲染出的节点上（容器六维 + 圆点六维逐个点名，且不再是白底胶囊）', async () => {
     setLang('zh')
     render(<SiteFooter />)
     await waitFor(() => expect(taglineEl()).toBeTruthy())
     const el = taglineEl()!
-    const got: Record<string, string> = {}
     for (const [k, v] of Object.entries(TAGLINE_STYLE as Record<string, string | number>)) {
-      // jsdom 保留 var(...) 原样（实测 el.style.background === 'var(--lc-fill-white)'），
-      // 所以这里能按**值**钉，而不是只能钉属性名在不在。
-      got[k] = String((el.style as unknown as Record<string, unknown>)[k] ?? '')
-      expect(got[k], `${k} 没落到页脚那个节点上（值 ${JSON.stringify(String(v))} 丢了）`).toBe(String(v))
+      // jsdom 保留 var(...) 原样（实测 el.style.color === 'var(--lc-text-3)'），所以这里按**值**钉。
+      expect(String((el.style as unknown as Record<string, unknown>)[k] ?? ''), `${k} 没落到页脚那个节点上（值 ${JSON.stringify(String(v))} 丢了）`).toBe(String(v))
     }
-    // 交付真值点名（等值锁，不是"更亮一档"）：面色＝实心白填充档、字色＝反相黑。
-    // 拿 var(--lc-text) / #E7E9EA 做整块填充就是"白色显脏、偏蓝"那条老根因，这里按令牌名直接挡掉。
-    expect(el.style.background, '尾注面色必须是实心白档').toBe('var(--lc-fill-white)')
-    expect(el.style.color, '白底必须配反相黑字').toBe('var(--lc-invert-fg)')
-    expect(el.style.background).not.toMatch(/(lc-text|#E7E9EA)/i)
+    // 交付真值点名（等值锁）：页脚 meta 灰字档，10-15 起**不再有**白底反相胶囊那一档。
+    expect(el.style.color, '尾注字色必须是页脚 meta 灰字档').toBe('var(--lc-text-3)')
+    expect(el.style.background, '尾注不许再有底色（用户把白底胶囊判成"像按钮"）').toBe('')
+    expect(el.style.borderRadius, '尾注不许再有胶囊圆角').toBe('')
+    expect(el.style.padding, '尾注不许再有胶囊内垫').toBe('')
     // ★ 字号／行高不设：继承所在页脚那一行（全站 15px／报价·对照 14px），统一抬档属未授权的规格改动。
     expect(el.style.fontSize, '尾注不许自带字号档').toBe('')
     expect(el.style.lineHeight, '尾注不许自带行高档').toBe('')
-    // 反证对照：这一档若整条丢掉（有人把 spread 写成 style 覆盖），上面第一条就会红；
-    // 这里再钉一次"节点确实是内联样式而不是 class"，免得将来改成 class 时本判据静默空转。
-    expect(el.getAttribute('style'), '样式应以内联形态落在这个节点上').toContain('--lc-fill-white')
+    // 圆点：必须真的渲染出来、带上 TAGLINE_DOT_STYLE 那一身，且是纯装饰（aria-hidden）。
+    const dot = document.querySelector('[data-testid="brand-tagline-dot"]') as HTMLElement | null
+    expect(dot, '文字前那枚小圆点没渲染出来（用户要的 tiny dot 丢了）').toBeTruthy()
+    expect(dot!.getAttribute('aria-hidden'), '圆点是纯装饰，必须 aria-hidden').toBe('true')
+    for (const [k, v] of Object.entries(TAGLINE_DOT_STYLE as Record<string, string | number>)) {
+      // jsdom 的 CSSOM 把颜色关键字小写化（currentColor → currentcolor），所以按小写比。
+      expect(String((dot!.style as unknown as Record<string, unknown>)[k] ?? '').toLowerCase(), `圆点 ${k} 没落到节点上`).toBe(String(v).toLowerCase())
+    }
+    expect(dot!.style.background.toLowerCase(), '圆点取 currentColor 跟字色走').toBe('currentcolor')
+    expect(dot!.style.width).toBe('5px')
+    // 反证对照：若有人把圆点做成会占文字（写进 textContent），① 那条逐字比对会红。
+    expect(el.textContent, '圆点不许进 textContent（品宣串必须逐字可辨）').toBe(BRAND_TAGLINE)
   })
 })

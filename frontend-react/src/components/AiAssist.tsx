@@ -305,7 +305,10 @@ export default function AiAssist() {
           /* 窄屏改为左右贴边（right+left 同时给值即等效满宽，max-width 自动失效），
              高度也从 78vh 收到 70vh 并再设 560px 上限：小屏上满高面板会把 FAB 与输入条挤没 */
           .na-panel{right:8px;left:8px;bottom:78px;width:auto;height:min(70vh,560px)}
-          .na-fab{inset-inline-end:14px;bottom:14px}
+          /* ★ 2026-10-15 用户令（第五批）：移动档页脚收进抽屉后，工作台输入卡贴到视口底，
+             悬浮球原来那格（bottom:14px）正压在输入行的发送键上。抬到 74px＝让出「输入行」这一段
+             （输入行贴卡底 + 高 ≈58px）；再往上只会压到选择行的右端弹性空白，不压按钮。 */
+          .na-fab{inset-inline-end:14px;bottom:74px}
         }
         @media (prefers-reduced-motion: reduce){
           /* 尊重系统「减弱动态效果」：登场缩放与气泡错落全部关掉（动效属可选项，不可有最低路径） */

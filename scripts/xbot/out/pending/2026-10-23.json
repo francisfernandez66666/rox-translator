@@ -1,0 +1,63 @@
+{
+  "date": "2026-10-23",
+  "day": 4,
+  "items": [
+    {
+      "seq": 1,
+      "slot": "10:00",
+      "angle": "返工",
+      "topic_id": "A11",
+      "text": "做了双语版，还得手工把两份文档的段落一段段对齐。\n\n这是最没技术含量、却最占时间的活。\n\n能言 LangCross：原版式直出，结构天然对齐。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s1",
+      "image_text": {
+        "main": "对齐段落这件事，不该占你一下午",
+        "sub1": "双语对照，结构天然对齐",
+        "sub2": "Word / PPT / Excel / PDF 原版式直出"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 153,
+        "max_similarity": 0.728,
+        "ok": true
+      },
+      "image": "out/2026-10-23/img-1.png"
+    },
+    {
+      "seq": 2,
+      "slot": "17:00",
+      "angle": "术语",
+      "topic_id": "B07",
+      "text": "这次译的说明书，和上个月那份对不上。\n\n客户以为你们上了两套产品。\n\n能言 LangCross：知识库与翻译记忆持续沉淀，越用越准。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s2",
+      "image_text": {
+        "main": "上一版和这一版，对不上",
+        "sub1": "术语与译法要跨批次一致",
+        "sub2": "知识库沉淀，越用越准"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 143,
+        "max_similarity": 0.729,
+        "ok": true
+      },
+      "image": "out/2026-10-23/img-2.png"
+    },
+    {
+      "seq": 3,
+      "slot": "22:00",
+      "angle": "成本",
+      "topic_id": "C07",
+      "text": "翻译的隐性成本，从来没人单独算过：\n\n等待的时间、返工的时间、和供应商扯皮的时间。\n\n能言 LangCross：成本约为人工翻译的 1/8，消耗前可预估。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s3",
+      "image_text": {
+        "main": "隐性成本，从来没人算过",
+        "sub1": "等待 · 返工 · 扯皮",
+        "sub2": "积分透明计费，消耗前可预估"
+      },
+      "checks": {
+        "compliance": "pass",
+        "weighted_len": 161,
+        "max_similarity": 0.76,
+        "ok": true
+      },
+      "image": "out/2026-10-23/img-3.png"
+    }
+  ]
+}

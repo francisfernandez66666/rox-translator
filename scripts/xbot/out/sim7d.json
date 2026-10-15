@@ -1,0 +1,234 @@
+{
+  "_meta": {
+    "purpose": "P3 七天模拟物料 · 21 条文案 + 21 张配图，供人工审阅",
+    "generated": "2026-10-13",
+    "rules": "严格按 X运营执行包_选题库与30天排期_20261013.md 与手册 §4.2 闸门规则生成",
+    "note": "全部未真实发布；本文件仅供审阅，通过后才进 P4"
+  },
+  "days": [
+    {
+      "day": 1, "date": "2026-10-20",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A02",
+          "text": "80 页 Word 交回来，目录、页码、图表编号全要手动重排。\n\n排这两小时的时间，本来能再写一版方案。\n\n能言 LangCross：Word / PPT / Excel / PDF 原版式直出，拿到手就能发。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s1",
+          "image_text": {
+            "main": "返工一次，这单白干",
+            "sub1": "Word / PPT / Excel / PDF 原版式直出",
+            "sub2": "拿到手就能发，不用再排一遍"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B01",
+          "text": "同一份稿子里，公司名出现了三种译法。\n\n客户看到的时候，没生气——他在想你是不是在骗他。\n\n能言 LangCross：品牌名统一锁死，术语硬闸说不对就拦。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s2",
+          "image_text": {
+            "main": "同一份稿，三个译法",
+            "sub1": "品牌名与术语：不对就拦，不放行",
+            "sub2": "多轮质控 + 人工复核通道"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C01",
+          "text": "一年翻译费花出去的，有多少是花在返工排版上的？\n\n没人算过这笔账。算完你会想砍掉点什么。\n\n能言 LangCross：成本约为人工翻译的 1/8，账单逐笔可查。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d1_s3",
+          "image_text": {
+            "main": "先别看单价，看返工",
+            "sub1": "等待、返工、扯皮，都是翻译的隐性成本",
+            "sub2": "成本约为人工翻译的 1/8"
+          }
+        }
+      ]
+    },
+    {
+      "day": 2, "date": "2026-10-21",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A06",
+          "text": "页眉、页脚、页码、图注——最容易整段漏译的地方。\n\n漏了没人发现，客户那边先发现。\n\n能言 LangCross：原版式直出，结构逐项守恒，漏不掉。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s1",
+          "image_text": {
+            "main": "漏在最不起眼的地方",
+            "sub1": "页眉页脚 / 页码 / 图注最易整段漏译",
+            "sub2": "原版式直出，结构逐项守恒"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B03",
+          "text": "产品型号被音译了。\n\n海外客户在官网搜不到你的产品，于是买了别家的。\n\n能言 LangCross：型号、术语、品牌名按你的库统一，不许自由发挥。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s2",
+          "image_text": {
+            "main": "型号译对了，客户才搜得到",
+            "sub1": "品牌名与型号：统一锁死",
+            "sub2": "术语硬闸：翻错即拦截"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C04",
+          "text": "客户要三天后交。\n\n而你要三天后才拿到译文，然后再排一天版。\n\n能言 LangCross：交期从「等三天」压到「等三分钟」。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d2_s3",
+          "image_text": {
+            "main": "从等三天，到等三分钟",
+            "sub1": "多语言并行，一次打包交付",
+            "sub2": "交期压缩，省下的不只是钱"
+          }
+        }
+      ]
+    },
+    {
+      "day": 3, "date": "2026-10-22",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A08",
+          "text": "一个术语改错，整份 60 页的稿子重译一遍。\n\n更贵的是那句话没说出口：你早就提醒过他们了。\n\n能言 LangCross：术语硬闸在翻译时就把住，不给错误出门的机会。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s1",
+          "image_text": {
+            "main": "一个词，全篇重来",
+            "sub1": "术语硬闸：翻错即拦，不出门",
+            "sub2": "省掉的不只是重译，还有扯皮"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B05",
+          "text": "法律条款里，一个词差一个字，责任就不在你的合同里了。\n\n这不是危言耸听，是常识。\n\n能言 LangCross：术语与条款走硬闸 + 人工复核通道。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s2",
+          "image_text": {
+            "main": "差一个字，责任就换了人",
+            "sub1": "术语硬闸 + 人工复核通道",
+            "sub2": "合同、条款、说明书：一个词都不许错"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C20",
+          "text": "按一页 80 字算，一份 80 页文件，人工要多少钱？\n\n再算上排版、沟通、加急，算完再谈。\n\n能言 LangCross：成本约为人工翻译的 1/8，账单逐笔可查。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d3_s3",
+          "image_text": {
+            "main": "算完这笔账再谈",
+            "sub1": "翻译、排版、沟通、加急，都是成本",
+            "sub2": "成本约为人工翻译的 1/8"
+          }
+        }
+      ]
+    },
+    {
+      "day": 4, "date": "2026-10-23",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A11",
+          "text": "做了双语版，还得手工把两份文档的段落一段段对齐。\n\n这是最没技术含量、却最占时间的活。\n\n能言 LangCross：原版式直出，结构天然对齐。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s1",
+          "image_text": {
+            "main": "对齐段落这件事，不该占你一下午",
+            "sub1": "双语对照，结构天然对齐",
+            "sub2": "Word / PPT / Excel / PDF 原版式直出"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B07",
+          "text": "这次译的说明书，和上个月那份对不上。\n\n客户以为你们上了两套产品。\n\n能言 LangCross：知识库与翻译记忆持续沉淀，越用越准。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s2",
+          "image_text": {
+            "main": "上一版和这一版，对不上",
+            "sub1": "术语与译法要跨批次一致",
+            "sub2": "知识库沉淀，越用越准"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C07",
+          "text": "翻译的隐性成本，从来没人单独算过：\n\n等待的时间、返工的时间、和供应商扯皮的时间。\n\n能言 LangCross：成本约为人工翻译的 1/8，消耗前可预估。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d4_s3",
+          "image_text": {
+            "main": "隐性成本，从来没人算过",
+            "sub1": "等待 · 返工 · 扯皮",
+            "sub2": "积分透明计费，消耗前可预估"
+          }
+        }
+      ]
+    },
+    {
+      "day": 5, "date": "2026-10-24",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A14",
+          "text": "打出来发现某页超框了。\n\n客户拿到的是一份废纸，而这一天就这么过去了。\n\n能言 LangCross：原版式直出 + 多轮质控，交付前先验版式。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s1",
+          "image_text": {
+            "main": "超框那一页，是废纸的一页",
+            "sub1": "原版式直出 + 多轮质控",
+            "sub2": "打印前先验版式，不给客户废纸"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B09",
+          "text": "计量单位在翻译时被顺手改错了。\n\n出了事，没人说得清是谁的责任。\n\n能言 LangCross：单位、数字、格式走原版式直出，一个符号都不动。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s2",
+          "image_text": {
+            "main": "多一个零，就不是小事了",
+            "sub1": "单位与数字：原版式直出，符号不动",
+            "sub2": "术语硬闸 + 多轮质控"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C02",
+          "text": "几十万买一套翻译软件，用起来还不如人工。\n\n因为软件不解决术语，也不解决版式。\n\n能言 LangCross：成本随用量摊薄，术语与版式一次解决。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d5_s3",
+          "image_text": {
+            "main": "贵的那套，解决的是错的问题",
+            "sub1": "术语与版式，才是真问题",
+            "sub2": "成本约为人工翻译的 1/8"
+          }
+        }
+      ]
+    },
+    {
+      "day": 6, "date": "2026-10-25",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A17",
+          "text": "图表标题和坐标轴翻译错了，整张图的意思就反了。\n\n而图正是一份报告里最值钱的部分。\n\n能言 LangCross：术语硬闸盯住关键标签，原版式直出保住结构。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s1",
+          "image_text": {
+            "main": "标题错一个字，图的意思就反了",
+            "sub1": "术语硬闸盯住关键标签",
+            "sub2": "原版式直出保住整张图的结构"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B20",
+          "text": "每次都要跟翻译公司解释一遍我们的术语。\n\n解释完这次，下次新来的翻译还是不懂。\n\n能言 LangCross：术语表沉淀进企业知识库，只讲一次。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s2",
+          "image_text": {
+            "main": "同一套术语，讲了第几遍了",
+            "sub1": "术语表沉淀进企业知识库",
+            "sub2": "只讲一次，之后都按这个来"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C05",
+          "text": "加急费比翻译费还贵。\n\n因为你付的不是翻译费，是时间费。\n\n能言 LangCross：交期分钟级，加急这件事从根上消失。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d6_s3",
+          "image_text": {
+            "main": "你付的不是翻译费，是时间费",
+            "sub1": "交期从「等三天」到「等三分钟」",
+            "sub2": "加急这件事，从根上消失"
+          }
+        }
+      ]
+    },
+    {
+      "day": 7, "date": "2026-10-26",
+      "items": [
+        {
+          "seq": 1, "slot": "10:00", "angle": "返工", "topic_id": "A19",
+          "text": "一批 30 个文件，人工一个一个排版，排到怀疑人生。\n\n而这活本来就不该由人做。\n\n能言 LangCross：批量上传，多语言并行，一次打包交付。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s1",
+          "image_text": {
+            "main": "30 个文件，不该排 30 遍",
+            "sub1": "批量处理 · 多语言并行",
+            "sub2": "一次上传，一次打包下载"
+          }
+        },
+        {
+          "seq": 2, "slot": "17:00", "angle": "术语", "topic_id": "B11",
+          "text": "翻译错误不会当场被发现。\n\n往往是客户那边出了事，你才知道。\n\n能言 LangCross：术语硬闸 + 多轮质控 + 人工复核通道。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s2",
+          "image_text": {
+            "main": "错误的代价，总是延后到账",
+            "sub1": "多轮质控 + 人工复核通道",
+            "sub2": "别等客户先发现问题"
+          }
+        },
+        {
+          "seq": 3, "slot": "22:00", "angle": "成本", "topic_id": "C13",
+          "text": "每次翻译都在重新花钱，公司却没沉淀下任何东西。\n\n五年后从零开始，术语还是那个坑。\n\n能言 LangCross：企业知识库私有沉淀，越用越省。\n\nhttps://langcross.lexicorn.cn/?utm_source=x&utm_medium=social&utm_campaign=bot_d7_s3",
+          "image_text": {
+            "main": "年年翻译，年年从零开始",
+            "sub1": "企业知识库私有沉淀",
+            "sub2": "越用越准，越用越省"
+          }
+        }
+      ]
+    }
+  ]
+}
