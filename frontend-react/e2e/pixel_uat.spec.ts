@@ -250,7 +250,18 @@ test.describe('像素级 UAT', () => {
     await expect(brand, '左栏品牌位未渲染').toBeVisible();
     // 品牌可能是图片 logo（此时 .lc-sidebar__logo 内只有 <img>），字号锁改为落在 img 的宿主上量，
     // 不能因为白标形态不同就假红。
-    expect(await brand.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '品牌字号 ≠ 〇-N 后档 16px').toBe(16);
+    // ★ 品牌字号分**两档**（★ 2026-10-15 用户令「logo 区域再做大点」＋同批「字阶只对中文放大，英文品牌名
+    //   放大反而显笨重」）：中文档 18px（.lc-sidebar__logo--zh）／非中文档 16px（组件库 .lc-sidebar__logo 基线）。
+    //   两档都必须钉——只钉一档时另一档漂了没人拦：把 18 提成基线＝英文跟着变大；基线回落＝中文档放大丢失。
+    //   语种**显式钉在 app_lang**（不靠宿主机 locale 自动检测），否则本锁随环境变档（同 §一·5 测试钉底口径）。
+    //   ⚠️ 旧形态（本批修）：这里只写死 16px、且按"品牌位 16/600 交付真值"理解 ⇒ 中文档恒读 18 判红，
+    //   而产品侧那一档是用户明令的形态（不是回归）——判据过时，改判据不改产品。
+    const brandFsAt = async (lang: 'zh' | 'en') => {
+      await page.evaluate((l) => localStorage.setItem('app_lang', l), lang);
+      await page.reload();
+      await expect(page.locator('.lc-sidebar'), '左栏未渲染（语言档切换后）').toBeVisible();
+      return page.locator('.lc-sidebar__logo').first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+    };
     const navItem = page.locator('.lc-side-item').first();
     // 导航项共用同一条 .lc-side-item 规则，取首个即可代表该字阶档（不必逐个数）。
     // 高度锁之前必须先断可见：隐藏元素 getBoundingClientRect() 恒为 0，
@@ -267,6 +278,11 @@ test.describe('像素级 UAT', () => {
     const langH = await langBtn.evaluate((el) => el.getBoundingClientRect().height);
     expect(langH, `语种钮实高 ${langH}px ⇒ 文案已折行`).toBeLessThanOrEqual(38);
     expect(await langBtn.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)), '语种钮字号 ≠ 〇-N 后档 14px').toBe(14);
+    // 品牌字号两档（定义见上方 brandFsAt）：中文档 18 ＝ 用户令后档；非中文档 16 ＝ 组件库基线（用户令只放大中文）。
+    expect(await brandFsAt('zh'), '中文档品牌字号 ≠ 用户令后档 18px').toBe(18);
+    expect(await brandFsAt('en'), '非中文档品牌字号 ≠ 基线 16px（用户令只放大中文档，英文不得跟着变大）').toBe(16);
+    // 复原中文档：截图与同用例后续判定都按中文档（切档用的是 reload，别把 en 留给后面）。
+    await brandFsAt('zh');
     await shot(page, 'p2b_workbench_merged');
   });
 
