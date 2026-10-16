@@ -27,6 +27,7 @@ const HEALTH_URL = '/api/health'
 const TTL_MS = 5 * 60 * 1000
 
 let snap: VoiceCap = { tts: null }
+// listeners 订阅者集合（各气泡的 useSyncExternalStore 各订一份，状态只此一份）
 const listeners = new Set<() => void>()
 let inflight: Promise<void> | null = null
 let fetchedAt = 0
