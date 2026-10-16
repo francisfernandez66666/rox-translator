@@ -79,8 +79,10 @@ func (s *Store) CreateAPIKey(tid, userID int64, name, perms string, dailyLimit i
 }
 
 // SetAPIKeyDailyLimit 设置 Key 每日调用上限（R4 Key 级配额；0=不限）。
+// tid<=0＝平台视角（超管），与 ListAPIKeys 同尺——见 apiKeyIDScope 上方那条 2026-10-16 的实证。
 func (s *Store) SetAPIKeyDailyLimit(id, tid, limit int64) error {
-	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET daily_call_limit=? WHERE id=? AND tenant_id=?", limit, id, tid)
+	where, args := apiKeyIDScope(id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET daily_call_limit=? WHERE "+where, append([]interface{}{limit}, args...)...)
 	return err
 }
 
@@ -95,10 +97,11 @@ func (s *Store) GetAPIKeyByHash(hash string) (*APIKey, error) {
 	return &k, nil
 }
 
-// GetAPIKey 按 ID+租户查询 API Key（用于管理端轮换：必须同时校验租户归属，防止越权访问）。
-// 参数：id=Key 主键 ID，tid=租户 ID。
+// GetAPIKey 按 ID 查询 API Key（用于管理端轮换等逐条操作：tid>0 时同时校验租户归属，防越权）。
+// 参数：id=Key 主键 ID，tid=租户 ID；tid<=0＝平台视角（超管，跨租户），与 ListAPIKeys 同尺。
 func (s *Store) GetAPIKey(id, tid int64) (*APIKey, error) {
-	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	where, args := apiKeyIDScope(id, tid)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, COALESCE(user_id,0), key_hash, key_prefix, name, perms, status, created_at, COALESCE(last_used_at,''), call_count, COALESCE(daily_call_limit,0), COALESCE(calls_today,0), COALESCE(calls_today_date,''), COALESCE(key_enc,'') FROM api_keys WHERE "+where, args...)
 	var k APIKey
 	if err := row.Scan(&k.ID, &k.TenantID, &k.UserID, &k.KeyHash, &k.KeyPrefix, &k.Name, &k.Perms, &k.Status, &k.CreatedAt, &k.LastUsedAt, &k.CallCount, &k.DailyCallLimit, &k.CallsToday, &k.CallsTodayDate, &k.KeyEnc); err != nil {
 		return nil, err
@@ -137,17 +140,35 @@ func (s *Store) ListAPIKeys(tid int64) ([]*APIKey, error) {
 	return out, nil
 }
 
+// apiKeyIDScope 返回「按主键 id 定位一行」的 WHERE 子句与参数：tid>0＝本租户（租户隔离），
+// tid<=0＝**平台视角**（超管，跨租户，不做租户过滤）——与 ListAPIKeys 的 tid<=0 口径**同一把尺子**。
+//
+// ★ 2026-10-16 立（现网实证「后台 API Key 删不掉」）：此前本文件六个「逐条」函数各自硬编码
+// `AND tenant_id=?`，而列表在超管平台上下文（tid=0）返回的是**全量**——于是超管在后台**看得见所有 Key、
+// 却删不掉／停不停／改不了限额／轮换不了**（轮换更隐蔽：它先 GetAPIKey 也带 tenant_id=0，直接回 404「Key 不存在」）。
+// 更坏的是写路径：`WHERE tenant_id=0` **恒 0 行影响且不报错**，接口照样回 `{"success":true}`，
+// 前端刷新后那行还在——「看得见却动不了」＋「假装动过了」，比 403 难查得多（日志里两条 200、字节数一字不变）。
+// 收敛成一个助手而不是在六个函数里各写一遍分支，就是为了让「列表与逐条操作同尺」这条本身可以一眼看全。
+func apiKeyIDScope(id, tid int64) (string, []interface{}) {
+	if tid > 0 {
+		return "id=? AND tenant_id=?", []interface{}{id, tid}
+	}
+	return "id=?", []interface{}{id}
+}
+
 // SetAPIKeyStatus 启用/停用 API Key（管理端轮换/吊销）。
 // 参数：id=Key 主键 ID，tid=租户 ID，status=新状态（active/disabled）。
 func (s *Store) SetAPIKeyStatus(id, tid int64, status string) error {
-	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET status=? WHERE id=? AND tenant_id=?", status, id, tid)
+	where, args := apiKeyIDScope(id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE api_keys SET status=? WHERE "+where, append([]interface{}{status}, args...)...)
 	return err
 }
 
 // DeleteAPIKey 删除 API Key（永久吊销）。
-// 参数：id=Key 主键 ID，tid=租户 ID（租户隔离校验）。
+// 参数：id=Key 主键 ID，tid=租户 ID（tid<=0＝平台视角，与 ListAPIKeys 同尺）。
 func (s *Store) DeleteAPIKey(id, tid int64) error {
-	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM api_keys WHERE id=? AND tenant_id=?", id, tid)
+	where, args := apiKeyIDScope(id, tid)
+	_, err := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM api_keys WHERE "+where, args...)
 	return err
 }
 
@@ -178,10 +199,12 @@ func (s *Store) TouchAPIKey(id int64) {
 		WHERE id=?`, time.Now().Format(time.RFC3339), today, today, id)
 }
 
-// GetAPIKeyPlain 解密返回 Key 明文（租户隔离校验；供「固定复制」能力使用）。
+// GetAPIKeyPlain 解密返回 Key 明文（供「固定复制」能力使用）。
+// 参数：tid>0＝本租户（租户隔离校验）；tid<=0＝平台视角（超管，与 ListAPIKeys 同尺）。
 func (s *Store) GetAPIKeyPlain(id, tid int64) (string, error) {
+	where, args := apiKeyIDScope(id, tid)
 	var enc string
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(key_enc,'') FROM api_keys WHERE id=? AND tenant_id=?", id, tid).Scan(&enc)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(key_enc,'') FROM api_keys WHERE "+where, args...).Scan(&enc)
 	if err != nil {
 		return "", err
 	}

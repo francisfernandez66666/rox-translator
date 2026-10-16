@@ -88,12 +88,21 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.SetAPIKeyStatus(req.ID, s.effTenant(r, u), req.Status); err != nil {
-		// F-64②：启停走 UPDATE ... WHERE id=? AND tenant_id=?，id 不存在只是 0 行影响、不报错，
-		// 所以能进到这条分支的只有数据库执行失败＝服务端出错（500）。
+	tid := s.effTenant(r, u)
+	if _, err := s.Store.GetAPIKey(req.ID, tid); err != nil {
+		// F-64②：跨租户越权启停别人的 Key、或 id 根本不存在，一律「Key 不存在」404
+		// （租户隔离下不回 403，避免泄露他租户 Key 的存在性）。
+		// ★ 2026-10-16：这一道**存在性前置**是本批补的——UPDATE 的 0 行影响不报错，
+		// 少了它就会把「没改到任何东西」回成 success（现网「后台删不掉/停不掉」的形态）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
+		return
+	}
+	if err := s.Store.SetAPIKeyStatus(req.ID, tid, req.Status); err != nil {
+		// F-64②：走到这里＝数据库执行失败＝服务端出错（500）。
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
+	s.Store.LogAudit(tid, u.ID, "apikey_set_status", "api_keys", fmt.Sprintf("%d status=%s", req.ID, req.Status))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -115,7 +124,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	old, err := s.Store.GetAPIKey(req.ID, tid)
 	if err != nil {
-		// F-64②：GetAPIKey 按 id+tenant_id 精确查一行，查不到（含跨租户越权轮换别人的 Key）
+		// F-64②：GetAPIKey 按 id（+tid>0 时的租户）精确查一行，查不到（含跨租户越权轮换别人的 Key）
 		// 就是「本租户下没有这条 Key」→ 404；租户隔离下不回 403，避免泄露他租户 Key 的存在性。
 		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
 		return
@@ -124,12 +133,16 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	plain, err := s.Store.CreateAPIKey(tid, old.UserID, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额与归属用户
+	// ★ 2026-10-16：新 Key 必须继承**被轮换那把 Key 的租户**（old.TenantID），不能用 tid——
+	// 超管在平台上下文（tid=0）轮换他租户的 Key 时，用 tid 会把新 Key 落成 tenant_id=0 的孤儿
+	// （列表聚合里还看得见，但任务归属校验与租户面再也查不到）。审计同理落 old.TenantID。
+	newTid := old.TenantID
+	plain, err := s.Store.CreateAPIKey(newTid, old.UserID, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额与归属用户
 	if err != nil {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
 		return
 	}
-	s.Store.LogAudit(tid, u.ID, "apikey_rotate", "api_keys", old.Name)
+	s.Store.LogAudit(newTid, u.ID, "apikey_rotate", "api_keys", old.Name)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain, "note": "旧 Key 已失效，新 Key 仅显示一次"})
 }
 
@@ -148,12 +161,19 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	if err := s.Store.DeleteAPIKey(req.ID, s.effTenant(r, u)); err != nil {
-		// F-64②：删除走 DELETE ... WHERE id=? AND tenant_id=?，删不到也是 0 行影响、不报错，
-		// 走到这里＝数据库执行失败＝服务端出错（500）。
+	tid := s.effTenant(r, u)
+	if _, err := s.Store.GetAPIKey(req.ID, tid); err != nil {
+		// 不存在/跨租户一律 404「Key 不存在」（不泄露他租户存在性）。
+		// ★ 2026-10-16：删不掉的那条现网缺陷正是缺了这道存在性前置——见 handleAPIKeyStatus 同处注释。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
+		return
+	}
+	if err := s.Store.DeleteAPIKey(req.ID, tid); err != nil {
+		// F-64②：真删失败了才是 500（存在性已在上面判过，删到 0 行在这里已不可能）。
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
+	s.Store.LogAudit(tid, u.ID, "apikey_delete", "api_keys", fmt.Sprintf("%d", req.ID))
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -175,13 +195,17 @@ func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	if err := s.Store.SetAPIKeyDailyLimit(req.ID, tid, req.Limit); err != nil {
+	if _, err := s.Store.GetAPIKey(req.ID, tid); err != nil {
 		// F-64②：文案「Key 不存在」按原样保留，状态码随文案取 404（本租户下查不到这条 Key 的语义，
 		// 且租户隔离下跨租户改限额也只回「不存在」不泄露存在性）。
-		// ⚠️ 已知偏差（已上报主代理）：store 侧是 UPDATE，id 不存在只算 0 行影响、并不报错，
-		// 故这条分支实际只会被数据库执行失败触发——真要按成因判应为 500 并改文案，
-		// 但本批边界要求文案一字不改，这里先与既有契约对齐。
+		// ★ 2026-10-16 修正：旧注释写着「store 侧是 UPDATE，id 不存在只算 0 行影响、并不报错，
+		// 这条分支实际只会被数据库执行失败触发」——那是把缺陷当契约登记的写法（同 handleAPIKeyDelete）。
+		// 现在这里**显式前置存在性检查**，所以这条 404 就是「真查不到」，不再是空转分支。
 		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在"))
+		return
+	}
+	if err := s.Store.SetAPIKeyDailyLimit(req.ID, tid, req.Limit); err != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "apikey_set_limit", "api_keys",
