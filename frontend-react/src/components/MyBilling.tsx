@@ -263,8 +263,11 @@ function InvoicesTab() {
 export default function BillingCenter() {
   // langcross Tabs 是受控组件（不像原 TDesign Tabs 自带 defaultValue 内部态），切换状态得自己拿
   const [tab, setTab] = useState('orders')
+  // ★ 2026-10-16：本页原先自带 `maxWidth:900; margin:0 auto; padding:16` 内联容器，
+  //   与 /packages /my /invites 的零外垫形态互相打架；外垫与限宽现统一由路由层的
+  //   <FrontPage>（.fs-page，styles/frontshell.css）承担，本组件不再自己开框。
   return (
-    <div style={{ width: '100%', maxWidth: 900, margin: '0 auto', padding: 16 }}>
+    <>
       <BalancePanel />
       <TrendCard />
       <div className="mb-card">
@@ -279,16 +282,18 @@ export default function BillingCenter() {
         {tab === 'ledger' && <LedgerTab />}
         {tab === 'rewards' && <RewardsTab />}
         {tab === 'invoices' && <InvoicesTab />}
-    </div>
+      </div>
       {/* 页面级 CSS 随组件挂载注入（本项目约定：不引全局样式表，前缀隔离） */}
       <style>{CSS_MB}</style>
-    </div>
+    </>
   )
 }
 
 // 页面级样式：mb- 前缀（防与组件库/其他页面类名重名）
+// ⚠ 卡间距不在这里：两个 .mb-card 是 .fs-page 的直接子项，纵向间距走框的 gap:16
+//    （原 margin-bottom:12 会与外垫/框的 gap 叠成 28px，已随 2026-10-16 页框统一撤掉）
 // ⚠ 本页表格用的 .ss-table 不在这里——它由 App.tsx 的全局 <style> 提供（theme.css 另有深色覆盖），
 //    想调表格边框/内边距去改那两处，写在本文件里会被全局规则的优先级比掉
 const CSS_MB = `
-.mb-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:20px;margin-bottom:12px;box-shadow:var(--lc-panel-highlight)}
+.mb-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:14px;padding:20px;box-shadow:var(--lc-panel-highlight)}
 `

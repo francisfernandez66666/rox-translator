@@ -18,6 +18,7 @@ import { SkillBadge } from './SkillBadge'
 import WordSwap from './WordSwap'
 // ★ P3 译文朗读（api/chatVoice.ts 是自包含模块，删掉本行与 SpeakButton 即回退到无语音形态）
 import { speakAloud } from '@/api/chatVoice'
+import { useVoiceCapability } from '@/api/voiceCapability'
 import { toastWarn } from '@/lib/toastBus'
 // ★ 语音失败文案的唯一取词口（改造方案 §六 第 9 条）：按后端 reason 档位取当前界面语言的词典键，
 //   绝不要把后端那句中文话术 toast 给非中文访客。
@@ -54,6 +55,8 @@ function isImage(path: string): boolean {
 //   翻译结果一个字节都不动——语音是择优产出，永远不是交付的前提条件。
 // ★ 单条封面：多目标语时朗读**首语言**那一份（`transRows[0]`）——同时出几种语言的声音
 //   只会互相盖住，选择权交给用户更合适（译文本身照样全在）。
+// ★ 2026-10-16：这颗按钮的**是否渲染**由 api/voiceCapability 决定（tts_ready=false ⇒ 整颗不渲染，
+//   同 ChatWindow 麦克风那条「不给一个点了必然报错的入口」）；本组件只管点下去之后的三态。
 function SpeakButton({ text, lang }: { text: string; lang: string }) {
   const urlRef = useRef<string | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
@@ -138,6 +141,9 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   // ★ 语言订阅（#31 修复）：本组件是 memo 包装，切语言时 props 不变、父级重渲染也进不来，
   //   气泡里的 msg.*/chat.* 文案会停在旧语种——这里显式订阅语言 store，切换即重挂渲染。
   useLang()
+  // ★ 2026-10-16：服务端语音能力（tts_ready）——只用来决定朗读钮是否渲染；
+  //   探不到时为 null（按可用处理），全站共用同一份状态（见 api/voiceCapability.ts）
+  const voiceCap = useVoiceCapability()
   // 移动端标记（窗口宽度 ≤ 768px）；typeof window 兜底：SSR/单测环境无 window，初值不能直接读
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈
@@ -569,7 +575,10 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                   ⚠️ 模式**不在这里重复**——同一个词在译文表头已经是一枚带色的胶囊（.mode-badge），
                   meta 再念一遍纯文本就是「同屏两处一模一样、还各是一档字号」，正是本条要统一掉的东西；
                   能力一项未减：读的是同一个 modeBadge，只是只出栈一次。 */}
-              {hasTranslations && (
+              {/* ★ 2026-10-16：服务端没投放 TTS 权重（/api/health.tts_ready=false）时**整颗不渲染**——
+                  点一次必然失败、再弹一句 toast，那是「摆了颗点了必错的按钮」；
+                  tts 为 null（探不到）时照常露出，失败仍有本地化 toast 兜底（fail-open 口径见 voiceCapability.ts） */}
+              {hasTranslations && voiceCap.tts !== false && (
                 <SpeakButton
                   text={transRows.length === 1 ? transRows[0].v : (transRows[0]?.v || '')}
                   lang={transRows[0]?.lc || ''}

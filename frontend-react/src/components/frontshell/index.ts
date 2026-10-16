@@ -27,6 +27,7 @@
 
 export { default as FrontSideNav } from './FrontSideNav'
 export { default as FrontMobileTopBar } from './FrontMobileTopBar'
+export { default as FrontPage } from './FrontPage'
 export { useMobileShell, MOBILE_SHELL_QUERY } from './useMobileShell'
 export type { FrontSideNavProps, FrontAccountMenuProps, FrontFooterProps, WorkbenchTab } from './FrontSideNav'
 export type { FrontMobileTopBarProps } from './FrontMobileTopBar'

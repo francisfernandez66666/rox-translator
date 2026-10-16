@@ -21,6 +21,16 @@
      ⑤ 令牌一律 --lc-* / --npz-*，不新增裸色值（readability.test.ts 会扫本文件）。
    ============================================================================ */
 
+/* ---- 路由页内容框（tab 页共用：/packages /billing /my /invites）----
+   ★ 2026-10-16 本批「侧栏 tab 页布局重做」：四个自助页此前各自为政——
+   有的贴边零外垫（card 直接顶到左栏与视口右缘）、有的自带 maxWidth:900 内联居中，
+   于是同一套卡片在四个页面里左边界各不相同。现在**只有这一个框**：
+   `max-width` 与 `.fs-main` 一同居中、外垫随屏收窄、纵向用 flex gap 统一间距。
+   ⚠ 只做「框」：卡片样式仍归 .ssc-card（selfservice.tsx）/ .mb-card（MyBilling.tsx），
+   别把卡片规则搬进来（那会让本文件变成第二个卡片样式出处）。 */
+.fs-page { width: 100%; max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column;
+  gap: 16px; padding: 20px 24px 32px; }
+
 /* ---- 左栏导航与信息带 ---- */
 /* 导航列：左栏内两处复用（中部工作台 Tab、底部自助入口） */
 .fs-nav { display: flex; flex-direction: column; gap: 2px; }
@@ -49,8 +59,12 @@
 /* ---- 左栏的两种形态（桌面常驻 / 移动抽屉）---- */
 /* 桌面档：位置钉回静态。641–900 也走这条（本壳断点是 ≤640，不吃 components.css 的 ≤900 抽屉规则） */
 .lc-sidebar.fs-sidebar { position: static; transform: none; z-index: auto; box-shadow: none; }
-/* 移动档：抽屉。默认移出屏外，--open 时滑回；打开期间可纵向滚动（左栏内容长于屏高） */
+/* 移动档：抽屉。默认移出屏外，--open 时滑回；打开期间可纵向滚动（左栏内容长于屏高）
+   ★ 宽度**只在这里覆写**（不吃库件 --lc-sidebar-w:238 —— 那个令牌同时服务后台侧栏，
+   全局改会把 11 屏后台一起改宽）；抽屉里还要塞「折叠页脚」，238px 下页脚换行明显局促
+   （实测：238 时页脚内容盒仅 217，三行且分隔符悬在行首），故移动档加宽到 296（84vw 兜住窄机）。 */
 .lc-sidebar.fs-sidebar--drawer { position: fixed; top: 0; bottom: 0; left: 0; z-index: 60;
+  width: min(296px, 84vw);
   transform: translateX(-100%); transition: transform .22s ease; box-shadow: none; overflow-y: auto; }
 .lc-sidebar.fs-sidebar--drawer.fs-sidebar--open { transform: none; box-shadow: 0 0 60px rgba(0, 0, 0, .7); }
 

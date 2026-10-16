@@ -112,7 +112,7 @@ import { EmailBindModal } from './components/modals'
 import WordSwap, { useWordSwapGate } from './components/WordSwap'
 // ★ 2026-10-15 前台外壳布局方案：左栏 / 移动档顶栏 / 移动档状态机
 //   （唯一实现，结构见 components/frontshell/index.ts，样式见 styles/frontshell.css）
-import { FrontSideNav, FrontMobileTopBar, useMobileShell } from './components/frontshell'
+import { FrontSideNav, FrontMobileTopBar, FrontPage, useMobileShell } from './components/frontshell'
 // ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看）
 const ChatHistory = lazy(() => import('./components/ChatHistory'))
 // LangCross 纯黑组件库：前台外壳只剩 Button 一件（Badge/Icon/LangSelect 已随
@@ -285,11 +285,21 @@ function FrontShell() {
             `html .app-header` 前缀整档放大顶栏控件（#67/#68），2026-09-22 全站还原 UI 真值时
             已随该层一并删除（真值见《UI-ANNOTATIONS.md》§2.2：顶栏 38 高、品牌 14、导航 13 胶囊）。 */}
       <style>{`
-        .ss-grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(340px,1fr))}
+        /* ★ 2026-10-16 侧栏 tab 页布局重做：align-items:start = 卡片按自身内容高，不再被同行最高的
+           那张拉到同高（/my 的「快速入口」卡曾经被 SCIM 卡拉到 315px，里面空一大片）；
+           auto-fit + minmax(min(320px,100%),1fr)：fit 让空轨道塌掉（/packages 两张卡摊满整行、/my 三张
+           卡落成三列），min() 是窄屏安全写法（原 340px 硬下限在 <380px 视口会横向溢出）。
+           页面外垫/限宽不在这里——四个自助页统一走 .fs-page（styles/frontshell.css）。 */
+        .ss-grid{display:grid;gap:16px;align-items:start;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr))}
         .ss-grid .ssc-card{width:100%}
-        .ss-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
+        /* ss-row 是「标签 ─ 值」的两端行：标签 flex:none 不参与收缩（否则窄列里会被长 URL 挤成
+           「SCIM 端 / 点」两行，CJK 默认任意位置可断）；值那一侧 min-width:0 + overflow-wrap:anywhere
+           才是该断的地方（长 URL/Badge 在断点处折行，不再反向撑破卡片）。 */
+        .ss-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid var(--lc-border-faint)}
+        .ss-row>span{flex:none}
+        .ss-row>:not(span){min-width:0;overflow-wrap:anywhere;text-align:end}
         .ss-row span{color:var(--lc-text-2)}.ss-row b{font-size:18px;color:#E7E9EA}
-        .ss-copy{display:flex;align-items:center;gap:8px}
+        .ss-copy{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
         .ss-stats{display:flex;gap:24px;padding:12px 0}
         .ss-stat{text-align:center}
         /* ★ 批2 六档字阶：关键数值 26/700 + 等宽数字（原 20px 旧档作废，UI-ANNOTATIONS §1.2） */
@@ -394,12 +404,12 @@ function FrontShell() {
                 <Route path="/" element={<ChatWindow />} />
                 <Route path="/tickets" element={<TicketsPage />} />
                 <Route path="/editor" element={<EditorPage />} />
-                <Route path="/billing" element={<BillingCenter />} />
+                <Route path="/billing" element={<FrontPage><BillingCenter /></FrontPage>} />
                 {/* 路由守卫：/invites 仅个人版可达（isPersonal 取自 meContext），企业用户命中即弹回工作台。
                     isPersonal 初值是 true，所以 meContext 尚未回来的那一帧放行——深链直达时可能先闪一下邀请页 */}
-                <Route path="/invites" element={isPersonal ? <ReferralPanel /> : <Navigate to="/" replace />} />
-                <Route path="/packages" element={<MyPackagePanel />} />
-                <Route path="/my" element={<AccountPanel />} />
+                <Route path="/invites" element={isPersonal ? <FrontPage><ReferralPanel /></FrontPage> : <Navigate to="/" replace />} />
+                <Route path="/packages" element={<FrontPage><MyPackagePanel /></FrontPage>} />
+                <Route path="/my" element={<FrontPage><AccountPanel /></FrontPage>} />
                 {/* 公开定价页：营销门面（无需登录，Root 内另有未登录分支），挂在 FrontShell
                     下是为了让已登录用户也能从工作台直达 */}
                 <Route path="/pricing" element={<PricingPage />} />

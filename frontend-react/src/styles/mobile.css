@@ -58,6 +58,8 @@
   .ss-grid { grid-template-columns: minmax(0, 1fr) !important; }
   .ss-grid > * { min-width: 0; }
   .ss-stats { flex-wrap: wrap; gap: 12px; }
+  /* ★ 2026-10-16：自助页统一内容框（.fs-page）窄屏收外垫——桌面档 20/24/32 在 900 档收成 16/16/28 */
+  .fs-page { padding: 16px 16px 28px; }
 
   /* 宽表格横向滚动（含 .ss-table 与面板内 table）
      必须 display:block：table 自己的 overflow 不生效（它的滚动盒是匿名 wrapper），
@@ -87,6 +89,8 @@
   .message-row { padding: 0 10px; gap: 8px; }
   .panel-card { padding: 12px; }
   .stat-card b { font-size: 18px; }
+  /* ★ 2026-10-16：自助页内容框在手机档再收一档（16 → 14），与聊天区 10px 外边距同族口径 */
+  .fs-page { padding: 14px 14px 22px; }
   /* 聊天气泡中翻译结果表格 / 代码块不撑破屏 */
   .bubble .md table { display: block; overflow-x: auto; }
 

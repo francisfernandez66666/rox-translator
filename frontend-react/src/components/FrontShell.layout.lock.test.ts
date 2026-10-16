@@ -172,6 +172,37 @@ describe('前台外壳布局锁（#7 汉堡退役 → 2026-10-15 抽屉回归 + 
     expect(app).toMatch(/lazy\(\(\) => import\(['"]\.\/components\/AccountMenu['"]\)\)/)
     expect(app).toMatch(/lazy\(\(\) => import\(['"]\.\/components\/SiteFooter['"]\)\)/)
   })
+
+  // ★ 2026-10-16 本批「侧栏 tab 页布局重做」的机械锁。三个事实，缺一个都会静默退化：
+  //   ① 四个自助页的页框**只由路由层一处提供**（FrontPage/.fs-page）——此前每个页面各写
+  //      各的外垫（/my 贴边零外垫、MyBilling 内联 maxWidth:900），同一个卡片在四个页面上
+  //      左边界各不相同；谁再在页面里开第二个框（内联 maxWidth/padding）当场红。
+  //   ② .ss-grid 必须 align-items:start——默认 stretch 会把「快速入口」这种矮卡拉到
+  //      同行最高那张（实测 101 → 315px，卡内空一大片），这是用户点名的缺陷本体。
+  //   ③ .fs-page 的样式出处唯一（frontshell.css），别在页面里再内联一份。
+  it('自助页页框只由路由层一处提供（FrontPage/.fs-page），且卡片不再被拉伸', () => {
+    // ① 四条自助路由都套在 <FrontPage> 里
+    for (const p of ['/billing', '/packages', '/my']) {
+      const idx = app.indexOf(`path="${p}"`)
+      expect(idx, `路由 ${p} 不在`).toBeGreaterThan(-1)
+      const line = app.slice(idx, app.indexOf('\n', idx))
+      expect(line, `${p} 必须包在 <FrontPage> 之内（页框唯一出处）`).toContain('<FrontPage>')
+    }
+    const inv = app.slice(app.indexOf('path="/invites"'))
+    expect(inv.slice(0, inv.indexOf('\n')), '/invites 必须包在 <FrontPage> 之内').toContain('<FrontPage>')
+    // ② .ss-grid 不再拉伸子项（用户点名的 /my 留白缺陷）
+    expect(app, '.ss-grid 必须 align-items:start（否则矮卡被拉高留白）').toMatch(/\.ss-grid\{[^}]*align-items:start/)
+    // auto-fit（空轨道塌掉，卡片摊满整行）＋窄屏安全下限（硬下限在 <380px 视口会横向溢出）
+    expect(app, '.ss-grid 轨道下限要能收到 100%').toMatch(/grid-template-columns:repeat\(auto-fit,minmax\(min\(3[0-9]{2}px,100%\),1fr\)\)/)
+    // ③ 页面自己不许再开框：MyBilling 的页级内联容器已撤，卡间距走 .fs-page 的 gap
+    const mb = stripComments(read('src/components/MyBilling.tsx'))
+    expect(mb, 'MyBilling 不许再自带页级容器（会双外垫）').not.toMatch(/maxWidth:\s*900/)
+    expect(mb, '卡间距已交 .fs-page 的 gap，.mb-card 不许再带 margin-bottom').not.toMatch(/\.mb-card\{[^}]*margin-bottom/)
+    // 样式出处唯一：.fs-page 只在 frontshell.css 里定义
+    expect(css).toContain('.fs-page')
+    expect(app, '.fs-page 样式只许在 frontshell.css 一处').not.toContain('.fs-page{')
+    expect(mb).not.toContain('.fs-page{')
+  })
 })
 
 // ★ F-48（〇-U 批 I-5 2026-09-26）：窄屏余额徽标的**静态机制锁**。
