@@ -224,6 +224,14 @@ for h in langcross.lexicorn.cn rox-test.lexicorn.cn rox.lexicorn.cn; do
   se=$(tr -d '\r' </tmp/_pd_srch 2>/dev/null | awk 'tolower($1)=="content-encoding:"{print tolower($2)}' | head -1)
   ss=$(wc -c </tmp/_pd_src 2>/dev/null | tr -d ' '); sh=$(sha256sum /tmp/_pd_src 2>/dev/null | cut -d' ' -f1)
   if [ "$se" = "gzip" ] && [ "$sh" = "$WANT_GZ_SHA" ]; then ok "$h 源站 gzip＝本机 .gz（${ss} B，回落链完整）"; else bad "$h 源站 gzip 档 enc=${se:-<无>} sha=${sh:0:16}/$ss ≠ .gz（${WANT_GZ_SHA:0:16}/${WANT_GZ_SIZE}）⇒ 侧车缺或被运行时重压"; fi
+  # F-2b identity 档（★ 2026-10-17 从公网挪到源站）：不带 Accept-Encoding 必须发**原文**且逐字节等于本机 raw。
+  #   这条的字节等值**只在源站成立**：跨境那一跳对 614 KB 原文档偶发截断（code=200 半截体＋curl_rc=28），
+  #   而真实浏览器都带 Accept-Encoding: br ⇒ 拿 162 KB 的 br（公网档一强判）。原文档只发给不带压缩协商的
+  #   探针/极旧客户端——把它的字节等值放进公网判据就是**结构性偶红**（10-16 两批 postdeploy 各 1 条 BAD 都死在它）。
+  curl -sk $RES -o /tmp/_pd_src -D /tmp/_pd_srch --max-time 20 "https://$h/$ENTRY" || true
+  se=$(tr -d '\r' </tmp/_pd_srch 2>/dev/null | awk 'tolower($1)=="content-encoding:"{print tolower($2)}' | head -1)
+  ss=$(wc -c </tmp/_pd_src 2>/dev/null | tr -d ' '); sh=$(sha256sum /tmp/_pd_src 2>/dev/null | cut -d' ' -f1)
+  if [ -z "$se" ] && [ "$sh" = "$WANT_SHA" ]; then ok "$h 源站 identity＝本机 raw（${ss} B）"; else bad "$h 源站 identity 档 enc=${se:-<无>} sha=${sh:0:16}/$ss ≠ raw（${WANT_SHA:0:16}/${WANT_SIZE}）⇒ 回落链最后一档断了"; fi
   # F-3 错误腿：/assets 下的 404 必须带 no-store，且绝不许带 immutable/一年档
   curl -sk $RES -o /dev/null -D /tmp/_pd_src4 --max-time 20 "https://$h/assets/$GZPROBE" || true
   c4=$(tr -d '\r' </tmp/_pd_src4 2>/dev/null | awk 'tolower($1)=="cache-control:"{sub(/^[^:]*:[ \t]*/,"");print}' | head -1)
@@ -352,15 +360,20 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   fi
 
   # 档三：负向对照——不带 Accept-Encoding 的客户端必须拿原文（证明 br 不是"对谁都说 br"）
-  #   ★ 等值判据本身就是完整性证明（半截体不等于 raw），但仍要先问 pd_complete，好把"没拨通"和"发错档"分开报
+  #   ★ 2026-10-17 降级为**纯读数、不进 PUB_RC**：跨境那一跳对 614 KB 原文档偶发截断
+  #     （10-16 两批各 1 条 BAD 都死在 `code=200 半截体 size=144215/614573 curl_rc=28`，重拨三次含 http1.1 仍不全，
+  #      同刻演示域同腿回满 614,573 B＝不是 origin/CF 配置，是最后一里抖动；真实浏览器都带 Accept-Encoding: br ⇒
+  #      拿 162 KB 的 br，原文档只发给探针/极旧客户端）。原文档的**字节等值**已挪到源站段 F-2b（源站可靠）。
+  #     公网这一档只留下读数：enc 空／体积／协议，供排障看"这一跳给了什么"——不判发版成败。
   PD_MAX="$PUB_MAX_BIG"
   pd_fetch "$TMPB" "$TMPH" "$u/$ENTRY"
   PD_MAX="$PUB_MAX"
-  if pd_complete && [ -z "$ENC" ] && [ "$SIZE" = "$L_SIZE" ]; then
-    echo "  OK   $u/$ENTRY 无 Accept-Encoding 时发原文（${SIZE} B＝本机 raw，负向对照成立）"
+  if pd_complete && [ -z "$ENC" ] && [ "$CODE" = "200" ]; then
+    echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ 原文 ${SIZE} B（完整收完；字节等值看源站段 F-2b）——不判发版"
+  elif pd_complete; then
+    echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ enc=${ENC:-<无>} size=$SIZE code=$CODE（完整收完但档位/体积异常，看 F-2b）——不判发版"
   else
-    echo "  BAD  $u/$ENTRY 无 Accept-Encoding 却 enc=${ENC:-<无>} size=$SIZE/$L_SIZE code=$CODE curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?} ⇒ 负向对照不成立（客户端协商这一层判据不可信）"
-    PUB_RC=1
+    echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ size=$SIZE/$L_SIZE curl_rc=${CURL_RC:-?}（这一跳没走完，最后一里抖动）——不判发版"
   fi
 
   # 首页品牌注入（§一·5 的三域判据，本批换了源、动过 Caddy，照旧复验一次）

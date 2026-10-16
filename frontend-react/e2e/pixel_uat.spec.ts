@@ -619,6 +619,17 @@ test.describe('像素级 UAT', () => {
     // 射程自证：1440 档必须是横排（否则上面那条"容器窄就竖排"会退化成恒真）
     expect(rows.find((r) => r.w === 1440)!.dir, '1440 档舞台不是横排 ⇒ 竖排判据恒真、本锁空转').toBe('row');
     expect(rows.find((r) => r.w === 320)!.dir, '320 档舞台没竖排 ⇒ 窄档判据没量到东西').toBe('column');
+    // ★ 2026-10-17 用户裁定续修：锚点组 981~1423 装不下（自然宽 709、budget 从 1423 起才够）——
+    //   旧形态 ≤980 才隐藏，中间段整组被压窄（锚点文字折两行、登录折两行，en 在 1024 档还把文档撑宽 153px）。
+    //   修法＝隐藏阈值抬到 1439。这里钉两档：1280（挤压最重的宽度）锚点必须已隐藏、1440（唯一完整放得下的宽度）必须可见。
+    await page.setViewportSize({ width: 1280, height: 900 });
+    const links1280 = await page.locator('.lc-nav-links').count();
+    const navH1280 = await page.locator('.lc-mkt-nav').evaluate((el) => Math.round(el.getBoundingClientRect().height));
+    expect(links1280, '1280 档锚点没被隐藏 ⇒ 981~1423 段又回到被 flex 压窄的旧形态（锚点折两行、登录折两行）').toBe(0);
+    expect(navH1280, '1280 档导航高度不是单行 76（锚点隐藏后只剩 brand＋右簇）').toBeLessThanOrEqual(80);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const links1440 = await page.locator('.lc-nav-links').count();
+    expect(links1440, '1440 档锚点被隐藏了 ⇒ 交付形态（含锚点的单行导航）没了').toBe(1);
     await shot(page, 'p2g_marketing_narrow_no_overflow');
   });
 
