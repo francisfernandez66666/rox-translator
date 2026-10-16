@@ -63,6 +63,20 @@ function namedTestids(code: string): string[] {
   return m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
 }
 
+// ★ 2026-10-16 补的第二族判据：点名正锁必须**按服务端能力分派**。
+// 由来：朗读钮自本批起由 `/api/health.tts_ready` 收门（false ⇒ 整颗不渲染，AGENTS §一·17），
+// 而这条 e2e 跑的本机／CI／UAT 实例**都没有 TTS 权重** ⇒ 无条件点名会让它在无权重环境恒红
+// （恒红即钝化）。三档与产品侧同口径：true ⇒ 必须在场；false ⇒ 必须不在场（反向腿）；
+// null（探不到）⇒ 不判。三腿缺一，这条锁要么恒红、要么退化成"永远放行"的单向锁。
+function capabilityLegs(code: string): string[] {
+  const need: Array<[string, RegExp]> = [
+    ['读实例能力（/api/health 的 tts_ready，按布尔取值）', /\/api\/health[\s\S]{0,240}tts_ready/],
+    ['按能力分派点名清单（探不到＝不判，fail-open）', /NAMED\.filter\([\s\S]{0,140}!== false\)/],
+    ['反向腿（能力明确为假时这颗钮必须在场即判红）', /ttsCap === false[\s\S]{0,240}speak-translation[\s\S]{0,160}\.toBe\(0\)/],
+  ]
+  return need.filter(([, re]) => !re.test(code)).map(([name]) => name)
+}
+
 describe('e2e TF4：气泡尾部那一排的判据形状（派生式，不写死件数）', () => {
   const specRaw = readFileSync(SPEC, 'utf8')
   const code = stripComments(specRaw)
@@ -87,6 +101,11 @@ describe('e2e TF4：气泡尾部那一排的判据形状（派生式，不写死
     }
   })
 
+  it('P4 正向：点名正锁按服务端 TTS 能力分派（三腿：读能力／按能力分派／反向腿）', () => {
+    const missing = capabilityLegs(code)
+    expect(missing, `TF4 的「按能力分派」缺腿：${missing.join(' / ')}（缺了它就成单向锁：要么在无权重实例恒红，要么永远放行）`).toEqual([])
+  })
+
   it('R1 反证：换回"写死件数"的旧形态必须被 P1/P2 判红', () => {
     // 变异＝精确复现改造前那三行：数组长句写死 4，且没有点名/第三类/下界三条腿。
     const mutated = code
@@ -101,5 +120,17 @@ describe('e2e TF4：气泡尾部那一排的判据形状（派生式，不写死
     expect(derivedLegs(mutated).length, '反证 R1 失效：摘掉派生腿没被判红').toBeGreaterThan(0)
     // 且变异体不能把 P3 的锚点取空当成"通过"
     expect(namedTestids(mutated).length, '反证 R1 的 NAMED 必须为空 ⇒ P3 必须走"锚点漂了"那条正锁').toBe(0)
+  })
+
+  it('R2 反证：把能力分派摘回"无条件点名"必须被 P4 判红', () => {
+    // 变异＝① 过滤式改成原样点名（等价于"朗读钮永远必须在场"）；② 删掉能力为假那条反向腿。
+    const mutated = code
+      .replace(/const EXPECT = NAMED\.filter\([^\n]*/, 'const EXPECT = NAMED')
+      .replace(/if \(ttsCap === false\) \{[\s\S]*?\n    \}/, '')
+    expect(mutated, '反证失效：变异没落地（替换没命中，等于没反证）').not.toBe(code)
+    expect(capabilityLegs(mutated).length, '反证 R2 失效：无条件点名＋无反向腿必须被判红（这是"无权重实例恒红"那条老病的形态）')
+      .toBeGreaterThan(0)
+    // 正向对照：原文件这条判据必须是绿的（否则 R2 红了也说明不了什么）
+    expect(capabilityLegs(code)).toEqual([])
   })
 })

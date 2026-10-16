@@ -210,6 +210,16 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
     //   ⇒ 将来再往这一排加第 N 件（只要它还是 `.msg-act-btn`）不需要改这条锁；而它会**自动**被
     //     下面的字号/同带逐件判据量到，这是写死 4 做不到的。
     const NAMED = ['show-src', 'copy-translation', 'speak-translation', 'msg-meta'];
+    // ★ 2026-10-16：朗读钮的**是否渲染**由服务端能力决定（AGENTS §一·17「能力布尔＝入口可见性」：
+    //   `/api/health.tts_ready=false` ⇒ 整颗不渲染，同 ChatWindow 麦克风那条）。所以「点名件必须在场」
+    //   这一条要按能力分派——本机／CI／UAT 这些**没有投放 TTS 权重**的实例上，朗读钮缺席恰恰是设计，
+    //   把它判成"控件掉了"会让这条锁在无权重环境恒红（恒红＝钝化，同 AGENTS §三「判据过时」那族）。
+    //   三档与产品侧同口径：`true` ⇒ 必须在场；`false` ⇒ 必须不在场（反向腿，见下）；`null`（探不到）⇒ 不判
+    //   （fail-open：探针自己坏掉不该让这条锁替产品做决定）。
+    const ttsCap: boolean | null = await page.request.get('/api/health')
+      .then((r) => r.json()).then((j) => (typeof j?.tts_ready === 'boolean' ? j.tts_ready : null))
+      .catch(() => null);
+    const EXPECT = NAMED.filter((id) => id !== 'speak-translation' || ttsCap !== false);
     const tail = await page.locator('.msg-actions').last().evaluate((row, named) => {
       const rc = row.getBoundingClientRect();
       const center = rc.top + rc.height / 2;
@@ -230,10 +240,16 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
           };
         }),
       };
-    }, NAMED);
+    }, EXPECT);
     expect(tail.count, `尾部操作行数到 ${tail.count} 件 < 点名的 ${NAMED.length} 件：锚点漂了或这一排压根没渲染（闸门失明）`)
       .toBeGreaterThanOrEqual(NAMED.length);
     expect(tail.missing, `尾部点名件缺席：${tail.missing.join(' / ')}（那件控件从完成态气泡上掉了）`).toEqual([]);
+    // 反向腿（★ 2026-10-16）：能力**明确为假**时这颗钮必须在场判红——否则上面那条按能力分派就会
+    // 退化成"只要探不到就永远放行"的单向锁，而渲染门失效（摆了颗点了必错的按钮）没人看得见。
+    if (ttsCap === false) {
+      const spoke = await page.locator('.msg-actions').last().locator('[data-testid="speak-translation"]').count();
+      expect(spoke, 'tts_ready=false 时朗读钮仍在场 ⇒ 渲染门（api/voiceCapability）失效').toBe(0);
+    }
     expect(tail.feedback, `反馈入口不是恰好一枚（实到 ${tail.feedback}）`).toBe(1);
     expect(tail.foreign, `尾部出现第三类控件／被别的容器包了一层：${tail.foreign.join(' / ')}（同排判据要求只有 .msg-act-btn 与 .msg-meta）`)
       .toEqual([]);
