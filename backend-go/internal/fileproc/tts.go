@@ -6,9 +6,16 @@
 //   - 主力模型的**拍板没变**：Chatterbox Multilingual V3（用户 2026-10-14 定，MIT，23 语），
 //     但它的 T3→S3Gen→声码器解码循环**还没实现**（`tts_speak.py` 里只有个空钩位），
 //     所以现在投 Chatterbox 权重会得到一个"点亮了就绪位、每次合成都失败"的假绿形态。
-//   - 现役可跑的是**sherpa-onnx 中英档**（MeloTTS zh_en，方案 §3.3 语种路由的第一句
-//     「zh/en → 轻量档」；2026-10-16 用户拍板"先上中英档"），覆盖语种见 ttsCoveredLangs。
+//   - 现役是**两条 sherpa-onnx 路线，按目标语种路由**（见 tts_speak.py 的 model_route）：
+//     ① 中英档 MeloTTS zh_en（assets/tts/ 根目录，方案 §3.3 的「zh/en → 轻量档」）；
+//     ② 多语档 Supertonic-3 int8（assets/tts/supertonic/，2026-10-16 用户钉「免费可商用」后选定，
+//     单模型覆盖 ja/ko/fr/de/es/pt/ru/ar 八档）。覆盖语种见 ttsCoveredLangs（th 是唯一边界）。
 //   - 两条路的切换**只动** assets/tts/ + 脚本内部驱动；本文件的接线（探测块 + 就绪位 + 覆盖清单）不变。
+//
+// ★ 许可如实登记（不许美化）：Supertonic-3 权重＝**OpenRAIL-M**（不是 MIT/CC0），
+//
+//	免费可商用但带使用限制（禁违法/歧视/误导/医疗建议等，下游需传递同样限制），见
+//	assets/tts/supertonic/README.md。法人已确认这条口径可接受（2026-10-16 用户令「不花钱、可商用」）。
 //
 // 可插拔硬标准（用户 2026-10-14 立）：本文件 + tts_speak.py + assets/tts/ 是 TTS 的全部家当；
 // 现有文件只留三处接线（healthcheck.go 探测块、api/server.go 的 tts_ready/tts_langs 两个字段、
@@ -62,15 +69,88 @@ var ttsPythonModules = []string{"sherpa_onnx", "soundfile", "lameenc", "numpy"}
 
 // ttsCoveredLangs 现役语音模型覆盖的目标语种（与 tts_speak.py 的 LANGS 同源维护，逐项等值）。
 //
-// ★ 2026-10-16：现役＝sherpa-onnx 中英档（MeloTTS zh_en）。方案 §3.3 的语种路由是
-// 「zh/en → 轻量档；其余 → Chatterbox（待驱动）」，所以这份清单是**能力边界**不是"临时数字"：
-// 越界语种由脚本回 ERR:UnsupportedLang → api 层映射 unsupported_lang → 前端按 12 语种词典
-// 说一句「该语种暂不支持语音播放，译文照常」。Chatterbox 驱动落地后扩到它覆盖的 11 个语种。
-var ttsCoveredLangs = []string{"zh", "en"}
+// ★ 2026-10-16 扩档：中英档（MeloTTS zh_en）＋ 多语档（Supertonic-3 int8，八档 ja/ko/fr/de/es/pt/ru/ar）。
+// 方案 §3.3 的语种路由是「zh/en → 轻量档；其余 → 多语模型」，所以这份清单是**能力边界**不是"临时数字"：
+// 越界语种（th 是唯一一条：Piper 48 语与 Supertonic 31 语均无泰语）由脚本回 ERR:UnsupportedLang
+// → api 层映射 unsupported_lang → 前端按 12 语种词典说一句「该语种暂不支持语音播放，译文照常」。
+// 分档（谁走根目录、谁走 supertonic 子目录）见 ttsMeloLangs / ttsSupertonicLangs。
+var ttsCoveredLangs = []string{"zh", "en", "ja", "ko", "fr", "de", "es", "pt", "ru", "ar"}
 
-// TtsCoveredLangs 覆盖语种清单（供 /api/health 的 tts_langs 出栈）。
+// ttsMeloLangs 走 `assets/tts/` **根目录**（MeloTTS zh_en）的语种，与 tts_speak.py 的 MELO_LANGS 同源（锁 L5）。
+var ttsMeloLangs = []string{"zh", "en"}
+
+// ttsSupertonicFiles Supertonic-3 多语档的**七件套文件名**（与脚本 SUPERTONIC_FILES 逐项等值，锁 L5）。
+//
+// ★ 为什么 Go 侧也要有一份：就绪/覆盖判据要能**现读资产**（/api/health 的 tts_langs 按语种如实收门），
+// 而探测不能为了看一眼文件就起一个 Python 子进程（healthcheck 是每进程一次，但 server 侧还要按语种算）。
+// 两份清单由锁 L5 钉住——「名字抄了一份在 Go」这件事由机械闸兜底，不靠记得同步。
+var ttsSupertonicFiles = []string{
+	"duration_predictor.int8.onnx",
+	"text_encoder.int8.onnx",
+	"vector_estimator.int8.onnx",
+	"vocoder.int8.onnx",
+	"tts.json",
+	"unicode_indexer.bin",
+	"voice.bin",
+}
+
+// ttsMinWeightBytes 权重体量下限（与脚本 MIN_WEIGHT_BYTES 同值）：低于它的 *.onnx 一律不当模型看
+// （HF 仓的 git-lfs 指针文件是 133 字节纯文本，纯存在性检查会被它骗过）。
+const ttsMinWeightBytes = 1_000_000
+
+// ttsInList 线性判成员（清单都在十项以内，不值得引 map）。
+func ttsInList(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// ttsSupertonicLangs 多语档语种＝声明清单 − MeloTTS 档（**派生**，不新抄一份字面清单：
+// 新增语种只动 ttsCoveredLangs 一处，忘改派生集这种事不可能发生）。
+func ttsSupertonicLangs() []string {
+	out := make([]string, 0, len(ttsCoveredLangs))
+	for _, lc := range ttsCoveredLangs {
+		if !ttsInList(ttsMeloLangs, lc) {
+			out = append(out, lc)
+		}
+	}
+	return out
+}
+
+// TtsCoveredLangs **这台机器真正能合成**的语种清单（供 /api/health 的 tts_langs 出栈，资产现读现算）。
+//
+// ★ 为什么出"有效档"而不是"声明档"：语音是**按语种**的能力，前端据这份清单逐语种收门
+// （AGENTS §一·17：false ⇒ 不渲染朗读键）。声明覆盖十档而机器只投了中英档时，
+// 界面会给日/韩访客一颗**点下去必然失败**的朗读键——那正是该条判为缺陷的形态。
+// 缺 supertonic 七件套 ⇒ 只回 zh/en；两台都齐 ⇒ 十档。
 // 返回**副本**：调用方改不了这份事实源（同 §一·3「单一事实源」的写法）。
-func TtsCoveredLangs() []string { return append([]string(nil), ttsCoveredLangs...) }
+func TtsCoveredLangs() []string { return ttsEffectiveLangs() }
+
+// ttsEffectiveLangs 按两条路线各自的资产在场情况，把声明清单收敛成有效清单。
+func ttsEffectiveLangs() []string {
+	return ttsEffectiveLangsFor(ttsAssetsReady(), ttsSupertonicAssetsReady())
+}
+
+// ttsEffectiveLangsFor 判据本体（**纯函数**：测试喂两档真假即可覆盖四种组合，不必动磁盘）。
+// 路由口径与脚本 model_route 同源：MeloTTS 档要 ttsAssetsReady，其余要 supertonic 资产齐。
+func ttsEffectiveLangsFor(meloReady, supertonicReady bool) []string {
+	out := make([]string, 0, len(ttsCoveredLangs))
+	for _, lc := range ttsCoveredLangs {
+		if ttsInList(ttsMeloLangs, lc) {
+			if meloReady {
+				out = append(out, lc)
+			}
+			continue
+		}
+		if supertonicReady {
+			out = append(out, lc)
+		}
+	}
+	return out
+}
 
 // ttsLangCovered 判一个目标语种有没有语音。
 // 归一化口径与脚本的 norm_lang **同一把尺子**：小写、剥掉地域段（zh-hant / zh_Hant → zh）。
@@ -123,8 +203,8 @@ func probeTts(pythonPath string) (bool, string) {
 			return false, "Python " + m + " 库未安装，译文语音合成（TTS）不可用（pip install sherpa-onnx soundfile lameenc numpy）"
 		}
 	}
-	if !ttsAssetsReady() {
-		return false, "TTS 模型资产缺失（assets/tts/*.onnx 未随包落盘），译文语音合成不可用，取权重步骤见 assets/tts/README.md"
+	if !ttsRoutesReady() {
+		return false, "TTS 模型资产缺失（assets/tts/ 或 assets/tts/supertonic/ 未随包落盘），译文语音合成不可用，取权重步骤见 assets/tts/README.md"
 	}
 	if !ttsVoiceReady() {
 		return false, "TTS 默认音色未配置（assets/tts/voices/" + ttsVoiceFile + " 缺失），译文语音合成不可用，投放步骤见 assets/tts/voices/README.md"
@@ -132,10 +212,32 @@ func probeTts(pythonPath string) (bool, string) {
 	return true, ""
 }
 
-// ttsAssetsReady TTS 模型资产是否落盘（脚本同目录 assets/tts/ 至少一个 .onnx）。
+// ttsAssetsReady **中英档**（MeloTTS，assets/tts/ 根目录）权重是否落盘。
 func ttsAssetsReady() bool {
 	matches, err := filepath.Glob(filepath.Join(ttsAssetsDir(), ttsAssetGlob))
 	return err == nil && len(matches) > 0
+}
+
+// ttsRoutesReady 任一语音路线就绪（中英档或**多语档**）即可让 TtsAvailable 为真。
+// ★ 为什么不是"两条都齐才算就绪"：中英档可用而多语档缺件时，"服务器有 TTS" 这件事不假，
+// 缺的只是那八档——按语种收门由 tts_langs 承担（见 TtsCoveredLangs）。
+// 反过来只看中英档也有缺陷：某天只投了多语档，就绪位会谎报 false 把可用的 TTS 摘掉。
+func ttsRoutesReady() bool { return ttsAssetsReady() || ttsSupertonicAssetsReady() }
+
+// ttsSupertonicAssetsReady 多语档七件套是否齐（逐件存在且**非空**，onnx 另加体量闸）。
+// 非空/体量判定不能省：LFS 指针或零字节文件同样让合成失败，纯存在性检查会被它们骗过（D5 同族）。
+func ttsSupertonicAssetsReady() bool {
+	dir := ttsSupertonicDir()
+	for _, n := range ttsSupertonicFiles {
+		info, err := os.Stat(filepath.Join(dir, n))
+		if err != nil || info.Size() == 0 {
+			return false
+		}
+		if strings.HasSuffix(n, ".onnx") && info.Size() < ttsMinWeightBytes {
+			return false
+		}
+	}
+	return true
 }
 
 // ttsVoiceReady 默认音色是否已投放（assets/tts/voices/default_reference.wav 存在且非空）。
@@ -162,6 +264,11 @@ func ttsAssetsDir() string {
 // ttsVoicesDir 定位默认音色目录（assets/tts/voices/，参考音频随资产树同步）。
 func ttsVoicesDir() string {
 	return filepath.Join(ttsAssetsDir(), "voices")
+}
+
+// ttsSupertonicDir 定位多语档模型目录（assets/tts/supertonic/，七件套随资产树同步）。
+func ttsSupertonicDir() string {
+	return filepath.Join(ttsAssetsDir(), "supertonic")
 }
 
 // ===== P3：合成入口（即时翻译「朗读译文」按钮的服务端半边） =====

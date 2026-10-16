@@ -19,9 +19,14 @@
   pkuseg（中文仓颉前端）/ pykakasi（日文假名前端）——D5 口径：真实依赖必须进探测，
   不许「装了一半还报绿」；反过来，尚未落地的引擎的依赖留在探测里同样是缺陷（会让就绪位恒 false）。
 
-当前引擎：sherpa_onnx.OfflineTts 中英档（**MeloTTS zh_en**，44.1kHz 单女声，zh/en 同模型），
-  经「配置对象」形态构造（`OfflineTtsConfig` + `OfflineTts(cfg)`，见 `_build_tts` 的核正说明）。
-  覆盖语种＝`LANGS`，越界一律 ERR:UnsupportedLang。
+当前引擎（两条路线，按目标语种路由，见 `model_route`）：
+  ① 中英档 **MeloTTS zh_en**（`assets/tts/` 根目录），经「配置对象」形态构造
+     （`OfflineTtsConfig` + `OfflineTts(cfg)`，见 `_build_tts` 的核正说明）；
+  ② 多语档 **Supertonic-3 int8**（`assets/tts/supertonic/`，2026-10-16 用户钉「免费可商用」后选定），
+     单模型覆盖 ja/ko/fr/de/es/pt/ru/ar 八档。★ 它的语种是**生成期**参数
+     （`GenerationConfig.extra["lang"]`），不是构造期——漏了这一步会用权重默认语言念任意文本、不报错，
+     见 `_synth_one`。
+  覆盖语种＝`LANGS`（两条路线的并集），越界一律 ERR:UnsupportedLang。
 ★ 与已拍板主力方案的关系（务必如实理解，别照着注释改坏）：
   Chatterbox Multilingual V3（Resemble AI，MIT，23 语）是 2026-10-14 **用户拍板的主力**，
   但它需要自实现的 T3→S3Gen→声码器解码循环，不是 sherpa-onnx 能直接加载的形态
@@ -53,12 +58,37 @@ MODULES = [
     "numpy",
 ]
 
-# 覆盖语种（与 fileproc/tts.go 的 ttsCoveredLangs 同源维护，两侧逐项等值由 Go 单测锁住）。
-# ★ 现役引擎是 sherpa-onnx 中英档（MeloTTS zh_en，2026-10-14 方案 §3.3「zh/en → 轻量档」那一条，
-#   2026-10-16 用户拍板「先上中英档」）；Chatterbox 驱动落地后这里扩到它覆盖的 11 个语种。
+# 覆盖语种（与 fileproc/tts.go 的 ttsCoveredLangs 同源维护，两侧逐项等值由 Go 单测锁住，锁 L1）。
+# ★ 2026-10-16 扩档：中英档（MeloTTS）+ Supertonic-3 int8 八档（ja/ko/fr/de/es/pt/ru/ar）。
+#   为什么是"一个多语模型 + 一个中英模型"而不是逐语种 Piper：Piper/VITS 逐语种表里**没有 ja、没有 ko**
+#   （唯一韩语 vits-mimic3-ko_KO-kss_low 建在 KSS 数据集上＝CC-BY-NC-SA，**不可商用**）；
+#   Kokoro 在 sherpa-onnx 里只支持 zh/en。Supertonic-3 一个 int8 包覆盖八档，是唯一"免费可商用"的合解。
 # 非本清单语种一律回 ERR:UnsupportedLang（**不许**拿中英模型去念日/韩/俄文：
-# 那不会报错，只会吐出一段听不懂的音频——比"没有语音"更坏）。
-LANGS = ["zh", "en"]
+# 那不会报错，只会吐出一段听不懂的音频——比"没有语音"更坏；泰语 th 就是这样一条诚实边界）。
+LANGS = ["zh", "en", "ja", "ko", "fr", "de", "es", "pt", "ru", "ar"]
+
+# 两条路线的**分档**（与 fileproc/tts.go 的 ttsMeloLangs 同源维护，锁 L5）：
+#   MELO_LANGS       → assets/tts/ 根目录（MeloTTS zh_en，模型文件名就叫 model.onnx）
+#   SUPERTONIC_LANGS → assets/tts/supertonic/ 子目录（七件套，见 SUPERTONIC_FILES）
+# 刻意用"减法派生"而不是再抄一份字面清单：新增语种只动 LANGS 一处，忘改派生集这种事不可能发生。
+MELO_LANGS = ["zh", "en"]
+SUPERTONIC_DIRNAME = "supertonic"
+SUPERTONIC_LANGS = [l for l in LANGS if l not in MELO_LANGS]
+
+# Supertonic-3 int8 的**七件套文件名**（单一事实源：`_build_tts` 按它构造，
+# Go 侧 ttsSupertonicFiles 与之逐项等值，锁 L5）。
+# ★ 为什么不复用 `_first_asset` 的"名字候选 + 任意 *.onnx 兜底"：四件 onnx 的兜底是对的
+#   （int8/非 int8 名字不同），但兜底会让**同一个文件被当成四件**（取不到名字时四次都回它），
+#   构造出一个看似成功、实际错位的 cfg。故这里先按名单取，再要求四件互不相同。
+SUPERTONIC_FILES = [
+    "duration_predictor.int8.onnx",
+    "text_encoder.int8.onnx",
+    "vector_estimator.int8.onnx",
+    "vocoder.int8.onnx",
+    "tts.json",
+    "unicode_indexer.bin",
+    "voice.bin",
+]
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "tts"
 VOICES_DIR = ASSETS_DIR / "voices"
@@ -70,6 +100,8 @@ DEFAULT_SAMPLE_RATE = 24000
 def cmd_probe() -> int:
     missing = [m for m in MODULES if importlib.util.find_spec(m) is None]
     weights = sorted(ASSETS_DIR.glob("*.onnx"))
+    sup_dir = ASSETS_DIR / SUPERTONIC_DIRNAME
+    sup_files = [n for n in SUPERTONIC_FILES if (sup_dir / n).exists()]
     voices = sorted(VOICES_DIR.glob("*.wav")) if VOICES_DIR.is_dir() else []
     detail = []
     if missing:
@@ -81,7 +113,15 @@ def cmd_probe() -> int:
     if detail:
         print("MISSING: " + "; ".join(detail))
         return 3
-    print("OK: tts 依赖齐备（%d 个 ONNX 权重，%d 个参考音色）" % (len(weights), len(voices)))
+    # ★ 多语档（Supertonic）缺件**刻意不抬进 MISSING**：中英档仍可用，「服务器有 TTS」这件事不假。
+    #   它只影响 ja/ko/... 八档的可用性，由 /api/health 的 tts_langs 按语种如实收门
+    #   （Go 侧 ttsEffectiveLangs 现读现算；缺件＝那八档不出现在 tts_langs，界面不摆必失败的朗读键）。
+    #   把"少一个语种包"判成整条 TTS 不可用，等于用一个可选资产摘掉中英档的朗读功能。
+    sup_note = ""
+    if len(sup_files) != len(SUPERTONIC_FILES):
+        sup_note = "；多语档 Supertonic 未齐（%d/%d 件，ja/ko/fr/de/es/pt/ru/ar 八档不可用，见 assets/tts/supertonic/README.md）" % (
+            len(sup_files), len(SUPERTONIC_FILES))
+    print("OK: tts 依赖齐备（%d 个 ONNX 权重，%d 个参考音色）%s" % (len(weights), len(voices), sup_note))
     return 0
 
 
@@ -116,6 +156,24 @@ def lang_covered(lang: str) -> bool:
     """
     lc = norm_lang(lang)
     return (not lc) or (lc in LANGS)
+
+
+def model_route(lang: str):
+    """目标语种 → (模型目录, 形态标签)；越界回 (None, "")。
+
+    形态标签决定 `_synth_one` 用哪一套 generate 签名：`vits`（MeloTTS，构造期定说话人）走
+    `generate(text, sid, speed)`；`supertonic`（多语档）走 `generate(text, gen_config)`，
+    语种在**生成期**经 `gen_config.extra["lang"]` 传入。拿错签名不会报错——只会用默认语言念，
+    属最坏的静默形态，故路由与形态必须成对返回、由同一处决定。
+
+    空码按 en（`lang_covered` 已放行空串，历史默认档就是 en）。
+    """
+    lc = norm_lang(lang) or "en"
+    if lc in MELO_LANGS:
+        return ASSETS_DIR, "vits"
+    if lc in SUPERTONIC_LANGS:
+        return ASSETS_DIR / SUPERTONIC_DIRNAME, "supertonic"
+    return None, ""
 
 
 def _pick_voice(explicit: str | None) -> Path:
@@ -153,6 +211,17 @@ def _try_chatterbox(_text: str, _lang: str, _voice: Path):
 MIN_WEIGHT_BYTES = 1_000_000
 
 
+def _has_weights(model_dir: Path) -> bool:
+    """路线目录里是否至少有一件**真权重**（够体量的 *.onnx）。
+
+    与 `_first_asset` 的体量闸同一条口径：LFS 指针文件（133 字节纯文本）和空文件都不算数，
+    「文件在」骗不过这一关（D5 同族：看着对、其实半截）。
+    """
+    if not model_dir.is_dir():
+        return False
+    return any(p.stat().st_size >= MIN_WEIGHT_BYTES for p in model_dir.glob("*.onnx"))
+
+
 def _first_asset(model_dir: Path, names: "tuple[str, ...]", min_bytes: int = MIN_WEIGHT_BYTES) -> "Path | None":
     """按名字优先级取第一个存在且体量合理的文件；都不中再退"目录里任意够大的 *.onnx"。"""
     for n in names:
@@ -175,7 +244,7 @@ def _find_dir(model_dir: Path, names: "tuple[str, ...]") -> "Path | None":
 
 
 def _build_tts(model_dir: Path):
-    """构造 sherpa-onnx OfflineTts。按资产形状试探三种形态，都不中即 ERR:Asset。
+    """构造 sherpa-onnx OfflineTts。按资产形状试探四种形态，都不中即 ERR:Asset。
 
     ★ 2026-10-16 核正（本批真踩）：现网装的 **sherpa-onnx 1.13.8** 的 Python API 是
       「配置对象」形态——`cfg = sherpa_onnx.OfflineTtsConfig()` 填好 `cfg.model.vits.*`
@@ -247,11 +316,34 @@ def _build_tts(model_dir: Path):
             return cfg
         attempts.append(("matcha", _matcha))
 
+    # ④ Supertonic-3（多语档）：七件套。**插在最前**——当 route 目录就是 supertonic 子目录时，
+    #    上面几条的 "任意 *.onnx 兜底" 可能误凑出一个 model/acoustic/vocoder 组合（取到的是同一件），
+    #    让 supertonic 排在前可保证它优先命中。缺件/四件 onnx 有重复即不登记这一形态。
+    sup = {n: model_dir / n for n in SUPERTONIC_FILES}
+    if all(p.exists() and p.stat().st_size >= (1 if p.suffix != ".onnx" else MIN_WEIGHT_BYTES)
+           for p in sup.values()):
+        # 四件 onnx 必须**互不相同**：否则是"名字没取到、四次都回同一个文件"的假命中。
+        onnx_paths = {str(sup[n]) for n in SUPERTONIC_FILES if n.endswith(".onnx")}
+        if len(onnx_paths) == 4:
+            def _supertonic():
+                cfg = base_cfg()
+                cfg.model.supertonic.duration_predictor = str(sup["duration_predictor.int8.onnx"])
+                cfg.model.supertonic.text_encoder = str(sup["text_encoder.int8.onnx"])
+                cfg.model.supertonic.vector_estimator = str(sup["vector_estimator.int8.onnx"])
+                cfg.model.supertonic.vocoder = str(sup["vocoder.int8.onnx"])
+                cfg.model.supertonic.tts_json = str(sup["tts.json"])
+                cfg.model.supertonic.unicode_indexer = str(sup["unicode_indexer.bin"])
+                cfg.model.supertonic.voice_style = str(sup["voice.bin"])
+                return cfg
+            attempts.insert(0, ("supertonic", _supertonic))
+
     if not attempts:
         raise RuntimeError(
             "ERR:Asset:无法从 assets/tts/ 的权重与 tokens/lexicon 推断模型形态"
-            "（需要 model.onnx + tokens.txt + lexicon.txt，或 acoustic+vocoder 两件套）"
+            "（需要 model.onnx + tokens.txt + lexicon.txt，或 acoustic+vocoder 两件套，"
+            "或多语档 supertonic 七件套）"
         )
+
 
     last_exc = None
     for kind, build in attempts:
@@ -353,10 +445,25 @@ def _write_wav(samples, sample_rate: int, out: Path) -> None:
             pass
 
 
-def _synth_one(tts, text: str):
-    """合成单段 → (samples, sample_rate)。失败抛 RuntimeError(ERR:<Variant>)。"""
+def _synth_one(tts, text: str, kind: str = "", lang: str = ""):
+    """合成单段 → (samples, sample_rate)。失败抛 RuntimeError(ERR:<Variant>)。
+
+    ★ Supertonic 的语种是**生成期**参数，不是构造期——两条路线的 generate 签名不同：
+      · vits 系：`generate(text, sid=0, speed=1.0)`（说话人在构造期定死）；
+      · supertonic：`generate(text, gen_config)`，语种经 `gen_config.extra["lang"]` 传。
+        少了这一步，supertonic 会用权重里的默认语言（英语）念任意文本，**不报错**、
+        只是听不懂，属最坏的静默形态（与"拿中英模型念日文"同一族，只是更隐蔽）。
+      ⚠️ `extra` 必须**整字典赋值**（`g.extra = {"lang": ...}`）：`g.extra["lang"] = ...`
+        只改到 pybind 返回的副本，生成器那边看不到（本批实测）。
+    """
     try:
-        audio = tts.generate(text, sid=0, speed=1.0)
+        if kind == "supertonic":
+            import sherpa_onnx
+            g = sherpa_onnx.GenerationConfig()
+            g.extra = {"lang": norm_lang(lang) or "en"}
+            audio = tts.generate(text, g)
+        else:
+            audio = tts.generate(text, sid=0, speed=1.0)
     except Exception as exc:
         raise RuntimeError("ERR:ModelLoad:合成失败 %s" % exc)
     if audio is None or len(audio.samples) == 0:
@@ -368,14 +475,17 @@ def cmd_speak(text: str, lang: str, out_path: str, voice_arg: str | None) -> int
     if not text.strip():
         print("ERR:Empty:文本为空", file=sys.stderr)
         return 2
-    if not ASSETS_DIR.is_dir() or not sorted(ASSETS_DIR.glob("*.onnx")):
-        print("ERR:Asset:assets/tts/*.onnx 缺失", file=sys.stderr)
-        return 2
     # ★ 语种边界先于任何加载动作：拿中英模型去念别的语言**不会报错**，只会吐一段听不懂的音频
     #   （客户以为"翻译坏了"）——所以宁可在这里明确拒，并让 Go 侧映射成 unsupported_lang 档，
     #   前端按 12 语种词典说一句「该语种暂不支持语音播放，译文照常」。
     if not lang_covered(lang):
         print("ERR:UnsupportedLang:语种 %s 超出当前语音模型覆盖范围（%s）" % (lang, ",".join(LANGS)), file=sys.stderr)
+        return 2
+    # 路线与资产同时定：形态标签必须跟着目录走（见 model_route），资产缺失按路线判——
+    # 「根目录有没有 onnx」不是 supertonic 那条路的判据。
+    route_dir, route_kind = model_route(lang)
+    if route_dir is None or not _has_weights(route_dir):
+        print("ERR:Asset:%s 下没有可用语音权重（取权重步骤见 assets/tts/README.md）" % route_dir, file=sys.stderr)
         return 2
 
     voice = _pick_voice(voice_arg)
@@ -396,9 +506,9 @@ def cmd_speak(text: str, lang: str, out_path: str, voice_arg: str | None) -> int
 
     import sherpa_onnx  # noqa: F401  导入失败由下面的通用异常处理包住
 
-    tts, kind = _build_tts(ASSETS_DIR)
+    tts, kind = _build_tts(route_dir)
     try:
-        samples, sr = _synth_one(tts, text)
+        samples, sr = _synth_one(tts, text, kind, lang)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -417,12 +527,16 @@ def cmd_speakfile(lines_path: str, lang: str, out_path: str, voice_arg: str | No
     ★ 择优产出：某一段合成失败只跳过那一段（stderr 记一行），其余段照常缝。
       全段都失败才判错——与"这一整片没有语音"是同一件事。
     """
-    if not ASSETS_DIR.is_dir() or not sorted(ASSETS_DIR.glob("*.onnx")):
-        print("ERR:Asset:assets/tts/*.onnx 缺失", file=sys.stderr)
+    if not ASSETS_DIR.is_dir():
+        print("ERR:Asset:assets/tts/ 目录缺失", file=sys.stderr)
         return 2
     # 语种门与单段路同源同档（见 cmd_speak 那段说明）：批量路也要在加载模型之前先判边界。
     if not lang_covered(lang):
         print("ERR:UnsupportedLang:语种 %s 超出当前语音模型覆盖范围（%s）" % (lang, ",".join(LANGS)), file=sys.stderr)
+        return 2
+    route_dir, route_kind = model_route(lang)
+    if route_dir is None or not _has_weights(route_dir):
+        print("ERR:Asset:%s 下没有可用语音权重（取权重步骤见 assets/tts/README.md）" % route_dir, file=sys.stderr)
         return 2
     try:
         raw = json.loads(Path(lines_path).read_text(encoding="utf-8"))
@@ -443,13 +557,13 @@ def cmd_speakfile(lines_path: str, lang: str, out_path: str, voice_arg: str | No
     import numpy as np
     import sherpa_onnx  # noqa: F401  导入失败由下面的通用异常处理包住
 
-    tts, kind = _build_tts(ASSETS_DIR)
+    tts, kind = _build_tts(route_dir)
     chunks: list = []
     sample_rate = 0
     skipped = 0
     for idx, line in enumerate(lines):
         try:
-            samples, sr = _synth_one(tts, line)
+            samples, sr = _synth_one(tts, line, kind, lang)
         except RuntimeError as exc:
             skipped += 1
             print("[speakfile] 第 %d 段跳过：%s" % (idx + 1, exc), file=sys.stderr)

@@ -578,8 +578,9 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
               {/* ★ 2026-10-16：服务端没投放 TTS 权重（/api/health.tts_ready=false）时**整颗不渲染**——
                   点一次必然失败、再弹一句 toast，那是「摆了颗点了必错的按钮」；
                   tts 为 null（探不到）时照常露出，失败仍有本地化 toast 兜底（fail-open 口径见 voiceCapability.ts）
-                  ★ 同日补：能力是**按语种**的。现役引擎是中英档（/api/health.tts_langs=["zh","en"]），
-                    日/俄/泰译文的朗读钮点下去只会换回 unsupported_lang 的失败 toast ⇒ 按目标语种一并收门
+                  ★ 同日补：能力是**按语种**的。tts_langs 出的是服务端**有效档**
+                    （中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar），未覆盖语种（如 th）
+                    的朗读钮点下去只会换回 unsupported_lang 的失败 toast ⇒ 按目标语种一并收门
                     （langs 未知时放行——探不到不比"已知支持"更该摘入口）。 */}
               {hasTranslations && voiceCap.tts !== false && ttsLangCovered(voiceCap, transRows[0]?.lc || '') && (
                 <SpeakButton

@@ -19,9 +19,10 @@
 import { useEffect, useSyncExternalStore } from 'react'
 
 // VoiceCap 语音能力快照：null＝未知（探不到，按可用处理）
-// ★ langs（2026-10-16 补）：TTS 覆盖的目标语种清单（/api/health.tts_langs）。
-//   语音是**按语种**的能力——"服务器有 TTS" 不等于"这个语种有语音"（现役引擎是中英档），
-//   只有 tts 一个布尔时，日/俄/泰译文的同一排会摆出一颗点下去必然失败的朗读钮。
+// ★ langs（2026-10-16 补）：TTS 覆盖的目标语种清单（/api/health.tts_langs，**有效档**：
+//   中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar，按服务端两条路线资产实况收敛）。
+//   语音是**按语种**的能力——"服务器有 TTS" 不等于"这个语种有语音"，
+//   只有 tts 一个布尔时，未覆盖语种（如 th）译文的同一排会摆出一颗点下去必然失败的朗读钮。
 //   null＝未知（字段缺失/形态不对/探不到）⇒ 照旧 fail-open 露出按钮。
 export type VoiceCap = { tts: boolean | null; langs: string[] | null }
 

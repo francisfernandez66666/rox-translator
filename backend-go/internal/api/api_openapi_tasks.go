@@ -6,8 +6,11 @@ package api
 // ============ 本文件职责中文说明 ============
 // 开放 API 任务接口（API Key 鉴权）：
 //   - POST /openapi/v1/tasks          创建任务：JSON=文本任务；multipart=文件批量任务
-//   - GET  /openapi/v1/tasks?id=      轮询状态：未完成返回 processing 出参；
+//   - GET  /openapi/v1/tasks/status?id=  轮询状态：未完成返回 processing 出参；
 //                                     文本完成内联返回译文；文件完成返回产物清单+下载地址
+//   （★ 2026-10-16 现网实测更正：轮询路径是 `/tasks/status`，此前这句写成 `/tasks?id=`——
+//    `/tasks` 只接 POST（GET 会被 multipart 解析挡成 bad_request）。对外文档面
+//    `admin_openapi.go` 一直写的是正确路径，是这里的注释漂了。）
 //   - GET  /openapi/v1/tasks/download 文件产物下载（file_id 可选，缺省 zip 全部）
 //   - GET  /openapi/v1/balance        查询租户 token 余额与 ≈句数
 //   - POST /openapi/v1/translate      同步短文翻译（划译插件 / Office taskpane 专用，2026-08-26 断链修复）

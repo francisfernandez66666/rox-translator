@@ -930,7 +930,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"ocr_ready": fileproc.OcrAvailable(),
 		"asr_ready": fileproc.AsrAvailable(),
 		"tts_ready": fileproc.TtsAvailable(),
-		// ★ 2026-10-16：TTS 覆盖的目标语种清单（现役＝sherpa-onnx 中英档 ⇒ ["zh","en"]）。
+		// ★ 2026-10-16：TTS 覆盖的目标语种清单，出的是**这台机器真正能合成**的档
+		//   （fileproc.TtsCoveredLangs()：中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar，
+		//   按两条路线的资产实况现读现算；缺档即不出现在这里）。
 		//   为什么要多出这一个字段：语音是**按语种**的能力（"服务器有 TTS" 不等于
 		//   "这个语种有语音"），只有 tts_ready 时界面会在日/俄/泰译文的同一排摆出一颗
 		//   点下去必然失败的朗读钮；前端据此按目标语种收门（同"能力缺失不摆必错入口"那条口径）。

@@ -15,6 +15,10 @@
 //	   只有「配置对象」一种构造形态，旧实现照不存在的类方法写（探测全绿、一合成必败）；
 //	L4 容器表等值：DubContainerFor ↔ 脚本 CONTAINER_ARGS（＋wav 原生档），并锁住
 //	   engine/file.go 的音频配音确实走了这一处映射（不是把 mp3 写死）。
+//	L5 分档等值：ttsMeloLangs ↔ 脚本 MELO_LANGS、ttsSupertonicFiles ↔ 脚本 SUPERTONIC_FILES，
+//	   并逐项核对"派生出来的多语档语种清单"两侧一致（派生集错＝路由错，且不会报错）；
+//	L6 有效档行为：ttsEffectiveLangsFor 四档组合（两路线各有/无资产）逐条点名，
+//	   并锁住 TtsCoveredLangs() 真的走这个纯函数（判据级断言代替不了守卫级）。
 //
 // 反证：L3/L4 各自把人工变异体喂给**同一个判据函数**，证明这两条腿真能红
 // （AGENTS §三：判据级断言代替不了守卫级——没有变异体就分不清"腿有射程"与"腿恒真"）。
@@ -308,4 +312,158 @@ func TestDubContainerTableAgreesWithScript(t *testing.T) {
 // ttsDubWiringOK engine 侧配音容器接线的判据本体（L4 与其反证共用）。
 func ttsDubWiringOK(src []byte) bool {
 	return bytes.Contains(src, []byte("fileproc.DubContainerFor("))
+}
+
+// pyMeloListRe 抓脚本 `MELO_LANGS = [...]` 清单（单行，同 LANGS）。
+var pyMeloListRe = regexp.MustCompile(`(?m)^MELO_LANGS\s*=\s*\[(.*?)\]`)
+
+// pySupertonicFilesRe 抓脚本 `SUPERTONIC_FILES = [...]` 七件套清单（多行）。
+var pySupertonicFilesRe = regexp.MustCompile(`(?s)SUPERTONIC_FILES\s*=\s*\[(.*?)\]`)
+
+// scriptStringList 按给定正则抓一处清单并抽双引号字符串（取不到即判红）。
+func scriptStringList(t *testing.T, src []byte, re *regexp.Regexp, what string) []string {
+	t.Helper()
+	m := re.FindSubmatch(src)
+	if m == nil {
+		t.Fatalf("tts_speak.py 里找不到 %s 清单 ⇒ 分档协议被破坏（清单丢了和「清单为空」长得一样，前者更坏）", what)
+	}
+	var out []string
+	for _, s := range pyStringRe.FindAllStringSubmatch(string(m[1]), -1) {
+		out = append(out, s[1])
+	}
+	if len(out) == 0 {
+		t.Fatalf("tts_speak.py 的 %s 清单为空 ⇒ 该档形同虚设", what)
+	}
+	return out
+}
+
+// TestTtsRoutePartitionsMatchScript L5：两条路线的**分档**两侧等值——
+// ① MeloTTS 语种清单；② Supertonic 七件套文件名；③ 由 LANGS − MELO 派生出多语档语种，两侧逐项一致。
+//
+// 为什么这一条必须机械化：分档决定"这个语种去哪个目录取模型"。分档漂了**不会报错**——
+// 拿中英模型念日文只是吐一段听不懂的音频，拿 vits 的 generate 签名调 supertonic 只是静默用英语。
+func TestTtsRoutePartitionsMatchScript(t *testing.T) {
+	src, err := os.ReadFile("tts_speak.py")
+	if err != nil {
+		t.Fatalf("读脚本失败: %v", err)
+	}
+	// ① MeloTTS 档
+	pyMelo := scriptStringList(t, src, pyMeloListRe, "MELO_LANGS")
+	if len(pyMelo) != len(ttsMeloLangs) {
+		t.Fatalf("MeloTTS 档语种两侧不等长：Go=%v 脚本=%v ⇒ 一侧改忘另一侧", ttsMeloLangs, pyMelo)
+	}
+	for i := range ttsMeloLangs {
+		if ttsMeloLangs[i] != pyMelo[i] {
+			t.Fatalf("MeloTTS 档第 %d 项不等值：Go=%q 脚本=%q", i, ttsMeloLangs[i], pyMelo[i])
+		}
+	}
+	// ② Supertonic 七件套文件名（顺序也判：它决定 cfg 各字段填哪个文件）
+	pyFiles := scriptStringList(t, src, pySupertonicFilesRe, "SUPERTONIC_FILES")
+	if len(pyFiles) != len(ttsSupertonicFiles) {
+		t.Fatalf("supertonic 文件清单两侧不等长：Go=%v 脚本=%v ⇒ 一侧改忘另一侧", ttsSupertonicFiles, pyFiles)
+	}
+	for i := range ttsSupertonicFiles {
+		if ttsSupertonicFiles[i] != pyFiles[i] {
+			t.Fatalf("supertonic 文件第 %d 项不等值：Go=%q 脚本=%q", i, ttsSupertonicFiles[i], pyFiles[i])
+		}
+	}
+	// ③ 派生集行为等值：拿同一份 LANGS 与 MELO_LANGS 两侧各减一次，结果必须逐项一致。
+	py := findPython()
+	if strings.TrimSpace(py) == "" {
+		t.Fatalf("找不到 python3 解释器 ⇒ 多语档派生集无法验证（只许补依赖，不许放宽或跳过）")
+	}
+	code := fmt.Sprintf(
+		`import sys; sys.path.insert(0, %s); import tts_speak as m; print(",".join(m.SUPERTONIC_LANGS))`,
+		strconv.Quote(filepath.Dir("tts_speak.py")))
+	out, err := exec.Command(py, "-c", code).Output()
+	if err != nil {
+		t.Fatalf("调用脚本取 SUPERTONIC_LANGS 失败：%v\n%s", err, errStderr(err))
+	}
+	pySup := strings.Split(strings.TrimSpace(string(out)), ",")
+	gotSup := ttsSupertonicLangs()
+	if len(pySup) != len(gotSup) {
+		t.Fatalf("多语档派生集两侧不等长：Go=%v 脚本=%v ⇒ 派生口径（LANGS−MELO）已漂", gotSup, pySup)
+	}
+	for i := range gotSup {
+		if gotSup[i] != pySup[i] {
+			t.Fatalf("多语档派生集第 %d 项不等值：Go=%q 脚本=%q", i, gotSup[i], pySup[i])
+		}
+	}
+	// 射程自证：多语档与中英档必须**互不重叠**且并集＝声明清单，否则"派生"没被真正用上。
+	if len(gotSup) == 0 {
+		t.Fatalf("多语档派生集为空 ⇒ 分档形同虚设")
+	}
+	for _, lc := range gotSup {
+		if ttsInList(ttsMeloLangs, lc) {
+			t.Fatalf("语种 %q 同时落在两条路线 ⇒ 分档不是划分", lc)
+		}
+		if !ttsInList(ttsCoveredLangs, lc) {
+			t.Fatalf("多语档语种 %q 不在声明清单里 ⇒ 越界语种会被渲染成「有语音」", lc)
+		}
+	}
+}
+
+// TestTtsEffectiveLangsPerRoute L6：/api/health.tts_langs 的**有效档**按两条路线各自的资产在场情况收敛，
+// 四种组合逐条点名，并锁住 TtsCoveredLangs() 确实走这条纯函数（不是又抄一份声明清单）。
+func TestTtsEffectiveLangsPerRoute(t *testing.T) {
+	covered := ttsCoveredLangs
+	sup := ttsSupertonicLangs()
+
+	both := ttsEffectiveLangsFor(true, true)
+	if len(both) != len(covered) {
+		t.Fatalf("两路线资产都齐时应回全部 %d 档，实得 %v", len(covered), both)
+	}
+	for i := range covered {
+		if both[i] != covered[i] {
+			t.Fatalf("两路线都齐时第 %d 档不等值：got=%q want=%q", i, both[i], covered[i])
+		}
+	}
+
+	meloOnly := ttsEffectiveLangsFor(true, false)
+	if len(meloOnly) != len(ttsMeloLangs) {
+		t.Fatalf("只投中英档时应只回 %v，实得 %v ⇒ 缺 supertonic 资产时仍给八档报「有语音」", ttsMeloLangs, meloOnly)
+	}
+	for i := range ttsMeloLangs {
+		if meloOnly[i] != ttsMeloLangs[i] {
+			t.Fatalf("只投中英档时第 %d 档不等值：got=%q want=%q", i, meloOnly[i], ttsMeloLangs[i])
+		}
+	}
+	for _, lc := range sup {
+		if ttsInList(meloOnly, lc) {
+			t.Fatalf("缺 supertonic 资产却把 %q 报成有语音 ⇒ 界面会摆一颗点下去必失败的朗读键", lc)
+		}
+	}
+
+	supOnly := ttsEffectiveLangsFor(false, true)
+	if len(supOnly) != len(sup) {
+		t.Fatalf("只投多语档时应只回 %v，实得 %v ⇒ 只看中英档会把可用的八档摘掉", sup, supOnly)
+	}
+	for i := range sup {
+		if supOnly[i] != sup[i] {
+			t.Fatalf("只投多语档时第 %d 档不等值：got=%q want=%q", i, supOnly[i], sup[i])
+		}
+	}
+
+	if none := ttsEffectiveLangsFor(false, false); len(none) != 0 {
+		t.Fatalf("两路线都缺资产时必须回空（前端按空=未知/fail-open 处理由前端决定，但这里不该谎报有语音），实得 %v", none)
+	}
+
+	// 接线腿（守卫级，不是判据级）：TtsCoveredLangs() 必须等于"按本机实况算出的有效档"，
+	// 而不是某处又写死了一份声明清单——把纯函数摘掉的变异必须在这里红。
+	if got, want := TtsCoveredLangs(), ttsEffectiveLangsFor(ttsAssetsReady(), ttsSupertonicAssetsReady()); !equalStrs(got, want) {
+		t.Fatalf("TtsCoveredLangs() 与实况有效档不一致：got=%v want=%v ⇒ 出栈清单没走这条纯函数", got, want)
+	}
+}
+
+// equalStrs 逐项比较两个字符串切片（避免引 reflect 只为这一处）。
+func equalStrs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

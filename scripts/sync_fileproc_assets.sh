@@ -202,6 +202,15 @@ for cap in ocr asr tts; do
     warn "${cap}：目标机上没有 ONNX 权重 ⇒ /api/health 的 ${cap}_ready=false（依赖装好也没用，识别/转写会整条降级）"
   fi
 done
+# ★ TTS **多语档**（Supertonic，assets/tts/supertonic/ 八档 ja/ko/fr/de/es/pt/ru/ar）单独读一次：
+#   cap_count 是**非递归** glob，看不到子目录——不补这一行，运营会看到「tts：1 份 ONNX」而以为
+#   八档权重没落过地（而它们其实在子目录里）。权重由 scripts/fetch_tts_models.sh 单独取。
+n_sup="$(cap_count "tts/supertonic" onnx)"
+if [ "${n_sup:-0}" -ge 4 ]; then
+  ok "tts 多语档（Supertonic）：${n_sup} 份 ONNX 在位（ja/ko/fr/de/es/pt/ru/ar 八档）"
+else
+  warn "tts 多语档（Supertonic）：子目录里只有 ${n_sup:-0}/4 份 ONNX ⇒ /api/health.tts_langs 只出中英档，八档配音整段降级；取法见 assets/tts/supertonic/README.md"
+fi
 log "★ 提醒：**权重刚落盘不会让就绪位自己翻**——CheckHealth 是 sync.Once，"
 log "  必须 systemctl restart translator.service（演示站 translator-demo.service）才重探一次；"
 log "  翻档后还要用 cmd/capability-smoke 逐件真跑（就绪位只回答「依赖＋权重」，证明不了整条腿）。"

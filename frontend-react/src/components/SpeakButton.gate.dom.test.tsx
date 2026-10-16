@@ -10,7 +10,8 @@
 //     ——「译文第一」：摘掉的是语音这一件，不是半排控件；
 //   · tts=null（探不到，fail-open）⇒ 照常露出（真点了仍有本地化 toast 兜底，见 lib/voiceFail.ts）；
 //   · tts=true ⇒ 露出。
-// ★ 2026-10-16 追加第四/五档：能力还是**按语种**的（现役引擎中英档，/api/health.tts_langs）——
+// ★ 2026-10-16 追加第四/五档：能力还是**按语种**的（tts_langs 出服务端有效档：
+//   中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar）——
 //   目标语种不在覆盖清单里时同样整颗不渲染（否则客户点一次就吃一句 unsupported_lang）；
 //   清单未知时放行。
 // 探针本身（TTL／失败不落状态／字段缺失不误判）由 api/voiceCapability.test.ts 覆盖，
