@@ -1464,6 +1464,12 @@ const LANDING_CSS = `
 
 /* —— 1. 导航 —— */
 /* sticky + 半透黑底 + blur：滚动时导航始终在位，但内容从它底下"透出"而不是被硬切断 */
+/* ★ 2026-10-16 用户报障续修①（窄屏首页整页横向滚动）：一行放不下时 flex 默认不换行会硬撑——
+   brand 189 + LangSelect 107 + 登录 17 + 试用 88/112 ＋两处间距 ⇒ min-content **473~497**，
+   而 iPhone SE 375/360/320 都比它窄，多出来的部分把**整份文档**撑宽（实测 360 视口 documentElement.scrollWidth=473、
+   320 视口 473 ⇒ 整页可左右拖）。
+   换行只在锚点已隐藏的那两档（≤980）开启，见下方 @media 块——**宽档保持交付稿的单行 76px 形态不动**
+   （>980 档锚点本身就装不下，那是另一族既有问题，与本批无关，已登记在 PROGRESS，不在此处顺手改）。 */
 .lc-mkt-nav{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:36px;height:76px;padding:0 80px;background:rgba(0,0,0,.86);backdrop-filter:blur(10px);border-bottom:1px solid var(--lc-border-card)}
 /* 品牌名不许折行：窄屏先牺牲锚点链接，也不把 Logo 压成两行 */
 .lc-nav-brand{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700;white-space:nowrap}
@@ -1526,7 +1532,14 @@ const LANDING_CSS = `
 .lc-fd-head{text-align:center;max-width:820px;margin:0 auto 48px}
 .lc-fd-title{margin:0 0 14px;font-size:clamp(26px,3.4vw,40px);line-height:1.25;font-weight:700;letter-spacing:.2px;color:var(--lc-text-1)}
 .lc-fd-sub{margin:0;font-size:14px;letter-spacing:1px;color:var(--lc-text-3)}
-.lc-fd-visual{position:relative;display:flex;flex-direction:column;align-items:center;width:100%}
+/* ★ container-type:inline-size 是这一段的量尺来源：横排管线的**最小内容宽是 680px**
+   （chip 196×2 + 引擎 96 + 两条链路 min 48×2 + 四道 gap 24×4），而它拿到的宽度由段落内垫决定
+   （≤1200 档左右各 40）——两者之比**与视口不成正比**。旧形态把"什么时候竖排"写死在 @media (max-width:640px)，
+   于是在 641~760 这段视口里横排被硬塞：实测 700 视口下段落可用宽只有 620，舞台内容 687 ⇒
+   **译文 chip 被顶出容器右缘 60px**、整页横向可滚（用户报障的同族形态）。
+   改量尺：容器自己声明 inline-size，竖排判据改吃 @container，即"舞台真拿到多宽"——与视口解耦，
+   段落内垫怎么调都不会再漂。门限 700（>680 留 20px 余量）见下方 @container 块。 */
+.lc-fd-visual{position:relative;display:flex;flex-direction:column;align-items:center;width:100%;container-type:inline-size}
 /* 舞台限宽居中（链路距离要克制，不能把 chip 推到屏幕两角）：源 chip — 链路(弹性伸缩) — 引擎环 — 链路 — 译文 chip。
    五元素定宽、引擎恒居中，演出只动元素自身（opacity/transform）——sink 只压亮度不缩放，任何阶段零布局位移 */
 .lc-fd-stage{position:relative;display:flex;align-items:center;justify-content:space-between;gap:24px;width:100%;max-width:880px;margin:0 auto;transition:filter .18s ease-out}
@@ -1590,8 +1603,10 @@ const LANDING_CSS = `
 .lc-fd-dl{display:inline-flex;align-items:center;justify-content:center;padding:6px;border-radius:50%;background:var(--lc-text-1);color:var(--lc-bg);border:none;cursor:default;pointer-events:none;opacity:0;transition:opacity .3s}
 .lc-fd-dl.show{opacity:1;animation:fd-pulse 1.5s ease-in-out infinite}
 @keyframes fd-pulse{0%,100%{box-shadow:0 0 0 0 rgba(231,233,234,0)}50%{box-shadow:0 0 0 7px rgba(231,233,234,.14)}}
-/* 窄屏（≤640px）质变：横排管线重排为竖排——源上/引擎中/译文下，chip 仍定宽、数据包纵向流动 */
-@media (max-width:640px){
+/* 窄档质变：横排管线重排为竖排——源上/引擎中/译文下，chip 仍定宽、数据包纵向流动。
+   ★ 判据是**容器宽**（.lc-fd-visual 的 inline-size）不是视口：舞台要 680px 才排得下横排，
+   容器一旦 ≤700 就竖排（旧形态写死 640 视口，641~760 那段是硬塞 ⇒ 译文 chip 越出容器右缘、整页横滚）。 */
+@container (max-width:700px){
   .lc-fd-stage{flex-direction:column;gap:14px}
   .lc-fd-chip{width:min(230px,76vw)}
   .lc-fd-link{flex:none;min-width:0;width:1.5px;height:56px;background:linear-gradient(180deg,transparent,var(--lc-border-pill) 30%,var(--lc-border-pill) 70%,transparent)}
@@ -1966,10 +1981,19 @@ const LANDING_CSS = `
   .lc-steps-slot{align-items:flex-start}
   .lc-step-arrow{transform:rotate(90deg);padding-inline-start:28px} /* 箭头旋转并左缩进到卡的内边距线上 */
   .lc-nav-links{display:none}
+  /* ★ 2026-10-16 用户报障续修①：锚点退场之后，导航只剩「brand + 右簇」两块，而右簇在窄屏是**装不下**的
+     （zh：189+16+252=457 ⇒ ≤457 越界；en 的 Sign in／Start free 更长 ⇒ 门限还要再高些）。
+     这两档允许换行：带 margin-left:auto 的右簇整行落到第二行并右对齐，导航长到 auto 高。
+     换行只在真放不下时发生 ⇒ 单行档与旧形态**逐像素等值**（min-height 76 吸收 padding）。
+     height:76px 定高必须换成 min-height：定高会把第二行裁掉，那才是"看不见的溢出"。
+     三件控件一个都不隐藏——LangSelect 是"给看不懂当前界面的人用的"，窄屏更不许消失。 */
+  .lc-mkt-nav{flex-wrap:wrap;height:auto;min-height:76px;row-gap:8px;padding:8px 40px}
 }
 /* 640px（★ 批3 断点归一 620→640）：手机档，只收留白与换行，不再改结构 */
 @media (max-width:640px){
-  .lc-mkt-nav{padding:0 16px;gap:16px}
+  /* 手机档：纵向留白 8 是给"两行档"用的（单行时被 min-height:76 吸收，与旧形态同高同位置）；
+     row-gap 8 比列距 16 紧——两行是同一套控件，行间不许读成两段 */
+  .lc-mkt-nav{padding:8px 16px;gap:16px;row-gap:8px}
   .lc-hero{padding:36px 16px}
   .lc-hero-ctas{flex-wrap:wrap} /* 两颗按钮允许换行：宁可上下叠，也不把文案压到 12px */
   .lc-hero-trust{flex-wrap:wrap;gap:12px 18px} /* 三条指标换行后给"行距 12 / 列距 18"：宁可叠三行也不缩字号（字号一缩就成脚注） */

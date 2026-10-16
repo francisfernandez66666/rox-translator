@@ -561,6 +561,67 @@ test.describe('像素级 UAT', () => {
     await shot(page, 'p2f_demo_card_containment');
   });
 
+  // ★ 2026-10-16 用户报障续修的运行时锁（源码级等值锁＝src/components/Landing.marketingOverflow.lock.test.ts）。
+  //   两处缺陷都是"宽度不由视口决定"那一族：① 导航一行装不下时 flex 不换行 ⇒ 把**整份文档**撑宽
+  //   （实测 360 视口 scrollWidth=473、320 视口 473 ⇒ 手机档首页能左右拖）；② 文件直出舞台横排要 680px，
+  //   而它拿到的宽度由段落内垫决定（700 视口只有 620）⇒ 译文 chip 右缘越出容器 60px（641 档整页横滚 86px）。
+  //   本档量的是**文档级**读数（scrollWidth）与**元素边界**（chip 右缘 vs 容器右缘），不看盒子宽度——
+  //   溢出物在窄档只在容器内可见，元素盒子判据结构上看不见（同 P2f 那条）。
+  test('P2g 营销页窄档不撑宽文档（导航换行 + 文件直出舞台竖排）', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('.lc-mkt-nav')).toBeVisible();
+    await expect(page.locator('.lc-fd-stage')).toBeVisible();
+    const rows: Array<{ w: number; docOver: number; ctaRight: number; dir: string; stageOver: number; navH: number }> = [];
+    for (const w of [1440, 1280, 1024, 800, 760, 700, 641, 640, 473, 390, 360, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      const m = await page.evaluate(() => {
+        const de = document.documentElement;
+        const nav = document.querySelector('.lc-mkt-nav') as HTMLElement | null;
+        const cta = document.querySelector('.lc-nav-cta') as HTMLElement | null;
+        const vis = document.querySelector('.lc-fd-visual') as HTMLElement | null;
+        const stage = document.querySelector('.lc-fd-stage') as HTMLElement | null;
+        const out = document.querySelector('.lc-fd-out') as HTMLElement | null;
+        if (!nav || !cta || !vis || !stage || !out) return null;
+        const sr = stage.getBoundingClientRect();
+        return {
+          clientW: de.clientWidth,
+          docOver: de.scrollWidth - de.clientWidth,
+          ctaRight: Math.round(cta.getBoundingClientRect().right),
+          containerW: Math.round(vis.getBoundingClientRect().width),
+          dir: getComputedStyle(stage).flexDirection,
+          chipOutOver: Math.round(out.getBoundingClientRect().right - sr.right),
+          navH: Math.round(nav.getBoundingClientRect().height),
+        };
+      });
+      expect(m, `视口 ${w} 下营销页骨架不在 DOM 里（本锁没量到东西）`).not.toBeNull();
+      // 文档级：这一条就是用户看到的那件事（能量左右拖）。≤4px 是绝对定位件的自身轮廓余量，不是灰区：
+      // 缺陷档实测 24~153px（473/390/360/320 与 641/700 各一组），两族都远在这条线之外。
+      expect(m!.docOver, `视口 ${w} 下整份文档被撑宽 ${m!.docOver}px（用户能左右拖整页）`).toBeLessThanOrEqual(4);
+      // 控件级：右簇的右缘不许越过视口右缘（"没被撑宽"但不等于"控件没跑出去"）
+      expect(m!.ctaRight, `视口 ${w} 下导航右簇右缘 ${m!.ctaRight}px 越出视口 ${m!.clientW}px`).toBeLessThanOrEqual(m!.clientW + 1);
+      // 舞台级：竖排吃**容器宽**（与视口不成正比）——容器 ≤700 必须已竖排，否则 chip 会被顶出容器
+      // （实测旧写法 700 档越界 60px）。横排档反向钉死"chip 右缘不许出容器"，两档各钉各的。
+      if (m!.containerW <= 700) {
+        expect(m!.dir, `视口 ${w}（容器 ${m!.containerW}px）文件直出舞台仍是横排 ⇒ chip 会被顶出容器右缘`)
+          .toBe('column');
+      } else {
+        expect(m!.dir, `视口 ${w}（容器 ${m!.containerW}px）舞台被判成竖排（射程漂了：横排档应为 row）`).toBe('row');
+        expect(m!.chipOutOver, `视口 ${w}（容器 ${m!.containerW}px）译文 chip 右缘越出舞台 ${m!.chipOutOver}px`)
+          .toBeLessThanOrEqual(1);
+      }
+      // 桌面/平板交付形态：>980 档导航必须仍是单行 76px（本批的换行只开在锚点已隐藏的两档，
+      // 全球化会把 1024/1280 变成两行——这条是那些档的死区守门）
+      if (w > 980) {
+        expect(m!.navH, `视口 ${w} 导航高度 ${m!.navH}px：>980 档必须维持交付稿的单行 76px`).toBeLessThanOrEqual(80);
+      }
+      rows.push({ w, docOver: m!.docOver, ctaRight: m!.ctaRight, dir: m!.dir, stageOver: m!.chipOutOver, navH: m!.navH });
+    }
+    // 射程自证：1440 档必须是横排（否则上面那条"容器窄就竖排"会退化成恒真）
+    expect(rows.find((r) => r.w === 1440)!.dir, '1440 档舞台不是横排 ⇒ 竖排判据恒真、本锁空转').toBe('row');
+    expect(rows.find((r) => r.w === 320)!.dir, '320 档舞台没竖排 ⇒ 窄档判据没量到东西').toBe('column');
+    await shot(page, 'p2g_marketing_narrow_no_overflow');
+  });
+
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {
     await login(page);
     // 每页期望文案写成宽松正则（/余额|积分|充值/）：自服务页的措辞与积分口径常调，
