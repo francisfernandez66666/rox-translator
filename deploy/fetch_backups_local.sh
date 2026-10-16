@@ -36,7 +36,7 @@ H_LOCAL=$(shasum -a 256 "$DEST/$LATEST_BASE" | cut -d' ' -f1)
 if [ "$H_REMOTE" = "$H_LOCAL" ]; then
   echo "  ✔ sha256 一致: $LATEST_BASE ($(du -h "$DEST/$LATEST_BASE" | cut -f1)) ${H_LOCAL:0:12}…"
 else
-  echo "  ✖ sha256 不一致（远端 $H_REMOTE / 本地 $H_LOCAL）"; exit 1
+  echo "  ✖ sha256 不一致（远端 $H_REMOTE / 本地 ${H_LOCAL}）"; exit 1
 fi
 # 本地若有不低于服务端的 pg client，追加 TOC 校验（可选，版本低则跳过不算失败）
 if command -v pg_restore >/dev/null 2>&1 && pg_restore --list "$DEST/$LATEST_BASE" >/dev/null 2>&1; then

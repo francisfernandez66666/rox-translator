@@ -53,7 +53,7 @@ SERVER_BIN="${SERVER_BIN:-/tmp/translator-server-linux-$TAG}"
 SRC="$SCRIPT_DIR/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$SRC")"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$SRC")"
-[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 $SRC）"; exit 2; }
+[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 ${SRC}）"; exit 2; }
 
 sha_local() { shasum -a 256 "$1" | awk '{print $1}'; }
 
@@ -79,7 +79,7 @@ CARRY_PURITY=$(grep -ac "tail_stripped" "$SERVER_BIN" || true)
 echo "server: post_restart_reconcile=$W_RECONCILE chain_unlisted=$W_UNLISTED 因链清单收窄=$W_RESOLVEMSG 匹配行解析失败=$W_SCANAMBIG 缺块高=$W_BLOCKNO ； carry: getnowblock=$CARRY_HEAD tail_stripped=$CARRY_PURITY"
 for pair in "$W_RECONCILE:(53) 重启后收敛腿的档名" "$W_UNLISTED:(54) 撤链档名" "$W_RESOLVEMSG:(54) 撤链文案（不许写成已恢复）" "$W_SCANAMBIG:(54) 匹配行解析失败按歧义" "$W_BLOCKNO:(54) 缺块高不评确认数" "$CARRY_HEAD:第 8 波㊾链头默认路径" "$CARRY_PURITY:第 8 波㊶尾段剥离档名"; do
   n="${pair%%:*}"; label="${pair#*:}"
-  [ "$n" != "0" ] || { echo "ABORT=2 缺特征串 ⇒ $label（编译的不是含本批改动的树）"; exit 3; }
+  [ "$n" != "0" ] || { echo "ABORT=2 缺特征串 ⇒ ${label}（编译的不是含本批改动的树）"; exit 3; }
 done
 SERVER_SHA=$(sha_local "$SERVER_BIN")
 
@@ -116,7 +116,7 @@ echo "----- P2-B2 特征串负向对照（★ 必须在落位之前读线上旧�
 for pat in post_restart_reconcile chain_unlisted 因链清单收窄而收敛 "USDT 匹配行解析失败" "USDT 入账缺块高读数"; do
   n=$(grep -a -c -F -- "$pat" /opt/translator/bin/translator-server 2>/dev/null || true)
   [ -n "$n" ] || n='<文件读不到>'
-  echo "旧件命中『$pat』=$n（期望 **0**）"
+  echo "旧件命中『${pat}』=${n}（期望 **0**）"
 done
 # 正向对照（同一条 grep 得能抓到**旧件本来就有**的东西，否则上面那一串 0 只是"读不到文件"）
 echo "同一把尺子的正向对照：旧件命中『/wallet/getnowblock』=$(grep -a -c -F -- '/wallet/getnowblock' /opt/translator/bin/translator-server 2>/dev/null || true)（期望 ≥1＝第 8 波那条腿确实在旧件里）"
@@ -161,7 +161,7 @@ echo "    fpdprobe 件里协议串命中=$(grep -a -c -F -- fpdexec /opt/transla
 
 echo "----- P5 落位后件内自检（新件必须带本波那五条，且旧串不复活）-----"
 for pat in post_restart_reconcile chain_unlisted 因链清单收窄而收敛 "USDT 匹配行解析失败" "USDT 入账缺块高读数"; do
-  echo "    新件命中『$pat』=$(grep -a -c -F -- "$pat" /opt/translator/bin/translator-server 2>/dev/null || true)"
+  echo "    新件命中『${pat}』=$(grep -a -c -F -- "$pat" /opt/translator/bin/translator-server 2>/dev/null || true)"
 done
 
 echo "----- P6 恢复腿的现网读数（(53) 的收口判据；这一刻起最多两轮 30s 内应出现）-----"
@@ -171,7 +171,7 @@ for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
   sleep 10
 done
 REC=$(awk -v lim="$RESTART_T" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"USDT 到账监听已恢复")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || echo '<读数失败>')
-echo "    重启以来「USDT 到账监听已恢复」行数=$REC（期望 ≥1）"
+echo "    重启以来「USDT 到账监听已恢复」行数=${REC}（期望 ≥1）"
 echo "    最后一行 why 档=$(grep -o '"why":"[a-z_]*"' "$LOGF" 2>/dev/null | tail -1 || echo '<日志里没有 why>')"
 echo "    换件后 open 行数=$(sudo -u postgres psql -d langcross -Atc "select count(*) from alerts where kind=\$\$usdt_watch_dead\$\$ and status<>\$\$resolved\$\$;" 2>/dev/null || echo '<读不到>')（基线=1）"
 echo "    换件后 /api/health usdt_watch=$(curl -s -m 10 http://127.0.0.1:8787/api/health | grep -o '"usdt_watch":"[^"]*"' || echo '<无该字段>')"

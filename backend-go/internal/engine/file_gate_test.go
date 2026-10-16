@@ -3,7 +3,11 @@
 //   - writebackDelivery：srt/vtt/json/yaml/yml 走 xlsx 对照表，其余走原格式写回
 package engine
 
-import "testing"
+import (
+	"testing"
+
+	"translator/internal/fileproc"
+)
 
 // TestProtectSourceByLang 翻译前品牌保护：源文品牌名替换为规定译法（长词优先防拆残），
 // 无术语匹配时不改动；返回第二个值标记是否发生过替换。
@@ -90,5 +94,47 @@ func TestWritebackDelivery(t *testing.T) {
 	//   否则不同形态会在同一条分支里互相串位（只测「该对的对了」测不出这种漂移，必须有反向对照）。
 	if got := writebackDelivery(".md"); got != "inplace" {
 		t.Errorf("writebackDelivery(\".md\") = %q, want \"inplace\"（反向对照：md 不是音频降级档）", got)
+	}
+}
+
+// TestWritebackDeliveryAgreesWithFormatSource ★ 同源等价锁（2026-10-16）：
+// writebackDelivery 的"图片/音频"两档**委托** fileproc 的集合判定（IsImageFormat / IsAudioFormat），
+// 所以这里必须拿**准入名单全量**逐条比对——两份列表一旦各自漂（历史上 engine 那份加过 .heic、
+// fileproc 那份没加），表现是"上传口放行、这里判 inplace"，图片被送进 Office 回写分支。
+//
+// 判据三腿：① 名单里每个后缀的分类与 fileproc 谓词一致；② image/audio 分类**恰好**等于谓词集合
+// （既不许漏，也不许把别的格式塞进媒体档）；③ 名单里每个后缀都真的被这三档之一接住（不许有孤儿）。
+func TestWritebackDeliveryAgreesWithFormatSource(t *testing.T) {
+	order := fileproc.TranslateFormatOrder
+	if len(order) < 20 {
+		// 射程自证：名单忽然变短 ⇒ 本腿在稀疏集合上恒真，等于失明。
+		t.Fatalf("准入名单只有 %d 项 ⇒ 派生失败，本等价锁已失明", len(order))
+	}
+	var wantImage, wantAudio []string
+	for _, ext := range order {
+		got := writebackDelivery(ext)
+		switch {
+		case fileproc.IsImageFormat(ext):
+			wantImage = append(wantImage, ext)
+			if got != "image" {
+				t.Fatalf("图片格式 %s 被判成 %q（fileproc 谓词说是图片）⇒ 两份列表已漂", ext, got)
+			}
+		case fileproc.IsAudioFormat(ext):
+			wantAudio = append(wantAudio, ext)
+			if got != "audio" {
+				t.Fatalf("音频格式 %s 被判成 %q（fileproc 谓词说是音频）⇒ 两份列表已漂", ext, got)
+			}
+		default:
+			if got != "inplace" && got != "xlsx" {
+				t.Fatalf("非媒体格式 %s 被判成 %q ⇒ 分类越界", ext, got)
+			}
+			if got == "image" || got == "audio" {
+				t.Fatalf("非媒体格式 %s 被判成媒体档 %q ⇒ 谓词与分类抢了同一格", ext, got)
+			}
+		}
+	}
+	// ② 两个集合都必须非空（否则"谓词恒假 + 分类恒 inplace"这一对能一起骗过上面每一条）。
+	if len(wantImage) == 0 || len(wantAudio) == 0 {
+		t.Fatalf("媒体集合为空：image=%d audio=%d ⇒ 谓词已失明", len(wantImage), len(wantAudio))
 	}
 }

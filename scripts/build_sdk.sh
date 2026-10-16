@@ -53,7 +53,7 @@ OUT_DIR="$ROOT/frontend-react/public/sdk"
 verify_embedded() {
   local art="$1" member="$2" srcrel="$3"
   [ -f "$art" ] || return 0   # 托管副本缺席由上面的成对检查负责报错，这里不重复
-  [ -f "$srcrel" ] || { echo "ℹ️  跳过对照：工作区无 $srcrel（编译产物不进 git，本机没构建时无从比对）"; return 0; }
+  [ -f "$srcrel" ] || { echo "ℹ️  跳过对照：工作区无 ${srcrel}（编译产物不进 git，本机没构建时无从比对）"; return 0; }
   python3 - "$art" "$member" "$srcrel" <<'PY' || return 1
 import sys, tarfile, zipfile
 art, member, src = sys.argv[1:4]
@@ -128,7 +128,7 @@ for a in "$@"; do
   case "$a" in
     --check) MODE="check" ;;
     [0-9]*)  BUMP="$a" ;;
-    *)       die "未知参数：$a（用法见文件头）" ;;
+    *)       die "未知参数：${a}（用法见文件头）" ;;
   esac
 done
 
@@ -136,7 +136,7 @@ done
 # pyproject 用逐行正则保留行内注释；package.json 走 json  round-trip（2 空格缩进，与 npm 默认一致）。
 if [ -n "$BUMP" ]; then
   MODE="build"
-  echo "==> 版本 bump：python $PY_VER / typescript $TS_VER → $BUMP（写回两份版本源）"
+  echo "==> 版本 bump：python $PY_VER / typescript $TS_VER → ${BUMP}（写回两份版本源）"
   python3 - "$PY_SRC/pyproject.toml" "$BUMP" <<'PY' || die "写回 pyproject.toml 版本失败"
 import re, sys
 p, v = sys.argv[1], sys.argv[2]
@@ -230,7 +230,7 @@ mkdir -p "$OUT_DIR" || die "无法创建 $OUT_DIR"
 # manifest 里的文件名跟当前版本对齐；源产物在盘时再加一层字节对照。
 if [ "$MODE" = "check" ]; then
   for f in "$WHL" "$SDIST" "$TGZ" "$WHL_LATEST" "$SDIST_LATEST" "$TGZ_LATEST" "$MANIFEST"; do
-    [ -f "$OUT_DIR/$f" ] || die "托管产物缺失：public/sdk/$f（请先跑 scripts/build_sdk.sh）"
+    [ -f "$OUT_DIR/$f" ] || die "托管产物缺失：public/sdk/${f}（请先跑 scripts/build_sdk.sh）"
     [ -s "$OUT_DIR/$f" ] || die "托管产物为空文件：public/sdk/$f"
   done
   for f in "$WHL" "$SDIST" "$TGZ" "$WHL_LATEST" "$SDIST_LATEST" "$TGZ_LATEST"; do
@@ -238,7 +238,7 @@ if [ "$MODE" = "check" ]; then
     [ -f "$fp" ] || die "指纹文件缺失：public/sdk/$f.sha256（产物与指纹必须成对提交）"
     OLD="$(tr -d '[:space:]' < "$fp")"
     WANT="$(lane_digest "$f")"
-    [ "$OLD" = "$WANT" ] || die "交付漂移：$f.sha256 记 $OLD，当前源码指纹 $WANT —— 请重跑 scripts/build_sdk.sh 并一并提交产物"
+    [ "$OLD" = "$WANT" ] || die "交付漂移：$f.sha256 记 ${OLD}，当前源码指纹 $WANT —— 请重跑 scripts/build_sdk.sh 并一并提交产物"
   done
   # manifest 是前端取文件名的唯一入口，落后于版本就等于页面挂死链
   python3 - "$OUT_DIR/$MANIFEST" "$PY_VER" "$TS_VER" "$WHL" "$TGZ" <<'PY' || die "manifest.json 与当前版本不一致（重跑 scripts/build_sdk.sh）"
@@ -259,7 +259,7 @@ PY
   done
   # ★★ 第三层：内嵌源码对照 + latest 别名配对（堵「源码改了、产物是旧构建」这一格假绿，见函数头注释）
   run_embedded_checks
-  echo "✅ public/sdk/ 托管产物与 SDK 源码一致（python $PY_VER / typescript $TS_VER，含产物内实比对）"
+  echo "✅ public/sdk/ 托管产物与 SDK 源码一致（python $PY_VER / typescript ${TS_VER}，含产物内实比对）"
   exit 0
 fi
 
@@ -292,7 +292,7 @@ fi
 # TS 侧同口径前置：npm 包只发编译产物，故比对包内 index.js 与本机 dist（本机没构建时如实跳过）
 verify_embedded "$TS_SRC/$TGZ" "index.js" "$TS_SRC/dist/index.js" || die "sdk/typescript 的 tgz 与本地编译产物不一致，请先跑 ./node_modules/.bin/tsc 再重跑本脚本"
 
-echo "==> 刷新 public/sdk/（python $PY_VER / typescript $TS_VER）"
+echo "==> 刷新 public/sdk/（python $PY_VER / typescript ${TS_VER}）"
 rm -f "$OUT_DIR/$WHL" "$OUT_DIR/$SDIST" "$OUT_DIR/$TGZ"
 cp -f "$PY_SRC/dist/$WHL" "$OUT_DIR/$WHL" || die "拷入 whl 失败"
 cp -f "$PY_SRC/dist/$SDIST" "$OUT_DIR/$SDIST" || die "拷入 sdist 失败"
@@ -328,5 +328,5 @@ echo "✅ 产物已刷新："
 for p in "$WHL" "$SDIST" "$TGZ" "$WHL_LATEST" "$SDIST_LATEST" "$TGZ_LATEST"; do
   printf '   public/sdk/%s (%s 字节)\n' "$p" "$(wc -c < "$OUT_DIR/$p" | tr -d ' ')"
 done
-echo "   站点下载路径：/sdk/$WHL、/sdk/$SDIST、/sdk/$TGZ（另有 -latest 别名）"
+echo "   站点下载路径：/sdk/${WHL}、/sdk/${SDIST}、/sdk/${TGZ}（另有 -latest 别名）"
 echo "⚠️ 生效条件：产物落在 public/ 下，属于前端构建产物——只换 /opt/translator/web 即生效，不需要换后端二进制。"

@@ -281,7 +281,7 @@ RATE=$(dbq "SELECT value FROM system_config WHERE key='points_tokens_rate'" | tr
 [ -n "$RATE" ] || RATE=400
 RULER_FEN=$(dbq "SELECT value FROM system_config WHERE key='price_fen_per_million_tokens'" | tr -d '[:space:]' | tr -dc '0-9')
 [ -n "$RULER_FEN" ] || RULER_FEN=24917
-echo "INFO|计费口径读数：积分汇率 1:$RATE，裸充值尺子 ${RULER_FEN} 分/百万 token"
+echo "INFO|计费口径读数：积分汇率 1:${RATE}，裸充值尺子 ${RULER_FEN} 分/百万 token"
 
 # T0 面值成对性锁：3,000 积分（＝3000×RATE token）按尺子折回来必须仍是 ¥299.00＝29,900 分。
 # 算法与 store 的 TokensToFen 同口径（乘满再除、分位四舍五入），两侧都取**库里的真实读数**，
@@ -1509,7 +1509,7 @@ UPD44="$(grep -A24 'SELECT id, balance FROM balance_accounts WHERE tenant_id=? A
 NOGRD44="$(grep -A24 'SELECT id, balance FROM balance_accounts WHERE tenant_id=? AND balance>0' "$SRC44" | grep 'UPDATE balance_accounts SET balance=balance-?' | grep -vc 'AND balance>=' || true)"
 if [ "${UPD44:-0}" -ge 1 ] 2>/dev/null && [ "${NOGRD44:-1}" = "0" ]; then
   PASS=$((PASS+1)); echo "PASS|T44-settle-balance-guard（兜底段 ${UPD44} 笔扣减全部带余额守卫）"
-else FAIL=$((FAIL+1)); echo "FAIL|T44-settle-balance-guard|扣减语句数=$UPD44（须≥1）其中无守卫数=$NOGRD44（须=0）⇒ D-1 并发透支修复被回退"; fi
+else FAIL=$((FAIL+1)); echo "FAIL|T44-settle-balance-guard|扣减语句数=${UPD44}（须≥1）其中无守卫数=${NOGRD44}（须=0）⇒ D-1 并发透支修复被回退"; fi
 if grep -q 'Is(qerr, sql.ErrNoRows)' "$SRC44"; then
   FAIL=$((FAIL+1)); echo "FAIL|T44-settle-qerr-ban|D1 修复被回退：SettleExhausted 重新出现 qerr 误判"
 else PASS=$((PASS+1)); echo "PASS|T44-settle-qerr-ban"; fi
@@ -1851,7 +1851,7 @@ else
   FAIL=$((FAIL+1)); echo "FAIL|T51-order-discounted(落库 $AM51 vs 试算 $PAY51)"
 fi
 TN51=$(sq "SELECT amount_tokens FROM orders WHERE id=$OID51" | tr -d '[:space:]')
-[ "$TN51" = "$(( 1000 * RATE ))" ] && { PASS=$((PASS+1)); echo "PASS|T51-tokens-undiscounted($TN51)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-tokens-undiscounted(want $((1000 * RATE))(1000积分×汇率$RATE) got $TN51，券不得减积分额度)"; }
+[ "$TN51" = "$(( 1000 * RATE ))" ] && { PASS=$((PASS+1)); echo "PASS|T51-tokens-undiscounted($TN51)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-tokens-undiscounted(want $((1000 * RATE))(1000积分×汇率$RATE) got ${TN51}，券不得减积分额度)"; }
 AP51=$(echo "$R" | pv '.get("order",{}).get("amount_points",-1)')
 [ "$AP51" = "1000" ] && { PASS=$((PASS+1)); echo "PASS|T51-points-undiscounted"; } || { FAIL=$((FAIL+1)); echo "FAIL|T51-points-undiscounted(got $AP51)"; }
 ck T51-order-coupon-code "$C51" "$(sq "SELECT coupon_code FROM orders WHERE id=$OID51")"
@@ -1972,7 +1972,7 @@ ck T52-kb-update '"ok":true' "$(curl -s -X PUT "$B/api/admin/assist/kb?id=$ID52"
 ck T52-kb-updated-title '冒烟条目（已改）' "$(get "$AH" /api/admin/assist/kb)"
 ck T52-kb-delete '"ok":true' "$(curl -s -X DELETE "$B/api/admin/assist/kb?id=$ID52" -H "$AH")"
 if get "$AH" /api/admin/assist/kb | grep -qE "$K52"; then
-  FAIL=$((FAIL+1)); echo "FAIL|T52-kb-deleted-gone（删除后列表仍见 $K52）"
+  FAIL=$((FAIL+1)); echo "FAIL|T52-kb-deleted-gone（删除后列表仍见 ${K52}）"
 else
   PASS=$((PASS+1)); echo "PASS|T52-kb-deleted-gone"
 fi
@@ -2794,7 +2794,7 @@ G62="${R3ST}/${R3CODE}/${R3MSG}"; GB62="$R3BODY"
 # ★ 核心等值锁：两条通道的「状态码/错误码/文案」三元组必须逐字相同——
 #   只要有任何一维不同，调用方就能数出「这一条存在」，探针就还开着。
 if [ "$P62" = "$G62" ]; then PASS=$((PASS+1)); echo "PASS|T62-feedback-probe-closed($P62)"
-else FAIL=$((FAIL+1)); echo "FAIL|T62-feedback-probe-closed(越权=$P62 / 查无=$G62，三元组必须逐字相等)"; fi
+else FAIL=$((FAIL+1)); echo "FAIL|T62-feedback-probe-closed(越权=$P62 / 查无=${G62}，三元组必须逐字相等)"; fi
 # 越权详情不得回带反馈字段（只承认「不存在」，不承认「有这么一条」）。
 # ⚠️ 两条响应体**分别**判：只判 ghost 会让「peer 漏字段但 ghost 干净」这种半截改法静默通过。
 LEAK62=0
@@ -2912,7 +2912,7 @@ req3 POST "$AH64" $ESTCFG "$B64BIG"; ck3 T64-reject-over-max 400 VALIDATION_ERRO
 B64MISS='{"k_pro":160,"k_fast":60,"fixed_pro":3000}'
 req3 POST "$AH64" $ESTCFG "$B64MISS"; ck3 T64-reject-missing-field 400 VALIDATION_ERROR '缺少 fixed_fast'
 EST1=$(ESTCNT); EST1=${EST1:-0}
-[ "$EST1" = "$EST0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reject-leaves-nothing(四键行数 $EST0→$EST1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reject-leaves-nothing(拒收却把行数从 $EST0 写成 $EST1＝半套配置，长短单口径会不一致)"; }
+[ "$EST1" = "$EST0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reject-leaves-nothing(四键行数 ${EST0}→$EST1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reject-leaves-nothing(拒收却把行数从 $EST0 写成 ${EST1}＝半套配置，长短单口径会不一致)"; }
 # ④ 合法保存 → 读回等值 + 审计留痕（F 档允许 0＝关闭固定项，这里顺带锁一次）
 #   ★ 成功体是 {success:true, coefficients:{…}}，没有 code/message 两字段，故不走 ck3（它会等值比
 #   错误码），只判状态码 200 + success:true + 生效值读回。
@@ -3326,7 +3326,7 @@ CARRY0=$(sq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID68A AND sourc
 # ① 主角判据·**额度全耗尽**后升级必须成单（旧代码在这里回 409「当前套餐已无剩余价值」）
 dbq "UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$TID68A AND kind='plan'" >/dev/null
 REM68Z=$(sq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID68A AND kind='plan' AND \"left\">0" | tr -d '[:space:]')
-[ "$REM68Z" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T68-exhausted-precondition(剩余 0，与演示站同形态)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-precondition(剩余=$REM68Z，本段判据失去意义)"; }
+[ "$REM68Z" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T68-exhausted-precondition(剩余 0，与演示站同形态)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-precondition(剩余=${REM68Z}，本段判据失去意义)"; }
 req3 POST "$H68A" /api/package/upgrade '{"code":"uat_t68_max"}'
 if [ "$R3ST" = "200" ] && echo "$R3BODY" | grep -qE '"success":true'; then
   PASS=$((PASS+1)); echo "PASS|T68-exhausted-upgrade-200(F-80：额度耗尽不再挡门)"
@@ -3354,7 +3354,7 @@ CARRY1=$(sq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID68A AND sourc
 if [ "${CARRY1:-0}" = "${CARRY0:-0}" ]; then
   PASS=$((PASS+1)); echo "PASS|T68-exhausted-no-extra-carry(carry 行数 $CARRY1 == 升级前 $CARRY0)"
 else
-  FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-no-extra-carry(旧包剩余 0 却多出结转行：$CARRY0 → $CARRY1，等于凭空多发额度)"
+  FAIL=$((FAIL+1)); echo "FAIL|T68-exhausted-no-extra-carry(旧包剩余 0 却多出结转行：$CARRY0 → ${CARRY1}，等于凭空多发额度)"
 fi
 
 # ④ 反向对照·前置校验一条都没被放宽：A 现在在 max（120 元），拿更便宜的 low（20 元）「升级」必须仍拒
@@ -3711,7 +3711,7 @@ ck T71-health-asr-ready '"asr_ready":(true|false)' "$H71"
 ck T71-health-tts-ready '"tts_ready":(true|false)' "$H71"
 OCR71=$(bool71 "$H71" ocr_ready); ASR71=$(bool71 "$H71" asr_ready); TTS71=$(bool71 "$H71" tts_ready)
 ckq T71-health-three-fields-readable yes "$([ -n "$OCR71" ] && [ -n "$ASR71" ] && [ -n "$TTS71" ] && echo yes || echo no)"
-echo "  [T71] 就绪读数：ocr=$OCR71 asr=$ASR71 tts=$TTS71（false＝本机/CI 未投放模型资产，属预期档位）"
+echo "  [T71] 就绪读数：ocr=$OCR71 asr=$ASR71 tts=${TTS71}（false＝本机/CI 未投放模型资产，属预期档位）"
 
 # ② ASR 的鉴权与协议四态（三件套：状态码＋错误码＋文案）
 req3 POST "" /api/chat/asr ""; ck3 T71-asr-anon-401 401 UNAUTHORIZED '未登录'
@@ -3844,7 +3844,7 @@ not_silent71(){ local payload="$1" kind="$2" st reason final respath
   case "$st" in
     completed) [ -n "$final$respath" ] && { PASS=$((PASS+1)); echo "PASS|T71-$kind-terminal-has-result"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-has-result|completed 却零产物（假成功形态）"; } ;;
     rejected)  [ -n "$reason" ] && { PASS=$((PASS+1)); echo "PASS|T71-$kind-terminal-has-reason"; } || { FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-has-reason|rejected 却不给理由"; } ;;
-    *) FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-status|got=$st（既非 completed 也非 rejected＝没跑到终态或在中间态被当成功）" ;;
+    *) FAIL=$((FAIL+1)); echo "FAIL|T71-$kind-terminal-status|got=${st}（既非 completed 也非 rejected＝没跑到终态或在中间态被当成功）" ;;
   esac; }
 D71IMG=$(waittk "$H1" "$TK71IMG")
 not_silent71 "$D71IMG" image

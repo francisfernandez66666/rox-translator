@@ -45,13 +45,13 @@ for a in "$@"; do
   case "$a" in
     --check) MODE="check" ;;
     [0-9]*)  BUMP="$a" ;;
-    *)       die "未知参数：$a（用法见文件头）" ;;
+    *)       die "未知参数：${a}（用法见文件头）" ;;
   esac
 done
 
 if [ -n "$BUMP" ]; then
   MODE="build"
-  echo "==> 版本 bump：$VER → $BUMP（写回 manifest.json）"
+  echo "==> 版本 bump：$VER → ${BUMP}（写回 manifest.json）"
   python3 - "$MANIFEST" "$BUMP" <<'PY' || die "写回版本失败"
 import json, sys
 p, v = sys.argv[1], sys.argv[2]
@@ -99,17 +99,17 @@ LATEST_ZIP="$OUT_DIR/langcross-extension-latest.zip"
 mkdir -p "$OUT_DIR" || die "无法创建 $OUT_DIR"
 
 if [ "$MODE" = "check" ]; then
-  [ -f "$ZIP_FILE" ] || die "托管产物缺失：$ZIP_FILE（请先跑 scripts/build_extension.sh）"
+  [ -f "$ZIP_FILE" ] || die "托管产物缺失：${ZIP_FILE}（请先跑 scripts/build_extension.sh）"
   for fp in "$FP_FILE" "$LATEST_FP_FILE"; do
     [ -f "$fp" ] || die "指纹文件缺失：${fp#$ROOT/}（zip 与指纹必须成对提交）"
     OLD="$(tr -d '[:space:]' < "$fp")"
-    [ "$OLD" = "$SRC_DIGEST" ] || die "交付漂移：$fp 记录 $OLD，当前源码指纹 $SRC_DIGEST —— 请重跑 scripts/build_extension.sh 并一并提交 zip"
+    [ "$OLD" = "$SRC_DIGEST" ] || die "交付漂移：$fp 记录 ${OLD}，当前源码指纹 $SRC_DIGEST —— 请重跑 scripts/build_extension.sh 并一并提交 zip"
   done
-  echo "✅ 托管 zip 与 extension/ 源码一致（版本 $VER，指纹 ${SRC_DIGEST:0:12}…）"
+  echo "✅ 托管 zip 与 extension/ 源码一致（版本 ${VER}，指纹 ${SRC_DIGEST:0:12}…）"
   exit 0
 fi
 
-echo "==> 打包 extension/（版本 $VER）"
+echo "==> 打包 extension/（版本 ${VER}）"
 rm -f "$ZIP_FILE"
 # -X 去多余字段、-q 静默；显式列文件而非 -r 整目录（同上：防塞进垃圾文件）
 (cd "$EXT" && zip -qX "$ZIP_FILE" "${FILES[@]}") || die "zip 失败"

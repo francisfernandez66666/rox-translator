@@ -450,7 +450,7 @@ else
         || { FAIL=$((FAIL+1)); echo "FAIL|X-$K-$L-no-cache-row|库里写了 $N 行（被拒的那一稿一行都不许留）"; }
       local HN; HN=$(hreason "$R")
       [ "${HN:-0}" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|X-$K-$L-health($R=$HN)"; } \
-        || { FAIL=$((FAIL+1)); echo "FAIL|X-$K-$L-health|/health 的 canned.by_reason 里没有 $R（读数=$HN）"; }
+        || { FAIL=$((FAIL+1)); echo "FAIL|X-$K-$L-health|/health 的 canned.by_reason 里没有 ${R}（读数=${HN}）"; }
     }
 
     # ---- X1 正向对照：clean 档必须**放行并写缓存**（这一段所有负向判据的底座）----
@@ -606,7 +606,7 @@ print(sum(1 for n in names if re.search(r"[一-鿿]",n)))' 2>/dev/null || echo E
     ck X13a-source-llm '"source":"llm"' "$RX13"
     for bad in '327' 'sandbox' '火花塞'; do
       if echo "$RX13" | grep -q "$bad"; then
-        FAIL=$((FAIL+1)); echo "FAIL|X13b-no-fabrication|编造句里的「$bad」还是发出去了：${RX13:0:200}"
+        FAIL=$((FAIL+1)); echo "FAIL|X13b-no-fabrication|编造句里的「${bad}」还是发出去了：${RX13:0:200}"
       else
         PASS=$((PASS+1)); echo "PASS|X13b-no-fabrication-$bad"
       fi
@@ -633,10 +633,10 @@ print(sum(1 for n in names if re.search(r"[一-鿿]",n)))' 2>/dev/null || echo E
     ck X10b-second-greet-chinese '你好，我是能言' "$(greetof "$RX0B")"
     # 前后两次 greet 之间**没有新增上游调用**＝窗口内两条腿都没打（这一条是退避的本体：
     # 只押后台腿的话访客那 8 秒白等照旧，台账 ㊷ 的验收判据写的正是"首屏不再白等"）
-    [ "$C1" -gt "$C0" ] && { PASS=$((PASS+1)); echo "PASS|X10c-first-round-dialed($C0→$C1)"; } \
-      || { FAIL=$((FAIL+1)); echo "FAIL|X10c-first-round-dialed|第一次 greet 压根没拨上游（$C0→$C1），后面那条'不再拨'就成了空判"; }
-    [ "$C2" = "$C1" ] && { PASS=$((PASS+1)); echo "PASS|X10d-window-dials-nothing($C1→$C2)"; } \
-      || { FAIL=$((FAIL+1)); echo "FAIL|X10d-window-dials-nothing|退避窗口内又拨了 $((C2-C1)) 次（$C1→$C2）＝窗口没生效"; }
+    [ "$C1" -gt "$C0" ] && { PASS=$((PASS+1)); echo "PASS|X10c-first-round-dialed(${C0}→$C1)"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10c-first-round-dialed|第一次 greet 压根没拨上游（${C0}→${C1}），后面那条'不再拨'就成了空判"; }
+    [ "$C2" = "$C1" ] && { PASS=$((PASS+1)); echo "PASS|X10d-window-dials-nothing(${C1}→$C2)"; } \
+      || { FAIL=$((FAIL+1)); echo "FAIL|X10d-window-dials-nothing|退避窗口内又拨了 $((C2-C1)) 次（${C1}→${C2}）＝窗口没生效"; }
     [ "$(hstatus)" = "backoff" ] && { PASS=$((PASS+1)); echo "PASS|X10e-health-backoff-word"; } \
       || { FAIL=$((FAIL+1)); echo "FAIL|X10e-health-backoff-word|/health canned.status 不是 backoff（实读 $(hstatus)）"; }
     [ "$(hreason canned_bg_backoff)" -ge 1 ] && { PASS=$((PASS+1)); echo "PASS|X10f-backoff-reason-counted"; } \
@@ -893,7 +893,7 @@ log "=============================="
 #   只看矩阵那三行 PASS/FAIL 分不开"拒了但记成别的档"与"压根没拒"（本轮 X-chips-it-health 就是这么卡了一轮）。
 #   目录在 mktemp 下，留着不外泄；排完自己 rm -rf。
 if [ -n "${ASSIST_UAT_KEEP:-}" ]; then
-  log "ASSIST_UAT_KEEP=1：临时目录不清理（库与日志留在 $WORK）"
+  log "ASSIST_UAT_KEEP=1：临时目录不清理（库与日志留在 ${WORK}）"
 else
   rm -rf "$WORK"
 fi

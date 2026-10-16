@@ -467,7 +467,7 @@ if [ "$SKIP_HOMEPAGE_PROBE" = "1" ]; then
         89504e47*) fmt=png ;; ffd8ff*) fmt=jpg ;; 47494638*) fmt=gif ;; 52494646*) fmt=webp ;;
       esac
       if [ "$code2" != "200" ]; then
-        red "D ${full} 件 HTTP $code2（期望 200）→ ${BASE%/}$full"
+        red "D ${full} 件 HTTP ${code2}（期望 200）→ ${BASE%/}$full"
       elif [ -z "$fmt" ]; then
         red "D ${full} 体首字节 ${magic:-<空>} 不是图片魔数（Content-Type=${ct2:-<缺失>}，${n2} B）"
       elif [ "$n2" -lt 128 ]; then
@@ -508,10 +508,10 @@ if [ "$EXPECT_BRANDING" = "1" ]; then LEG_F=" / F 首页由后端直出（带 __
 LEG_H=""
 if [ "$EXPECT_LANDING_OFF" = "1" ]; then LEG_H=" / H 该部署已对访客关闭主页（须带门面标记）"; else LEG_H=" / H 主页开放档（不得出现门面标记）"; fi
 note "判据：A 首屏体积<${MAX_KB}KB / B 品牌字段是地址不是 dataURI / C 全文无 data:image / D 品牌件真取得到字节 / E 缺件如实 4xx${LEG_F} / G 匿名 ?tenant_id= 点名别家必须回落平台（F-79）${LEG_H}"
-note "首页 HTTP $http_code，body ${bytes} B（上限 $((MAX_KB * 1024)) B）"
+note "首页 HTTP ${http_code}，body ${bytes} B（上限 $((MAX_KB * 1024)) B）"
 
 if [ "$http_code" != "200" ]; then
-  red "首页 HTTP ${http_code}（期望 200）→ $url；后续判据无从跑起"
+  red "首页 HTTP ${http_code}（期望 200）→ ${url}；后续判据无从跑起"
   note "★ 冒烟失败 $fails 项"; exit 1
 fi
 
@@ -656,7 +656,7 @@ if [ -s "$TMP/urls" ]; then
       89504e47*) fmt=png ;; ffd8ff*) fmt=jpg ;; 47494638*) fmt=gif ;; 52494646*) fmt=webp ;;
     esac
     if [ "$code2" != "200" ]; then
-      red "D ${key} 指向的件 HTTP $code2（期望 200）→ $target"
+      red "D ${key} 指向的件 HTTP ${code2}（期望 200）→ $target"
     elif head -c 2048 "$b2" | grep -q -i -E '<!doctype html|<html'; then
       red "D ${key} 拿到的是 HTML 壳 ⇒ SPA 兜底吃掉了品牌件（与 F-69 同一陷阱）"
     elif [ -z "$fmt" ]; then
@@ -687,7 +687,7 @@ neg() {
       else
         ok "E 负向 $path → $c 且非 HTML 兜底"
       fi ;;
-    *) red "E 负向 $path → HTTP $c（期望 4xx 且非 HTML 壳）；体首=$(head -c 60 "$b" | tr -d '\n')" ;;
+    *) red "E 负向 $path → HTTP ${c}（期望 4xx 且非 HTML 壳）；体首=$(head -c 60 "$b" | tr -d '\n')" ;;
   esac
 }
 if [ "$RUN_NEG" != "1" ]; then
@@ -722,7 +722,7 @@ else
     case "$GT" in
       0) ok "G 首屏注入：匿名 ?tenant_id=1 已回落平台（tenant_id=0）" ;;
       NOKEY) note "G 未解析到注入体（该站点形态由判据 F 定性），本条不计分" ;;
-      *) red "G 匿名 ?tenant_id=1 被采纳（tenant_id=$GT）⇒ F-79 复发，别家品牌会被注入首屏" ;;
+      *) red "G 匿名 ?tenant_id=1 被采纳（tenant_id=${GT}）⇒ F-79 复发，别家品牌会被注入首屏" ;;
     esac
   else
     red "G 首屏探针拉取失败（$BASE/?tenant_id=1）"

@@ -9,15 +9,35 @@
 package api
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"net/http"
 	"sort"
 	"strings"
+
+	"translator/internal/fileproc"
 )
 
 //go:embed openapi.v1.json
 var openapiV1JSON []byte
+
+// openAPIFormatPlaceholder 规范／文档里代表「准入格式清单」的占位符。
+//
+// ★ 为什么用占位符而不是把清单抄进规范和文档（2026-10-16 立）：
+//
+//	准入名单的唯一事实源是 fileproc.TranslateFormatOrder（见 AGENTS §一·14），
+//	历史上它在本包与文档页各被抄过一份，结果 2026-10-14 那次「图片/音频进准入」
+//	只改了名单与闸门，对外文档仍写着旧的一行字面量 ⇒ 客户照文档写调用、发图片被判不支持。
+//	占位符把"抄一份"变成"不可能抄"——api_openapi_media_gate_test.go 会锁住
+//	规范与中英文档都只经由本占位符引用清单，手写清单当场红。
+const openAPIFormatPlaceholder = "{{FORMATS}}"
+
+// expandOpenAPIFormats 把占位符替换成现取的准入清单（唯一事实源＝fileproc.FormatHintBase）。
+// 规范 JSON 与文档 Markdown 共用这一处，两条面不会各取各的。
+func expandOpenAPIFormats(raw []byte) []byte {
+	return bytes.ReplaceAll(raw, []byte(openAPIFormatPlaceholder), []byte(fileproc.FormatHintBase()))
+}
 
 // routesOpenAPISpec 注册规范服务路由（在 routes() 中调用）。
 func (s *Server) routesOpenAPISpec() {
@@ -31,13 +51,16 @@ func (s *Server) routesOpenAPISpec() {
 func (s *Server) handleOpenAPIV1JSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
+	// 占位符先展开：两条分支（手工视图／自动导出视图）拿到的都是同一份已展开规范，
+	// 免得 manual_only=1 的客户看到裸 {{FORMATS}}（那是把内部记号漏给客户）。
+	raw := expandOpenAPIFormats(openapiV1JSON)
 	if r.URL.Query().Get("manual_only") == "1" {
-		w.Write(openapiV1JSON)
+		w.Write(raw)
 		return
 	}
 	var spec map[string]interface{}
-	if err := json.Unmarshal(openapiV1JSON, &spec); err != nil {
-		w.Write(openapiV1JSON) // 规范损坏时兜底原样输出（保 embed 校验测试之外的极端情况）
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		w.Write(raw) // 规范损坏时兜底原样输出（保 embed 校验测试之外的极端情况）
 		return
 	}
 	paths, _ := spec["paths"].(map[string]interface{})

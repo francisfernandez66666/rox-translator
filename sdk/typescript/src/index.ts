@@ -170,6 +170,16 @@ export class TranslatorClient {
   /**
    * 创建文件批量翻译任务（≤20 个，总量 ≤40MB）。
    *
+   * 支持三类文件，产物形态不同（详见开放 API 文档「图片与音频」一节）：
+   *  - 文档（docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml 等）：原格式回写；
+   *  - 图片（png/jpg/jpeg/bmp/tif/tiff/webp/heic）：OCR 识别后翻译，
+   *    产物＝同容器译后图（文字原位回填）＋译文 .md；
+   *  - 音频（mp3/m4a/wav/ogg/flac/aac/opus）：ASR 转写后翻译，
+   *    产物＝同容器译后配音＋字幕 .srt（带原时间轴）＋译文 .md＋原音频副本。
+   *
+   * 服务端不会静默降级：缺 OCR/ASR 资产时该文件明确失败；配音语种覆盖（当前 zh/en）
+   * 之外的语种只交付字幕与译文，任务仍完成。
+   *
    * @param files - 本地文件路径数组（Node 环境）
    * @param targetLangs - 目标语言代码列表，缺省 ["en"]
    * @param mode - "pro" / "fast"

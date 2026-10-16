@@ -25,7 +25,8 @@
 #   bash deploy/install_socket_activation.sh --rollback   # 回滚：disable --now 两份 socket → restart → 回今天形态（不需要回滚代码）
 #
 # ★ 四条验收（方案文档 §六 里机器可查的那四条；其余要人工看延迟分位，不在本脚本射程）：
-#   V1 端口属主＝`systemd`（结构性判据：属主没换＝socket activation 压根没生效，V2/V3/V4 照样能绿）；
+#   V1 属主列里出现 `systemd`（结构性判据：接管之后 `ss -lntp` 会同时列出 systemd 那份监听 socket
+#      与继承它的业务进程；只有业务进程＝压根没接管，V2/V3/V4 照样能绿）；
 #   V2 两站 `/api/health` 各 200（接管之后服务照常）；
 #   V3 主站日志里出现接管那一行（观测腿，**不参与裁决**，只用来抓"日志压根没落盘"那一族观测失效）；
 #   V4 **发版窗口内**的 5xx 与 P99（★ 2026-10-14 补，见下面 probe 三函数头注释）。
@@ -49,7 +50,7 @@ CONF="$REPO/deploy/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$CONF" | head -1)"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$CONF" | head -1)"
 RUSER="$(sed -n 's/^REMOTE_USER="${DEPLOY_USER:-\(.*\)}"/\1/p' "$CONF" | head -1)"
-[ -n "$HOST" ] || { echo "ABORT=2 主机没解析出来（读 $CONF，别在命令行里写死地址）"; exit 2; }
+[ -n "$HOST" ] || { echo "ABORT=2 主机没解析出来（读 ${CONF}，别在命令行里写死地址）"; exit 2; }
 [ -n "$PORT" ] || PORT=22
 [ -n "$RUSER" ] || RUSER=root
 
@@ -71,7 +72,7 @@ while [ $# -gt 0 ]; do
     --rollback) MODE="rollback" ;;
     --status) MODE="status" ;;
     -h | --help) awk '/^set -uo/{exit} {print}' "${BASH_SOURCE[0]}" ; exit 0 ;;
-    *) echo "未知参数：$1（--apply／--rollback／--status／--help）" >&2 ; exit 2 ;;
+    *) echo "未知参数：${1}（--apply／--rollback／--status／--help）" >&2 ; exit 2 ;;
   esac
   shift
 done
@@ -150,7 +151,7 @@ for b in $BINS; do
   esac
 done
 if [ "$G1_BAD" = "1" ]; then
-  echo "ABORT=2 现网二进制里没有 socket 接管标记（$BINARY_MARKER）⇒ 顺序不成立，停在干跑。"
+  echo "ABORT=2 现网二进制里没有 socket 接管标记（${BINARY_MARKER}）⇒ 顺序不成立，停在干跑。"
   echo "        先按正常发版把带接管逻辑的二进制换上两站（S2），再回来跑本脚本 --apply。"
   exit 2
 fi
@@ -227,9 +228,47 @@ for u in translator.socket translator-demo.socket; do
   cmp -s "\$u" "\$dst" && echo "LANDED=\$u byte_equal" || { echo 'APPLY=2 内容与仓库不一致'; exit 2; }
 done
 systemctl daemon-reload
+# ★★ 2026-10-16 现网实测补上的一步：**首次装配必须先停服务，才能启用 socket**。
+#   旧形态（enable --now → restart）在真机首跑直接失败，journal 原文：
+#     `translator.socket: Socket service translator.service already active, refusing.`
+#   机理：systemd 只在**服务被启动**的那一瞬交接 fd；关联 service 还在跑时它拒绝让 socket
+#   去绑同一地址（否则两个持有者并存，它无从决定谁 accept）。所以首次装配的硬顺序是
+#     stop（让出 127.0.0.1:8787） → enable --now（socket 立刻 bind，此后恒在 listen）→ 服务启动/重启。
+#   ⚠️ 这一停一启是**首次装配自身的一次性窗口**（今天的 `restart` 每跳都有窗口，装上之后不再有）；
+#     它会计进本次 V4_STATS 的 non2xx —— 判绿的口径因此是"**装上之后再跑一次 --apply**"：
+#     第二次进来 socket 已 active ⇒ 不 stop（见下面的 FIRST 分支）⇒ restart 由 socket 顶着 ⇒ non2xx=0。
+FIRST=0
+systemctl is-active --quiet translator.socket || FIRST=1
+if [ "\$FIRST" = "1" ]; then
+  echo "FIRST_INSTALL=1（socket 尚未接管 ⇒ 本次要先停服务让出端口，这一次窗口是一次性的）"
+  systemctl stop translator translator-demo
+fi
 systemctl enable --now translator.socket translator-demo.socket
+# 启用之后必须**当场**问一句"真在 listen 吗"：旧形态把 `Job failed` 淹在几十行输出中间，
+# 靠末尾的 V1 兜底——那是"半装"形态（socket 单元 enabled 却 inactive），排障得倒回去找原因。
+# ★ 失败一律**回位**（disable socket ＋ 把服务拉回自绑形态）再停手：这一步刚刚 stop 过两个服务，
+#   只管判死不管回位＝把"没装上"升级成"停站"，方向反了（同文件头「宁可不装，不可停站」）。
+SOCK_OK=1
+for s in translator.socket translator-demo.socket; do
+  systemctl is-active "\$s" >/dev/null 2>&1 || SOCK_OK=0
+done
+if [ "\$SOCK_OK" = "0" ]; then
+  systemctl disable --now translator.socket translator-demo.socket >/dev/null 2>&1
+  systemctl start translator translator-demo >/dev/null 2>&1
+  echo "APPLY=2 socket 启用后不是 active（enable 没生效／端口被别的持有者占着）⇒ 已回位到现状形态（disable socket ＋ start 服务）；根因看 journalctl -u translator.socket"
+  exit 2
+fi
 systemctl restart translator translator-demo
 sleep 8
+# 服务必须真起来：接管分支与"自己 bind"同时发生＝EADDRINUSE＝崩溃重启循环，这是那条族的拦口
+for s in translator translator-demo; do
+  systemctl is-active "\$s" >/dev/null 2>&1 || {
+    systemctl disable --now translator.socket translator-demo.socket >/dev/null 2>&1
+    systemctl restart "\$s" >/dev/null 2>&1
+    echo "APPLY=2 \$s 在 socket 接管后起不来（疑似 EADDRINUSE：接管没生效又自绑）⇒ 已回位；根因看 journalctl -u \$s"
+    exit 2
+  }
+done
 # 窗口到此结束：先收摊采样腿，再读三份统计（顺序错了就把"收摊之后"的空档算进窗口）。
 : > "\$PDIR/stop"
 wait "\$PROBE_PID" 2>/dev/null || true
@@ -255,8 +294,14 @@ echo "$V"
 BAD=""
 for p in 8787 8789; do
   line=$(echo "$V" | grep "^PORT$p " || true)
+  # ★ 2026-10-16 现网实读校准：接管之后 `ss -lntp` 那一列**同时**列出两个持有者
+  #   （systemd 那份监听 socket 与继承了它的业务进程），形如
+  #     owner=users:(("translator-serv",pid=1187492,fd=13),("systemd",pid=1,fd=79))
+  #   于是旧判据 `*owner=systemd*` 恒不命中——那样会把一次**成功**的装配判成 V1 不合格
+  #   （本批首跑就踩到：socket 已 active、V3 接管行也在，只有 V1 红）。
+  #   判据的射程不变：**属主列里必须出现 systemd**；没接管的形态那一列只有业务进程。
   case "$line" in
-    *owner=systemd*) : ;;
+    *owner=systemd*|*'"systemd"'*) : ;;
     *) BAD="$BAD V1:$p=${line:-<无读数>}" ;;
   esac
 done
@@ -289,6 +334,12 @@ elif [ -z "$V4_N" ] || [ "$V4_N" = "0" ]; then
 else
   echo "V4_window samples=$V4_N non2xx=$V4_BAD timeout000=$V4_ZERO p99_s=$V4_P99 urls=$PROBE_URLS"
   [ "${V4_BAD:-1}" = "0" ] || BAD="$BAD V4:窗口内非2xx=$V4_BAD"
+  # 首次装配那一次窗口是**一次性的**（上面 FIRST_INSTALL 那段讲了机理）：把提示写在紧挨判据的地方，
+  # 否则下一个人看到 non2xx=4 会先去怀疑 socket activation 没用——而它恰恰刚被证明接管住了。
+  if [ "${V4_BAD:-0}" != "0" ] && echo "$APPLY_OUT" | grep -q "^FIRST_INSTALL=1"; then
+    echo "V4_FIRST_INSTALL_NOTE 本次是首次装配（服务让位→socket 绑定那一跳），non2xx=${V4_BAD} 属一次性窗口；"
+    echo "                       验收请**再跑一次 --apply**（第二次不 stop，restart 由 socket 顶着）判 non2xx=0。"
+  fi
   LATE=$(awk -v v="${V4_P99:-99}" -v w="$PROBE_P99" 'BEGIN{print (v+0>w+0)?"1":"0"}')
   if [ "$LATE" = "1" ]; then
     echo "V4_DELAY_NOTE P99=${V4_P99}s ≥ ${PROBE_P99}s ⇒ 5xx 归零已达成、延迟还没进亚秒（本条**不参与裁决**，是 S3 下一步的输入读数）"

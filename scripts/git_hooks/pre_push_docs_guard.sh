@@ -44,7 +44,7 @@ LIST_NAME="scripts/doc_pathspec.excl"
 ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$ROOT" ] || { echo "DOCGUARD ABORT=拿不到仓库根（git rev-parse --show-toplevel 失败）"; exit 1; }
 LIST="$ROOT/$LIST_NAME"
-[ -f "$LIST" ] || { echo "DOCGUARD ABORT=口径文件不在位：$LIST（钩子拒绝在'尺子丢了'的情况下放行）"; exit 1; }
+[ -f "$LIST" ] || { echo "DOCGUARD ABORT=口径文件不在位：${LIST}（钩子拒绝在'尺子丢了'的情况下放行）"; exit 1; }
 
 PATHSPECS=()
 while IFS= read -r line; do
@@ -63,7 +63,7 @@ HAS_POSITIVE=0
 for p in "${PATHSPECS[@]}"; do
   [ "$p" = "." ] && HAS_POSITIVE=1
   case "$p" in
-    *' '*) echo "DOCGUARD ABORT=口径第 N 条含空格（$p），会让 git 把它当两个参数读，判红不判绿"; exit 1 ;;
+    *' '*) echo "DOCGUARD ABORT=口径第 N 条含空格（${p}），会让 git 把它当两个参数读，判红不判绿"; exit 1 ;;
   esac
 done
 [ "$HAS_POSITIVE" = 1 ] || { echo "DOCGUARD ABORT=口径里没有 '.' 这条正项 ⇒ 清单必被读空，判红不判绿"; exit 1; }
@@ -104,7 +104,7 @@ while read -r local_ref local_oid remote_ref remote_oid; do
   [ -n "$hits" ] && n=$(printf '%s\n' "$hits" | grep -c . || true)
   if [ "$n" -gt 0 ]; then
     BLOCKED_TOTAL=$((BLOCKED_TOTAL + n))
-    echo "DOCGUARD REJECT=$remote_ref：推送区间里有 $n 个文档/取证类文件将被新增或修改"
+    echo "DOCGUARD REJECT=${remote_ref}：推送区间里有 $n 个文档/取证类文件将被新增或修改"
     printf '%s\n' "$hits" | head -20 | sed 's/^/    /'
     [ "$n" -gt 20 ] && echo "    …另有 $((n - 20)) 条（完整清单：git diff --name-only --diff-filter=AM $base $local_oid -- $(printf '%s ' "${PATHSPECS[@]}")）"
   fi

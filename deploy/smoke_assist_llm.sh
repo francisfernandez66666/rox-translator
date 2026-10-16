@@ -260,7 +260,7 @@ FALLBACK_TXT='这个问题我还没学到'
 GREET="$TMP/greet.json"
 CHAT="$TMP/chat.json"
 
-note "AI 助手问答链冒烟：BASE=$BASE${ASSIST_PREFIX:+（前缀 $ASSIST_PREFIX）}"
+note "AI 助手问答链冒烟：BASE=$BASE${ASSIST_PREFIX:+（前缀 ${ASSIST_PREFIX}）}"
 
 # ---------------------------------------------------------------------------
 # 0) 链路探针：greet 必须拿到 JSON + sid + tok
@@ -270,7 +270,7 @@ note "AI 助手问答链冒烟：BASE=$BASE${ASSIST_PREFIX:+（前缀 $ASSIST_PR
 gcode="$(curl -sS --http1.1 -m "$MAX_TIME" -o "$GREET" -w '%{http_code}' \
   "${BASE}${ASSIST_PREFIX}/api/assist/greeting?page=/" || echo 000)"
 if [ "$gcode" != "200" ]; then
-  red "0 链路探针：greeting HTTP $gcode（期望 200）→ ${BASE}${ASSIST_PREFIX}/api/assist/greeting?page=/"
+  red "0 链路探针：greeting HTTP ${gcode}（期望 200）→ ${BASE}${ASSIST_PREFIX}/api/assist/greeting?page=/"
   note "  排查：① Caddy 的 /assist-api/* 转发段在不在 ② ai-assist.service 是否 active ③ 域名解析"
   note "★ 冒烟失败 $fails 项"; exit 1
 fi
@@ -299,11 +299,11 @@ while IFS='|' read -r q want; do
   body=$(printf '{"session":"%s","tok":"%s","message":"%s","page":"/"}' "$sid" "$tok" "$q")
   ccode="$(ask "$body" "$CHAT")"
   if [ "$ccode" != "200" ]; then
-    red "1 问句「$q」chat HTTP $ccode（期望 200；401=session/tok 失效，5xx=assist 侧崩）"
+    red "1 问句「${q}」chat HTTP ${ccode}（期望 200；401=session/tok 失效，5xx=assist 侧崩）"
     n_red=$((n_red + 1)); continue
   fi
   if [ "$(jget "$CHAT" reply)" = "__NOTJSON__" ]; then
-    red "1 问句「$q」chat 回的也不是 JSON ⇒ 链路上被兜底/改道了（体首=$(head -c 120 "$CHAT" | redact)）"
+    red "1 问句「${q}」chat 回的也不是 JSON ⇒ 链路上被兜底/改道了（体首=$(head -c 120 "$CHAT" | redact)）"
     n_red=$((n_red + 1)); continue
   fi
   reply="$(jget "$CHAT" reply)"
@@ -318,29 +318,29 @@ while IFS='|' read -r q want; do
   esac
   # 判据 1a：不得是零命中兜底文案（这就是 #76 的本体：那句文案出现在访客屏幕上＝没答上）
   if printf '%s' "$reply" | grep -q -F "$FALLBACK_TXT"; then
-    red "1 问句「$q」仍回零命中兜底 ⇒ 生产库里没有这一族词条（跑 python3 scripts/assist_kb_sync.py --host <服务器> 推 seed），或 LLM 把知识丢了"
+    red "1 问句「${q}」仍回零命中兜底 ⇒ 生产库里没有这一族词条（跑 python3 scripts/assist_kb_sync.py --host <服务器> 推 seed），或 LLM 把知识丢了"
     n_red=$((n_red + 1)); continue
   fi
   # 判据 1b：必须有实义长度（「命中了但拼空串」也是一种答不上）
   if [ "$rlen" -lt "$MIN_REPLY" ]; then
-    red "1 问句「$q」回答只有 ${rlen} 字符（< ${MIN_REPLY}）⇒ 空/半截回答（内容=$(printf '%s' "$reply" | redact | head -c 120)）"
+    red "1 问句「${q}」回答只有 ${rlen} 字符（< ${MIN_REPLY}）⇒ 空/半截回答（内容=$(printf '%s' "$reply" | redact | head -c 120)）"
     n_red=$((n_red + 1)); continue
   fi
   # 判据 1c：fallback 形态下核 seed 实义片段；llm 形态下只播报（措辞由模型改写，钉字面量是判据错）
   if [ "$src" = "fallback" ]; then
     if printf '%s' "$reply" | grep -q -F "$want"; then
-      ok "1 问句「$q」答得上（fallback，含 seed 实义内容「$want」，${rlen} 字）"
+      ok "1 问句「${q}」答得上（fallback，含 seed 实义内容「${want}」，${rlen} 字）"
     else
-      red "1 问句「$q」走 fallback 却没带词条实义片段「$want」⇒ 命中的不是这条知识（内容=$(printf '%s' "$reply" | redact | head -c 160)）"
+      red "1 问句「${q}」走 fallback 却没带词条实义片段「${want}」⇒ 命中的不是这条知识（内容=$(printf '%s' "$reply" | redact | head -c 160)）"
       n_red=$((n_red + 1))
     fi
   else
-    ok "1 问句「$q」答得上（source=${src:-?}${model:+, model=$model}，${rlen} 字；llm 形态不钉字面量）"
+    ok "1 问句「${q}」答得上（source=${src:-?}${model:+, model=$model}，${rlen} 字；llm 形态不钉字面量）"
   fi
 done < "$QUESTIONS"
 
 # 判据 2：LLM 生效状态
-note "2 回答来源分布：llm=$n_llm fallback=$n_fallback 其他=$n_other（红=$n_red）"
+note "2 回答来源分布：llm=$n_llm fallback=$n_fallback 其他=${n_other}（红=${n_red}）"
 if [ "$EXPECT_LLM" = "1" ]; then
   if [ "$n_llm" -ge 1 ]; then
     ok "2 EXPECT_LLM=1 且确有 llm 来源的回答 ⇒ 上游接入生效"
@@ -378,7 +378,7 @@ else
   nreply="$(jget "$TMP/neg.json" reply)"
   nsrc="$(jget "$TMP/neg.json" source)"
   if [ "$ncode" != "200" ]; then
-    red "3 反向对照 chat HTTP $ncode（期望 200）"
+    red "3 反向对照 chat HTTP ${ncode}（期望 200）"
   elif [ "$nsrc" = "llm" ]; then
     note "3 反向对照只播报：线上走 llm（source=llm），零命中由模型自由回答，兜底文案那条不适用"
     note "  （该问句回答=${nreply:0:80}）"

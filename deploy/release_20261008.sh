@@ -36,7 +36,7 @@ ASSIST_BIN="${ASSIST_BIN:-/tmp/translator-assist-linux-$TAG}"
 SRC="$SCRIPT_DIR/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$SRC")"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$SRC")"
-[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 $SRC）"; exit 2; }
+[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 ${SRC}）"; exit 2; }
 
 sha_local() { shasum -a 256 "$1" | awk '{print $1}'; }
 
@@ -59,12 +59,12 @@ A_SESS=$(grep -ac "deleted_sessions" "$ASSIST_BIN" || true)
 echo "server: tail_stripped=$S_TAIL review_batch_rejected=$S_REVBATCH getnowblock=$S_HEADPATH USDT_TRON_HEAD_METHOD=$S_HEADMETHOD ；assist: deleted_sessions=$A_SESS"
 for pair in "$S_TAIL:㊶④ 尾段剥离档名" "$S_REVBATCH:㊶② 批量拒绝档名" "$S_HEADPATH:㊾ 链头默认路径" "$S_HEADMETHOD:㊾ 方法覆盖口" "$A_SESS:(52) 会话侧条数读数"; do
   n="${pair%%:*}"; label="${pair#*:}"
-  [ "$n" != "0" ] || { echo "ABORT=2 缺特征串 ⇒ $label（编译的不是含本批改动的树）"; exit 3; }
+  [ "$n" != "0" ] || { echo "ABORT=2 缺特征串 ⇒ ${label}（编译的不是含本批改动的树）"; exit 3; }
 done
 # ④ 代际等值判据：本批**刻意不抬 rev**，所以线上件里必须**仍是** `0AR-1`。
 #    这一条是"不许把'没抬'写成'不需要看'"的落点：若哪天件里冒出第二个 rev 字样，说明有人在别处动了 canned 形态。
 S_REV=$(grep -ac "0AR-1" "$ASSIST_BIN" || true)
-echo "assist: cannedPromptRev 特征串 0AR-1 命中=$S_REV（期望 **≥1**＝本批沿用同一代际）"
+echo "assist: cannedPromptRev 特征串 0AR-1 命中=${S_REV}（期望 **≥1**＝本批沿用同一代际）"
 [ "$S_REV" != "0" ] || { echo "ABORT=2 挂件件里找不到 0AR-1（构建树与台账口径不符，先查清再换）"; exit 3; }
 
 SERVER_SHA=$(sha_local "$SERVER_BIN")
@@ -97,7 +97,7 @@ echo "----- P2-B 换件前基线（三条现网判据各自的起点，不贴任
 LOGF=/opt/translator/log/translator.log
 MT=$(grep -o '^METRICS_TOKEN=.*' /etc/translator/secrets.env 2>/dev/null | head -1 | cut -d= -f2-)
 MT_LEN=${#MT}
-echo "换件前 METRICS_TOKEN 长度=$MT_LEN（只出长度，不出值；取不到则 /metrics 那两条读数属『没 token』而非『没序列』）"
+echo "换件前 METRICS_TOKEN 长度=${MT_LEN}（只出长度，不出值；取不到则 /metrics 那两条读数属『没 token』而非『没序列』）"
 echo "换件前 /api/health usdt_watch=$(curl -s -m 10 http://127.0.0.1:8787/api/health | grep -o '"usdt_watch":"[^"]*"' || echo '<无该字段>')"
 echo "换件前 translator.log 近 10 分钟 usdt-watch 失败行数=$(awk -v lim="$(date -d '10 minutes ago' '+%Y-%m-%dT%H:%M:%S')" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"[usdt-watch]") && index($0,"扫描失败")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || echo '<读数失败>')"
 echo "换件前 /metrics 纯度序列行数=$( [ -n "$MT" ] && curl -s -m 10 http://127.0.0.1:8787/metrics -H "Authorization: Bearer $MT" | grep -c '^translator_translation_purity_total' || echo '<无 token>' )"
@@ -111,7 +111,7 @@ for pair in "/opt/translator/bin/translator-server:tail_stripped" "/opt/translat
   # `grep -c` **无命中时退 1** ⇒ 必须 `|| true` 吃退出码，空串才判"文件读不到"（否则会把 0 和失败串在一起）。
   n=$(grep -a -c -F -- "$pat" "$f" 2>/dev/null || true)
   [ -n "$n" ] || n='<文件读不到>'
-  echo "旧件 $f 命中『$pat』=$n  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
+  echo "旧件 $f 命中『${pat}』=$n  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
 done
 # 正向对照（同一条 grep 得能抓到**旧件本来就有**的东西，否则上面那一串 0 只是"读不到文件"）
 echo "同一把尺子的正向对照：旧 translator-server 命中『/v1/blocks』=$(grep -a -c -F -- '/v1/blocks' /opt/translator/bin/translator-server 2>/dev/null || true)（期望 ≥1＝旧端点串确实在旧件里）"
@@ -168,13 +168,13 @@ for u in translator translator-demo ai-assist; do
         # 偏移必须是 `i+8`（`"time":"` 长 8 字符），写成 i+7 会把前导引号取进来 ⇒ 字典序恒不等 ⇒ 计数恒 0＝假绿。
         jn=$(awk -v ts="$rs" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=ts && index($0,"\"level\":\"ERROR\"")) c++ } END { print c+0 }' "$f" 2>/dev/null || true)
         [ -n "$jn" ] || jn='<读数失败>'
-        echo "unit=$u journal_err行=$n（该 unit 不落 journal，只作对照） 文件落点=$f ERROR行(重启后)=$jn"
+        echo "unit=$u journal_err行=${n}（该 unit 不落 journal，只作对照） 文件落点=$f ERROR行(重启后)=$jn"
       else
         echo "unit=$u journal_err行=$n 文件落点=$f <文件不存在⇒读不到，不等于零错误>"
       fi
       ;;
     *)
-      echo "unit=$u journal_err行=$n（StandardOutput=$so）"
+      echo "unit=$u journal_err行=${n}（StandardOutput=${so}）"
       ;;
   esac
 done

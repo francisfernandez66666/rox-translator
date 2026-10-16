@@ -85,7 +85,7 @@ neg() { # $1=path $2=期望状态
   if [ "$http_code" = "$want" ] && ! grep -q -i -E '<!doctype html' "$body"; then
     ok "负向 $path → $http_code 且非 HTML 兜底"
   else
-    red "负向 $path → HTTP $http_code（期望 $want）且不得是 HTML 兜底壳；体首=$(head -c 60 "$body" | tr -d '\n')"
+    red "负向 $path → HTTP ${http_code}（期望 ${want}）且不得是 HTML 兜底壳；体首=$(head -c 60 "$body" | tr -d '\n')"
   fi
 }
 if [ "$RUN_NEG" != "1" ]; then

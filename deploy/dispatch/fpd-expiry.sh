@@ -100,7 +100,7 @@ fi
 
 # ---------------- 2. 未到期 ⇒ 什么都不做，闹钟必须还在 ----------------
 if [ "$EXPIRED" != "1" ]; then
-  log "未到期（今天 $TODAY ＜ 到期日 $EXP）⇒ 一次 systemctl 都不碰，清理与退役都不做"
+  log "未到期（今天 $TODAY ＜ 到期日 ${EXP}）⇒ 一次 systemctl 都不碰，清理与退役都不做"
   # ★ 这条腿过去是**永远走不到**的：旧 unit 无条件跑 sweep(ttl=1) ＋ 无条件 rm ＋ 无条件 disable，
   #   任何人手工 `systemctl start fpd-expiry.service` 排障，都会当场把当天所有在途会话目录清空，
   #   并把"跑过一次"当成"到期已处理"。现在手工拉起是安全操作（只读判定），这是本次改造的主要收益之一。
@@ -108,7 +108,7 @@ if [ "$EXPIRED" != "1" ]; then
 fi
 
 # ---------------- 3. 已到期 ⇒ 先清 ----------------
-log "已到期（今天 $TODAY ≥ 到期日 $EXP，或日期非法按到期）⇒ 开始自清"
+log "已到期（今天 $TODAY ≥ 到期日 ${EXP}，或日期非法按到期）⇒ 开始自清"
 if [ -z "$SWEEP_CMD" ]; then
   PYBIN=""
   if [ -f "$ENV_FILE" ]; then
@@ -126,7 +126,7 @@ fi
 #   那种碎法在测试里表现为"sweep 失败退 5"，看起来像脚本判据在起作用，其实是 harness 自己写错了。
 SWEEP_OUT="$(FPD_TTL_SEC=1 bash -c "$SWEEP_CMD" 2>&1)" || {
   rc=$?
-  err "sweep 失败（exit=$rc）：$SWEEP_OUT"
+  err "sweep 失败（exit=${rc}）：$SWEEP_OUT"
   err "★ 不许把「远端没清成」写成「已处理」——闹钟保持 enabled，明天再试"
   exit 5
 }
@@ -152,7 +152,7 @@ log "坐实完成（$MARKER 在、$WORK_DIR 空）⇒ 退役两只 timer，避�
 DISABLE_OUT="$("$SYSTEMCTL_BIN" disable --now fpd-sweep.timer fpd-expiry.timer 2>&1)"
 disable_rc=$?
 if [ "$disable_rc" != "0" ]; then
-  err "systemctl disable 退 $disable_rc：$DISABLE_OUT"
+  err "systemctl disable 退 ${disable_rc}：$DISABLE_OUT"
   err "★ 清理已经生效（客户文件不在本机了），但闹钟还在 ⇒ 下次触发会重跑本脚本，属预期"
   exit 6
 fi

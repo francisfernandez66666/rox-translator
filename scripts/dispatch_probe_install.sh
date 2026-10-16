@@ -61,7 +61,7 @@ while [ $# -gt 0 ]; do
     --allow-no-sample) ALLOW_NO_SAMPLE=1 ;;
     --root) ROOT_OVERRIDE="${2:-}"; shift ;;
     -h|--help) awk '/^set -uo/{exit} {print}' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "未知参数：$1（--apply/--sample <路径>/--allow-no-sample/--root <目录>）" >&2; exit 2 ;;
+    *) echo "未知参数：${1}（--apply/--sample <路径>/--allow-no-sample/--root <目录>）" >&2; exit 2 ;;
   esac
   shift
 done

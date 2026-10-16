@@ -16,14 +16,14 @@ if [ "${1:-}" = "--systemd" ]; then
   PID=$(systemctl show -p MainPID --value translator 2>/dev/null)
   if [ -z "$PID" ] || [ "$PID" = "0" ]; then bad "translator 服务未运行"; else
     USER=$(ps -o user= -p "$PID" 2>/dev/null | tr -d ' ')
-    [ "$USER" = "translator" ] && ok "进程用户=$USER (PID=$PID)" || bad "进程用户=$USER（期望 translator）"
+    [ "$USER" = "translator" ] && ok "进程用户=$USER (PID=$PID)" || bad "进程用户=${USER}（期望 translator）"
   fi
   echo "==> [S2] 密钥隔离（unit 无明文密钥 + secrets.env 0600）"
   CAT=$(systemctl cat translator 2>/dev/null)
   echo "$CAT" | grep -Eq 'JWT_SECRET=[^$]|ADMIN_TOKEN=[^$]' && bad "unit/drop-in 含明文密钥" || ok "unit 无明文密钥"
   if [ -f /etc/translator/secrets.env ]; then
     PERM=$(stat -c %a /etc/translator/secrets.env 2>/dev/null)
-    [ "$PERM" = "600" ] && ok "secrets.env 权限=$PERM" || bad "secrets.env 权限=$PERM（期望600）"
+    [ "$PERM" = "600" ] && ok "secrets.env 权限=$PERM" || bad "secrets.env 权限=${PERM}（期望600）"
     echo "$CAT" | grep -q "EnvironmentFile=/etc/translator/secrets.env" && ok "EnvironmentFile 引用正确" || bad "缺少 EnvironmentFile 引用"
   else
     bad "/etc/translator/secrets.env 不存在"
@@ -162,10 +162,10 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
     bad "/api/health 缺 dispatch 字段（派发未接线或二进制没换）"
   else
     case "$DISP" in
-      off)     ok "dispatch=$DISP（默认关闭＝正确态：派发是增益不是依赖）" ;;
-      online)  ok "dispatch=$DISP（派发生效中）" ;;
-      degraded) bad "dispatch=$DISP（远端不可用，主站内存一分没省 ⇒ 按 §5.1/§5.2 排障，不要继续观察）" ;;
-      *)       bad "dispatch=$DISP（非法状态词，只允许 off/online/degraded）" ;;
+      off)     ok "dispatch=${DISP}（默认关闭＝正确态：派发是增益不是依赖）" ;;
+      online)  ok "dispatch=${DISP}（派发生效中）" ;;
+      degraded) bad "dispatch=${DISP}（远端不可用，主站内存一分没省 ⇒ 按 §5.1/§5.2 排障，不要继续观察）" ;;
+      *)       bad "dispatch=${DISP}（非法状态词，只允许 off/online/degraded）" ;;
     esac
   fi
   # ★★ 2026-09-30 追加：派发第二节新增的三个健康面读数（到期日／内存帽／远端自检）一起验收。
@@ -202,10 +202,10 @@ sys.stdout.write("|".join(out) + "\n")' 2>/dev/null)
       else
         DXT_BAD=""
         [ -n "$DX_EXPIRE" ] || DXT_BAD="$DXT_BAD 到期日为空（取不到不等于没有到期）"
-        case "$DX_MEMCAP" in on|clamped) ;; *) DXT_BAD="$DXT_BAD 内存帽=$DX_MEMCAP（应为 on/clamped）" ;; esac
-        [ "$DX_SELFTEST" = "pass" ] || DXT_BAD="$DXT_BAD 自检=$DX_SELFTEST（状态词已是 $DISP，自检却不是 pass）"
+        case "$DX_MEMCAP" in on|clamped) ;; *) DXT_BAD="$DXT_BAD 内存帽=${DX_MEMCAP}（应为 on/clamped）" ;; esac
+        [ "$DX_SELFTEST" = "pass" ] || DXT_BAD="$DXT_BAD 自检=${DX_SELFTEST}（状态词已是 ${DISP}，自检却不是 pass）"
         if [ -z "$DXT_BAD" ]; then
-          ok "派发三档一致（expire=$DX_EXPIRE mem_cap=$DX_MEMCAP selftest=$DX_SELFTEST）"
+          ok "派发三档一致（expire=$DX_EXPIRE mem_cap=$DX_MEMCAP selftest=${DX_SELFTEST}）"
         else
           bad "$DISP 态下派发三档不自洽：$DXT_BAD ⇒ 详见 fileproc_remote.go 的 DispatchStatusWords"
         fi
@@ -258,13 +258,13 @@ fi
 # 那种绿和"反代确实没摊开诊断面"是两件事，必须分开记账。
 PP_LINK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$BASE/api/health")
 if [ "$PP_LINK" = "000" ] || [ -z "$PP_LINK" ]; then
-  bad "pprof 腿无效：$BASE/api/health 不可达（$PP_LINK）⇒ 响应体为空当然'没有特征'，这条绿灯不许采信"
+  bad "pprof 腿无效：$BASE/api/health 不可达（${PP_LINK}）⇒ 响应体为空当然'没有特征'，这条绿灯不许采信"
 else
   PP_PUB=$(curl -s --max-time 8 "$BASE/debug/pprof/")
   if echo "$PP_PUB" | grep -Eq "$PP_FEAT"; then
     bad "公网 $BASE/debug/pprof 回吐了 pprof 索引 ⇒ 反代把诊断端口摊到公网了（进程内存/协程栈可被任何人拉走，profile 还能被打满 CPU）"
   else
-    ok "公网 /debug/pprof 无 pprof 特征（链路存活 http=$PP_LINK，回环独占）"
+    ok "公网 /debug/pprof 无 pprof 特征（链路存活 http=${PP_LINK}，回环独占）"
   fi
 fi
 # 对照腿（仅服务器本机）：确认「没特征」是因为通道不通，而不是判据串写错
@@ -279,12 +279,12 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
     PP_TOKEN=$(echo "$PPROF_ENV" | sed -n 's/^PPROF_TOKEN=//p')
     case "$PP_ADDR" in
       ""|off) echo "  ↳ PPROF_ADDR=${PP_ADDR:-（unit 现值未设，走默认回环 127.0.0.1:18787）}" ;;
-      127.0.0.1:*|\[::1\]:*|localhost:*) echo "  ↳ PPROF_ADDR=$PP_ADDR（回环＝正确态，外网打不到）" ;;
+      127.0.0.1:*|\[::1\]:*|localhost:*) echo "  ↳ PPROF_ADDR=${PP_ADDR}（回环＝正确态，外网打不到）" ;;
       *)
         if [ -z "$PP_TOKEN" ]; then
           bad "PPROF_ADDR=$PP_ADDR 非回环且无 PPROF_TOKEN ⇒ 诊断面对内网摊开（闸门本应拒绝启动，请核 unit 现值）"
         else
-          echo "  ↳ PPROF_ADDR=$PP_ADDR（非回环，已配 PPROF_TOKEN＝受 pprofAuth 保护）"
+          echo "  ↳ PPROF_ADDR=${PP_ADDR}（非回环，已配 PPROF_TOKEN＝受 pprofAuth 保护）"
         fi
         ;;
     esac
@@ -309,7 +309,7 @@ if [ "$PROBE_ON_SERVER" = "1" ]; then
     if echo "$PP_LOCAL" | grep -Eq "$PP_FEAT"; then
       echo "  ↳ 对照腿：本机 $_pa 能取到 pprof 索引 ⇒ 上面那条「无特征」判据测的是反代链，不是空转"
     else
-      bad "本机 $_pa（unit 现值认定的诊断端口）有应答却无 pprof 索引 ⇒ 公网那条绿灯不可采信：要么诊断面没起来（排障能力为零），要么端口被别的服务占了"
+      bad "本机 ${_pa}（unit 现值认定的诊断端口）有应答却无 pprof 索引 ⇒ 公网那条绿灯不可采信：要么诊断面没起来（排障能力为零），要么端口被别的服务占了"
     fi
   done
   [ "$PP_CONTROL_SEEN" = "1" ] || echo "  ↳ 诊断端口（18787 及 unit 里配的回环档）均未监听 ⇒ 诊断面关闭，公网那条锁无需对照"

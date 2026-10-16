@@ -34,7 +34,7 @@ SUMMARY="$RESULTS_DIR/matrix_summary.csv"
 printf 'vus,requests,success_rate,p95_ms,p99_ms,limited,err_rate,verdict\n' > "$SUMMARY"
 FAILS=0
 for V in $VUS_LIST; do
-  echo "===== 台阶 VU=$V（${DURATION}，冷却 ${COOLDOWN}s）====="
+  echo "===== 台阶 VU=${V}（${DURATION}，冷却 ${COOLDOWN}s）====="
   if k6 run -e BASE="$BASE" -e TOKEN="$TOKEN" -e VUS="$V" -e DURATION="$DURATION" \
        -e P99_MS="$P99_MS" -e ERR_RATE_MAX="$ERR_RATE_MAX" -e RESULTS_DIR="$RESULTS_DIR" \
        deploy/loadtest/k6.js > "$RESULTS_DIR/k6_vu${V}.log" 2>&1; then
@@ -57,7 +57,7 @@ done
 
 echo "===== 容量矩阵总表 ====="
 column -s, -t "$SUMMARY" 2>/dev/null || cat "$SUMMARY"
-echo "[capacity] 归档：$RESULTS_DIR（JSON+CSV+日志）"
+echo "[capacity] 归档：${RESULTS_DIR}（JSON+CSV+日志）"
 if [ "$FAILS" -gt 0 ]; then
   echo "[capacity] 存在 $FAILS 个超预算台阶（高位台阶 FAIL 属预期，用于标定安全并发线；"
   echo "           若低位档（≤默认并发闸×租户数）FAIL，请更新《容量预告与超卖预案》并排查）"

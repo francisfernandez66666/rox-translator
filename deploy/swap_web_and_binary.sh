@@ -47,9 +47,9 @@ ok()  { echo "OK   $*"; }
 
 # ---- 0. 上传件完整性：两份 sha 先对上，对不上整段不做（一个字节都不动）----
 got=$(sha256sum "$TAR" | cut -d' ' -f1)
-[ "$got" = "$TAR_SHA" ] && ok "tar sha 与本机一致（$got）" || bad "tar sha 不符：期望 $TAR_SHA 实得 $got"
+[ "$got" = "$TAR_SHA" ] && ok "tar sha 与本机一致（${got}）" || bad "tar sha 不符：期望 $TAR_SHA 实得 $got"
 gotb=$(sha256sum "$BIN_NEW" | cut -d' ' -f1)
-[ "$gotb" = "$BIN_SHA" ] && ok "二进制 sha 与本机一致（$gotb）" || bad "二进制 sha 不符：期望 $BIN_SHA 实得 $gotb"
+[ "$gotb" = "$BIN_SHA" ] && ok "二进制 sha 与本机一致（${gotb}）" || bad "二进制 sha 不符：期望 $BIN_SHA 实得 $gotb"
 [ "$FAIL" -eq 0 ] || { echo "SWAP_ABORT=上传件校验没过，什么都没动"; exit 1; }
 
 # ---- 1a. 备料段：解到 web.new → 四道校验（**一个字节都不动现有目录**）----
@@ -59,7 +59,7 @@ stage_site() {
   # ★ 守卫 ①：形状。传成部署根＝把 bin/data/log/.venv 一起搬走＝停站，所以这一条比判据都靠前。
   case "$root" in
     */web) : ;;
-    *) bad "$name 根路径不以 /web 结尾（实得 $root）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;
+    *) bad "$name 根路径不以 /web 结尾（实得 ${root}）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;
   esac
   [ -d "$(dirname "$root")/bin" ] || { bad "$name 部署根 $(dirname "$root") 下没有 bin/，形态不认识，停手"; return; }
 
@@ -74,10 +74,10 @@ stage_site() {
   [ -n "$entry" ] || { bad "$name 新 index.html 里认不出入口名"; return; }
   case "$entry" in
     assets/index-????????*.js) : ;;
-    *) bad "$name 入口名形状不合（$entry）"; return ;;
+    *) bad "$name 入口名形状不合（${entry}）"; return ;;
   esac
   [ -f "$root.new/$entry" ] || { bad "$name 首页指向 $entry 但磁盘上没有它"; return; }
-  ok "$name 入口 $entry（raw $(stat -c%s "$root.new/$entry") B；侧车 br=$([ -f "$root.new/$entry.br" ] && echo 在 || echo 缺) gz=$([ -f "$root.new/$entry.gz" ] && echo 在 || echo 缺)）"
+  ok "$name 入口 ${entry}（raw $(stat -c%s "$root.new/$entry") B；侧车 br=$([ -f "$root.new/$entry.br" ] && echo 在 || echo 缺) gz=$([ -f "$root.new/$entry.gz" ] && echo 在 || echo 缺)）"
 
   # 守卫 ③：首页引用的**每个** asset 都要真落盘（缺一个是换源后 404 的直接来源）
   local missing=0 total=0 a
@@ -108,7 +108,7 @@ commit_site() {
   [ "$dirty" -eq 0 ] && ok "$name 脏文件复验 0" || bad "$name 脏文件复验 $dirty"
   # 归档按**文件名时间戳**裁（不是 ls -t）
   ls -d "$root".old.* 2>/dev/null | sort -r | tail -n "+$((KEEP_ARCHIVES + 1))" | while read -r d; do rm -rf "$d"; done
-  ok "$name 换源完成，web 归档现有 $(ls -d "$root".old.* 2>/dev/null | wc -l) 份（保留上限 $KEEP_ARCHIVES）"
+  ok "$name 换源完成，web 归档现有 $(ls -d "$root".old.* 2>/dev/null | wc -l) 份（保留上限 ${KEEP_ARCHIVES}）"
 }
 
 for d in $DEPLOY_DIRS; do stage_site "$d/web" "$(basename "$d")"; done
@@ -125,12 +125,12 @@ for d in $DEPLOY_DIRS; do commit_site "$d/web" "$(basename "$d")"; done
 # ---- 2. 二进制：备份 → 落到临时名 → mv rename → 现读 sha 比对 ----
 for d in $DEPLOY_DIRS; do
   bin="$d/bin/translator-server"
-  [ -f "$bin" ] || { bad "$(basename "$d") 没有 $bin（部署根形态不对？）"; continue; }
+  [ -f "$bin" ] || { bad "$(basename "$d") 没有 ${bin}（部署根形态不对？）"; continue; }
   cp -a "$bin" "$bin.bak.$TS" || { bad "$(basename "$d") 备份失败"; continue; }
   cp -a "$BIN_NEW" "$bin.tmp" && mv "$bin.tmp" "$bin" || { bad "$(basename "$d") 替换失败"; continue; }
   chmod +x "$bin"
   news=$(sha256sum "$bin" | cut -d' ' -f1)
-  [ "$news" = "$BIN_SHA" ] && ok "$(basename "$d") 二进制已到位（$news）" || bad "$(basename "$d") 二进制 sha 不符：$news"
+  [ "$news" = "$BIN_SHA" ] && ok "$(basename "$d") 二进制已到位（${news}）" || bad "$(basename "$d") 二进制 sha 不符：$news"
 done
 
 # ---- 3. 重启后端单元并自证（演示单元启动要约 3.4 秒才 bind，先等再读；探活与重启**分开**）----
@@ -252,7 +252,7 @@ if [ -z "${WINDOW_PROBE_URLS:-}" ] && [ "${WINDOW_PROBE_OFF:-0}" != "1" ]; then
   for p in $CHECK_PORTS; do WINDOW_PROBE_URLS="$WINDOW_PROBE_URLS http://127.0.0.1:$p/livez"; done
   WINDOW_PROBE_URLS=$(echo "$WINDOW_PROBE_URLS" | sed 's/^ *//')
   export WINDOW_PROBE_URLS
-  echo "WINDOW_PROBE=defaulted（未显式配 URL，按 CHECK_PORTS 生成：$WINDOW_PROBE_URLS）"
+  echo "WINDOW_PROBE=defaulted（未显式配 URL，按 CHECK_PORTS 生成：${WINDOW_PROBE_URLS}）"
 fi
 if [ "${WINDOW_PROBE_OFF:-0}" = "1" ]; then
   # 显式关也要出一行**读数缺失**的说明：屏幕上"什么都没出"与"关掉了"必须不同形，
@@ -273,7 +273,7 @@ probe_finish
 # 端口集合在文件头随 env 一起定（探针与这里共用一份，见头注那条纪律）。
 for p in $CHECK_PORTS; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://127.0.0.1:$p/livez" 2>/dev/null)
-  [ "$code" = 200 ] && ok "回环 :$p /livez=200" || bad "回环 :$p /livez=$code（这一条不判发版失败，起得慢也会 000）"
+  [ "$code" = 200 ] && ok "回环 :$p /livez=200" || bad "回环 :$p /livez=${code}（这一条不判发版失败，起得慢也会 000）"
 done
 echo "caddy（本脚本不碰它）=$(systemctl is-active caddy 2>&1)"
 

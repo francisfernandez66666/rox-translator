@@ -92,7 +92,7 @@ if [ -z "${FILEPROC_PYTHON_BIN:-}" ]; then
   for _fp_cand in "$HOME/.venvs/langcross-fileproc/bin/python3" "/opt/translator/.venv/bin/python3"; do
     if [ -x "$_fp_cand" ] && "$_fp_cand" -c 'import pymupdf' >/dev/null 2>&1; then
       export FILEPROC_PYTHON_BIN="$_fp_cand"
-      log "fileproc 依赖解释器已指到 $_fp_cand（实测含 pymupdf，供 PDF 原版式用例实跑）"
+      log "fileproc 依赖解释器已指到 ${_fp_cand}（实测含 pymupdf，供 PDF 原版式用例实跑）"
       break
     fi
   done

@@ -46,7 +46,7 @@ fi
 
 if [ "$MODE" = "--uninstall" ]; then
   if [ -f "$DST" ] && cmp -s "$SRC" "$DST"; then
-    rm -f "$DST" && echo "已摘除 $DST（只摘本仓这一份；内容不同的一律不碰）"
+    rm -f "$DST" && echo "已摘除 ${DST}（只摘本仓这一份；内容不同的一律不碰）"
   else
     echo "未摘除：目标不在位或内容与仓内不同，绝不替别人删钩子"
   fi
@@ -79,6 +79,6 @@ cmp -s "$SRC" "$DST" || fail "写入内容与源不一致（回读等值判红�
 # 所以这里提前出声。
 [ -f "scripts/doc_pathspec.excl" ] || fail "口径文件 scripts/doc_pathspec.excl 不在位（钩子会拒绝放行每一次 push）"
 
-echo "已安装：$DST（可执行位已给，内容与仓内逐字节一致）"
+echo "已安装：${DST}（可执行位已给，内容与仓内逐字节一致）"
 echo "下一步自证：bash scripts/pre_push_docs_guard_selftest.sh"
 echo "HOOKINSTALL_ALL_OK=1"

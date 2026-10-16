@@ -39,7 +39,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$REPO/deploy/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$CONF" | head -1)"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$CONF" | head -1)"
-[ -n "$HOST" ] || { echo "ABORT=2 主机没解析出来（读 $CONF，别在命令行里写死地址）"; exit 2; }
+[ -n "$HOST" ] || { echo "ABORT=2 主机没解析出来（读 ${CONF}，别在命令行里写死地址）"; exit 2; }
 [ -n "$PORT" ] || PORT=22
 
 APPLY=0
@@ -49,7 +49,7 @@ while [ $# -gt 0 ]; do
     --apply) APPLY=1 ;;
     --selftest) SELFTEST=1 ;;
     -h|--help) awk '/^set -uo/{exit} {print}' "${BASH_SOURCE[0]}"; exit 0 ;;
-    *) echo "未知参数：$1（--apply／--selftest／--help）" >&2; exit 2 ;;
+    *) echo "未知参数：${1}（--apply／--selftest／--help）" >&2; exit 2 ;;
   esac
   shift
 done
@@ -99,7 +99,7 @@ fi
 # 点族判据按**路径段**判（`(^|/)\._`），不能写成不带锚的 `\.`——那会把六个 `.sh`/`.py` 全算成脏条目，
 # 于是这条负向锁恒红，下一次就有人把它放宽成"不看了"（负向锁必须配得准，同 AGENTS §一·5 那条）。
 DIRTY=$(tar tf "$TAR_LOCAL" | grep -cE '(^|/)(\._|\.DS_Store|__MACOSX)' || true)
-say "  打包：$(wc -c <"$TAR_LOCAL" | tr -d ' ') B，条目=$(tar tf "$TAR_LOCAL" | wc -l | tr -d ' ')，dotfile/资源叉条目=$DIRTY（期望 **0**）$PACK_NOTE"
+say "  打包：$(wc -c <"$TAR_LOCAL" | tr -d ' ') B，条目=$(tar tf "$TAR_LOCAL" | wc -l | tr -d ' ')，dotfile/资源叉条目=${DIRTY}（期望 **0**）$PACK_NOTE"
 if [ "${DIRTY:-0}" != "0" ]; then
   say "  FAIL 树里混进了点族／资源叉条目 ⇒ 停下（这条链上去的东西会永久留在服务器上）"
   rm -f "$TAR_LOCAL"; exit 2
@@ -157,7 +157,7 @@ echo "@@REMOTE_SHA_END"
 echo "----- ① 服务器侧干跑（安装器自己那份判据，一行 /opt 都不写）-----"
 bash "$ROOT/scripts/dispatch_probe_install.sh"
 DRY_RC=$?
-echo "  干跑退出码=$DRY_RC（1＝有待办，属正常提示；2＝硬前置不满足）"
+echo "  干跑退出码=${DRY_RC}（1＝有待办，属正常提示；2＝硬前置不满足）"
 [ "$DRY_RC" = 2 ] && bad "干跑退 2：硬前置不满足，--apply 也装不上"
 
 if [ "$APPLY" = 1 ]; then
@@ -178,7 +178,7 @@ if [ "$APPLY" = 1 ]; then
       bash "$ROOT/scripts/dispatch_probe_install.sh" --apply --sample "$ROOT/tmp/probe.pdf"
       AP_RC=$?
       echo "  执行段退出码=$AP_RC"
-      [ "$AP_RC" = 0 ] || bad "--apply 退 $AP_RC：没装成（排障看上面的 FAIL 行；1 有两种含义＝『还没做』或『做了没做成』）"
+      [ "$AP_RC" = 0 ] || bad "--apply 退 ${AP_RC}：没装成（排障看上面的 FAIL 行；1 有两种含义＝『还没做』或『做了没做成』）"
     else
       bad "$ROOT/tmp/probe.pdf 没生成 ⇒ 不 --apply（没样张的闹钟每天判红，安装器按设计也不 enable）"
     fi
@@ -193,7 +193,7 @@ if [ "$APPLY" = 1 ]; then
   if [ -s "$SAMP" ]; then
     echo "  样张在位：$(wc -c <"$SAMP" | tr -d ' ') B，属主 $(stat -c '%U:%G %a' "$SAMP" 2>/dev/null)"
   else
-    bad "样张不在位（$SAMP）"
+    bad "样张不在位（${SAMP}）"
   fi
   systemctl list-timers --all --no-pager 2>/dev/null | grep -E 'dispatch' | head -3 | sed 's/^/    /'
 fi
@@ -203,7 +203,7 @@ if [ "$SELFTEST" = 1 ]; then
   echo "----- ⑤ 人工拨一次（探针只读远端、绝不动配置；红才投告警）-----"
   PT_EN_NOW=$(sysd is-enabled translator-dispatch-probe.timer)
   if [ "$PT_EN_NOW" != enabled ]; then
-    bad "闹钟没 enable（现读=$PT_EN_NOW）⇒ 不自检（不自启一个没装好的单元，那只会读出一条无关的失败）"
+    bad "闹钟没 enable（现读=${PT_EN_NOW}）⇒ 不自检（不自启一个没装好的单元，那只会读出一条无关的失败）"
   else
     # TimeoutStartSec=2400：两条腿各含一次真机往返，这里**同步等它跑完**，
     # 因为"start 退 0"才是这一腿的判据；异步跑会让读数停在"还在跑"那一档。
@@ -213,7 +213,7 @@ if [ "$SELFTEST" = 1 ]; then
     START_T=$(date +%s)
     systemctl start translator-dispatch-probe.service
     PR=$?
-    echo "  systemctl start 退出码=$PR（1＝任一腿判红，这是**故意的诚实读数**：unit failed 是告警通道之外的第二条可见面），用时 $(( $(date +%s) - START_T ))s"
+    echo "  systemctl start 退出码=${PR}（1＝任一腿判红，这是**故意的诚实读数**：unit failed 是告警通道之外的第二条可见面），用时 $(( $(date +%s) - START_T ))s"
     # 用函数而不是把命令行塞进变量：`--since` 的值带空格时变量展开会被拆成两个参数，
     # journalctl 会把 `04:20:00` 当成**文件名**去打开（10-10 自查抓到，改用带 T 的 ISO 档＋函数）
     jl() { journalctl -u translator-dispatch-probe.service --since "$SINCE" --no-pager 2>/dev/null; }
@@ -229,7 +229,7 @@ if [ "$SELFTEST" = 1 ]; then
       *)                   bad "自检没拿到 ok/closed（${RES:-无读数}）⇒ 闹钟虽在，这一腿的证据仍是零" ;;
     esac
     if [ "$PR" != 0 ]; then
-      echo "  ⚠️ 本次手工触发退 $PR：告警通道若可达，会经 /api/alerts/alertmanager 留下一条 kind=prom:DispatchProbeFailure 的 open 行（红才投，绿不投）⇒ 定性去告警中心按这一个 kind 数行数，别按'今天有没有告警'读"
+      echo "  ⚠️ 本次手工触发退 ${PR}：告警通道若可达，会经 /api/alerts/alertmanager 留下一条 kind=prom:DispatchProbeFailure 的 open 行（红才投，绿不投）⇒ 定性去告警中心按这一个 kind 数行数，别按'今天有没有告警'读"
     fi
   fi
 fi
@@ -239,7 +239,7 @@ fi
 #   正身已经落到 /opt/translator/bin 与 /etc/systemd/system，/root 下再留一份**同名不同代**的拷贝，
 #   下一次排障的人第一件事就是"这两份哪份是现役"——而本脚本每次都会重传重解（rm -rf ＋ mkdir 在最前面），
 #   清掉不损失任何可重复性。没 --apply 时也一样清：干跑的产物本来就没有落位价值。
-echo "----- ⑥ 清装配临时树 $ROOT（正身在 /opt/translator/bin，这里只留过路副本）-----"
+echo "----- ⑥ 清装配临时树 ${ROOT}（正身在 /opt/translator/bin，这里只留过路副本）-----"
 if rm -rf "$ROOT"; then
   [ -d "$ROOT" ] && bad "$ROOT 没清掉（磁盘或权限异常）" || ok "临时树已清"
 else
@@ -252,7 +252,7 @@ exit "$RC"
 REMOTE_EOF
 SSH_RC=$?
 cat "$REMOTE_OUT"
-[ "$SSH_RC" = 0 ] || { say "  FAIL 远端段退 $SSH_RC（远端自己的 REMOTE_RC 见上面那行）"; RC=1; }
+[ "$SSH_RC" = 0 ] || { say "  FAIL 远端段退 ${SSH_RC}（远端自己的 REMOTE_RC 见上面那行）"; RC=1; }
 
 # ---------------------------------------------------------------- ③ 逐文件 sha 等值（本机清单 vs 远端清单）
 # 先 `tr -d '\r'`（ssh 回传在某些终端配置下带 CR，而 `\r` 会让 64 位 sha 的等值比较**恒假**＝假红）

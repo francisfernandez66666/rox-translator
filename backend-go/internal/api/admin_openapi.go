@@ -136,14 +136,16 @@ func (s *Server) getDocsMD(lang string) string {
 	return def
 }
 
-// expandDocsHost ★ B11（2026-09-12）：文档内 {{OPENAPI_HOST}} 占位替换为主站配置；
-// 未配置时用通用示例主机，代码零明文运营域名。
-func (s *Server) expandDocsHost(md string) string {
+// expandDocsPlaceholders ★ B11（2026-09-12）：文档内占位符替换。
+//   - {{OPENAPI_HOST}} → 主站配置（未配置时用通用示例主机，代码零明文运营域名）；
+//   - {{FORMATS}}      → 现取准入格式清单（唯一事实源 fileproc.FormatHintBase，见 openAPIFormatPlaceholder）。
+func (s *Server) expandDocsPlaceholders(md string) string {
 	host := s.primaryHost()
 	if host == "" {
 		host = "your-host.example.com"
 	}
-	return strings.ReplaceAll(md, "{{OPENAPI_HOST}}", host)
+	md = strings.ReplaceAll(md, "{{OPENAPI_HOST}}", host)
+	return string(expandOpenAPIFormats([]byte(md)))
 }
 
 // extractBodyInner 提取 HTML 文档 <body> 内部内容（双语容器嵌入复用）。
@@ -161,8 +163,8 @@ func extractBodyInner(htmlDoc string) string {
 // （默认语言按浏览器 navigator.language 自动选择；切换结果记忆到 localStorage）。
 func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("zh"))))
-	enBody := extractBodyInner(renderDocsHTML(s.expandDocsHost(s.getDocsMD("en"))))
+	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("zh"))))
+	enBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("en"))))
 	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐。
 	// 样式壳与 renderDocsHTML 同源（openAPIDocsCSS），两条路径不会再各画一套配色。
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
@@ -277,7 +279,7 @@ func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Re
 	if lang == "" {
 		lang = "zh"
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(s.expandDocsHost(req.MD)), "lang": lang})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "html": renderDocsHTML(s.expandDocsPlaceholders(req.MD)), "lang": lang})
 }
 
 // itoaApi 整数转字符串（审计明细用）。
@@ -409,8 +411,38 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 - multipart 字段名必须为 **files**，本地路径前**必须加 @**：
   curl -F 'files=@/path/手册.docx' -F 'files=@/path/清单.xlsx'
 - 单次 ≤20 个文件、总量 ≤30MB
-- 支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
+- 支持 {{FORMATS}}
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
+
+## 图片与音频（OCR / ASR：识别 → 翻译 → **按原文件格式回写**）
+
+图片与音频走的是同一个文件任务接口，files 字段直接传图片或音频即可，无需额外参数：
+
+~~~
+# 图片：OCR 识别图上文字 → 翻译 → 产出**同容器译后图**（文字原位回填）＋译文 .md
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'files=@产品说明.png' -F 'target_langs=en' -F 'mode=pro'
+
+# 音频：ASR 转写 → 翻译 → 产出**同容器译后配音**＋译文 .srt（带原时间轴）＋译文 .md＋原音频副本
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'files=@会议录音.m4a' -F 'target_langs=en' -F 'mode=pro'
+~~~
+
+产物命名与形态（{译名}_{语言码}{后缀}，每语种一份）：
+
+| 输入 | 产物 | 说明 |
+|------|------|------|
+| 图片 .png/.jpg 等 | 同容器译后图（_en.png）＋译文 .md（_en.md） | 译文按 **OCR 原坐标原位回填**；渲染不出来（缺中文字体等）时退回「仅译文 .md」，任务仍 completed |
+| 音频（mp3、m4a、wav、ogg、flac、aac、opus 七种容器） | 同容器译后配音（_en.m4a）＋字幕 _en.srt＋译文 _en.md＋原音频副本 | 配音容器**照搬输入容器**（m4a 进 m4a 出）；目标语种暂无语音或该容器转码不可用时**回落 mp3 / 不出配音**（在任务告警里明示），字幕与译文不受影响 |
+
+两条能力边界（**如实报错，不静默降级**）：
+
+- 图片依赖服务器 OCR 模型资产、音频依赖 ASR 模型资产；资产缺失时该文件**明确失败**并提示原因，
+  不会"跑完给一个没处理的原文件"。
+- 译后配音的语种覆盖取决于服务器 TTS 模型（当前为中文/英文档）；目标语种不在覆盖内时
+  该语种只交付字幕与译文，任务状态仍 completed。
 
 ## 错误与 HTTP 状态码（★ 2026-09-26 起：失败按真实状态码发出）
 
@@ -546,8 +578,41 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 - The multipart field must be named **files**, and local paths **must be prefixed with @**:
   curl -F 'files=@/path/manual.docx' -F 'files=@/path/list.xlsx'
 - Up to 20 files, 30MB total per request
-- Accepted: docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml
+- Accepted: {{FORMATS}}
 - Download via the download endpoint when completed; artifacts are kept for 14 days
+
+## Images & audio (OCR / ASR: recognise → translate → **write back in the original format**)
+
+Images and audio use the very same file-task endpoint — just put the image or audio file in the files field,
+no extra parameter needed:
+
+~~~
+# Image: OCR the text on the picture → translate → **same-container translated image** (text redrawn
+# in place) + translated .md
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -F 'files=@spec-sheet.png' -F 'target_langs=en' -F 'mode=pro'
+
+# Audio: ASR → translate → **same-container dubbed audio** + .srt subtitles (original timeline)
+# + translated .md + a copy of the source audio
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
+  -H 'Authorization: Bearer YOUR_API_KEY' \
+  -F 'files=@meeting.m4a' -F 'target_langs=en' -F 'mode=pro'
+~~~
+
+Artifact naming and shape ({translated-name}_{lang}{ext}, one set per target language):
+
+| Input | Artifacts | Notes |
+|-------|-----------|-------|
+| Images .png/.jpg etc. | Same-container translated image (_en.png) + translated .md (_en.md) | Text is redrawn **over the original OCR boxes**; if rendering is impossible (missing CJK font etc.) it falls back to "translated .md only" and the task still completes |
+| Audio (mp3, m4a, wav, ogg, flac, aac, opus — seven containers) | Same-container dubbed audio (_en.m4a) + subtitles _en.srt + translated _en.md + a copy of the source audio | The dub **keeps the input container** (m4a in, m4a out); if the target language has no voice model or the container cannot be transcoded it **falls back to mp3 / no dub** (stated in the task warnings) — subtitles and translation are unaffected |
+
+Two capability boundaries (**fail loudly, never degrade silently**):
+
+- Images need the server's OCR model assets and audio needs the ASR assets; if they are missing the
+  file **fails with a reason** — the API never returns an unprocessed original and calls it success.
+- Dub language coverage depends on the server TTS model (currently Chinese/English). A target language
+  outside that coverage still gets subtitles and translation, and the task still completes.
 
 ## Errors & HTTP status codes (★ since 2026-09-26: failures carry real status codes)
 

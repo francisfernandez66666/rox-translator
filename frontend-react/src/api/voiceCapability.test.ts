@@ -12,7 +12,7 @@
 // ============================================================================
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
-  probeVoiceCapability, voiceCapability, subscribeVoiceCapability, resetVoiceCapability,
+  probeVoiceCapability, voiceCapability, subscribeVoiceCapability, resetVoiceCapability, ttsLangCovered,
 } from './voiceCapability'
 
 // healthReply 造一个 /api/health 响应
@@ -94,5 +94,55 @@ describe('语音能力探针（/api/health.tts_ready）', () => {
     impl = () => healthReply({ tts_ready: false })
     await probeVoiceCapability(true)
     expect(seen).toEqual([true, false])
+  })
+
+  // ★ 2026-10-16 补（按语种收门）：语音是**按语种**的能力，只有一个布尔时
+  //   日/俄/泰译文的同一排会摆出一颗点下去必然 unsupported_lang 的朗读钮。
+  it('P6 tts_langs 如实落快照并归一化；形态不对一律按未知（不误摘入口）', async () => {
+    impl = () => healthReply({ tts_ready: true, tts_langs: ['zh', 'zh-Hant', 'en'] })
+    await probeVoiceCapability(true)
+    expect(voiceCapability().langs, '地域段要归一化到主码（zh-Hant → zh），否则 zh-hant 译文会被误判越界')
+      .toEqual(['zh', 'zh', 'en'])
+
+    // 五档"读不到"：字段缺失 / null / 空数组 / 非数组 / 数组里混了非字符串
+    const badBodies = [
+      { tts_ready: true },
+      { tts_ready: true, tts_langs: null },
+      { tts_ready: true, tts_langs: [] },
+      { tts_ready: true, tts_langs: 'zh,en' },
+      { tts_ready: true, tts_langs: ['zh', 7] },
+    ]
+    for (const body of badBodies) {
+      resetVoiceCapability()
+      impl = () => healthReply(body)
+      await probeVoiceCapability(true)
+      expect(voiceCapability().langs, `形态不对必须按"未知"（放行），不许推断成"一个语种都不支持"：${JSON.stringify(body)}`)
+        .toBeNull()
+    }
+  })
+
+  it('P7 ttsLangCovered 三档：未知放行 / 空码放行 / 命中放行 / 越界收门', () => {
+    // 未知（探不到）⇒ 放行：探针坏了不等于能力没了
+    expect(ttsLangCovered({ tts: null, langs: null }, 'ja')).toBe(true)
+    // 已知覆盖清单：命中（含地域段与大小写）放行
+    const cap = { tts: true, langs: ['zh', 'en'] }
+    expect(ttsLangCovered(cap, 'zh')).toBe(true)
+    expect(ttsLangCovered(cap, 'en')).toBe(true)
+    expect(ttsLangCovered(cap, 'ZH-hant'), '地域段/大小写都要归一化后再判').toBe(true)
+    // 空 lang（调用方没指定）⇒ 放行
+    expect(ttsLangCovered(cap, '')).toBe(true)
+    // 越界 ⇒ 收门（这一语种的朗读钮不渲染）
+    expect(ttsLangCovered(cap, 'ja')).toBe(false)
+    expect(ttsLangCovered(cap, 'th')).toBe(false)
+  })
+
+  it('P8 通知按两个字段任一变化发（只比 tts 会让覆盖语种变化不重渲染）', async () => {
+    const seen: Array<string | null> = []
+    subscribeVoiceCapability(() => seen.push((voiceCapability().langs || []).join(',')))
+    impl = () => healthReply({ tts_ready: true, tts_langs: ['zh', 'en'] })
+    await probeVoiceCapability(true)
+    impl = () => healthReply({ tts_ready: true, tts_langs: ['zh', 'en', 'ja'] })
+    await probeVoiceCapability(true)
+    expect(seen, 'tts 没变但覆盖语种扩了，也必须重渲染一次').toEqual(['zh,en', 'zh,en,ja'])
   })
 })

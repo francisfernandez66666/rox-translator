@@ -110,7 +110,7 @@ echo
 echo "----- E 磁盘事实：web 根 dotfile／归档族／权限／公网负向-----"
 for w in /opt/translator/web /opt/translator-demo/web; do
   d=$(find "$w" \( -name .DS_Store -o -name '._*' \) 2>/dev/null | wc -l)
-  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=$d（必须 0）"
+  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=${d}（必须 0）"
   echo "  $w 下划线归档=$(ls -1d "${w}"_old.* 2>/dev/null | grep -c .) 份 点族=$(ls -1d "$w".old.* 2>/dev/null | grep -c .) 份 入口=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' "$w/index.html" | head -1)"
 done
 for u in https://langcross.lexicorn.cn https://rox-test.lexicorn.cn; do
@@ -118,7 +118,7 @@ for u in https://langcross.lexicorn.cn https://rox-test.lexicorn.cn; do
   home=$(curl -s -o /tmp/_hm -w '%{size_download}' --max-time 20 "$u/" || echo 0)
   sz=$(echo "$r" | awk -F'|' '{print $3}')
   ct=$(echo "$r" | awk -F'|' '{print $2}')
-  if [ "$ct" = "text/html; charset=utf-8" ] && [ "$sz" = "$home" ]; then ok "$u/.DS_Store 是 SPA 兜底（字节=$sz＝首页 $home）"; else bad "$u/.DS_Store code|ct|sz=$r 首页=$home（磁盘上还有真文件）"; fi
+  if [ "$ct" = "text/html; charset=utf-8" ] && [ "$sz" = "$home" ]; then ok "$u/.DS_Store 是 SPA 兜底（字节=${sz}＝首页 ${home}）"; else bad "$u/.DS_Store code|ct|sz=$r 首页=${home}（磁盘上还有真文件）"; fi
 done
 for path in /extensions/langcross-extension-latest.zip /sdk/langcross_translator-latest-py3-none-any.whl /sdk/langcross-translator-sdk-latest.tgz; do
   r=$(curl -s -o /tmp/_mg -w '%{http_code}|%{content_type}|%{size_download}' --max-time 20 "https://langcross.lexicorn.cn$path" || echo CURL_FAIL)
@@ -164,6 +164,6 @@ echo "POSTDEPLOY_LOCAL_EXIT=$SSH_RC"
 if [ "$SSH_RC" = "0" ]; then
   echo "本机结论：复查全绿（现网接线一条不缺）"
 else
-  echo "本机结论：复查**未通过**，退出码 $SSH_RC（255＝链路没通，别读成『现网没问题』）"
+  echo "本机结论：复查**未通过**，退出码 ${SSH_RC}（255＝链路没通，别读成『现网没问题』）"
 fi
 exit "$SSH_RC"

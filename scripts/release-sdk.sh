@@ -122,5 +122,5 @@ say "发布 npm @langcross/translator-sdk@$ts_ver"
 say "发布 PyPI langcross-translator@$py_ver"
 python3 -m twine upload --repository pypi "$PY_DIR"/dist/* \
   || die "twine 发布失败（检查 ~/.pypirc / TWINE_PASSWORD）"
-say "✓ 三端发布完成：$ts_ver（Maven 如需要请另行 mvn deploy）"
+say "✓ 三端发布完成：${ts_ver}（Maven 如需要请另行 mvn deploy）"
 say "提醒：在 sdk/CHANGELOG.md 追加 $ts_ver 条目（若尚未写）"

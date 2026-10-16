@@ -41,7 +41,7 @@ bad()  { printf '\033[1;31m❌\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 
 [ -n "$FPD_SSH" ] || { bad "必须给 FPD_SSH=user@host（本机 ssh 的目标就是体验机，不是主站）"; exit 2; }
-[ -d "$SRC" ] || { bad "找不到源目录 $SRC（请在仓库根目录下执行本脚本）"; exit 2; }
+[ -d "$SRC" ] || { bad "找不到源目录 ${SRC}（请在仓库根目录下执行本脚本）"; exit 2; }
 
 SSH_OPTS=(-i "$FPD_KEY" -n -o BatchMode=yes -o ConnectTimeout=15 -p "$FPD_PORT")
 RSH_STR="ssh -i $FPD_KEY -o BatchMode=yes -o ConnectTimeout=15 -p $FPD_PORT"

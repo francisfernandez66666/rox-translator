@@ -49,7 +49,7 @@ expect() {
 }
 # expect nonzero/zero：退出码只问"是不是 0"，不写死具体 BAD 条数（条数随判据增长会变）
 expect_zero()    { if [ "${1:-1}" -eq 0 ];   then echo "EXPECT_OK   $2 退 0";   else echo "EXPECT_BAD  $2 应退 0，实退 $1"; BAD_EXPECT=$((BAD_EXPECT + 1)); fi }
-expect_nonzero() { if [ "${1:-0}" -ne 0 ];   then echo "EXPECT_OK   $2 退非 0（$1）"; else echo "EXPECT_BAD  $2 本该拒绝却退 0"; BAD_EXPECT=$((BAD_EXPECT + 1)); fi }
+expect_nonzero() { if [ "${1:-0}" -ne 0 ];   then echo "EXPECT_OK   $2 退非 0（${1}）"; else echo "EXPECT_BAD  $2 本该拒绝却退 0"; BAD_EXPECT=$((BAD_EXPECT + 1)); fi }
 
 # ---------- 桩目录（PATH 前置，把 Linux 口径搬到 mac）----------
 mkdir -p "$H/bin"
@@ -138,7 +138,7 @@ DD="$H/opt/translator $H/opt/translator-demo"
 # ★ 安全断言：待自证的执行体在任何一段里都只准看见夹具树（写在夹具根之外一律停手）
 case "$DD" in
   "$H"/opt/*) : ;;
-  *) echo "BAD_HOME DEPLOY_DIRS 不在夹具根 $H 下（实得 $DD）——拒绝执行"; exit 1 ;;
+  *) echo "BAD_HOME DEPLOY_DIRS 不在夹具根 $H 下（实得 ${DD}）——拒绝执行"; exit 1 ;;
 esac
 
 echo "############ T1 正测（根＝<部署根>/web，应整段成功） ############"
@@ -192,17 +192,26 @@ expect "T4_无web.new残留" "$(find "$H/opt" -maxdepth 2 -name 'web.new' | wc -
 echo
 echo "############ T5 反证 D：只摘**第一道**守卫 ⇒ 第二道（同级必须有 bin/）必须还拦得住 ############"
 build_trees
-python3 - "$SRC" "$H/one_leg_off.sh" <<'PY'
+rm -f "$H/one_leg_off.sh"
+if ! python3 - "$SRC" "$H/one_leg_off.sh" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
-old = '    *) bad "$name 根路径不以 /web 结尾（实得 $root）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;'
+old = '    *) bad "$name 根路径不以 /web 结尾（实得 ${root}）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;'
 assert old in s, "锚点没命中（第一道守卫），反证脚本没造出来——那说明执行体已改形态，本夹具需同步重钉"
 s = s.replace(old, '    *) : ;;  # 反证 D：第一道形状守卫摘掉（夹具专用，不是交付形态）')
 s = s.replace('stage_site "$d/web"', 'stage_site "$d"')
 s = s.replace('commit_site "$d/web"', 'commit_site "$d"')
 open(dst, "w", encoding="utf-8").write(s)
 PY
+then
+  # ★ 2026-10-16：旧形态的 assert 是"只喊不拦"——它退非 0，但本脚本没查那个退码，
+  # 变异体于是**没被造出来**，紧接着 `bash $H/one_leg_off.sh` 因文件不存在退 127，
+  # 被 expect_nonzero 读成"守卫拦住了"⇒ T5 全绿而射程是空气（本批 `${VAR}` 收口改了
+  # 执行体文案、锚点失配，正是靠这一改把假绿暴露出来的）。修法：显式查退码＋先删旧变异体。
+  echo "BAD_FIXTURE 反证 D 的变异体没造出来（锚点漂了／python 报错）⇒ 本段判死，不许读成绿"
+  exit 1
+fi
 WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" bash "$H/one_leg_off.sh" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" >/dev/null 2>&1
 T5=$?
 expect_nonzero "$T5" "T5 只摘第一道"
@@ -211,11 +220,12 @@ expect "T5_data还在原位" "$([ -f "$H/opt/translator/data/app.db" ] && echo y
 echo
 echo "############ T6 反证 E：**两道守卫全摘** ⇒ 必须真出事（证明 T2/T5 的绿灯来自守卫本身） ############"
 build_trees
-python3 - "$SRC" "$H/no_guard.sh" <<'PY'
+rm -f "$H/no_guard.sh"
+if ! python3 - "$SRC" "$H/no_guard.sh" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src, encoding="utf-8").read()
-a = '    *) bad "$name 根路径不以 /web 结尾（实得 $root）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;'
+a = '    *) bad "$name 根路径不以 /web 结尾（实得 ${root}）——**拒绝执行**，见本函数头注释与文件头「建立经过」"; return ;;'
 b = '  [ -d "$(dirname "$root")/bin" ] || { bad "$name 部署根 $(dirname "$root") 下没有 bin/，形态不认识，停手"; return; }'
 assert a in s and b in s, "锚点没命中（两道守卫），反证脚本没造出来"
 s = s.replace(a, '    *) : ;;  # 反证 E：第一道守卫摘掉（夹具专用）').replace(b, '  # 反证 E：第二道守卫摘掉（夹具专用）')
@@ -223,6 +233,10 @@ s = s.replace('stage_site "$d/web"', 'stage_site "$d"')
 s = s.replace('commit_site "$d/web"', 'commit_site "$d"')
 open(dst, "w", encoding="utf-8").write(s)
 PY
+then
+  echo "BAD_FIXTURE 反证 E 的变异体没造出来（锚点漂了／python 报错）⇒ 本段判死，不许读成绿"
+  exit 1
+fi
 WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" bash "$H/no_guard.sh" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" >/dev/null 2>&1
 expect "T6_data被一起搬走（真复现 07:44）" "$([ -f "$H/opt/translator/data/app.db" ] && echo yes || echo NO)" "NO"
 expect "T6_bin被一起搬走" "$([ -f "$H/opt/translator/bin/translator-server" ] && echo yes || echo NO)" "NO"

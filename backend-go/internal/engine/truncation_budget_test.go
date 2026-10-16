@@ -1,12 +1,14 @@
 // ============ truncation_budget_test.go 职责中文说明 ============
 // 2026-10-15 工作台「译文中间断掉」修复的回归锁。三条缺陷各自一条：
-//   A. singleLangRaw 的「截断重试翻倍」是死代码：它在 length 分支里对局部 maxTokens 做乘法，
-//      而递归自调会把预算从 zhText 重算一遍 ⇒ 翻倍被抹平，重试仍是同一配额。锁：重试请求的
-//      max_tokens 必须真的翻倍（本用例读假上游收到的 max_tokens 字段，不看注释）。
-//   B. ReviewTranslation 会**覆盖**客户手上的初翻，却把 max_tokens 写死 2048 且丢掉 finish_reason
-//      ⇒ 长译文的审校输出被截断后照样覆盖 ⇒ 客户拿到比初翻更短、中间断掉的译文。
-//      锁：finish_reason=length ⇒ 返回 ""（调用方保留初翻）；配正向对照（stop ⇒ 照采）。
-//   C. translateWithFeedbackEx（改写腿）同 B：同样覆盖上一版、同样写死 2048。
+//
+//	A. singleLangRaw 的「截断重试翻倍」是死代码：它在 length 分支里对局部 maxTokens 做乘法，
+//	   而递归自调会把预算从 zhText 重算一遍 ⇒ 翻倍被抹平，重试仍是同一配额。锁：重试请求的
+//	   max_tokens 必须真的翻倍（本用例读假上游收到的 max_tokens 字段，不看注释）。
+//	B. ReviewTranslation 会**覆盖**客户手上的初翻，却把 max_tokens 写死 2048 且丢掉 finish_reason
+//	   ⇒ 长译文的审校输出被截断后照样覆盖 ⇒ 客户拿到比初翻更短、中间断掉的译文。
+//	   锁：finish_reason=length ⇒ 返回 ""（调用方保留初翻）；配正向对照（stop ⇒ 照采）。
+//	C. translateWithFeedbackEx（改写腿）同 B：同样覆盖上一版、同样写死 2048。
+//
 // 全程 httptest 假上游（零真实 LLM 调用）、自钉 sqlite 方言（AGENTS §一·4）。
 // ========================================
 package engine

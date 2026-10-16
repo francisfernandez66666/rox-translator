@@ -87,20 +87,62 @@ type FileTranslateData struct {
 
 // writebackDelivery 写回交付形态（纯函数，便于单测）：
 //   - 返回 "xlsx"：无原格式回写能力的格式（srt/vtt/json/yaml/yml），以 xlsx 对照表为唯一交付形态；
-//   - 返回 "image"：图片格式（P1a，经 OCR 投喂翻译）——无原格式可原位回写，产出译文 .md 文档；
-//   - 返回 "audio"：音频格式（P2，经 ASR 转写投喂翻译）——产出译文 .md + 译文 .srt（带原时间轴）；
+//   - 返回 "image"：图片格式（P1a，经 OCR 投喂翻译）——交付形态＝**译后图片（同容器，P4 原位叠字）
+//     ＋译文 .md**；叠字渲染不出来时退回「只有译文 .md」（择优产出，绝不判死整单）；
+//   - 返回 "audio"：音频格式（P2，经 ASR 转写投喂翻译）——交付形态＝译后音频（**同容器**，见
+//     dubTranslatedAudio）＋译文 .md＋译文字幕 .srt（带原时间轴）＋原音频副本；
 //   - 返回 "inplace"：有原格式写写能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级 xlsx。
 func writebackDelivery(ext string) string {
-	switch ext {
-	case ".srt", ".vtt", ".json", ".yaml", ".yml":
+	switch {
+	case isComparisonTableFormat(ext):
 		return "xlsx"
-	case ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic":
+	// ★ 媒体两档**委托** fileproc 的集合判定，不在这里再抄一份扩展名列表
+	//   （2026-10-16：这两份列表漂过——engine 那份加了 .heic/opus，fileproc 那份没加，
+	//   表现是"上传口放行、这里判 inplace"，客户拿到一个走了 Office 回写分支的图片）。
+	//   等价性由 writeback_delivery_test.go 拿 TranslateFormatOrder 全量逐条钉住。
+	case fileproc.IsImageFormat(ext):
 		return "image"
-	case ".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus":
+	case fileproc.IsAudioFormat(ext):
 		return "audio"
 	default:
 		return "inplace"
 	}
+}
+
+// isComparisonTableFormat 无原格式回写能力、以 xlsx 对照表为唯一交付形态的格式。
+//
+// ★ 这一份清单**就该留在这里**：AGENTS §一·14 规定"交付形态判据只有一处＝本文件的 writebackDelivery"，
+// 所以它是这条规则的事实源，不下沉到 fileproc（fileproc 只管"准入与否/是不是图片音频"）。
+func isComparisonTableFormat(ext string) bool {
+	switch ext {
+	case ".srt", ".vtt", ".json", ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
+// dubWithFallback 配音产物的**两段式容器决策**（纯逻辑，便于单测；I/O 由 synth 注入）。
+//
+// 口径（用户令 2026-10-16「处理完回成原文件格式」）：
+//  1. 先按**输入容器**合成（fileproc.DubContainerFor 给出的那一个）——mp3 进 mp3 出；
+//  2. 该容器合成失败且它不是 .mp3（转码不可用：服务器缺 ffmpeg 或该容器编码器）⇒ 回落 .mp3；
+//  3. 回落也失败、或原容器本就是 .mp3 而失败 ⇒ 返回错误，调用方只记 warning。
+//
+// 返回 (最终容器, 是否发生回落, 错误)。容器为空串且 err!=nil 表示"这一次没有语音"。
+// ★ 为什么抽出来：这是"回原格式"承诺的唯一判定点，必须能被单测直接喂失败，
+// 不然它只活在一条需要真 TTS 引擎才能走到的分支里（等于没有断言）。
+func dubWithFallback(srcExt string, synth func(container string) error) (string, bool, error) {
+	container := fileproc.DubContainerFor(srcExt)
+	if err := synth(container); err == nil {
+		return container, false, nil
+	} else if container == ".mp3" {
+		return "", false, err
+	}
+	if err := synth(".mp3"); err != nil {
+		return "", false, err
+	}
+	return ".mp3", true, nil
 }
 
 // optionString options 通用字符串读取（非字符串/缺失返回空串）。
@@ -837,6 +879,39 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return baseName
 	}
 
+	// dubTranslatedAudio 音频入口的**配音产物**（用户令 2026-10-16：「处理完回成原文件格式」）。
+	// 两段式：先按**输入容器**合成（mp3 进 mp3 出、m4a 进 m4a 出，用户拿回去能直接替换原件）；
+	// 该容器转码不可用（服务器缺 ffmpeg 或该容器编码器，脚本侧回 ERR:Encode）⇒ 回落 .mp3，
+	// 并在 GateWarnings 里如实点明容器已改——不丢声音，也不假装容器对得上。
+	// 返回 (产物路径列表, 面向客户的 warning)，两者均可为空。合成整体失败只记 warning：
+	// 配音是增值产物，字幕与译文才是资产，**绝不**因为没出声把整单判死。
+	// 容器映射的唯一事实源是 fileproc.DubContainerFor，这里不另抄一份后缀判断。
+	dubTranslatedAudio := func(lc string, lines []string) ([]string, string) {
+		paths := map[string]string{}
+		synth := func(container string) error {
+			suffix := fmt.Sprintf("_%s%s", lc, container)
+			p := filepath.Join(outputDir, artifactBase(lc, suffix)+suffix)
+			if serr := fileproc.SpeakLines(ctx, lines, lc, p); serr != nil {
+				return serr
+			}
+			paths[container] = p
+			return nil
+		}
+		container, fellBack, serr := dubWithFallback(ext, synth)
+		if serr != nil {
+			observability.Warn(ctx, "译文配音跳过（不影响字幕与译文交付）",
+				"lang", lc, "error", serr.Error())
+			return nil, fmt.Sprintf("%s 未生成译文配音（%s）；字幕与译文已完整交付", config.LangNames[lc], serr.Error())
+		}
+		if fellBack {
+			observability.Warn(ctx, "译文配音回落 mp3（原容器转码不可用）", "lang", lc)
+			return []string{paths[container]}, fmt.Sprintf(
+				"%s 配音已回落 mp3（原容器 %s 转码不可用，服务器需安装 ffmpeg）；字幕与译文不受影响",
+				config.LangNames[lc], fileproc.DubContainerFor(ext))
+		}
+		return []string{paths[container]}, ""
+	}
+
 	// writeTextMd 生成某语言的纯文案 .md 产物（按提取顺序输出；未译段保留原文）。
 	writeTextMd := func(lc string) (string, error) {
 		suffix := fmt.Sprintf("_%s_text.md", lc)
@@ -1013,15 +1088,15 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if len(ttsLines) == 0 {
 					// 一段译文都没拿到（不该发生：上面已判 len(tr)==0 就 continue）——不合成，也不报警。
 				} else {
-					mp3Suffix := fmt.Sprintf("_%s.mp3", lc)
-					mp3Path := filepath.Join(outputDir, artifactBase(lc, mp3Suffix)+mp3Suffix)
-					if terr := fileproc.SpeakLines(ctx, ttsLines, lc, mp3Path); terr != nil {
-						observability.Warn(ctx, "译文配音跳过（不影响字幕与译文交付）",
-							"lang", lc, "error", terr.Error(), "artifact", filepath.Base(mp3Path))
-						gateWarnings = append(gateWarnings, fmt.Sprintf(
-							"%s 未生成译文配音（%s）；字幕与译文已完整交付", config.LangNames[lc], terr.Error()))
-					} else {
-						filesOut = append(filesOut, mp3Path)
+					// ★ 2026-10-16 用户令「处理完回成原文件格式」：配音容器**照搬输入音频的容器**
+					//   （mp3 进就 mp3 出、m4a 进就 m4a 出），用户拿回去能直接替换原件。
+					//   容器映射的唯一事实源是 fileproc.DubContainerFor（表在 tts_speak.py 的
+					//   CONTAINER_ARGS，两侧等值有单测锁）。转码不可用（缺 ffmpeg/编码器）⇒ 回落 .mp3；
+					//   合成失败 ⇒ 只记 warning。配音是增值产物，**绝不**因此判死整单。
+					dubFiles, dubWarn := dubTranslatedAudio(lc, ttsLines)
+					filesOut = append(filesOut, dubFiles...)
+					if dubWarn != "" {
+						gateWarnings = append(gateWarnings, dubWarn)
 					}
 				}
 				continue

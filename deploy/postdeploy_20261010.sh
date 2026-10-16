@@ -48,12 +48,12 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONF="$REPO/deploy/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$CONF" | head -1)"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$CONF" | head -1)"
-[ -n "$HOST" ] || { echo "ABORT=1 主机没解析出来（读 $CONF）"; exit 2; }
+[ -n "$HOST" ] || { echo "ABORT=1 主机没解析出来（读 ${CONF}）"; exit 2; }
 [ -n "$PORT" ] || PORT=22
 
 # ── 本机侧：前端 dist 事实（远端拿它做等值对照）──
 DIST="$REPO/frontend-react/dist"
-[ -d "$DIST" ] || { echo "ABORT=1 本机没有 dist（$DIST）——前端对账这一段没法做"; exit 2; }
+[ -d "$DIST" ] || { echo "ABORT=1 本机没有 dist（${DIST}）——前端对账这一段没法做"; exit 2; }
 L_ENTRY=$(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' "$DIST/index.html" | head -1)
 [ -n "$L_ENTRY" ] || { echo "ABORT=1 dist/index.html 里取不到入口 asset 名"; exit 2; }
 L_ASSET="$DIST/$L_ENTRY"
@@ -123,7 +123,7 @@ for pair in "translator:/opt/translator/bin/translator-server" "translator-demo:
   if [ "$st" = "active" ] && [ -n "$es" ] && [ "$es" = "$ds" ]; then
     ok "$u active pid=$pid NRestarts=$nr 现役件 sha256＝磁盘件（${es:0:16}…）"
   else
-    bad "$u active=$st exe_sha=${es:0:16} 磁盘 sha=${ds:0:16}（不等＝跑的不是落位那件，或 NRestarts 在涨：$nr）"
+    bad "$u active=$st exe_sha=${es:0:16} 磁盘 sha=${ds:0:16}（不等＝跑的不是落位那件，或 NRestarts 在涨：${nr}）"
   fi
 done
 for p in 8787 8789 8790; do
@@ -145,7 +145,7 @@ echo "----- B ㊾ 三条腿一起读：状态词＋失败行数＋**成功轮次
 # 腿①／3：主站状态词（进程态、重启即清 ⇒ 它说的就是"这一代件"；演示单元按运营意图是 disabled，只作读数）
 WORD=$(curl -s --max-time 8 http://127.0.0.1:8787/api/health | sed -n 's/.*"usdt_watch":"\([a-z_]*\)".*/\1/p' || true)
 [ -n "$WORD" ] || WORD="<取不到>"
-echo "  主站 usdt_watch 状态词=$WORD（ok＝本进程至少跑完一轮且清单内全链无失败／unknown＝压根没跑过一轮／disabled＝开关关着）"
+echo "  主站 usdt_watch 状态词=${WORD}（ok＝本进程至少跑完一轮且清单内全链无失败／unknown＝压根没跑过一轮／disabled＝开关关着）"
 if [ "$WORD" = "ok" ]; then
   ok "B 腿①：主站监听状态词＝ok"
 else
@@ -164,7 +164,7 @@ else
   FAILS=$(awk -v lim="$LIM" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"[usdt-watch]") && index($0,"扫描失败")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || true)
   SCANS=$(awk -v lim="$LIM" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=lim && index($0,"[usdt-watch]")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || true)
   : "${FAILS:=<读数失败>}" "${SCANS:=<读数失败>}"
-  echo "  自 $LIM（本单元启动）以来：[usdt-watch] 扫描失败行=$FAILS（期望 **0**）  [usdt-watch] 全部行=$SCANS（**只作读数不作判据**：成功轮不带这个前缀，健康态它恒 0）"
+  echo "  自 ${LIM}（本单元启动）以来：[usdt-watch] 扫描失败行=${FAILS}（期望 **0**）  [usdt-watch] 全部行=${SCANS}（**只作读数不作判据**：成功轮不带这个前缀，健康态它恒 0）"
   if [ "$FAILS" = "0" ]; then
     ok "B 腿②：本件启动以来零失败行"
   else
@@ -179,7 +179,7 @@ else
   if [ -z "$CHAIN_LIST" ]; then
     bad "B 腿③：库里 usdt_chains 现值读不到 ⇒ 不知道该核哪几条游标（这一格判『未验证』，不等于通过）"
   elif [ -z "$LIM_E" ]; then
-    bad "B 腿③：启动锚点转不成时刻（LIM=$LIM）⇒ 游标新鲜度无从比较（同样判『未验证』）"
+    bad "B 腿③：启动锚点转不成时刻（LIM=${LIM}）⇒ 游标新鲜度无从比较（同样判『未验证』）"
   else
     DIAL_BAD=0
     DIAL_DETAIL=""
@@ -194,13 +194,13 @@ else
       fi
       TS_E=$(date -d "$TS" +%s 2>/dev/null || true)
       if [ -z "$TS_E" ]; then
-        bad "B 腿③：链 $ch 游标时刻解析不了（原值 $TS）⇒ 判未验证"
+        bad "B 腿③：链 $ch 游标时刻解析不了（原值 ${TS}）⇒ 判未验证"
         DIAL_BAD=1
         continue
       fi
       DIAL_DETAIL="$DIAL_DETAIL $ch=$((${NOW_E} - TS_E))s前"
       if [ "$TS_E" -lt "$LIM_E" ]; then
-        bad "B 腿③：链 $ch 最后一次成功扫描写在 $TS，**早于本件启动** $LIM ⇒ 这一代件还没拨通过上游（别拿旧件的游标当新件的健康）"
+        bad "B 腿③：链 $ch 最后一次成功扫描写在 ${TS}，**早于本件启动** $LIM ⇒ 这一代件还没拨通过上游（别拿旧件的游标当新件的健康）"
         DIAL_BAD=1
       fi
     done
@@ -231,13 +231,13 @@ REC=$(awk -v lim="${LIM:-}" '{ i=index($0,"\"time\":\""); if (i==0) next; t=subs
 UNLISTED=$(awk -v lim="${LIM:-}" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (lim!="" && t<lim) next; if (index($0,"因链清单收窄而收敛")) c++ } END { print c+0 }' "$LOGF" 2>/dev/null || true)
 : "${REC:=<读数失败>}" "${UNLISTED:=<读数失败>}"
 WHY=$(grep -o '"why":"[a-z_]*"' "$LOGF" 2>/dev/null | tail -1 || true)
-echo "    恢复行=$REC（本单元启动以来，期望 **≥1**＝遗留 open 行被这一腿收敛掉）" \
-  "清单收窄行=$UNLISTED（**只作读数不作判据**：现网没收窄过就不该有；有它就必须去核 usdt_chains 现值）" \
+echo "    恢复行=${REC}（本单元启动以来，期望 **≥1**＝遗留 open 行被这一腿收敛掉）" \
+  "清单收窄行=${UNLISTED}（**只作读数不作判据**：现网没收窄过就不该有；有它就必须去核 usdt_chains 现值）" \
   "最后一档=${WHY:-<日志里没有 why 字段>}"
 if [ "${REC:-0}" != "0" ] && [ "${REC:-}" != "<读数失败>" ]; then
-  ok "(53) 补腿现网坐实：恢复行存在且带档名（$WHY）"
+  ok "(53) 补腿现网坐实：恢复行存在且带档名（${WHY}）"
 else
-  bad "(53) 补腿没跑出恢复行（rec=$REC）——两种形态别混：①监听被闸关着/一条都没探过（看 B 段腿①状态词与腿③游标）；②库里那条 open 本来就不归这一腿管（看上面 status 行）。open 还在＝这一格没闭环，别记成已修"
+  bad "(53) 补腿没跑出恢复行（rec=${REC}）——两种形态别混：①监听被闸关着/一条都没探过（看 B 段腿①状态词与腿③游标）；②库里那条 open 本来就不归这一腿管（看上面 status 行）。open 还在＝这一格没闭环，别记成已修"
 fi
 OPENW=$(sudo -u postgres psql -d langcross -Atc "select count(*) from alerts where kind='usdt_watch_dead' and status<>'resolved';" 2>/dev/null || echo "")
 if [ -n "$OPENW" ]; then
@@ -251,13 +251,13 @@ echo
 echo "----- D ㊶ 观测腿接线：/metrics 的 purity 序列（只判 HELP/TYPE 在位，不判计数）-----"
 MT=$(grep -o '^METRICS_TOKEN=.*' /etc/translator/secrets.env 2>/dev/null | head -1 | cut -d= -f2-)
 MT_LEN=${#MT}
-echo "  METRICS_TOKEN 长度=$MT_LEN（只出长度，不出值）"
+echo "  METRICS_TOKEN 长度=${MT_LEN}（只出长度，不出值）"
 if [ "$MT_LEN" -gt 0 ]; then
   BODY=$(curl -s -m 10 http://127.0.0.1:8787/metrics -H "Authorization: Bearer $MT")
   HL=$(printf '%s' "$BODY" | grep -cE '^# (HELP|TYPE) translator_translation_purity_total' || true)
   SER=$(printf '%s' "$BODY" | grep -c '^translator_translation_purity_total' || true)
-  echo "  HELP/TYPE 行=$HL（期望 ≥2＝计数器注册上了）  样本行=$SER（**现网无退化样本时 0 属正常**，不为判据）"
-  [ "${HL:-0}" -ge 2 ] && ok "purity 序列已注册到 /metrics" || bad "purity HELP/TYPE 行=$HL（<2＝计量没接线，不是'没发生退化'）"
+  echo "  HELP/TYPE 行=${HL}（期望 ≥2＝计数器注册上了）  样本行=${SER}（**现网无退化样本时 0 属正常**，不为判据）"
+  [ "${HL:-0}" -ge 2 ] && ok "purity 序列已注册到 /metrics" || bad "purity HELP/TYPE 行=${HL}（<2＝计量没接线，不是'没发生退化'）"
   printf '%s' "$BODY" | grep -E '^# (HELP|TYPE) translator_translation_purity_total|^translator_translation_purity_total' | head -5 | sed 's/^/    /'
 else
   echo "  没取到 token ⇒ 本段属『读不到』，**不等于**『没接线』（两种形态别混，见 AGENTS §一·3 那条读数口径）"
@@ -292,7 +292,7 @@ echo "  probe.timer enabled=$PT_EN active=$PT_AC"
 if [ "$PT_EN" = enabled ] && [ "$PT_AC" = active ]; then
   ok "#29 闹钟已装配并已装填（enabled/active）"
 else
-  bad "#29 闹钟没装上（enabled=$PT_EN active=$PT_AC）——『有脚本无调度』这一格仍未闭，别把 scripts/ 里那份文件当成已生效"
+  bad "#29 闹钟没装上（enabled=$PT_EN active=${PT_AC}）——『有脚本无调度』这一格仍未闭，别把 scripts/ 里那份文件当成已生效"
 fi
 echo "  expiry.timer enabled=$(sysd is-enabled translator-dispatch-expiry.timer) active=$(sysd is-active translator-dispatch-expiry.timer)"
 systemctl list-timers --all --no-pager 2>/dev/null | grep -E 'dispatch' | head -3 | sed 's/^/    /'
@@ -349,7 +349,7 @@ for u in https://langcross.lexicorn.cn https://rox-test.lexicorn.cn; do
   as=$(sha256sum /tmp/_pd_asset 2>/dev/null | cut -d' ' -f1)
   # ★ content_type 本身含空格（text/html; charset=utf-8），所以判据按 | 分隔取字段，不拿 %{http_code} 后面的裸词序
   ct=$(echo "$r" | awk -F'|' '{print $2}'); code=$(echo "$r" | awk -F'|' '{print $1}')
-  if [ "$as" = "$WANT_SHA" ]; then ok "$u/$ENTRY 公网抓回 sha 与本机一致（code=$code ct=$ct）"; else bad "$u/$ENTRY 公网 sha=${as:0:16} ≠ 本机（code=$code ct=$ct $r）⇒ 公网那份不是这个构建（HTML 兜底/CDN 缓存/路径写错）"; fi
+  if [ "$as" = "$WANT_SHA" ]; then ok "$u/$ENTRY 公网抓回 sha 与本机一致（code=$code ct=${ct}）"; else bad "$u/$ENTRY 公网 sha=${as:0:16} ≠ 本机（code=$code ct=$ct ${r}）⇒ 公网那份不是这个构建（HTML 兜底/CDN 缓存/路径写错）"; fi
   rm -f /tmp/_pd_asset
 done
 
@@ -357,14 +357,14 @@ echo
 echo "----- H 磁盘与公开面负向（dotfile／归档族／首页品牌直出）-----"
 for w in /opt/translator/web /opt/translator-demo/web; do
   d=$(find "$w" \( -name .DS_Store -o -name '._*' \) 2>/dev/null | wc -l)
-  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=$d（必须 0）"
+  [ "$d" = "0" ] && ok "$w dotfile=0" || bad "$w dotfile=${d}（必须 0）"
   echo "  $w 下划线归档=$(ls -1d "${w}"_old.* 2>/dev/null | grep -c . || true) 份 点族=$(ls -1d "$w".old.* 2>/dev/null | grep -c . || true) 入口大小=$(wc -c <"$w/index.html" 2>/dev/null | tr -d ' ')"
 done
 for u in https://langcross.lexicorn.cn https://rox-test.lexicorn.cn; do
   r=$(curl -s -o /tmp/_pd_ds -w '%{http_code}|%{content_type}|%{size_download}' --max-time 25 "$u/.DS_Store" || echo CURL_FAIL)
   home=$(curl -s -o /dev/null -w '%{size_download}' --max-time 25 "$u/" || echo 0)
   ct=$(echo "$r" | awk -F'|' '{print $2}'); sz=$(echo "$r" | awk -F'|' '{print $3}')
-  if [ "$ct" = "text/html; charset=utf-8" ] && [ "$sz" = "$home" ]; then ok "$u/.DS_Store 是 SPA 兜底（字节=$sz＝首页 $home）"; else bad "$u/.DS_Store =$r 首页=$home（磁盘上还有真文件）"; fi
+  if [ "$ct" = "text/html; charset=utf-8" ] && [ "$sz" = "$home" ]; then ok "$u/.DS_Store 是 SPA 兜底（字节=${sz}＝首页 ${home}）"; else bad "$u/.DS_Store =$r 首页=${home}（磁盘上还有真文件）"; fi
   rm -f /tmp/_pd_ds
   b=$(curl -s --max-time 25 "$u/" | grep -c '__BRANDING__' || true)
   echo "  $u 首页 branding 命中=$b 字节=$(curl -s -o /dev/null -w '%{size_download}' --max-time 25 "$u/")（demo 域走通配块打到 8787，别拿它读演示单元）"
@@ -385,7 +385,7 @@ sqlite3 /opt/ai-assist/data/assist.db "select '    messages_base='||COALESCE(cou
 sqlite3 /opt/ai-assist/data/assist.db "select '    壳行(msg_count>0 但已无消息)='||COALESCE(count(*),0) from sessions_base where msg_count>0 and id not in (select session_id from messages_base);" 2>/dev/null || echo "    <读不到>"
 for t in sessions messages; do
   n=$(sqlite3 /opt/ai-assist/data/assist.db "select count(*) from $t;" 2>/dev/null || echo '<无此表>')
-  echo "    旧表 $t=$n（应仍是 <无此表>，回潮＝迁移判据又跑了一次）"
+  echo "    旧表 $t=${n}（应仍是 <无此表>，回潮＝迁移判据又跑了一次）"
 done
 
 echo
@@ -412,6 +412,6 @@ echo "POSTDEPLOY_LOCAL_EXIT=$SSH_RC"
 if [ "$SSH_RC" = "0" ]; then
   echo "本机结论：复查全绿（现网接线一条不缺）"
 else
-  echo "本机结论：复查**未通过**，退出码 $SSH_RC（255＝链路没通，别读成『现网没问题』）"
+  echo "本机结论：复查**未通过**，退出码 ${SSH_RC}（255＝链路没通，别读成『现网没问题』）"
 fi
 exit "$SSH_RC"

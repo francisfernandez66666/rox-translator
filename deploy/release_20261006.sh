@@ -37,7 +37,7 @@ sha_local() { shasum -a 256 "$1" | awk '{print $1}'; }
 
 echo "===== P0 本机产物自检 ====="
 for f in "$SERVER_BIN" "$ASSIST_BIN"; do
-  [ -f "$f" ] || { echo "ABORT=1 缺产物 $f（先按 §四 交叉编译）"; exit 2; }
+  [ -f "$f" ] || { echo "ABORT=1 缺产物 ${f}（先按 §四 交叉编译）"; exit 2; }
   echo "$f size=$(wc -c <"$f" | tr -d ' ') sha=$(sha_local "$f")"
 done
 [ -d "$DIST_DIR" ] || { echo "ABORT=1 缺 $DIST_DIR"; exit 2; }
@@ -55,7 +55,7 @@ rm -f "$TARBALL"
 (cd "$REPO/frontend-react" && COPYFILE_DISABLE=1 tar czf "$TARBALL" --exclude='._*' --exclude='.DS_Store' dist) || { echo "ABORT=1 打包失败"; exit 2; }
 echo "$TARBALL size=$(wc -c <"$TARBALL" | tr -d ' ') sha=$(sha_local "$TARBALL")"
 DIRTY_AFTER=$(find "$DIST_DIR" \( -name '.DS_Store' -o -name '._*' \) 2>/dev/null | wc -l | tr -d ' ')
-echo "打包后 dist 脏件复数=$DIRTY_AFTER（必须仍为 0）"
+echo "打包后 dist 脏件复数=${DIRTY_AFTER}（必须仍为 0）"
 [ "$DIRTY_AFTER" = "0" ] || { echo "ABORT=1 打包过程又生出脏件"; exit 2; }
 
 SERVER_SHA=$(sha_local "$SERVER_BIN")
@@ -113,11 +113,11 @@ rehost() { # $1 web 根
   rm -rf "$newdir"; mkdir -p "$newdir" || { echo "FAIL mkdir $newdir"; return 1; }
   tar xzf /tmp/frontend-dist-20261006.tar.gz -C "$newdir" --strip-components=1 || { echo "FAIL 解包到 $newdir"; return 1; }
   local e=$(grep -oE 'index-[A-Za-z0-9_-]+\.js' "$newdir/index.html" | head -1)
-  echo "$root 解包入口=$e（期望 $EXPECT_ENTRY）"
+  echo "$root 解包入口=${e}（期望 ${EXPECT_ENTRY}）"
   [ "$e" = "$EXPECT_ENTRY" ] || { echo "FAIL 入口 asset 不等：可能忘了重新 build，不换名"; return 1; }
   local miss=0
   for A in $(assets_in "$newdir/index.html"); do
-    [ -f "$newdir/$A" ] || { echo "FAIL 缺 $A（$root）"; miss=$((miss+1)); }
+    [ -f "$newdir/$A" ] || { echo "FAIL 缺 ${A}（${root}）"; miss=$((miss+1)); }
   done
   [ "$miss" = "0" ] || { echo "FAIL 有 $miss 个引用未落盘，不换名"; return 1; }
   local d=$(find "$newdir" \( -name .DS_Store -o -name '._*' \) 2>/dev/null | wc -l)

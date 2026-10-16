@@ -45,7 +45,7 @@ expect() { # expect <用例名> <期望 ok|reject|abort> <实际退出码> <输�
     if [ "$rc" != 0 ] && printf '%s' "$out" | grep -q 'DOCGUARD ABORT'; then got=abort; fi
   fi
   if [ "$got" = "$want" ]; then
-    echo "PASS $name（want=$want rc=$rc）"
+    echo "PASS ${name}（want=$want rc=${rc}）"
   else
     echo "FAIL $name want=$want got=$got rc=$rc"
     printf '%s\n' "$out" | sed 's/^/      │ /' | head -8

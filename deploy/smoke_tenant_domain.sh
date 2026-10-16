@@ -84,7 +84,7 @@ print("" if v is None else v)
 PY
 }
 
-echo "==> 租户品牌域名冒烟：$TENANT_HOST（对照 $UNREG_HOST ／ $MAIN_HOST）"
+echo "==> 租户品牌域名冒烟：${TENANT_HOST}（对照 $UNREG_HOST ／ ${MAIN_HOST}）"
 
 # ---- T1 租户域首页：后端直出 + 注入体归属正确 --------------------------------
 CODE1=$(curl -s -o "$BODY" -w '%{http_code}' --max-time 60 "$TENANT_BASE/")
@@ -118,16 +118,16 @@ except Exception:
 PY
 )
 if [ "$CODE1" = "200" ] && [ "$HITS1" = "1" ] && [ "$B_TID1" = "$EXPECT_TENANT_ID" ]; then
-  ok "T1 租户域首页 $CODE1／__BRANDING__ 命中 $HITS1／tenant_id=$B_TID1（=期望 $EXPECT_TENANT_ID）"
+  ok "T1 租户域首页 ${CODE1}／__BRANDING__ 命中 ${HITS1}／tenant_id=${B_TID1}（=期望 ${EXPECT_TENANT_ID}）"
 else
-  bad "T1 租户域首页异常：code=$CODE1 hits=$HITS1 tenant_id=$B_TID1（期望 200／1／$EXPECT_TENANT_ID）⇒ 通配块缺失、或兜底段写成 file_server（F-74 形态）、或后端按 Host 没解析出租户"
+  bad "T1 租户域首页异常：code=$CODE1 hits=$HITS1 tenant_id=${B_TID1}（期望 200／1／${EXPECT_TENANT_ID}）⇒ 通配块缺失、或兜底段写成 file_server（F-74 形态）、或后端按 Host 没解析出租户"
 fi
 if [ -n "$EXPECT_BRAND_NAME" ]; then
-  [ "$B_NAME1" = "$EXPECT_BRAND_NAME" ] && ok "T1b 注入体 brand_name=$B_NAME1（等值）" \
-    || bad "T1b brand_name 不符：实取「$B_NAME1」期望「$EXPECT_BRAND_NAME」"
+  [ "$B_NAME1" = "$EXPECT_BRAND_NAME" ] && ok "T1b 注入体 brand_name=${B_NAME1}（等值）" \
+    || bad "T1b brand_name 不符：实取「${B_NAME1}」期望「${EXPECT_BRAND_NAME}」"
 else
-  [ -n "$B_NAME1" ] && ok "T1b 注入体 brand_name 非空（$B_NAME1）" \
-    || bad "T1b brand_name 为空 ⇒ 该域名没解析到租户品牌（检查 tenants.domain 是否等于子域前缀 $TENANT_HOST）"
+  [ -n "$B_NAME1" ] && ok "T1b 注入体 brand_name 非空（${B_NAME1}）" \
+    || bad "T1b brand_name 为空 ⇒ 该域名没解析到租户品牌（检查 tenants.domain 是否等于子域前缀 ${TENANT_HOST}）"
 fi
 
 # ---- T2 品牌件可达（图片魔数，防「库里存了 URL 但取不到字节」）-----------------
@@ -164,9 +164,9 @@ PY
         esac
         if [ "$code" = "200" ] && [ "${size:-0}" -ge "$MIN_BRAND_BYTES" ] && [ "$magic" = "$want" ] \
            && echo "$ctype" | grep -qi '^image/'; then
-          ok "T2 $pair 可达（${size}B／magic=$magic／$ctype）"; got=$((got + 1))
+          ok "T2 $pair 可达（${size}B／magic=${magic}／${ctype}）"; got=$((got + 1))
         else
-          bad "T2 $pair 取不到字节：code=$code size=$size ctype=$ctype magic=$magic（期望 200／≥${MIN_BRAND_BYTES}B／image\/*／魔数 $want）⇒ SPA 兜底吃成 HTML 或静态件没落盘"
+          bad "T2 $pair 取不到字节：code=$code size=$size ctype=$ctype magic=${magic}（期望 200／≥${MIN_BRAND_BYTES}B／image\/*／魔数 ${want}）⇒ SPA 兜底吃成 HTML 或静态件没落盘"
         fi
         ;;
       *) echo "  · $pair 非 /brand/ 路径（空值或外链），T2 该件不计判" ;;
@@ -187,10 +187,10 @@ fi
 # ---- T4 接口链诚实：401 语义 + JSON 形状（证明 API 反代落到后端）--------------
 C4=$(curl -s -o "$BODY" -w '%{http_code}' --max-time 60 "$TENANT_BASE/api/me/tasks")
 [ "$C4" = "401" ] && ok "T4a /api/me/tasks 匿名 ⇒ 401（F-64 诚实状态码，说明请求真到了后端而不是 SPA 兜底）" \
-  || bad "T4a /api/me/tasks 匿名返回 $C4（期望 401；200＝落 SPA 兜底，404＝API 段没反代到后端）"
+  || bad "T4a /api/me/tasks 匿名返回 ${C4}（期望 401；200＝落 SPA 兜底，404＝API 段没反代到后端）"
 R4=$(fetch "$TENANT_BASE/api/health"); code4=$(echo "$R4" | cut -d'|' -f1); magic4=$(echo "$R4" | cut -d'|' -f4)
-{ [ "$code4" = "200" ] && [ "${magic4:0:2}" = "7b" ]; } && ok "T4b /api/health 200 且体首是 JSON（magic=$magic4）" \
-  || bad "T4b /api/health code=$code4 magic=$magic4（期望 200／7b…）⇒ 后端没接住"
+{ [ "$code4" = "200" ] && [ "${magic4:0:2}" = "7b" ]; } && ok "T4b /api/health 200 且体首是 JSON（magic=${magic4}）" \
+  || bad "T4b /api/health code=$code4 magic=${magic4}（期望 200／7b…）⇒ 后端没接住"
 
 # ---- T5 托管物：扩展 zip 与 SDK manifest 不得被 SPA 兜底吃掉 -------------------
 if [ "$SKIP_ASSETS" = "1" ]; then
@@ -199,11 +199,11 @@ else
   R5=$(fetch "$TENANT_BASE/extensions/langcross-extension-latest.zip")
   code5=$(echo "$R5" | cut -d'|' -f1); size5=$(echo "$R5" | cut -d'|' -f2); magic5=$(echo "$R5" | cut -d'|' -f4)
   { [ "$code5" = "200" ] && [ "$magic5" = "504b0304" ] && [ "${size5:-0}" -ge "$MIN_ZIP_BYTES" ]; } \
-    && ok "T5a 扩展包 ${size5}B／magic=$magic5（不是 HTML 兜底）" \
-    || bad "T5a 扩展包异常 code=$code5 size=$size5 magic=$magic5（期望 200／504b0304／≥${MIN_ZIP_BYTES}B）"
+    && ok "T5a 扩展包 ${size5}B／magic=${magic5}（不是 HTML 兜底）" \
+    || bad "T5a 扩展包异常 code=$code5 size=$size5 magic=${magic5}（期望 200／504b0304／≥${MIN_ZIP_BYTES}B）"
   R5b=$(fetch "$TENANT_BASE/sdk/manifest.json"); code5b=$(echo "$R5b" | cut -d'|' -f1); magic5b=$(echo "$R5b" | cut -d'|' -f4)
-  { [ "$code5b" = "200" ] && [ "${magic5b:0:2}" = "7b" ]; } && ok "T5b SDK manifest 200 且是 JSON（magic=$magic5b）" \
-    || bad "T5b SDK manifest code=$code5b magic=$magic5b（期望 200／7b…）⇒ 落 HTML 兜底"
+  { [ "$code5b" = "200" ] && [ "${magic5b:0:2}" = "7b" ]; } && ok "T5b SDK manifest 200 且是 JSON（magic=${magic5b}）" \
+    || bad "T5b SDK manifest code=$code5b magic=${magic5b}（期望 200／7b…）⇒ 落 HTML 兜底"
 fi
 
 # ---- T6 安全头基线（租户域不得弱于主站）--------------------------------------
@@ -215,18 +215,18 @@ rm -f /tmp/.std_h.$$
 
 # ---- T7 HTTP ⇒ HTTPS ---------------------------------------------------------
 C7=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "http://$TENANT_HOST/")
-case "$C7" in 301 | 308) ok "T7 http:// ⇒ $C7 跳 https" ;; *) bad "T7 http:// 返回 $C7（期望 301/308）" ;; esac
+case "$C7" in 301 | 308) ok "T7 http:// ⇒ $C7 跳 https" ;; *) bad "T7 http:// 返回 ${C7}（期望 301/308）" ;; esac
 
 # ---- T8 反向不串号：主站首页不得出现该租户品牌名 ------------------------------
 curl -s -o "$BODY" --max-time 60 "$MAIN_BASE/"
 if [ -n "$B_NAME1" ] && grep -qF "$B_NAME1" "$BODY"; then
-  bad "T8 主站首页出现租户品牌「$B_NAME1」⇒ 平台根域名被套上了租户品牌（应永远回平台默认）"
+  bad "T8 主站首页出现租户品牌「${B_NAME1}」⇒ 平台根域名被套上了租户品牌（应永远回平台默认）"
 else
   ok "T8 主站首页不含租户品牌「${B_NAME1:-（无品牌名可比对）}」（反向不串号）"
 fi
 
 echo ""
 echo "============================================================"
-echo "smoke_tenant_domain｜租户域 $TENANT_HOST｜PASS=$PASS FAIL=$FAIL"
+echo "smoke_tenant_domain｜租户域 ${TENANT_HOST}｜PASS=$PASS FAIL=$FAIL"
 echo "============================================================"
 [ "$FAIL" = "0" ] && exit 0 || exit 1

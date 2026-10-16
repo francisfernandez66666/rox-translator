@@ -84,8 +84,8 @@ if [ "$MODE" = "--status" ]; then
   fi
   echo "PURGE_STATUS_DONE=1"; exit 0
 fi
-[ "$MODE" = "--build" ] || [ "$MODE" = "--force-push" ] || fail "未知参数 $MODE（--build / --force-push / --status）"
-[ -f "$LIST" ] || fail "清理清单不在位：$LIST（宁停手，也不按猜的范围改写历史）"
+[ "$MODE" = "--build" ] || [ "$MODE" = "--force-push" ] || fail "未知参数 ${MODE}（--build / --force-push / --status）"
+[ -f "$LIST" ] || fail "清理清单不在位：${LIST}（宁停手，也不按猜的范围改写历史）"
 
 # 清单去空行；注释行（# 开头）允许存在，方便人留"这批为什么是这些"的脚印。
 CLEAN=".git/purge-list.$$"
@@ -162,7 +162,7 @@ while IFS= read -r old; do
   #   它比较的是工作树文件，而我们根本不想动工作树。`--cached` 保证只从索引摘、磁盘一字不碰，
   #   所以这里的 -f 只是"别再拿工作树当理由拒绝摘临时索引里的条目"，不是"强制删文件"。
   GIT_INDEX_FILE="$IDX" git rm -r --cached -f --quiet --ignore-unmatch --pathspec-from-file="$CLEAN" \
-    || { rm -f "$IDX"; fail "摘件失败 $old（先核清单路径形态与 git 是否支持 --pathspec-from-file）"; }
+    || { rm -f "$IDX"; fail "摘件失败 ${old}（先核清单路径形态与 git 是否支持 --pathspec-from-file）"; }
   TREE=$(GIT_INDEX_FILE="$IDX" git write-tree) || { rm -f "$IDX"; fail "write-tree 失败 $old"; }
   git log -1 --format='%B' "$old" > "$RMTMP" || fail "取提交正文失败 $old"
   # 父指针：范围内的父换成重建后的那一条；范围外（锚点及其之前）保持原 SHA 不动。
@@ -189,7 +189,7 @@ done < "$REVLIST"
 rm -f "$IDX" "$RMTMP"
 
 lookup_tip=$(awk -v k="$TIP_SHA" '$1==k{print $2; exit}' "$MAPFILE" 2>/dev/null)
-[ -n "$lookup_tip" ] || fail "重建完没拿到新顶端（映射表里查不到 $TIP_SHA）"
+[ -n "$lookup_tip" ] || fail "重建完没拿到新顶端（映射表里查不到 ${TIP_SHA}）"
 NEW_TIP="$lookup_tip"
 git update-ref "refs/purged/$BR" "$NEW_TIP" || fail "写 refs/purged/$BR 失败"
 # 同时记下**这次建链对着的远端顶端**：--status 拿它当对照，force-push 拿它当防线C 的判据。
@@ -220,7 +220,7 @@ while IFS= read -r c; do
 done < "$NEWREVS"
 rm -f "$NEWREVS"
 if [ "$LEFT" -ne 0 ]; then
-  echo "PURGE FAIL=自证2：新链里仍有提交带着清单中的路径（命中 $LEFT，首条 $FIRST_BAD）"
+  echo "PURGE FAIL=自证2：新链里仍有提交带着清单中的路径（命中 ${LEFT}，首条 ${FIRST_BAD}）"
   rm -f "$MAPFILE" "$REVLIST" "$CLEAN"; exit 1
 fi
 echo "自证2 全链无残留=通过（逐提交数清单命中，合计 0）"
@@ -263,7 +263,7 @@ for i in real[:3]:
 PY
 )" || fail "自证4：正文比对脚本自身跑挂（比对器失灵＝判据失明，宁停手）"
 case "$BODY_CHECK" in
-  OK*) echo "自证4 提交正文逐条等价=通过（$BODY_CHECK）" ;;
+  OK*) echo "自证4 提交正文逐条等价=通过（${BODY_CHECK}）" ;;
   *) rm -f .git/purge-old-body.$$ .git/purge-new-body.$$ "$MAPFILE" "$REVLIST" "$CLEAN"; fail "自证4：提交正文被改写 → $BODY_CHECK" ;;
 esac
 rm -f .git/purge-old-body.$$ .git/purge-new-body.$$
@@ -283,7 +283,7 @@ if [ "$MODE" = "--force-push" ]; then
   # 防线C：建链这段时间里远端顶端有没有被别人推过？动过就必须重来，
   # 拿旧顶端算出来的链去 force-push＝把别人那一段直接抹掉。
   NOW_TIP=$(git rev-parse --verify -q "$REMOTE/$BR") || fail "force-push 前重读远端顶端失败"
-  [ "$NOW_TIP" = "$TIP_SHA" ] || fail "防线C：远端顶端在建链期间动了（$TIP_SHA → $NOW_TIP）；重跑 --build 再推"
+  [ "$NOW_TIP" = "$TIP_SHA" ] || fail "防线C：远端顶端在建链期间动了（$TIP_SHA → ${NOW_TIP}）；重跑 --build 再推"
   echo "防线C 远端顶端未变动=通过"
   echo "（改写已推送历史＝人工明令档）执行 force-push → $REMOTE/$BR"
   git push --force "$REMOTE" "refs/purged/$BR:refs/heads/$BR" || fail "force-push 失败"

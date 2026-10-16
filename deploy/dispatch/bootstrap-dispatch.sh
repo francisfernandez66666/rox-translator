@@ -54,11 +54,11 @@ if [ -x /opt/translator/bin/translator-server ]; then
 fi
 for f in fpdexec.py fpd-bridge fpd.slice fpd-sweep.service fpd-sweep.timer \
          fpd-expiry.service fpd-expiry.timer fpd-expiry.sh sshd-fpd.conf requirements.lock.txt; do
-  [ -f "$SRC_DIR/$f" ] || { bad "缺少随包文件 $f（应把 deploy/dispatch/ 整个目录一起传上来）"; exit 4; }
+  [ -f "$SRC_DIR/$f" ] || { bad "缺少随包文件 ${f}（应把 deploy/dispatch/ 整个目录一起传上来）"; exit 4; }
 done
 
 # ----------------------------- 1. 账号 -----------------------------
-log "[1/8] 建立专用账号 $FPD_USER（系统账号、只跑 ForceCommand）"
+log "[1/8] 建立专用账号 ${FPD_USER}（系统账号、只跑 ForceCommand）"
 if id -u "$FPD_USER" >/dev/null 2>&1; then
   log "  账号已存在，跳过创建（uid=$(id -u "$FPD_USER")）"
 else
@@ -269,10 +269,10 @@ run_expiry_leg() { # $1=leg 目录名 $2=人读名 $3=期望退码 $4=期望调�
         /bin/bash "$FPD_ROOT/bin/fpd-expiry.sh" >/dev/null 2>&1; echo "$?")"
   calls="$(grep -c . "$SC_CALLS" 2>/dev/null || true)"; calls="${calls:-0}"
   if [ "$rc" != "$want_rc" ] || [ "$calls" != "$want_calls" ]; then
-    bad "到期自毁「$leg」分支不符（exit=$rc 期望 $want_rc；systemctl 被调 $calls 次 期望 $want_calls 次）"
+    bad "到期自毁「${leg}」分支不符（exit=$rc 期望 ${want_rc}；systemctl 被调 $calls 次 期望 $want_calls 次）"
     MISS=$((MISS+1))
   else
-    log "  到期自毁「$leg」分支生效（exit=$rc，systemctl 被调 $calls 次）"
+    log "  到期自毁「${leg}」分支生效（exit=${rc}，systemctl 被调 $calls 次）"
   fi
 }
 FUTURE="$(date -u -d '+30 days' +%Y-%m-%d 2>/dev/null || true)"
@@ -313,11 +313,11 @@ rm -rf "$EXPIRY_PROOF_DIR"
 #   而账号 shell 必须是可执行的 shell（见 [1/8] 那条 nologin 教训），两项分开点红。
 EFF_SHELL="$(getent passwd "$FPD_USER" | cut -d: -f7 || true)"
 case "$EFF_SHELL" in
-  /bin/sh|/bin/bash) log "  账号 shell=$EFF_SHELL（ForceCommand 可执行）" ;;
+  /bin/sh|/bin/bash) log "  账号 shell=${EFF_SHELL}（ForceCommand 可执行）" ;;
   *) bad "账号 shell=$EFF_SHELL ⇒ sshd 会用 \$SHELL -c 拉起 ForceCommand，nologin 系一律报 \"This account is currently not available\""; MISS=$((MISS+1)) ;;
 esac
 FC="$(sshd -T -C user=$FPD_USER,host=127.0.0.1,addr=127.0.0.1 2>/dev/null | awk '/^forcecommand /{print $2}' || true)"
-if [ "$FC" = "$FPD_ROOT/bin/fpd-bridge" ]; then log "  ForceCommand 已收口到 fpd-bridge"; else bad "ForceCommand=$FC（应为 $FPD_ROOT/bin/fpd-bridge）⇒ 派发账号可能被当交互账号用"; MISS=$((MISS+1)); fi
+if [ "$FC" = "$FPD_ROOT/bin/fpd-bridge" ]; then log "  ForceCommand 已收口到 fpd-bridge"; else bad "ForceCommand=${FC}（应为 $FPD_ROOT/bin/fpd-bridge）⇒ 派发账号可能被当交互账号用"; MISS=$((MISS+1)); fi
 AK_BYTES=0; [ -f "$FPD_ROOT/home/.ssh/authorized_keys" ] && AK_BYTES="$(wc -c < "$FPD_ROOT/home/.ssh/authorized_keys" 2>/dev/null || echo 0)"
 if [ "${AK_BYTES:-0}" -ge 40 ]; then log "  派发公钥已在（$AK_BYTES 字节）"; else warn "  派发公钥缺失 ⇒ 主站现在拨不进来（补 FPD_PUBKEY 重跑本脚本即可）"; fi
 
@@ -497,7 +497,7 @@ else
       bad "到期自拒失效：fpd.env 写 2020-01-01 时 bridge 仍放行 ⇒ 机器到期后还会接客户文件"
       MISS=$((MISS+1))
     else
-      log "  到期自拒生效（临时把到期日设成 2020-01-01 ⇒ bridge exit=$BRIDGE_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
+      log "  到期自拒生效（临时把到期日设成 2020-01-01 ⇒ bridge exit=${BRIDGE_RC}，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
     fi
     # 腿二（★ 2026-10-01 加）：**形似而实非**的日期（13 月 45 日）也必须拒。
     #   旧 bridge 只校验"剥掉连字符是 8 位数字"，2026-13-45 能过那道，再进数值比较时
@@ -509,7 +509,7 @@ else
       bad "非法日期自拒失效：fpd.env 写 2026-13-45（不存在的日期）时 bridge 仍放行 ⇒ 与 fpdexec 口径打架，坏配置下机器还会接客户文件"
       MISS=$((MISS+1))
     else
-      log "  非法日期按已到期生效（2026-13-45 ⇒ bridge exit=$BRIDGE_RC，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
+      log "  非法日期按已到期生效（2026-13-45 ⇒ bridge exit=${BRIDGE_RC}，文案：$(head -c 120 "$EXPIRY_ERR" | tr '\n' ' ')）"
     fi
     if [ -f "$FPD_ROOT/EXPIRED" ]; then
       bad "到期自证过程中落出了 EXPIRED 标记 ⇒ 拒绝路径写到了标记文件（红线③的实现不该在探测时落盘），请人工确认后删除"

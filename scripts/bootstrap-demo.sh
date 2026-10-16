@@ -111,7 +111,7 @@ echo "==========================================="
 
 # ----------------------------- 前置检查 -----------------------------
 for c in psql pg_dump systemctl caddy; do
-  command -v "$c" >/dev/null 2>&1 || die "缺少命令: $c（演示镜像依赖 PostgreSQL 客户端与 Caddy）"
+  command -v "$c" >/dev/null 2>&1 || die "缺少命令: ${c}（演示镜像依赖 PostgreSQL 客户端与 Caddy）"
 done
 systemctl is-active --quiet "$PROD_SVC" 2>/dev/null || \
   log "⚠️  生产服务 ${PROD_SVC} 未运行——仍将克隆数据库，但请确认生产数据是期望的最新快照"
@@ -126,7 +126,7 @@ if [ -d "$PROD_WEB" ] && [ -f "$PROD_WEB/index.html" ]; then
   rm -rf "$DEMO_DIR/web"
   cp -r "$PROD_WEB" "$DEMO_DIR/web"
 else
-  log "⚠️  未找到生产前端目录 $PROD_WEB（或缺少 index.html），演示将仅提供 API；可稍后手动补充"
+  log "⚠️  未找到生产前端目录 ${PROD_WEB}（或缺少 index.html），演示将仅提供 API；可稍后手动补充"
 fi
 # ★ 复制生产 npz 向量索引到演示数据目录（否则演示站无语义检索，知识库术语无法命中）。
 #   -kb 参数由下方 5/6 的 ExecStart 引用；缺失时仅告警不阻断（服务仍可起，语义检索降级）。
@@ -136,7 +136,7 @@ if [ -f "$PROD_NPZ" ]; then
   chown translator:translator "$DEMO_USER_DATA/tm_embeddings.npz" 2>/dev/null || true
   log "   已复制向量索引: $PROD_NPZ"
 else
-  log "⚠️  未找到生产向量索引 $PROD_NPZ——演示站将无语义检索（KB 术语参考受限）；请确认路径或以 PROD_NPZ=... 覆盖"
+  log "⚠️  未找到生产向量索引 ${PROD_NPZ}——演示站将无语义检索（KB 术语参考受限）；请确认路径或以 PROD_NPZ=... 覆盖"
 fi
 # 运行账号（与生产一致 translator；目录归属一次性授权）
 if ! id translator >/dev/null 2>&1; then

@@ -65,7 +65,7 @@ if [ -n "${DRILL_PG_ADMIN_DSN:-}" ] && [ -n "$LATEST_PG" ]; then
   if [ $RESTORE_RC -ne 0 ]; then
     psql "$ADMIN_DSN" -q -c "DROP DATABASE IF EXISTS $SCRATCH WITH (FORCE)" >/dev/null 2>&1
     echo "$RESTORE_OUT" | tail -5
-    fail "pg_restore 还原失败（exit=$RESTORE_RC）：备份不完整或与目标库版本不兼容"
+    fail "pg_restore 还原失败（exit=${RESTORE_RC}）：备份不完整或与目标库版本不兼容"
   fi
   echo "✔ pg_restore 全量还原成功（DDL+DATA 无致命错误）"
   # ③ 关键表行数抽样（0 行且业务应有数据的表给出提示；表缺失视为还原不完整直接判失败）
@@ -88,8 +88,8 @@ fi
 # ==================== SQLite 演练分支（原行为） ====================
 LATEST=$(ls -t "$BACKUP_DIR"/${DB_NAME}.bak_* "$BACKUP_DIR"/${DB_NAME}_*.db \
          "$BACKUP_DIR"/${DB_NAME} 2>/dev/null | head -1)
-[ -n "$LATEST" ] || fail "未找到备份文件于 $BACKUP_DIR（SQLite 模式；PG 部署请配 DRILL_PG_ADMIN_DSN）"
-echo "==> 方言：SQLite（最新备份 $LATEST，$(du -h "$LATEST" | cut -f1)）"
+[ -n "$LATEST" ] || fail "未找到备份文件于 ${BACKUP_DIR}（SQLite 模式；PG 部署请配 DRILL_PG_ADMIN_DSN）"
+echo "==> 方言：SQLite（最新备份 ${LATEST}，$(du -h "$LATEST" | cut -f1)）"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT

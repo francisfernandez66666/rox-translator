@@ -259,7 +259,7 @@ sleep 6
 CHARGE_AFTER_PROBE=$(dbq "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=$TID AND charge_kind='charge'" | tr -d '[:space:]')
 UNIT_COST=$(python3 -c "print(int(round(abs($CHARGE_AFTER_PROBE - $CHARGE_BASE))))" 2>/dev/null || echo 0)
 if [ "${UNIT_COST:-0}" -lt 1 ] 2>/dev/null; then
-  FAIL=$((FAIL+1)); echo "FAIL|M3b-cost-calibration(标定增量=$UNIT_COST，无法钉小额余额，本段未跑)"
+  FAIL=$((FAIL+1)); echo "FAIL|M3b-cost-calibration(标定增量=${UNIT_COST}，无法钉小额余额，本段未跑)"
 else
   dbq "UPDATE balance_accounts SET balance=$((UNIT_COST * 2)) WHERE tenant_id=$TID" >/dev/null
   sleep 6   # 双实例影子 TTL 重播种，确保两侧从同一个「刚够两笔」的真值开始
@@ -324,7 +324,7 @@ print(int(g or 0)+int(b or 0))")
   # 不透支：两桶逐列取极值/合计（绝对赋值丢失更新的直接后果是余额为负）
   MINBAL=$(dbq "SELECT COALESCE(MIN(balance),0) FROM balance_accounts WHERE tenant_id=$TID" | tr -d '[:space:]')
   [ "${MINBAL:-0}" -ge 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|M3b-no-negative-balance(min=$MINBAL)"; } \
-    || { FAIL=$((FAIL+1)); echo "FAIL|M3b-no-negative-balance(min=$MINBAL，D-1 透支)"; }
+    || { FAIL=$((FAIL+1)); echo "FAIL|M3b-no-negative-balance(min=${MINBAL}，D-1 透支)"; }
   NEGG=$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TID AND \"left\"<0" | tr -d '[:space:]')
   [ "${NEGG:-0}" = "0" ] && { PASS=$((PASS+1)); echo "PASS|M3b-no-negative-grant"; } \
     || { FAIL=$((FAIL+1)); echo "FAIL|M3b-no-negative-grant(负库存台账 $NEGG 行)"; }
@@ -525,7 +525,7 @@ else
   ELINE0=$(grep -E '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null | tail -1)
   EFROM0=$(snap_from "$ELINE0")
   if [ -n "$EFROM0" ] && [ "$EFROM0" = "$EXP0" ]; then
-    PASS=$((PASS+1)); echo "PASS|M5-e1-origin-equals-store-before-withdraw(from=$EFROM0＝库里读数 $EXP0)"
+    PASS=$((PASS+1)); echo "PASS|M5-e1-origin-equals-store-before-withdraw(from=${EFROM0}＝库里读数 $EXP0)"
   else
     FAIL=$((FAIL+1)); echo "FAIL|M5-e1-origin-equals-store-before-withdraw(from=${EFROM0:-无行}，库里读数=${EXP0:-读库失败})⇒ 前置没搭对（此刻库里正有 online_api_key，D 的档位应与之一致），E2 不成立"
   fi
@@ -551,11 +551,11 @@ else
   elif [ -z "$EFROM1" ]; then
     FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(有新行但取不到档位读数)⇒ 日志字段名或格式变了：${ELINE1:0:200}"
   elif [ "$EFROM1" = "$EFROM0" ]; then
-    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(撤库里那行 Key 后档位纹丝不动＝from=$EFROM1，而此刻库里读数是 $EXP1)⇒ 这一档是上一次写回 cfg 的产物冒充来源，且被撤的凭据洗不掉（现网那句 from=db 就是这条）；等待 ${EWAIT}s HO0=${EHO0:-?} HO1=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)"
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(撤库里那行 Key 后档位纹丝不动＝from=${EFROM1}，而此刻库里读数是 $EXP1)⇒ 这一档是上一次写回 cfg 的产物冒充来源，且被撤的凭据洗不掉（现网那句 from=db 就是这条）；等待 ${EWAIT}s HO0=${EHO0:-?} HO1=$(grep -cE '上游模型配置已热加载' "$WORK/instD.log" 2>/dev/null || true)"
   elif [ "$EFROM1" != "$EXP1" ]; then
-    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(from=$EFROM1，库里读数=$EXP1)⇒ 换了档但换错了，档位与库内容不同源"
+    FAIL=$((FAIL+1)); echo "FAIL|M5-e2-origin-follows-store-after-withdraw(from=${EFROM1}，库里读数=$EXP1)⇒ 换了档但换错了，档位与库内容不同源"
   else
-    PASS=$((PASS+1)); echo "PASS|M5-e2-origin-follows-store-after-withdraw(from=$EFROM1＝库里读数，等待 ${EWAIT}s)"
+    PASS=$((PASS+1)); echo "PASS|M5-e2-origin-follows-store-after-withdraw(from=${EFROM1}＝库里读数，等待 ${EWAIT}s)"
   fi
   ER=$(curl -s $D_URL/openapi/v1/translate -H 'Content-Type: application/json' -H "Authorization: Bearer $AK" --max-time 60 \
     -d '{"text":"撤掉库里那把 Key 之后这台仍要能翻","target_lang":"en","mode":"pro"}')

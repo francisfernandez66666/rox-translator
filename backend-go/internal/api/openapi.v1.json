@@ -3,7 +3,7 @@
   "info": {
     "title": "翻译助手 langcross OpenAPI",
     "version": "1.0.0",
-    "description": "翻译助手（langcross）开放 API v1 规范（与 Python SDK 契约一致）。鉴权：X-API-Key 头（开放 API 专用 Key）。所有计量按积分计费，受租户余额与每日配额约束。"
+    "description": "翻译助手（langcross）开放 API v1 规范（与 Python/TypeScript SDK 契约一致）。鉴权：X-API-Key 头（开放 API 专用 Key）。所有计量按积分计费，受租户余额与每日配额约束。★ 文件任务支持**文档 / 图片 / 音频**三类：图片经 OCR 识别、音频经 ASR 转写后进入同一翻译管线；处理完**按原文件格式回写**——图片产出同容器译后图（png 进 png 出，文字原位回填），音频产出同容器译后配音（mp3 进 mp3 出；该容器转码不可用或目标语种无语音时回落 mp3/无配音），并随包交付译文 .md（音频另含 .srt 字幕与原音频副本）。能力依赖：图片需服务器 OCR 模型就绪、音频需 ASR + TTS 资产就绪（缺资产时该任务按 bad_request/task_failed 明确拒绝，不会静默降级）。"
   },
   "servers": [
     {
@@ -73,7 +73,7 @@
             }
           },
           "400": {
-            "description": "请求参数不合法（error_code: bad_request，如 text 为空、文件格式不支持、超出单次文件数上限）",
+            "description": "请求参数不合法（error_code: bad_request，如 text 为空、文件格式不支持、超出单次文件数上限、媒体能力未就绪〔服务器缺 OCR/ASR 模型资产〕）",
             "content": {
               "application/json": {
                 "schema": {
@@ -727,7 +727,8 @@
             "items": {
               "type": "string",
               "format": "binary"
-            }
+            },
+            "description": "待翻译文件（multipart 字段名必须为 files，路径前加 @）。支持 {{FORMATS}}；其中图片格式经 OCR、音频格式经 ASR 进入翻译管线，产物按原文件格式回写。"
           },
           "target_langs": {
             "type": "array",
@@ -807,7 +808,8 @@
                   "type": "string"
                 }
               }
-            }
+            },
+            "description": "产物文件列表。命名口径 {译名}_{语言码}{后缀}：文档=原格式回写（无原格式可回写的字幕/数据类格式以 xlsx 对照表交付）；图片=OCR 识别后翻译，产出同容器译后图（文字按原坐标原位回填）＋译文 .md；音频=ASR 转写后翻译，产出同容器译后配音＋译文 .srt（带原时间轴）＋译文 .md＋原音频副本。"
           }
         }
       },

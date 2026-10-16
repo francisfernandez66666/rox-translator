@@ -63,7 +63,7 @@ for w in /opt/translator/web /opt/translator-demo/web; do
   if [ "$total" -gt "$KEEP" ]; then
     tail -n +$((KEEP + 1)) /tmp/_archive_list | while read -r O; do
       sz=$(du -sk "$O" 2>/dev/null | cut -f1)
-      echo "    待删 $O（${sz}K）"
+      echo "    待删 ${O}（${sz}K）"
       if [ "$APPLY" = "1" ]; then rm -rf "$O" && echo "      DELETED" || echo "      FAIL delete"; fi
     done
   fi
@@ -78,7 +78,7 @@ for b in /opt/translator/bin/translator-server /opt/translator-demo/bin/translat
   echo "    现存备份 $total 份"
   if [ "$total" -gt "$KEEP" ]; then
     tail -n +$((KEEP + 1)) /tmp/_bak_list | while read -r O; do
-      echo "    待删 $O（$(du -h "$O" 2>/dev/null | cut -f1)）"
+      echo "    待删 ${O}（$(du -h "$O" 2>/dev/null | cut -f1)）"
       if [ "$APPLY" = "1" ]; then rm -f "$O" && echo "      DELETED" || echo "      FAIL delete"; fi
     done
   fi

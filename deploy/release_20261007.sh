@@ -29,7 +29,7 @@ ASSIST_BIN="${ASSIST_BIN:-/tmp/translator-assist-linux-$TAG}"
 SRC="$SCRIPT_DIR/deploy_to_production.sh"
 HOST="$(sed -n 's/^REMOTE_HOST="${DEPLOY_HOST:-\(.*\)}"/\1/p' "$SRC")"
 PORT="$(sed -n 's/^REMOTE_PORT="${DEPLOY_PORT:-\(.*\)}"/\1/p' "$SRC")"
-[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 $SRC）"; exit 2; }
+[ -n "$HOST" ] && [ -n "$PORT" ] || { echo "ABORT=1 主机/端口现读失败（读 ${SRC}）"; exit 2; }
 
 sha_local() { shasum -a 256 "$1" | awk '{print $1}'; }
 
@@ -85,7 +85,7 @@ echo "----- P2-B 换件前基线（两条现网判据各自的起点，不贴任
 DB=/opt/ai-assist/data/assist.db
 echo "换件前 挂件库：sessions_base=$(sqlite3 -readonly "$DB" "select count(*) from sessions_base;" 2>/dev/null || echo '<失败>') 壳行(msg_count>0 且已无消息)=$(sqlite3 -readonly "$DB" "select count(*) from sessions_base where msg_count>0 and id not in (select session_id from messages_base);" 2>/dev/null || echo '<失败>') messages_base=$(sqlite3 -readonly "$DB" "select count(*) from messages_base;" 2>/dev/null || echo '<失败>')"
 for d in langcross langcross_demo; do
-  echo "换件前 PG 库 $d：system_config 总行=$(sudo -u postgres psql -At -c "select count(*) from system_config;" "$d" 2>/dev/null || echo '<失败>') kb_scrape_% 行=$(sudo -u postgres psql -At -c "select count(*) from system_config where key like 'kb_scrape_%';" "$d" 2>/dev/null || echo '<失败>') 当天断点键=$(sudo -u postgres psql -At -c "select count(*) from system_config where key like 'kb_scrape_checkpoint_'||to_char(current_date,'YYYY-MM-DD')||'%';" "$d" 2>/dev/null || echo '<失败>')"
+  echo "换件前 PG 库 ${d}：system_config 总行=$(sudo -u postgres psql -At -c "select count(*) from system_config;" "$d" 2>/dev/null || echo '<失败>') kb_scrape_% 行=$(sudo -u postgres psql -At -c "select count(*) from system_config where key like 'kb_scrape_%';" "$d" 2>/dev/null || echo '<失败>') 当天断点键=$(sudo -u postgres psql -At -c "select count(*) from system_config where key like 'kb_scrape_checkpoint_'||to_char(current_date,'YYYY-MM-DD')||'%';" "$d" 2>/dev/null || echo '<失败>')"
 done
 
 echo "----- P2-B2 特征串负向对照（★ 必须在落位之前读线上旧件）-----"
@@ -98,7 +98,7 @@ for pair in "/opt/translator/bin/translator-server:采集进度账已回收" "/o
   #   （本轮首跑实测就是这样，读起来像查询坏了）。正确形态＝`|| true` 吃掉退出码、空串才判"文件读不到"。
   n=$(grep -a -c -F -- "$pat" "$f" 2>/dev/null || true)
   [ -n "$n" ] || n='<文件读不到>'
-  echo "旧件 $f 命中『$pat』=$n  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
+  echo "旧件 $f 命中『${pat}』=$n  size=$(stat -c %s "$f" 2>/dev/null || echo '<无>')  sha16=$(sha256sum "$f" 2>/dev/null | cut -c1-16)"
 done
 
 place() { # $1 源 $2 目标目录 $3 目标文件名 $4 模式
@@ -161,13 +161,13 @@ for u in translator translator-demo ai-assist; do
         #   `"2026-…"` 字典序恒小于 `2026-…` ⇒ 计数**恒 0**，journal 那条腿也 0 ⇒ 两条腿一起假绿。
         jn=$(awk -v ts="$rs" '{ i=index($0,"\"time\":\""); if (i==0) next; t=substr($0,i+8,19); if (t>=ts && index($0,"\"level\":\"ERROR\"")) c++ } END { print c+0 }' "$f" 2>/dev/null || true)
         [ -n "$jn" ] || jn='<读数失败>'
-        echo "unit=$u journal_err行=$n（该 unit 不落 journal，只作对照） 文件落点=$f ERROR行(重启后)=$jn"
+        echo "unit=$u journal_err行=${n}（该 unit 不落 journal，只作对照） 文件落点=$f ERROR行(重启后)=$jn"
       else
         echo "unit=$u journal_err行=$n 文件落点=$f <文件不存在⇒读不到，不等于零错误>"
       fi
       ;;
     *)
-      echo "unit=$u journal_err行=$n（StandardOutput=$so）"
+      echo "unit=$u journal_err行=${n}（StandardOutput=${so}）"
       ;;
   esac
 done

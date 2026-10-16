@@ -56,7 +56,7 @@ cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
 if [ "$MODE" = "tar" ]; then
-  [ -f "$TAR_PATH" ] || { echo "ABORT=2 找不到交付包：$TAR_PATH（先 npx vite build && node scripts/precompress_dist.mjs 再打包）"; exit 2; }
+  [ -f "$TAR_PATH" ] || { echo "ABORT=2 找不到交付包：${TAR_PATH}（先 npx vite build && node scripts/precompress_dist.mjs 再打包）"; exit 2; }
   WORK="$(mktemp -d)"
   # 只解清单需要的东西代价太大（要读 index.html 与逐个 asset 尺寸），这里整包解到临时目录后按**包内**计数；
   # tar 解出的是一比一的磁盘形态，判据问的就是"落盘后长什么样"。
@@ -73,7 +73,7 @@ if [ "$MODE" = "tar" ]; then
   list() { find "$ROOT" -type f 2>/dev/null; }
   echo "=== 前端交付包自检（tar 模式：${TAR_PATH}）==="
 else
-  [ -d "$DIST_DIR" ] || { echo "ABORT=2 找不到 dist 目录：$DIST_DIR（先 npx vite build）"; exit 2; }
+  [ -d "$DIST_DIR" ] || { echo "ABORT=2 找不到 dist 目录：${DIST_DIR}（先 npx vite build）"; exit 2; }
   ROOT="$DIST_DIR"
   list() { find "$ROOT" -type f 2>/dev/null; }
   echo "=== 前端交付包自检（磁盘模式：${DIST_DIR}）==="
@@ -98,7 +98,7 @@ echo "  侧车：br=$BR gz=$GZ ｜ 语种 chunk=$LOCALE ｜ 入口=${ENTRY:-<取
 
 # T5 的判据单独成函数：自检模式（文件末尾）与真包判据**共用同一个函数**，
 # 否则「自测通过」只证明了一份副本判据，真包走的还是另一份（本仓两份判据打架的老形态）。
-entry_shape_ok() { # $1＝从 index.html 认出来的入口相对路径；返回 0＝形态合格
+entry_shape_ok() { # ${1}＝从 index.html 认出来的入口相对路径；返回 0＝形态合格
   case "${1:-}" in
     assets/index-*.js) ;;
     *) return 1 ;;

@@ -1,13 +1,20 @@
 // ============ tts.go · 职责说明 ============
-// TTS（译文语音合成）能力件：Chatterbox Multilingual V3 的 ONNX 权重（用户 2026-10-14
-// 拍板定为主力，MIT，23 语）经 tts_speak.py 子命令壳把「译文文本 → 可播放音频」产出
+// TTS（译文语音合成）能力件：**经 tts_speak.py 子命令壳把「译文文本 → 可播放音频」产出**
 // （上游适配器定位，见《改造方案_OCR与ASR接入_20261014_v2.md》§三 3.3）。
 //
-// 可插拔硬标准（用户 2026-10-14 立）：本文件 + tts_speak.py + assets/tts/ 是 TTS 的全部家当；
-// 现有文件只留两处接线（healthcheck.go 探测块、api/server.go 就绪字段）。
-// 删掉这三组新文件与接线行 ⇒ 逐字节回退到 2026-10-14 前。
+// ★ 引擎现状（2026-10-16 校正，别照旧注释理解）：
+//   - 主力模型的**拍板没变**：Chatterbox Multilingual V3（用户 2026-10-14 定，MIT，23 语），
+//     但它的 T3→S3Gen→声码器解码循环**还没实现**（`tts_speak.py` 里只有个空钩位），
+//     所以现在投 Chatterbox 权重会得到一个"点亮了就绪位、每次合成都失败"的假绿形态。
+//   - 现役可跑的是**sherpa-onnx 中英档**（MeloTTS zh_en，方案 §3.3 语种路由的第一句
+//     「zh/en → 轻量档」；2026-10-16 用户拍板"先上中英档"），覆盖语种见 ttsCoveredLangs。
+//   - 两条路的切换**只动** assets/tts/ + 脚本内部驱动；本文件的接线（探测块 + 就绪位 + 覆盖清单）不变。
 //
-// 译文第一（用户令，最高优先级）：TTS 是**择优产出**——语种越界（Chatterbox 23 语之外）或
+// 可插拔硬标准（用户 2026-10-14 立）：本文件 + tts_speak.py + assets/tts/ 是 TTS 的全部家当；
+// 现有文件只留三处接线（healthcheck.go 探测块、api/server.go 的 tts_ready/tts_langs 两个字段、
+// 前端按 tts_ready 与覆盖语种收门）。删掉这三组新文件与接线行 ⇒ 逐字节回退到 2026-10-14 前。
+//
+// 译文第一（用户令，最高优先级）：TTS 是**择优产出**——语种越界（覆盖清单之外）或
 //
 //	合成失败时，调用方的动作是"这一次没有语音、别的照常"，译文与工单状态一个字节都不动。
 //	因此本能力不可用**不影响任何主链**：探测为红只代表「没有语音」，不代表故障。
@@ -19,8 +26,10 @@
 //     `src/api/chatVoice.ts` 的 speakAloud）走 SpeakToWav；`internal/engine/file.go` 的
 //     audio 分支走 SpeakLines，产出 `{base}_{lang}.mp3`（择优：语种覆盖才产）。
 //     计费口径见 v2 方案 §3.5——识别与合成都**不单独立项**，TTS 算力视为获客成本。
-//   - ⚠️ 现网 `assets/tts/*.onnx` 与默认音色尚未投放（`sync_fileproc_assets.sh` 没跑过），
-//     所以工单侧这条腿当前是**恒跳过**态：接了线但产物出不来，按设计降级、不影响译文。
+//   - ⚠️ 现网资产状态（2026-10-16 起已投产）：`assets/tts/` 下是 **sherpa-onnx 中英档**
+//     （MeloTTS zh_en，见 ttsCoveredLangs），已随部署落到两站 bin 目录；Chatterbox 驱动**尚未落地**，
+//     所以非 zh/en 语种是**明确的能力边界**（unsupported_lang），不是"暂时坏了"。
+//     换/补权重仍只动本目录 + 脚本内部驱动，Go 侧只会因**清单变化**（模块、覆盖语种）而改。
 //
 // 边界（刻意不做）：不建任务类型/队列/状态机；不联网下载模型与音色（私有化机器可能无外网）。
 // =============================================
@@ -39,16 +48,53 @@ import (
 )
 
 // ttsPythonModules TTS 真实依赖的**导入名**清单（与 tts_speak.py 的 MODULES 同源维护，
-// 两侧改一侧必红在 capabilities_p0_test.go 的协议断言上）：
+// 两侧改一侧必红在 capabilities_p0_test.go 的协议断言上）。
 //
-//	onnxruntime   —— ONNX 推理（Chatterbox Q4 权重，CPU 可跑）
-//	transformers  —— T3 Llama 分词器（照 onnx-community 参考驱动，勿轻言换成 tokenizers 裸载）
-//	soundfile     —— wav 读写
-//	resemble_perth—— PerTh 水印（D11：默认开，产物可溯源）
-//	pkuseg        —— 中文仓颉编码前端（onnx 驱动必需，缺了中文音质塌）
-//	pykakasi      —— 日文汉字→假名前端（同上）
-//	lameenc       —— mp3 编码（D4：产物 mp3 兼容优先）
-var ttsPythonModules = []string{"onnxruntime", "transformers", "soundfile", "resemble_perth", "pkuseg", "pykakasi", "lameenc"}
+// ★ 2026-10-16 校正（本批真踩）：这里必须是**装机引擎真正 import 的东西**。
+//
+//	现役引擎＝sherpa-onnx 中英档（MeloTTS zh_en），只需 sherpa_onnx + soundfile + lameenc + numpy。
+//	旧清单里的 onnxruntime / transformers / resemble_perth / pkuseg / pykakasi 属于**尚未落地的
+//	Chatterbox 驱动**：留在探测里会让就绪位**恒 false**（pkuseg 这个 2018 年的包在 Python 3.12
+//	上连 wheel 都构建不出来，本批实测）——探测与引擎各说一套，就是"永远点不亮"的形态。
+//	Chatterbox 驱动落地时必须把那份清单**同时**加回本处与脚本侧（同源锁会拦只改一侧），
+//	届时 PerTh 水印（D11）随之生效；现役中英档无水印，见 assets/tts/README.md。
+var ttsPythonModules = []string{"sherpa_onnx", "soundfile", "lameenc", "numpy"}
+
+// ttsCoveredLangs 现役语音模型覆盖的目标语种（与 tts_speak.py 的 LANGS 同源维护，逐项等值）。
+//
+// ★ 2026-10-16：现役＝sherpa-onnx 中英档（MeloTTS zh_en）。方案 §3.3 的语种路由是
+// 「zh/en → 轻量档；其余 → Chatterbox（待驱动）」，所以这份清单是**能力边界**不是"临时数字"：
+// 越界语种由脚本回 ERR:UnsupportedLang → api 层映射 unsupported_lang → 前端按 12 语种词典
+// 说一句「该语种暂不支持语音播放，译文照常」。Chatterbox 驱动落地后扩到它覆盖的 11 个语种。
+var ttsCoveredLangs = []string{"zh", "en"}
+
+// TtsCoveredLangs 覆盖语种清单（供 /api/health 的 tts_langs 出栈）。
+// 返回**副本**：调用方改不了这份事实源（同 §一·3「单一事实源」的写法）。
+func TtsCoveredLangs() []string { return append([]string(nil), ttsCoveredLangs...) }
+
+// ttsLangCovered 判一个目标语种有没有语音。
+// 归一化口径与脚本的 norm_lang **同一把尺子**：小写、剥掉地域段（zh-hant / zh_Hant → zh）。
+//
+//	▲ 两侧各写一套归一化必然漂（历史形态：前端送 zh_hant、后端按 zh-hant 判，边界永远差一档），
+//	  所以这条函数的**行为等值**也由 tts_lang_coverage_gate_test.go 拿同一张表去比对脚本实现。
+//
+// 空串放行：调用方没送语种（老客户端、脚本直调）时按默认音色试；把"没送参数"判成"不支持"
+// 等于给可用性交押金（同 §一·10 公开接口新增防护一律软档）。
+func ttsLangCovered(lang string) bool {
+	lc := strings.ToLower(strings.TrimSpace(lang))
+	if i := strings.IndexAny(lc, "-_"); i >= 0 {
+		lc = lc[:i]
+	}
+	if lc == "" {
+		return true
+	}
+	for _, c := range ttsCoveredLangs {
+		if c == lc {
+			return true
+		}
+	}
+	return false
+}
 
 // ttsAssetGlob TTS 模型资产判别串：assets/tts/ 下至少一个 .onnx 权重才算资产落盘。
 const ttsAssetGlob = "*.onnx"
@@ -74,7 +120,7 @@ func TtsAvailable() bool { return CheckHealth().TtsAvail }
 func probeTts(pythonPath string) (bool, string) {
 	for _, m := range ttsPythonModules {
 		if !checkPythonModule(pythonPath, m) {
-			return false, "Python " + m + " 库未安装，译文语音合成（TTS）不可用（pip install onnxruntime transformers soundfile resemble-perth pkuseg pykakasi lameenc）"
+			return false, "Python " + m + " 库未安装，译文语音合成（TTS）不可用（pip install sherpa-onnx soundfile lameenc numpy）"
 		}
 	}
 	if !ttsAssetsReady() {
@@ -311,6 +357,24 @@ const (
 	// TtsReasonFailed 其余合成失败（可重试；**不许**把它写成能力缺失去误导运维）。
 	TtsReasonFailed = "failed"
 )
+
+// DubContainerFor 配音产物的**容器**后缀（"译后音频回到原文件格式"口径，2026-10-16 用户令）。
+//
+// 输入什么容器就回什么容器：wav 由脚本原生落盘，mp3/ogg/opus/m4a/aac/flac 由脚本侧
+// ffmpeg 转码（参数表在 tts_speak.py 的 CONTAINER_ARGS，两侧逐项等值由
+// tts_lang_coverage_gate_test.go 锁住——**不许**在这里再抄一份"支持哪些后缀"的独立判断，
+// 两份尺子迟早打架，见 AGENTS §一·5 报价单一事实源那族）。
+//
+// 表外容器一律回 .mp3：宁可产物容器与原件不同，也不许不出声
+// （音频入口白名单里只有这 7 种后缀，走到 default 说明上游形态变了，此时"有声音"优先）。
+func DubContainerFor(ext string) string {
+	switch strings.ToLower(strings.TrimSpace(ext)) {
+	case ".wav", ".mp3", ".ogg", ".opus", ".m4a", ".aac", ".flac":
+		return strings.ToLower(strings.TrimSpace(ext))
+	default:
+		return ".mp3"
+	}
+}
 
 // ttsReasonForVariant 脚本 Variant → 出栈档位。未知 Variant 一律 TtsReasonFailed：
 // 认不出＝不知道是什么失败，按"可重试"处理是最小谎，比猜一个能力档名安全。

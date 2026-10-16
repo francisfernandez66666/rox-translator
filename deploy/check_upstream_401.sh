@@ -36,17 +36,17 @@ BAD_TEXT="${UPSTREAM_401_BAD_TEXT:-api key 无效 (401)}"
 say() { echo "$1"; }
 
 if [ ! -f "$LOG" ]; then
-  say "FAIL|upstream-401|日志文件不存在：$LOG（服务没起来或路径不对，本条判红不判过）"
+  say "FAIL|upstream-401|日志文件不存在：${LOG}（服务没起来或路径不对，本条判红不判过）"
   exit 1
 fi
 if [ ! -r "$LOG" ]; then
-  say "FAIL|upstream-401|日志不可读：$LOG（判据无从谈起，绝不按 0 通过）"
+  say "FAIL|upstream-401|日志不可读：${LOG}（判据无从谈起，绝不按 0 通过）"
   exit 1
 fi
 
 ANCHOR_LINE=$(grep -n -F "$ANCHOR_TEXT" "$LOG" | tail -1 | cut -d: -f1)
 if [ -z "${ANCHOR_LINE:-}" ]; then
-  say "FAIL|upstream-401|找不到「$ANCHOR_TEXT」锚点行 ⇒ 时间窗无法界定（日志被轮转/启动即失败/锚点文案被改），本条判红不判过"
+  say "FAIL|upstream-401|找不到「${ANCHOR_TEXT}」锚点行 ⇒ 时间窗无法界定（日志被轮转/启动即失败/锚点文案被改），本条判红不判过"
   exit 1
 fi
 

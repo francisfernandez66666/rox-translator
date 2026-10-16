@@ -76,7 +76,7 @@ die()  { bad "$*"; exit 1; }
 # ---------------------------------------------------------------- ① 前置
 [ "$(id -u)" = "0" ] || die "必须以 root 执行（要写 /etc/systemd 与 /etc/translator）"
 [ -n "$FPD_SSH" ] || die "必须给 FPD_SSH=fpd@<ip>（派发专用账号，不是管理员账号）"
-[ -f "$FPD_KEY" ] || die "私钥不存在：$FPD_KEY（先在主站生成并配好体验机的 authorized_keys）"
+[ -f "$FPD_KEY" ] || die "私钥不存在：${FPD_KEY}（先在主站生成并配好体验机的 authorized_keys）"
 command -v systemctl >/dev/null 2>&1 || die "本机没有 systemd"
 systemctl list-unit-files 'translator.service' >/dev/null 2>&1 || die "translator.service 不存在（本脚本只在主站跑）"
 
@@ -115,12 +115,12 @@ if [ "$SVC_USER" != "root" ] && ! as_svc test -r "$FPD_KEY"; then
     [ -f "$NEW_DIR/$KEY_BASE.pub" ] && chmod 644 "$NEW_DIR/$KEY_BASE.pub" && chown translator:translator "$NEW_DIR/$KEY_BASE.pub" 2>/dev/null
     FPD_KEY="$NEW_DIR/$KEY_BASE"
     as_svc test -r "$FPD_KEY" || die "挪完仍读不到 ⇒ 不是目录权限问题，停下人工查（别让闸半开）"
-    ok "私钥已落位 $FPD_KEY（服务账号 $SVC_USER 实读通过）"
+    ok "私钥已落位 ${FPD_KEY}（服务账号 $SVC_USER 实读通过）"
   else
     die "私钥对服务账号不可读，且落点不是已知的历史位置 ⇒ 不猜、不改，按上面两条手工修完再开闸"
   fi
 else
-  ok "私钥 $FPD_KEY 服务账号（$SVC_USER）实读通过"
+  ok "私钥 $FPD_KEY 服务账号（${SVC_USER}）实读通过"
 fi
 
 # ---------- ①c 主机指纹：给 ssh 一个能用的 known_hosts，并把远端主机键钉进去 ----------
@@ -129,7 +129,7 @@ FPD_HOST="${FPD_SSH#*@}"
 KH_DIR="$(dirname "$FPD_KNOWN_HOSTS")"
 install -d -m 700 -o translator -g translator "$KH_DIR" 2>/dev/null || true
 if [ -s "$FPD_KNOWN_HOSTS" ] && grep -qF "$FPD_HOST " "$FPD_KNOWN_HOSTS"; then
-  ok "主机指纹已在 $FPD_KNOWN_HOSTS（$FPD_HOST）"
+  ok "主机指纹已在 ${FPD_KNOWN_HOSTS}（${FPD_HOST}）"
 else
   TMPKH="$(mktemp)"
   if ! ssh-keyscan -p "$FPD_PORT" -T 10 "$FPD_HOST" >"$TMPKH" 2>/dev/null; then
@@ -143,21 +143,21 @@ else
   rm -f "$TMPKH" "${TMPKH}.clean"
   chmod 600 "$FPD_KNOWN_HOSTS" 2>/dev/null || true
   chown translator:translator "$FPD_KNOWN_HOSTS" 2>/dev/null || true
-  ok "已预置主机指纹到 $FPD_KNOWN_HOSTS（$FPD_HOST）"
+  ok "已预置主机指纹到 ${FPD_KNOWN_HOSTS}（${FPD_HOST}）"
   warn "  ⚠️ 这是**首见即信**（TOFU）：开闸前请带外核对一次下面这几个指纹。"
   warn "     对不上就不要开闸——把闸开在一条被人换过主机键的链上，客户文件就送给别人了。"
   ssh-keygen -lf "$FPD_KNOWN_HOSTS" 2>/dev/null | sed 's/^/      /' || true
 fi
 # Go 侧只认这个开关；没它就不加 -o（本地快跑与单测维持原形态），所以这里必须显式配上。
 if ! as_svc test -r "$FPD_KNOWN_HOSTS"; then
-  die "known_hosts 对服务账号 $SVC_USER 不可读 ⇒ 钉不住主机键，先修属主/权限（chmod 600 + chown $SVC_USER）"
+  die "known_hosts 对服务账号 $SVC_USER 不可读 ⇒ 钉不住主机键，先修属主/权限（chmod 600 + chown ${SVC_USER}）"
 fi
 
 if [ -z "$FPD_EXPIRE_DATE" ]; then
   warn "  未给 FPD_EXPIRE_DATE ⇒ 主站侧到期自动回归**不会启用**。"
   warn "  口径：这不是可选项——体验机到期那天若没人手工关闸，派发会一直拨一台已回收的机器。"
 else
-  ok "到期日 $FPD_EXPIRE_DATE（回归 timer 会在此之前自动关闸）"
+  ok "到期日 ${FPD_EXPIRE_DATE}（回归 timer 会在此之前自动关闸）"
 fi
 if [ "$SKIP_PREFLIGHT" = "1" ]; then
   warn "  SKIP_PREFLIGHT=1 ⇒ 跳过一致性门禁。**只在已跑过 preflight 且环境未变时用**，"
@@ -194,7 +194,7 @@ FILEPROC_DISPATCH_MIN_PAGES=$FPD_MIN_PAGES
 EOF
 chmod 600 "$ENV_FILE"
 chown translator:translator "$ENV_FILE" 2>/dev/null || warn "  chown translator 失败（确认该账号存在）"
-ok "已写 $ENV_FILE（0600）"
+ok "已写 ${ENV_FILE}（0600）"
 
 mkdir -p "$DROPIN_DIR"
 # ★ 只声明 EnvironmentFile，不写任何值：unit 是 world-readable 的，主机/密钥路径不许落在这里。
@@ -232,7 +232,7 @@ HEALTH="$(curl -s --max-time 8 "$LOCAL_BASE/api/health")"
 DISP="$(printf '%s' "$HEALTH" | python3 -c "import sys,json;print(json.load(sys.stdin).get('dispatch',''))" 2>/dev/null)"
 case "$DISP" in
   online)
-    ok "dispatch=$DISP（派发生效）"
+    ok "dispatch=${DISP}（派发生效）"
     ;;
   off)
     bad "dispatch=$DISP ⇒ 开关没生效（env 没读到？检查 drop-in 是否被别的 drop-in 覆盖）"

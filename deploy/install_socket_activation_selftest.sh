@@ -72,7 +72,7 @@ expect() { # expect <名字> <实得> <期望>
   if [ "$2" = "$3" ]; then echo "EXPECT_OK   $1 = $2"; else echo "EXPECT_BAD  $1 期望 $3 实得 $2"; ECHO_BAD=$((ECHO_BAD + 1)); fi
 }
 expect_nonzero() {
-  if [ "$2" != "0" ]; then echo "EXPECT_OK   $1 退非 0（$2）"; else echo "EXPECT_BAD  $1 应退非 0，实退 0"; ECHO_BAD=$((ECHO_BAD + 1)); fi
+  if [ "$2" != "0" ]; then echo "EXPECT_OK   $1 退非 0（${2}）"; else echo "EXPECT_BAD  $1 应退非 0，实退 0"; ECHO_BAD=$((ECHO_BAD + 1)); fi
 }
 expect_zero() {
   if [ "$2" = "0" ]; then echo "EXPECT_OK   $1 退 0"; else echo "EXPECT_BAD  $1 应退 0，实退 $2"; ECHO_BAD=$((ECHO_BAD + 1)); fi
@@ -310,7 +310,7 @@ echo "############ P1 反证：V4 三条红腿各点名（无读数／零样本�
 p_run() { # p_run <名字> <合成 APPLY_OUT> <期望 SOCKET_APPLY_OK>
   local out rc
   out=$( __APPLY_OUT="$2" __BAD="" bash "$H/run_parser.sh" 2>&1 ); rc=$?
-  echo "---- $1（退 $rc）"
+  echo "---- ${1}（退 ${rc}）"
   echo "$out" | sed 's/^/    /'
   if [ "$3" = "1" ]; then
     expect "$1_判绿" "$(echo "$out" | grep -c 'SOCKET_APPLY_OK=1')" "1"

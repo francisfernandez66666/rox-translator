@@ -383,7 +383,7 @@ USED2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_today", -1)')
 MON2=$(curl -s $B/api/me/package -H "$H1" | pv '.get("points_used_month", -1)')
 [ -n "$USED1" ] && [ -n "$USED2" ] && [ "$USED2" -gt "$USED1" ] \
   && [ -n "$MON1" ] && [ -n "$MON2" ] && [ "$MON2" -gt "$MON1" ] \
-  && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->$USED2｜本月已耗 $MON1->$MON2)"; } \
+  && { PASS=$((PASS+1)); echo "PASS|A7s-stream-metering-sync(今日已耗 $USED1->${USED2}｜本月已耗 $MON1->$MON2)"; } \
   || { FAIL=$((FAIL+1)); echo "FAIL|A7s-stream-metering-sync(今日已耗 ${USED1}->${USED2}｜本月已耗 ${MON1}->${MON2}，done 帧后计量未即时可见或月度读数被日历边界判空)"; }
 
 # ---------- A7t ★ F-29 后端半（2026-09-25 批D）超长对话文本必须在 SSE 头前拒 ----------

@@ -67,7 +67,7 @@ SA_PW="Drill!$(date +%s | tail -c 6)"
 DB_DSN="$SCRATCH_DSN" /tmp/opskey -resetpw 1 -pw "$SA_PW" >/dev/null 2>&1 && ok "scratch 超管口令重置" || bad "超管口令重置失败"
 
 # ---------- 2. 起一次性实例 ----------
-STEP "2/9 起一次性实例（:$PORT，DB=scratch，USER_DATA_DIR=/tmp/chain_drill/data）"
+STEP "2/9 起一次性实例（:${PORT}，DB=scratch，USER_DATA_DIR=/tmp/chain_drill/data）"
 ( DB_DSN="$SCRATCH_DSN" REQUIRE_PROD_SECRETS=0 USER_DATA_DIR="$DRILL/data" \
   SELFCHECK_URL="http://$HOST/status" MAIL_ENABLED=0 PORT_HINT=$PORT \
   nohup "$BIN" -addr $HOST -frontend "" >"$DRILL/server.log" 2>&1 & echo $! >"$DRILL/pid" )
@@ -92,7 +92,7 @@ PTS=$(echo "$OV" | jqv "['points_available']")
 sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT kind,total,COALESCE(source,''),expires_at FROM quota_grants WHERE tenant_id=$TID" | sed 's/^/    grant: /'
 sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT 'BA:'||tenant_id||'|'||balance||'|'||COALESCE(updated_at,'') FROM balance_accounts WHERE tenant_id=$TID"
 sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT 'AUDIT:'||action||'|'||COALESCE(detail,'') FROM audit_logs ORDER BY id DESC LIMIT 6" | sed "s/^/    /"
-[ "${PTS:-0}" = "1000" ] && ok "体验积分 points_available=1000（tid=$TID）" || bad "积分异常: $PTS"
+[ "${PTS:-0}" = "1000" ] && ok "体验积分 points_available=1000（tid=${TID}）" || bad "积分异常: $PTS"
 sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT utm_source FROM registration_attribution ORDER BY id DESC LIMIT 1" | grep -q drill_channel \
   && ok "注册归因已落库（S4）" || echo "  ○ 归因行未含 utm（若注册链路未带上则记观察）"
 
@@ -105,7 +105,7 @@ TR=$(curl -s -XPOST "http://$HOST/openapi/v1/translate" -H "Authorization: Beare
   -d "{\"text\":\"演练链路验证：请翻成英文。批次 $CODE\",\"target_lang\":\"en\",\"source_lang\":\"zh\"}")
 echo "$TR" | grep -q '"success":true' && ok "翻译返回成功" || bad "翻译失败: $(echo $TR|head -c 120)"
 U1=$(sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT count(*) FROM usage_ledger WHERE tenant_id=$TID")
-[ "$U1" -gt "$U0" ] && ok "usage_ledger 留痕（$U0→$U1，计费生效）" || bad "未见用量留痕"
+[ "$U1" -gt "$U0" ] && ok "usage_ledger 留痕（${U0}→${U1}，计费生效）" || bad "未见用量留痕"
 
 # ---------- 5. 耗尽停服 ----------
 STEP "5/9 余额清零 → 翻译应被硬停（insufficient_balance）"
@@ -118,13 +118,13 @@ for i in 1 2 3 4 5 6; do sleep 15
   ALERT_SEEN=$(sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT COALESCE(string_agg(DISTINCT kind,','),'') FROM alerts WHERE tenant_id=$TID AND kind IN ('billing_exhausted','balance')")
   [ -n "$ALERT_SEEN" ] && break
 done
-[ -n "$ALERT_SEEN" ] && ok "耗尽告警已落中心（kind=$ALERT_SEEN：sink 清零或 watchdog 扫描两路）" || echo "  ○ 90s 内未见告警（定性：sink 路仅真实扣费清零触发；watchdog 周期路 alert_interval_sec 默认 300s>90s 窗口。生产告警面已在压测实证 billing_exhausted，见部署指南 §八-B8）"
+[ -n "$ALERT_SEEN" ] && ok "耗尽告警已落中心（kind=${ALERT_SEEN}：sink 清零或 watchdog 扫描两路）" || echo "  ○ 90s 内未见告警（定性：sink 路仅真实扣费清零触发；watchdog 周期路 alert_interval_sec 默认 300s>90s 窗口。生产告警面已在压测实证 billing_exhausted，见部署指南 §八-B8）"
 
 # ---------- 6. 充值下单（个人码） ----------
 STEP "6/9 pay/create 充值单（3000 分/¥299）→ pending + 二维码"
 PO=$(curl -s "${A[@]}" -XPOST "http://$HOST/api/pay/create" -d '{"points":3000,"channel":"manual"}')
 OID=$(echo "$PO" | jqv "['order']['id']")
-echo "$PO" | grep -q '"manual_confirm":true' && ok "manual 单创建（id=$OID）" || bad "下单失败: $(echo $PO|head -c 200)"
+echo "$PO" | grep -q '"manual_confirm":true' && ok "manual 单创建（id=${OID}）" || bad "下单失败: $(echo $PO|head -c 200)"
 
 # ---------- 7. 我已付费 ----------
 STEP "7/9 用户点「我已付费」→ manual_confirm=1"
@@ -138,7 +138,7 @@ SA_TOK=$(echo "$SLT" | jqv "['token']"); [ -n "$SA_TOK" ] && ok "超管登录" |
 curl -s -XPOST "http://$HOST/api/admin/orders/pay" -H "Authorization: Bearer $SA_TOK" -H 'Content-Type: application/json' \
   -d "{\"id\":$OID,\"tenant_id\":$TID}" | grep -q '"success":true' && ok "确认收款成功" || bad "确认失败"
 PTS2=$(curl -s "${A[@]}" "http://$HOST/api/billing/my/overview" | jqv "['points_available']")
-[ "${PTS2:-0}" -ge 2900 ] && ok "到账 points_available=$PTS2（≈3000 内扣少量演练用量）" || bad "开通后余额异常: $PTS2"
+[ "${PTS2:-0}" -ge 2900 ] && ok "到账 points_available=${PTS2}（≈3000 内扣少量演练用量）" || bad "开通后余额异常: $PTS2"
 
 # ---------- 9. 退款演练（不碰真实资金） ----------
 STEP "9/9 超管 orders/refund → 订单退款态 + 额度回收"
@@ -147,7 +147,7 @@ curl -s -XPOST "http://$HOST/api/admin/orders/refund" -H "Authorization: Bearer 
 ST=$(sudo -u postgres psql -d "$SCRATCH" -tAc "SELECT status FROM orders WHERE id=$OID")
 [ "$ST" = "refunded" ] && ok "orders.status=refunded" || bad "订单态: $ST"
 PTS3=$(curl -s "${A[@]}" "http://$HOST/api/billing/my/overview" | jqv "['points_available']")
-echo "  ○ 退款后 points_available=$PTS3（回收口径见 SOP §3：消耗<10% 全额回收）"
+echo "  ○ 退款后 points_available=${PTS3}（回收口径见 SOP §3：消耗<10% 全额回收）"
 
 printf "\n════════ 演练结果：%d 通过 / %d 失败 ════════\n" "$PASS" "$FAIL"
 [ "$FAIL" = 0 ] || { echo "（tail server.log）"; tail -5 "$DRILL/server.log"; }
