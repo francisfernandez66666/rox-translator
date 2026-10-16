@@ -2,7 +2,8 @@
 // components/frontshell/FrontSideNav.tsx — 前台外壳 · 左栏（唯一实现）
 // ----------------------------------------------------------------------------
 // 承载「除会话区外的一切」：品牌 / 租户身份 / 语言 / 工作台 Tab / 自助入口 /
-// 套餐积分 / 账号菜单 / 通知中心；移动档尾部另挂一份折叠页脚。
+// 套餐积分 / 账号菜单 / 通知中心；尾部挂一份折叠页脚（★ 2026-10-16 用户令：两档一致，
+// 桌面档也从右主列列尾收进这一栏——旧形态「桌面常驻列尾 / 移动才折叠」已退役）。
 // 同一节点两种形态，由 props 切换（样式见 src/styles/frontshell.css）：
 //   · 桌面档（isMobile=false）：常驻左栏（.fs-sidebar 把位置钉回静态）
 //   · 移动档（isMobile=true） ：汉堡抽屉（.fs-sidebar--drawer + --open 滑入）
@@ -172,19 +173,17 @@ export default function FrontSideNav({
           </div>
         </div>
 
-        {/* 移动档专属：页脚收进抽屉尾部并折叠（默认收起，展开＝版权行 + 品宣尾注 + 手册 + 协议）。
+        {/* 页脚收进左栏尾部并折叠（默认收起，展开＝版权行 + 品宣尾注 + 手册 + 协议）。
+            ★ 2026-10-16 用户令：两档一致——桌面档也从右主列列尾收进这一栏（旧形态已退役）。
             传 bare 去掉「贴外壳列尾」那身形态（auto 上边距 / 深色面 / 自成一条的顶缘线）——
-            抽屉里已有 .fs-foot-fold 的顶缘分隔，页脚再自带来一条就是双线。
-            桌面档不渲染这一份（页脚在右主列列尾，见 App.tsx）。 */}
-        {isMobile && (
-          <details className="fs-foot-fold">
-            <summary className="fs-foot-fold__sum">
-              <Icon n="book" style={{ fontSize: 14, verticalAlign: '-2px', marginInlineEnd: 6 }} />
-              {t('app.legalLinks')}
-            </summary>
-            <SiteFooter bare />
-          </details>
-        )}
+            这一栏尾部已有 .fs-foot-fold 的顶缘分隔，页脚再自带来一条就是双线。 */}
+        <details className="fs-foot-fold">
+          <summary className="fs-foot-fold__sum">
+            <Icon n="book" style={{ fontSize: 14, verticalAlign: '-2px', marginInlineEnd: 6 }} />
+            {t('app.legalLinks')}
+          </summary>
+          <SiteFooter bare />
+        </details>
       </aside>
     </>
   )

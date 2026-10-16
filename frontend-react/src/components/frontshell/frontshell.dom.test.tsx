@@ -126,13 +126,19 @@ describe('FrontMobileTopBar · 汉堡 + 品牌簇（★ 2026-10-15 用户令）'
 })
 
 describe('FrontSideNav · 桌面档（常驻左栏）', () => {
-  it('不带抽屉档位、不渲染遮罩与折叠页脚；导航点击不触发 onClose', () => {
+  it('不带抽屉档位、不渲染遮罩；折叠页脚两档一致都在（默认收起）；导航点击不触发 onClose', () => {
     const { onClose, onTab } = renderShell({ open: true }, false)
     const aside = document.querySelector('aside.lc-sidebar')!
     expect(aside.className).not.toContain('--drawer')
     expect(aside.className).not.toContain('--open')
     expect(document.querySelector('.lc-shell-scrim')).toBeNull()
-    expect(document.querySelector('.fs-foot-fold')).toBeNull()
+    // ★ 2026-10-16 用户令：页脚两档一致收进左栏 ⇒ 桌面档**必须有**折叠页脚
+    // （旧断言是 `toBeNull()`——那正是"只有移动档才有"的旧形态，按新令翻转，
+    //   翻转理由留在这里：留着旧期望会让下一个人照着旧口径把桌面档页脚删掉）
+    const fold = document.querySelector('.lc-sidebar .fs-foot-fold') as HTMLDetailsElement | null
+    expect(fold, '桌面档左栏必须有折叠页脚（两档一致）').not.toBeNull()
+    expect(fold!.hasAttribute('open'), '折叠页脚默认必须是收起态').toBe(false)
+    expect(screen.getByTestId('stub-footer').textContent).toBe('bare')
     fireEvent.click(screen.getByText(t('app.tabTickets')))
     expect(onTab).toHaveBeenCalledWith('tickets')
     expect(onClose, '桌面档没有抽屉可收，不该调 onClose').not.toHaveBeenCalled()

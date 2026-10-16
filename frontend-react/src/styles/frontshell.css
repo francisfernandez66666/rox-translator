@@ -13,8 +13,9 @@
         自助入口 / 套餐积分 / 账号菜单（含通知中心）。桌面档左栏常驻，移动档（≤640）
         左栏化为汉堡抽屉（.fs-sidebar--drawer），顶栏只剩「汉堡 + 品牌簇」。
      ② 底部 TabBar 已撤除（.lc-tabbar 不再被本壳渲染，库件与令牌保留给后台移动壳用）。
-     ③ 页脚：桌面档常驻外壳列尾（SiteFooter 自带 marginTop:auto 贴列底）；
-        移动档收进抽屉尾部、以 <details> 折叠呈现（.fs-foot-fold）。
+     ③ 页脚只有一处：左栏尾部、以 <details> 折叠呈现（.fs-foot-fold，默认收起）。
+        ★ 2026-10-16 用户令：桌面档也从右主列列尾收进这一栏（两档一致）——
+        旧形态「桌面常驻列尾 / 移动才折叠」已退役，故 ③ 不再分档描述。
      ④ 断点只有 ≤640 一档（与 components.css / mobile.css 的 S 档同口径）；
         641–900 仍走桌面档——左栏用 .fs-sidebar 把位置钉回 static，
         不吃 components.css 那段 ≤900 的「侧栏转抽屉」规则（否则 641–900 侧栏凭空消失）。
@@ -37,8 +38,8 @@
 /* 租户身份格（企业简称 / 个人版）：单行省略，不许把品牌名挤成竖排 */
 .fs-tenant { display: flex; align-items: center; min-width: 0; font-size: 14px; color: var(--lc-text-2);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 底部账号行（账号菜单在其内） */
-.fs-footrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-top: 8px; }
+/* 底部账号行（账号菜单在其内）；padding-bottom 给下面的折叠页脚留最小间隔（页脚 margin-top:auto 贴列底） */
+.fs-footrow { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding-top: 8px; padding-bottom: 12px; }
 
 /* ---- 品牌区（logo 行）---- */
 /* ★ 用户令「logo 区域再做大点」：抬高内垫与图标；字阶只对中文放大
@@ -57,8 +58,10 @@
 .fs-langrow { display: flex; align-items: center; padding: 0 0 16px; }
 
 /* ---- 左栏的两种形态（桌面常驻 / 移动抽屉）---- */
-/* 桌面档：位置钉回静态。641–900 也走这条（本壳断点是 ≤640，不吃 components.css 的 ≤900 抽屉规则） */
-.lc-sidebar.fs-sidebar { position: static; transform: none; z-index: auto; box-shadow: none; }
+/* 桌面档：位置钉回静态。641–900 也走这条（本壳断点是 ≤640，不吃 components.css 的 ≤900 抽屉规则）。
+   ★ 2026-10-16：加 overflow-y:auto——页脚收进本栏后（折叠块贴列底），内容比屏高时（展开态／矮屏）
+   由左栏自身滚动；不加则整块溢出屏外、折叠块永远够不到。 */
+.lc-sidebar.fs-sidebar { position: static; transform: none; z-index: auto; box-shadow: none; overflow-y: auto; }
 /* 移动档：抽屉。默认移出屏外，--open 时滑回；打开期间可纵向滚动（左栏内容长于屏高）
    ★ 宽度**只在这里覆写**（不吃库件 --lc-sidebar-w:238 —— 那个令牌同时服务后台侧栏，
    全局改会把 11 屏后台一起改宽）；抽屉里还要塞「折叠页脚」，238px 下页脚换行明显局促
@@ -76,9 +79,13 @@
 .fs-mob-brand__name { font-size: 20px; font-weight: 600; letter-spacing: .2px; white-space: nowrap;
   overflow: hidden; text-overflow: ellipsis; }
 
-/* ---- 抽屉内折叠页脚 ---- */
-/* 顶缘一条弱分隔 + 13px 次要档 summary；展开后页脚走 SiteFooter 的 bare 档（样式自带走） */
-.fs-foot-fold { margin-top: 12px; border-top: 1px solid var(--npz-line); padding-top: 10px; }
+/* ---- 左栏尾部折叠页脚（★ 2026-10-16 用户令：两档一致，都收在左栏尾部并折叠）---- */
+/* margin-top:auto 把折叠块顶到左栏列底（左栏本身是 flex 列、随外壳行撑满 100dvh）；
+   上一条 .fs-footrow 的 padding-bottom 保证"内容顶到列底"时仍留 12px 最小间隔；
+   内容比屏高时（展开态／矮屏）由左栏自身滚动（见上面 .lc-sidebar.fs-sidebar 的 overflow-y），
+   页脚不会被顶出屏外——旧形态「桌面常驻右主列列尾」已退役。
+   展开后页脚走 SiteFooter 的 bare 档（样式自带走）。 */
+.fs-foot-fold { margin-top: auto; border-top: 1px solid var(--npz-line); padding-top: 10px; }
 .fs-foot-fold__sum { font-size: 13px; color: var(--lc-text-3); cursor: pointer; list-style: none;
   display: flex; align-items: center; user-select: none; }
 .fs-foot-fold__sum::-webkit-details-marker { display: none; }

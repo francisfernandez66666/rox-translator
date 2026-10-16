@@ -22,6 +22,20 @@
 //   语言自动检测」，不钉住就会整批落到 en 而随机翻红（不是产品缺陷）。
 // ============================================================================
 import { test, expect, Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// 用 import.meta.url 而不是 __dirname 解析：Playwright 以 ESM 加载 spec 文件（同 extension_download.spec.ts）
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Hero 演示卡的正译词表：从 demoTerms 源码现读（P2f 取其中最长的一个当最坏用例，不在这里写死第二份词表）。
+// 作用域刻意收到 demoTerms 函数体那一段，免得把文件里别的 `r: '…'` 一并收进来把判据做成"总在更长的词上量"。
+const DEMO_R_WORDS: string[] = (() => {
+  const src = readFileSync(path.resolve(HERE, '../src/components/Landing.tsx'), 'utf8');
+  const at = src.indexOf('function demoTerms');
+  if (at < 0) return [];
+  return Array.from(src.slice(at, at + 800).matchAll(/r:\s*'([^']+)'/g)).map((m) => m[1]);
+})();
 
 // BASE：本地 CI 起 8899 预览实例；e2e 禁写死生产域名（AGENTS §6），需打生产请走 e2e-manual/
 const BASE = process.env.BASE_URL || 'http://127.0.0.1:8899';
@@ -166,24 +180,25 @@ test.describe('像素级 UAT', () => {
     //   〇-L 那次灰描边留在页面上就是同一类失效。
     //   为什么写等值而不是「≥ 某下限」：单向锁只拦变矮不拦变高，正是历史上把配色推离交付稿的形态。
     //   旧档 min(70vh,640px) 在 1280×720 实测留 ~70px 黑（本条判红），高屏上更多＝用户看到的「一大片空」。
-    // 先确认页脚在场：隐藏/缺席的元素 getBoundingClientRect() 恒 0，会让下面的间距判据静默通过。
-    await expect(page.locator('footer').last(), '外壳页脚未渲染 ⇒ 本条吃满锁没有参照物').toBeVisible();
+    // ★ 2026-10-16 用户令：页脚两档一致，收进左栏折叠块（.fs-foot-fold）⇒ 右主列内**不再**有页脚。
+    //   所以"对话框底沿距页脚上沿 14px"这条老判据失去了参照物（页脚已不在同一列），换成两条等值锁：
+    //   ① 右主列里一份页脚都不许有（谁把列尾页脚装回来当场红）；② 左栏折叠块在场且默认收起。
+    //   先确认目标在场：隐藏/缺席的元素 getBoundingClientRect() 恒 0，会让下面的间距判据静默通过。
+    await expect(page.locator('.lc-sidebar .fs-foot-fold'), '左栏折叠页脚未渲染 ⇒ 页脚被整块弄丢了').toHaveCount(1);
+    expect(await page.locator('.lc-sidebar .fs-foot-fold[open]').count(), '左栏页脚必须默认收起').toBe(0);
+    expect(await page.locator('.fs-main footer').count(), '右主列内不许再有页脚（★ 2026-10-16 页脚已收进左栏）').toBe(0);
     const fill = await page.evaluate(() => {
       const d = document.querySelector('.cw-dialog')!.getBoundingClientRect();
-      const m = document.querySelector('.app-main')!;      const mr = m.getBoundingClientRect();
-      // 外壳页脚取**文档里最后一个** <footer>：页面内容区（长页）自己也可能带 footer，
-      // 用 querySelector('footer') 会量到内容区那一个，间距判据就变成了猜。
-      const footers = document.querySelectorAll('footer');
-      const f = footers[footers.length - 1].getBoundingClientRect();
+      const m = document.querySelector('.app-main')!;
+      const mr = m.getBoundingClientRect();
       return {
-        gapToMain: Math.round(mr.bottom - d.bottom), gapToFooter: Math.round(f.top - d.bottom),
-        // 溢出判据：吃满不等于撑破——app-main 一旦可滚，说明对话框把页脚顶出了首屏（〇-S 的原缺陷形态）
+        gapToMain: Math.round(mr.bottom - d.bottom),
+        // 溢出判据：吃满不等于撑破——app-main 一旦可滚，说明对话框把列底顶出了首屏（〇-S 的原缺陷形态）
         mainOverflows: m.scrollHeight > Math.round(m.clientHeight) + 2,
       };
     });
     expect(Math.abs(fill.gapToMain - 14), `对话框底沿距 .app-main 底 ${fill.gapToMain}px ≠ 下外边距 14px ⇒ 没吃满（或多吃了）`).toBeLessThanOrEqual(3);
-    expect(Math.abs(fill.gapToFooter - 14), `对话框底沿距页脚上沿 ${fill.gapToFooter}px ≠ 14px ⇒ 页眉/页脚之间留了空白或页脚被顶走`).toBeLessThanOrEqual(3);
-    expect(fill.mainOverflows, '.app-main 出现整页滚动 ⇒ 对话框高度超出了页眉与页脚之间的空间').toBe(false);
+    expect(fill.mainOverflows, '.app-main 出现整页滚动 ⇒ 对话框高度超出了列内可用空间').toBe(false);
     // ★ 〇-M 负向锁：语种面板在贴底的工具条里必须**向上弹**——宿主 .cw-dialog 是 overflow:hidden，
     //   向下弹会被裁掉（表现为「点了没反应」），而 DOM 顺序与结构锁全都扫不到这种失效。
     await page.locator('[data-testid="lang-multi-trigger"]').click();
@@ -467,6 +482,83 @@ test.describe('像素级 UAT', () => {
     expect(narrow.draft, '草稿档被窄屏偷缩（§1.5 钉不缩，缩了与文本基线错位）').toEqual(wide.draft);
     expect(narrow.segs, '逐段档被窄屏偷缩（§1.5 钉不缩）').toEqual(wide.segs);
     await shot(page, 'p2e_wordswap_sizes');
+  });
+
+  // ★ 2026-10-16 用户报障「小屏动效超格子」的运行时锁（源码级等值锁＝src/components/Landing.demoCard.lock.test.ts）。
+  //   演示卡宽度由 hero 栅格决定，**与视口不成正比**——1280 视口下卡片只有 560px（1440 以上才是满 720px），
+  //   所以"屏幕变小就同步变小"只能按**卡片自身宽度**缩放（cqw 容器口径）。改回视口基准(vw)时本档量到的
+  //   正译词会越出卡缘 100px 以上（实测 131px），不是"看着有点挤"那种灰区。
+  //   判据用**文本实际外框**（Range rect）而不是元素盒子：块级元素的盒子宽度恒等于容器宽，
+  //   文字溢出时盒子一点不变，盒子判据在这里结构性看不见（历史事故就是这么被漏掉的）。
+  test('P2f Hero 演示卡内容不越卡缘（1280 双列档＝历史事故宽度）', async ({ page }) => {
+    // 关掉演出（reduced motion 是产品自带的终态分支）：本锁量的是**几何口径**，不是演出时序——
+    // 开着动画就必须等整个 24s 循环里"正译词打完"那一拍才量得到最坏值，判据会做成 flaky。
+    // 终态分支本身也是用户可见面（系统开了「减少动效」的访客看到的就是它）。
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    await expect(page.locator('.hd-panel')).toBeVisible();
+    // 最坏用例＝demoTerms 里最长的那个正译词。词表从源码现读：加词时本锁自动跟着变严；
+    // 读不到就判红（"尺子丢了"与"这次很干净"长得一样，必须分得开）。
+    expect(DEMO_R_WORDS.length, '没能从 Landing.tsx 的 demoTerms 里读到正译词表 ⇒ 本锁没量到东西').toBeGreaterThan(0);
+    const worstWord = DEMO_R_WORDS.reduce((a, b) => (b.length > a.length ? b : a));
+    // 五档视口：1440/1280/1024 走双列 hero（卡片 720/560/720），700/360 走窄屏（320px 档卡片约 288）
+    const measures: Array<{ w: number; panelW: number; worst: number; scroll: number; rfs: number }> = [];
+    for (const w of [1440, 1280, 1024, 700, 360, 320]) {
+      await page.setViewportSize({ width: w, height: 900 });
+      const m = await page.evaluate((word) => {
+        const panel = document.querySelector('.hd-panel') as HTMLElement | null;
+        if (!panel) return null;
+        // 钉到最坏词：终态分支只写一次文本，这里覆写不会被演出抢回去；typing 光标类一并摘掉
+        const r = panel.querySelector('[data-hd="r"]') as HTMLElement | null;
+        if (r) {
+          r.classList.remove('typing');
+          r.textContent = word;
+        }
+        const pr = panel.getBoundingClientRect();
+        const cs = getComputedStyle(panel);
+        const L = pr.left + parseFloat(cs.borderLeftWidth), R = pr.right - parseFloat(cs.borderRightWidth);
+        let worst = 0;
+        // 判据用**文本实际外框**（Range rect）而不是元素盒子：块级元素的盒子宽度恒等于容器宽，
+        // 文字溢出时盒子一点不变，盒子判据在这里结构性看不见（历史事故就是这么被漏掉的）。
+        for (const el of Array.from(panel.querySelectorAll('*'))) {
+          if (!el.getClientRects().length) continue;
+          for (const n of Array.from(el.childNodes)) {
+            if (n.nodeType !== 3 || !n.textContent || !n.textContent.trim()) continue;
+            const range = document.createRange();
+            range.selectNodeContents(n);
+            const cr = range.getBoundingClientRect();
+            range.detach?.();
+            if (!cr.width) continue;
+            worst = Math.max(worst, cr.right - R, L - cr.left);
+          }
+        }
+        return {
+          worst,
+          panelW: Math.round(pr.width),
+          scroll: panel.scrollWidth - panel.clientWidth,
+          rfs: r ? parseFloat(getComputedStyle(r).fontSize) : 0,
+        };
+      }, worstWord);
+      expect(m, `视口 ${w} 下 Hero 演示卡不在 DOM 里（本锁没量到东西）`).not.toBeNull();
+      expect(m!.worst, `视口 ${w}（卡片 ${m!.panelW}px）演示卡内容越出卡缘 ${Math.round(m!.worst)}px`).toBeLessThanOrEqual(1);
+      // 粗档护栏（≤4px）：尺珠/光晕这类绝对定位件在 100% 处本就带 1~2px 的自身轮廓外扩
+      // （.hd-gbead 3px 宽 + -1.5px 偏移），那不是"文字被裁"这一族。锐判据是上面的文本外框 ≤1px。
+      expect(m!.scroll, `视口 ${w} 演示卡出现横向滚动`).toBeLessThanOrEqual(4);
+      // 射程自证：正译字号必须 = 50 × 卡片宽/720（cqw 口径），而不是视口基准下的 50px 定值。
+      // 这一条堵住"改回 vw 但恰好没越界"的假绿——1280 档卡片 560 ⇒ 应约 38.9px，vw 口径下会是 50px。
+      // ⚠️ ≤640px 那一档不是纯比例：媒体块把 min 抬到 24px（"窄屏别缩到看不见"），
+      //    卡片小于 345px 时生效，所以两档要各钉各的（只钉一档＝给另一档放假）。
+      const expectedRfs = w <= 640 ? Math.max(24, 50 * (m!.panelW / 720)) : 50 * (m!.panelW / 720);
+      expect(m!.rfs, `视口 ${w}（卡片 ${m!.panelW}px）正译字号 ${m!.rfs}px 不是按卡片宽度缩放的档`)
+        .toBeCloseTo(expectedRfs, 0);
+      measures.push({ w, ...m! });
+    }
+    // 卡片确实在按宽度分档（卡片 560 档 < 720 档），否则上面那条对齐可能是在两个定值之间自证
+    const at1280 = measures.find((x) => x.w === 1280)!;
+    const at1440 = measures.find((x) => x.w === 1440)!;
+    expect(at1280.panelW, '1280 档卡片没落到 560px（hero 栅格口径变了，本锁的前提要重钉）').toBeLessThan(at1440.panelW);
+    expect(at1280.rfs, '1280 档正译字号没跟着卡片缩小').toBeLessThan(at1440.rfs);
+    await shot(page, 'p2f_demo_card_containment');
   });
 
   test('P3 自服务页渲染（余额/套餐/账号·企业 + 邀请·个人）', async ({ page }) => {

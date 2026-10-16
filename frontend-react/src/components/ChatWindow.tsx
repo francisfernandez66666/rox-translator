@@ -473,12 +473,12 @@ export default function ChatWindow() {
 
   return (
     /* ★ 2026-09-24 〇-S（#7）：高度口径从「视口-顶栏 39px 自算」改为 flex:1 吃满 .app-main——
-       汉堡抽屉退役后 SiteFooter 常驻外壳列尾，视口里除了顶栏还有一行页脚，
-       任何写死的 calc(100vh - 39px) 都会把页脚顶出首屏（永远滚不到）。
+       视口里除了顶栏还有一行页脚，任何写死的 calc(100vh - 39px) 都会把页脚顶出首屏（永远滚不到）。
+       ★ 2026-10-16 页脚已收进左栏折叠块（不再占右主列高度），本页口径不变（flex:1 仍是最稳的写法）。
        外壳（App.tsx FrontShell）已改 height:100dvh + .app-main overflowY:auto，
        本页 flex:1 + minHeight:0 即精确占满剩余空间，消息列表内滚、输入区与页脚常驻可见。
        （旧注释留档：39 = 顶栏 38 + 1px 下边框，UI-ANNOTATIONS §2.2 顶栏真值高 38。）
-       background:#000 与 theme.css 的 html,body 底色同值：懒加载占位/回弹露出的底色
+       background:#000 与 theme.css 的 html,body 底色同底：懒加载占位/回弹露出的底色
        必须与本页一致，否则切页瞬间会闪一块异色（#66 换词动效糊白底那次的成因）。 */
     <div className="cw-root" style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: '#000' }}>
       <style>{CW_CSS}</style>

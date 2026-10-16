@@ -3,14 +3,15 @@
 // 背景：用户拍板「套餐/余额/账号并入账号下拉；页脚回页脚位置」。本锁钉死改造后的结构口径：
 //   ① 外壳改 height:100dvh + .app-main overflowY:auto（页脚常驻的前提，见 App.tsx 注释）；
 //   ② ChatWindow 不再写死 calc(100vh - 39px)——页脚占位后该算法必然把页脚顶出首屏；
-//   ③ 桌面档：左栏常驻 + 页脚挂外壳列尾；移动档：左栏化为汉堡抽屉、页脚收进抽屉折叠。
+//   ③ 桌面档：左栏常驻；移动档：左栏化为汉堡抽屉。★ 2026-10-16 用户令：页脚**两档一致**
+//      都收进左栏尾部折叠块（旧形态「桌面常驻右主列列尾 / 移动才折叠」已退役）。
 // ★ 2026-10-15 用户令（第五批）口径翻转（旧期望按新令改写，理由写在各条注释里，
 //   不许只删断言——那会让下一个人照着旧口径改回去）：
 //   · 〇-S 那条「顶栏不得有汉堡 / 不许有抽屉」→ 汉堡回归为**抽屉开关**（拉的是同一份左栏），
 //     仍不许回潮成当年的 <Drawer> + menuOpen 那一套；
 //   · 「移动两件套（标题栏 + 底部 TabBar）」→ 底部 TabBar 撤除，只剩标题栏 + 抽屉；
 //   · 「桌面左栏与移动件按 isMobile 互斥渲染」→ 左栏改为**始终渲染**（桌面常驻 / 移动抽屉同一个节点），
-//     只有页脚按 isMobile 分两处。
+//     ★ 2026-10-16 起页脚也不再按 isMobile 分两处。
 // ★ 2026-10-15 本批（用户令「把这次的 UI 做成固定组件和布局方案」）射程扩到四份源码：
 //   结构搬进 src/components/frontshell/（App.tsx 只留外壳行布局与路由），样式搬进
 //   src/styles/frontshell.css。故本锁一并钉住**两个守卫级事实**（判据级断言代替不了守卫级）：
@@ -65,18 +66,26 @@ describe('前台外壳布局锁（#7 汉堡退役 → 2026-10-15 抽屉回归 + 
     expect(app).not.toContain('setDrawerOpen')
   })
 
-  it('SiteFooter 分两处：桌面档常驻 .app-main 之后，移动档收进抽屉并折叠', () => {
-    // 桌面档：列尾常驻（这个实例出现在 .app-main 之后）
-    expect(app).toContain('{!isMobile && <SiteFooter />}')
-    expect(app.indexOf('className="app-main"')).toBeLessThan(app.indexOf('{!isMobile && <SiteFooter />}'))
-    // 移动档：抽屉内的折叠块，且落在左栏 <aside>…</aside> 之内
+  // ★ 2026-10-16 用户令（本批）：「web 端页脚模仿移动端，收进左栏并折叠」。
+  //   口径翻转（旧期望按新令改写，理由留在这里）：
+  //   · 旧：桌面档 `<SiteFooter />` 常驻右主列列尾 + 移动档抽屉内 `<SiteFooter bare />` 折叠——两处；
+  //   · 新：**只有一处**，左栏尾部 `.fs-foot-fold` 里 `<SiteFooter bare />`，两档一致、默认收起。
+  //   负向锁是这条的关键：谁把 `<SiteFooter />` 装回 App.tsx（列尾常驻）当场红——
+  //   否则同一页会出现两份页脚，而 e2e 只会看到"页脚在"，看不出一份还是两份是设计还是漏删。
+  it('页脚只有一处：左栏尾部折叠块（两档一致，列尾常驻已退役）', () => {
+    // 负向：外壳不许再直接渲染页脚（旧形态 `{!isMobile && <SiteFooter />}`）
+    expect(app, '右主列列尾页脚已退役 ⇒ 外壳不许再渲染 <SiteFooter').not.toMatch(/<SiteFooter\b/)
+    expect(app, '旧式 isMobile 门禁页脚已退役').not.toContain('{!isMobile && <SiteFooter />}')
+    // 正向：唯一那份在左栏 <aside> 之内、且落在折叠块里（bare 去外壳列尾形态）
     expect(nav).toContain('<SiteFooter bare />')
     const asideIdx = nav.indexOf('<aside')
     // 取 JSX 用法而不是同名 CSS 规则（样式已迁出本文件，此处仍按 JSX 形态取，防将来又把样式写回来）
     const foldIdx = nav.indexOf('className="fs-foot-fold"')
     expect(asideIdx, '左栏 <aside> 不在').toBeGreaterThan(-1)
-    expect(foldIdx, '移动档折叠页脚 fs-foot-fold 不在抽屉里').toBeGreaterThan(asideIdx)
+    expect(foldIdx, '折叠页脚 fs-foot-fold 不在左栏里').toBeGreaterThan(asideIdx)
     expect(foldIdx, '折叠页脚必须落在 </aside> 之前').toBeLessThan(nav.indexOf('</aside>'))
+    // 负向：折叠块不许再被 isMobile 门禁（那正是"只有移动档才有"的旧形态）
+    expect(nav, '折叠页脚必须两档都渲染（不许 {isMobile && (<details…）)').not.toMatch(/\{isMobile && \(\s*<details/)
   })
 
   it('外壳锁 100dvh、.app-main 接管滚动', () => {
@@ -111,9 +120,9 @@ describe('前台外壳布局锁（#7 汉堡退役 → 2026-10-15 抽屉回归 + 
     expect(nav).toContain('fs-sidebar--drawer')
     expect(nav).toContain('fs-sidebar--open')
     expect(nav).toContain('lc-shell-scrim')
-    // 移动档仍有 isMobile 门禁：顶栏（外壳）、遮罩与折叠页脚（左栏件）
+    // 移动档仍有 isMobile 门禁：顶栏（外壳）与遮罩（左栏件）
     expect(app).toMatch(/\{isMobile && <FrontMobileTopBar/)
-    expect(nav).toMatch(/\{isMobile && \(/)
+    expect(nav).toMatch(/\{isMobile && open && <div className="lc-shell-scrim"/)
     // 判档必须走 matchMedia(≤640)，不许换成别的启发式（换档位先同步 §1.7 断点表）
     expect(shellHook).toContain("'(max-width: 640px)'")
     expect(shellHook).toContain('matchMedia')
@@ -124,6 +133,7 @@ describe('前台外壳布局锁（#7 汉堡退役 → 2026-10-15 抽屉回归 + 
   //   AccountMenu 下拉（组件在 AccountMenu.tsx，不在左栏源码里），故本锁把 `<Bell` 从正向
   //   清单换成负向清单（谁把独立铃铛装回左栏当场红），正向补 `fs-footrow`。
   // ★ 2026-10-15 用户令（第五批）：页脚（折叠块）也收进这一栏，正向补 `fs-foot-fold`。
+  // ★ 2026-10-16 用户令（本批）：两档一致 ⇒ 这一条对桌面档同样成立（不再只是移动档的形态）。
   it('元宝式左栏：品牌/语言/功能菜单/自助入口/身份余额控件/折叠页脚都在左栏之内', () => {
     const start = nav.indexOf('<aside')
     expect(start, '左栏 <aside> 不在').toBeGreaterThan(-1)

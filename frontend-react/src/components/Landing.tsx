@@ -1996,7 +1996,13 @@ const LANDING_CSS = `
 /* 这一段的类名一律 hd-* 前缀且只在本文件出现：演示卡是独立"器件"，不与上方营销布局互相覆写。
    状态类（in/out/done/cur/armed/hot/bright/blaze/dim…）全由 JS 切挂，CSS 只负责"长什么样"。 */
 /* 卡片定宽 720：与画布演示区等宽，父级 flex 居中，max-width 让窄屏等比收缩而不换结构 */
-.hd{width:720px;max-width:100%}
+/* ★ container-type:inline-size 是「动效跟着卡片一起变小」的唯一实现口（用户报障：窄屏下术语行的
+   正译词顶出卡片右缘被裁）。卡片宽度由 hero 栅格决定，**与视口不成正比**（1280 视口下卡片只有
+   560px，1440 以上才是满 720px），旧写法用 vw 做 clamp ⇒ 视口越过 720 后所有度量都钉在上限，
+   而卡片还在变窄，于是横向必然溢出。改用 cqw（1cqw = 卡片自身宽/100）：下面每个中项都按 720
+   设计宽反推（例 165/720 = 22.917%），所以卡片 = 720 时取值与改造前的 vw 写法**逐字等值**，
+   只有卡片窄于 720 时才等比缩小——这正是"动效自适应同步变小"。 */
+.hd{width:720px;max-width:100%;container-type:inline-size}
 /* overflow:hidden 是给 .hd-barfill 与扫光用的：它们都靠"跑出去一截"实现动画，不能露出圆角外 */
 /* 底色与页面同黑，所以"卡片感"只能靠最高一档描边（--lc-border-strong 6.0:1）+ 顶缘那 1px 内受光做出来 */
 .hd-panel{
@@ -2030,7 +2036,7 @@ const LANDING_CSS = `
 @keyframes hdSweep{from{width:0}to{width:100%}}
 
 /* 标题栏定高 46px：它只是"窗口感"，不参与内容高度计算 */
-.hd-bar{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 32px;border-bottom:1px solid var(--lc-border-faint)}
+.hd-bar{height:46px;display:flex;align-items:center;justify-content:space-between;padding:0 clamp(16px,4.444cqw,32px);border-bottom:1px solid var(--lc-border-faint)}
 /* 三点用第一/第三点拉开明暗：三颗同色会像"禁用态"，有一颗最亮才像窗口 */
 .hd-dots{display:inline-flex;align-items:center;gap:6px;flex:none}
 .hd-dots i{width:10px;height:10px;border-radius:999px;background:var(--lc-text-4)}
@@ -2038,26 +2044,26 @@ const LANDING_CSS = `
 .hd-dots i:nth-child(2){background:var(--lc-text-3)}
 /* 品牌名与副标基线对齐：字号相同但字重与色阶不同，用 center 会让 em 看起来偏低 */
 .hd-name{display:inline-flex;align-items:baseline;white-space:nowrap}
-.hd-name b{font-size:15px;font-weight:600;color:var(--lc-text-1);letter-spacing:.02em}
-.hd-name em{margin-left:5px;font-style:normal;font-size:15px;font-weight:600;color:var(--lc-text-2);letter-spacing:.02em}
+.hd-name b{font-size:clamp(12px,2.083cqw,15px);font-weight:600;color:var(--lc-text-1);letter-spacing:.02em}
+.hd-name em{margin-left:5px;font-style:normal;font-size:clamp(12px,2.083cqw,15px);font-weight:600;color:var(--lc-text-2);letter-spacing:.02em}
 /* 语种标签用拉丁字体族：里面是 "ZH → EN" 这类拉丁字形，用中文字体拿不到正确的箭头与字距 */
-.hd-tag{font-size:14px;color:var(--lc-text-4);font-family:var(--lc-font-latin);letter-spacing:.03em;border:1.2px solid var(--lc-border-pill);border-radius:999px;padding:5px 12px;white-space:nowrap}
+.hd-tag{font-size:clamp(11px,1.944cqw,14px);color:var(--lc-text-4);font-family:var(--lc-font-latin);letter-spacing:.03em;border:1.2px solid var(--lc-border-pill);border-radius:999px;padding:clamp(3px,.694cqw,5px) clamp(8px,1.667cqw,12px);white-space:nowrap}
 
 /* —— 原文区 —— */
-.hd-stream{padding:30px 32px 20px}
-.hd-src{border:1.2px solid var(--lc-border-input);border-radius:14px;padding:16px 18px}
-.hd-srctag{display:block;font-size:14px;letter-spacing:.06em;color:var(--lc-text-4);margin-bottom:8px}
+.hd-stream{padding:clamp(16px,4.167cqw,30px) clamp(16px,4.444cqw,32px) clamp(12px,2.778cqw,20px)}
+.hd-src{border:1.2px solid var(--lc-border-input);border-radius:14px;padding:clamp(11px,2.222cqw,16px) clamp(12px,2.5cqw,18px)}
+.hd-srctag{display:block;font-size:clamp(11px,1.944cqw,14px);letter-spacing:.06em;color:var(--lc-text-4);margin-bottom:clamp(6px,1.111cqw,8px)}
 .hd-srcwrap{position:relative}
 /* min-height 一格：ghost 与真身都在，这里再兜一层，避免首帧空白时输入框塌陷 */
-.hd-srctext{font-size:17px;line-height:26px;color:#B4B9C0;min-height:26px}
+.hd-srctext{font-size:clamp(13px,2.361cqw,17px);line-height:clamp(20px,3.611cqw,26px);color:#B4B9C0;min-height:clamp(20px,3.611cqw,26px)}
 /* ghost 用 visibility 不用 display：要它继续占位撑高，真身才能绝对定位盖上去（打字时不跳行高） */
 .hd-srctext.ghost{visibility:hidden}
 .hd-srcwrap .hd-srctext:not(.ghost){position:absolute;left:0;top:0;right:0}
 /* 光标：::after 画 2px 竖条并 steps(1) 硬闪（0.9s 一轮），三处打字区共用同一套 hdBlink 节拍 */
-.hd-srctext.typing::after{content:'';display:inline-block;width:2px;height:14px;margin-left:3px;vertical-align:-3px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
+.hd-srctext.typing::after{content:'';display:inline-block;width:2px;height:clamp(11px,1.944cqw,14px);margin-left:3px;vertical-align:-3px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
 
 /* 状态行：min-height 先占好一格，文案打出来前后都不许顶动下面的量尺 */
-.hd-status{margin-top:14px;min-height:22px;display:flex;align-items:center;gap:10px;font-size:15px;line-height:22px;color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
+.hd-status{margin-top:clamp(10px,1.944cqw,14px);min-height:clamp(17px,3.056cqw,22px);display:flex;align-items:center;gap:10px;font-size:clamp(12px,2.083cqw,15px);line-height:clamp(17px,3.056cqw,22px);color:var(--lc-text-3);opacity:0;transition:opacity .45s ease}
 .hd-status.in{opacity:1}
 /* 脉冲点常驻无限循环：它表达"系统还活着"，一旦停了观众会以为演示结束 */
 .hd-pulse{width:6px;height:6px;border-radius:999px;background:var(--lc-text-4);flex:none;animation:hdPulse 1.4s ease-in-out infinite}
@@ -2066,12 +2072,12 @@ const LANDING_CSS = `
 /* 量尺区（.hd-steps）= 上排三个步骤标签 + 下排一条刻度尺。标签由 DEMO_TERMS 直接生成，
    所以条数/宽度都是自适应的，加删术语不必回来改这里；.armed 由 play() 在状态行打完字后挂上
    （减少动效分支则由 staticState 直接挂），挂上之前整块保持透明。 */
-.hd-steps{margin-top:16px;margin-bottom:16px}
-.hd-slabels{display:flex;margin-bottom:8px}
+.hd-steps{margin-top:clamp(11px,2.222cqw,16px);margin-bottom:clamp(11px,2.222cqw,16px)}
+.hd-slabels{display:flex;margin-bottom:clamp(6px,1.111cqw,8px)}
 /* flex:1 把整条尺按术语条数等分：标签落点与 JS 写进 style 的百分比共用同一套比例，天然对齐 */
-.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:6px;font-size:14px;line-height:16px;letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
+.hd-sl{flex:1;min-width:0;display:flex;align-items:baseline;gap:clamp(4px,.833cqw,6px);font-size:clamp(11px,1.944cqw,14px);line-height:clamp(13px,2.222cqw,16px);letter-spacing:.02em;color:#3F444B;white-space:nowrap;opacity:0;transition:color .5s ease}
 /* 序号单独 10px + 等宽数字：01/02/03 的字宽必须一致，否则后面的中文标签会左右跳动 */
-.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:12px;font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
+.hd-sl i{font-style:normal;font-family:var(--lc-font-latin);font-size:clamp(11px,1.667cqw,12px);font-weight:600;letter-spacing:0;font-variant-numeric:tabular-nums;color:#33383F;transition:color .5s ease}
 /* done→cur 只换颜色、不换字重：字重一变行宽就抖，量尺只是背景信息，抖动比对比度低更难受 */
 .hd-sl.done{color:var(--lc-text-3)}.hd-sl.done i{color:var(--lc-text-btn-secondary)} /* ★ 批2：#8A9099/#C8CCD1 野值收编 */
 .hd-sl.cur{color:var(--lc-text-1)}.hd-sl.cur i{color:#fff}
@@ -2117,7 +2123,7 @@ const LANDING_CSS = `
 .hd-track{position:relative;min-height:128px;display:flex;align-items:center}
 /* 一行 = 序号 | 中文 | 箭头 | 初译 → 正译；绝对定位钉在同一处，三条轮播复用这一个 DOM（clearRow 只做复位） */
 /* blur 与位移同时消解，观感是"对焦到这一行"而不是普通淡入；transform 曲线控制点 >1，入场带一点回弹 */
-.hd-row{position:absolute;left:0;right:0;top:12px;height:64px;display:flex;align-items:center;gap:16px;opacity:0;transform:translateY(20px);filter:blur(3px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .46s cubic-bezier(.16,1.06,.3,1),filter .30s ease}
+.hd-row{position:absolute;left:0;right:0;top:12px;height:64px;display:flex;align-items:center;gap:clamp(8px,2.222cqw,16px);opacity:0;transform:translateY(20px);filter:blur(3px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .46s cubic-bezier(.16,1.06,.3,1),filter .30s ease}
 .hd-row.in{opacity:1;transform:none;filter:blur(0)}
 /* 离场改的是另一套曲线（.4,0,.6,1，不回弹）+ 每条 transition 都带 .26s 延迟：
    先原地停一拍让上一行读完，再向上散掉，也避免与下一条入场叠成"两行同时在" */
@@ -2129,13 +2135,13 @@ const LANDING_CSS = `
 /* 命中确认只动 filter:brightness，不碰 color/宽度：这两样已被 struck 与 glow 占用，同属性会互相覆写 */
 
 /* 序号：默认就是危险色——它标的是"被判错的那条初译"；24px 定宽 + 等宽数字，三条轮播左缘才齐 */
-.hd-idx{align-self:center;flex:none;width:24px;font-family:var(--lc-font-latin);font-size:16px;font-weight:600;color:var(--lc-danger);font-variant-numeric:tabular-nums}
+.hd-idx{align-self:center;flex:none;width:clamp(14px,3.333cqw,24px);font-family:var(--lc-font-latin);font-size:clamp(12px,2.222cqw,16px);font-weight:600;color:var(--lc-danger);font-variant-numeric:tabular-nums}
 .hd-idx.pop{animation:hdIdxPop .46s cubic-bezier(.2,.9,.3,1) both}
 @keyframes hdIdxPop{0%{transform:scale(1.38);color:#fff}100%{transform:scale(1);color:var(--lc-danger)}}
 /* 白起纯基线收：pop 与 .hd-row.in 同帧挂，读作"这一项开始了"，所以起帧要最亮 */
-.hd-swap{display:flex;align-items:baseline;gap:19px;min-width:0}
+.hd-swap{display:flex;align-items:baseline;gap:clamp(9px,2.639cqw,19px);min-width:0}
 /* 初译/正译字号差近一倍，只有 baseline 对齐才能让两栏像同一句话；align-items:center 会让小字看着下沉 */
-.hd-w{position:relative;flex:none;display:inline-block;white-space:nowrap;width:clamp(74px,22.917vw,165px);font-family:var(--lc-font-latin);font-size:clamp(21px,5.278vw,38px);font-weight:600;line-height:clamp(32px,7.778vw,56px);color:#8E949C;letter-spacing:-.015em;transition:color .28s ease}
+.hd-w{position:relative;flex:none;display:inline-block;white-space:nowrap;width:clamp(74px,22.917cqw,165px);font-family:var(--lc-font-latin);font-size:clamp(21px,5.278cqw,38px);font-weight:600;line-height:clamp(32px,7.778cqw,56px);color:#8E949C;letter-spacing:-.015em;transition:color .28s ease}
 .hd-w .hd-wt{position:relative;display:inline-block}
 /* 文本挂内层 .hd-wt：外层是定宽的排版单元，内层才等于"词的实际宽度"，删除线不能画到空白上去 */
 .hd-w .hd-wt::before{content:'';position:absolute;left:-4px;right:-4px;top:56%;height:3px;margin-top:-1.5px;background:var(--lc-danger);border-radius:2px;transform:scaleX(0);transform-origin:left center}
@@ -2146,26 +2152,26 @@ const LANDING_CSS = `
 /* 过冲 3.5% 再收回：像笔锋多拖了一下，比匀速划到端点更像"人手画的线" */
 @keyframes hdStrikeFlash{0%{text-shadow:0 0 0 rgba(229,72,77,0)}20%{text-shadow:0 0 18px rgba(229,72,77,.62)}100%{text-shadow:0 0 0 rgba(229,72,77,0)}}
 /* 只亮 20% 那一拍：闪一下是"判错"，常亮会去抢正译栏（字号最大那栏）的注意力 */
-.hd-wt.typing::after{content:'';display:inline-block;width:2px;height:clamp(19px,4.167vw,30px);margin-inline-start:3px;vertical-align:-5px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
+.hd-wt.typing::after{content:'';display:inline-block;width:2px;height:clamp(19px,4.167cqw,30px);margin-inline-start:3px;vertical-align:-5px;background:currentColor;animation:hdBlink .9s steps(1) infinite}
 .hd-arrow{flex:none;display:flex;align-items:center;color:var(--lc-border-faint);opacity:0;transform:translateX(-5px);transition:opacity .22s ease,transform .22s ease,color .28s ease}
 /* 箭头单独 .in 提亮（描边色→#A0A5AC）：出场排在中文之后、初译之前，用次序表达"从这里开始换外语" */
 .hd-arrow.in{opacity:1;transform:none;color:#A0A5AC}
-.hd-r{font-family:var(--lc-font-latin);font-size:clamp(30px,6.944vw,50px);font-weight:800;line-height:clamp(42px,8.333vw,60px);color:#fff;letter-spacing:-.028em;white-space:nowrap;min-width:1px;text-shadow:0 0 0 rgba(255,255,255,0);transition:text-shadow .62s ease}
+.hd-r{font-family:var(--lc-font-latin);font-size:clamp(30px,6.944cqw,50px);font-weight:800;line-height:clamp(42px,8.333cqw,60px);color:#fff;letter-spacing:-.028em;white-space:nowrap;min-width:1px;text-shadow:0 0 0 rgba(255,255,255,0);transition:text-shadow .62s ease}
 /* min-width:1px 兜住空文本帧——glow 比打字先挂，那一刻栏里还没字；text-shadow .62s 长过渡让辉光是"渗出来"的 */
 .hd-r.glow{text-shadow:0 0 16px rgba(255,255,255,.5)}
 .hd-r.lock{animation:hdRLock .42s cubic-bezier(.2,.9,.3,1) both}
 @keyframes hdRLock{0%{transform:scale(1.05);text-shadow:0 0 17px rgba(255,255,255,.72)}55%{transform:scale(.994)}100%{transform:scale(1);text-shadow:0 0 16px rgba(255,255,255,.5)}}
 /* 终值停在 glow 的辉光上（both 锁住）：所以摘掉 .lock 后 glow 接手，两拍之间没有亮度断层 */
-.hd-r.typing::after{content:'';display:inline-block;width:2px;height:clamp(26px,5.833vw,42px);margin-inline-start:5px;vertical-align:-9px;background:#fff;animation:hdBlink .9s steps(1) infinite}
+.hd-r.typing::after{content:'';display:inline-block;width:2px;height:clamp(26px,5.833cqw,42px);margin-inline-start:5px;vertical-align:-9px;background:#fff;animation:hdBlink .9s steps(1) infinite}
 @keyframes hdBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
 /* steps(1) = 硬切而不是渐隐：四处打字区（原文 / 初译 / 正译 / 定稿）都挂这一条 hdBlink，光标节拍全站一致 */
-.hd-cn{flex:none;width:clamp(78px,12.778vw,92px);font-size:clamp(14px,2.361vw,17px);font-weight:500;color:#B4B9C0;letter-spacing:.04em;white-space:nowrap;opacity:0;transform:translateX(-7px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .38s cubic-bezier(.16,1.08,.3,1)}
+.hd-cn{flex:none;width:clamp(78px,12.778cqw,92px);font-size:clamp(14px,2.361cqw,17px);font-weight:500;color:#B4B9C0;letter-spacing:.04em;white-space:nowrap;opacity:0;transform:translateX(-7px);transition:opacity .30s cubic-bezier(.2,.85,.25,1),transform .38s cubic-bezier(.16,1.08,.3,1)}
 /* 中文栏定宽：JS 是逐字往里写的，不定宽的话箭头与初译会跟着字数的增加一路右移 */
 .hd-cn.in{opacity:1;transform:none}
 
 /* —— 回写结果框：峰值一次给"框出现→斜扫光→描边转完成色→落章"四段，段段独立挂类（in/sweep/settled/stamp）—— */
 /* 起手 transform:scale(.992) 而不是 scale(.9)：结果框里全是正文，位移过大会读不清；overflow:hidden 给 ::before/::after 的两道扫光裁边 */
-.hd-result{position:relative;overflow:hidden;width:100%;padding:16px 18px;border:1.2px solid var(--lc-border-input);border-radius:14px;opacity:0;transform:scale(.992);transform-origin:50% 50%;transition:opacity .3s ease-out,transform .42s cubic-bezier(.16,1,.3,1),border-color .7s ease}
+.hd-result{position:relative;overflow:hidden;width:100%;padding:clamp(11px,2.222cqw,16px) clamp(12px,2.5cqw,18px);border:1.2px solid var(--lc-border-input);border-radius:14px;opacity:0;transform:scale(.992);transform-origin:50% 50%;transition:opacity .3s ease-out,transform .42s cubic-bezier(.16,1,.3,1),border-color .7s ease}
 .hd-result.in{opacity:1;transform:none}
 /* settled 只换描边、.7s 慢过渡：爆发收势后要把"这是最终结果"这件事安静地说完，不该再有动静 */
 .hd-result.settled{border-color:var(--lc-border-done)}
@@ -2227,7 +2233,7 @@ const LANDING_CSS = `
 
 /* —— 定稿译文区：与原文区同一套"ghost 撑高 + 真身覆盖"，外层再叠一条审校窄光 —— */
 .hd-fwrap{position:relative}
-.hd-final{font-family:var(--lc-font-latin);font-size:18px;line-height:28px;color:var(--lc-text-1)}
+.hd-final{font-family:var(--lc-font-latin);font-size:clamp(14px,2.5cqw,18px);line-height:clamp(21px,3.889cqw,28px);color:var(--lc-text-1)}
 /* 拉丁字体族：DEMO_FINAL 是整句英文，用中文栈会让字距与连字都变形（中英混排时才需要中文兜底） */
 .hd-final.ghost{visibility:hidden}
 .hd-fwrap .hd-final:not(.ghost){position:absolute;left:0;top:0;right:0}
@@ -2235,7 +2241,7 @@ const LANDING_CSS = `
 .hd-final.done{animation:hdProofLight 1s cubic-bezier(.16,1,.3,1) forwards}
 @keyframes hdProofLight{0%{color:var(--lc-text-1);text-shadow:none}10%{color:#fff;text-shadow:0 0 15px rgba(255,255,255,.62)}100%{color:var(--lc-text-1);text-shadow:none}}
 /* 1s 里只有前 10% 是亮的：定稿要"被点亮一次"，然后立刻退回可读基线，常亮会让正文失去对比度 */
-.hd-final.typing::after{content:'';display:inline-block;width:2px;height:15px;margin-inline-start:3px;vertical-align:-3px;background:var(--lc-text-1);animation:hdBlink .9s steps(1) infinite}
+.hd-final.typing::after{content:'';display:inline-block;width:2px;height:clamp(12px,2.083cqw,15px);margin-inline-start:3px;vertical-align:-3px;background:var(--lc-text-1);animation:hdBlink .9s steps(1) infinite}
 /* 光带本身就是这张伪元素的背景（宽 16px、不重复），动画只挪 background-position：
    伪元素始终 inset:0 覆盖整块，尺寸不变所以不会引起重排 */
 .hd-fwrap::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(255,255,255,0) 0%,rgba(255,255,255,.16) 35%,rgba(255,255,255,.95) 50%,rgba(255,255,255,.16) 65%,rgba(255,255,255,0) 100%);background-size:16px 100%;background-repeat:no-repeat;background-position:-16px 0;opacity:0}
@@ -2251,7 +2257,7 @@ const LANDING_CSS = `
   /* 副标整块撤掉而不是缩小：这一栏放不下两段文字，语种标签（ZH → EN）才是演示的语境信息 */
   .hd-stream{padding:20px 16px 16px}
   /* 换 grid 具名区域重排：DOM 一个节点都不动，JS 缓存的 data-hd 句柄在窄屏继续有效 */
-  .hd-row{top:50%;height:auto;display:grid;grid-template-columns:auto 1fr;grid-template-areas:"idx cn" "arrow swap";align-items:center;column-gap:clamp(8px,2.222vw,16px);row-gap:clamp(2px,.556vw,4px);transform:translateY(calc(-50% + 20px))}
+  .hd-row{top:50%;height:auto;display:grid;grid-template-columns:auto 1fr;grid-template-areas:"idx cn" "arrow swap";align-items:center;column-gap:clamp(8px,2.222cqw,16px);row-gap:clamp(2px,.556cqw,4px);transform:translateY(calc(-50% + 20px))}
   /* 绝对定位的行改由 translateY 自己居中：基态 = 居中再下沉 20px，.in = 居中，.out = 居中再上移 26px，三处必须成套 */
   .hd-row.in{transform:translateY(-50%)}
   .hd-row.out{transform:translateY(calc(-50% - 26px))}
@@ -2262,9 +2268,14 @@ const LANDING_CSS = `
   .hd-swap{grid-area:swap;justify-content:flex-start;min-width:0}
   /* 下笔线与光斑跟到新的视觉中线：宽屏写死的 44px 是"单行时的行中线"，折两行后那个位置已经不是中线 */
   .hd-rule,.hd-flash{top:50%}
-  /* clamp 上限（165px/38px、50px）在窄屏根本用不到，实际生效的是中间的 vw 项；下调 min 是为了不顶破 320px 视口 */
-  .hd-w{font-size:clamp(17px,5.278vw,38px);line-height:clamp(26px,7.778vw,56px)}
-  .hd-r{font-size:clamp(24px,6.944vw,50px);line-height:clamp(34px,8.333vw,60px)}
+  /* cqw 口径下上限（165px/38px、50px）只有卡片满 720px 才生效，窄屏自然走到中项；
+     这里下调 min 是为了不顶破 320px 视口（卡片约 288px，此时中项已小于原 min） */
+  .hd-w{font-size:clamp(17px,5.278cqw,38px);line-height:clamp(26px,7.778cqw,56px)}
+  .hd-r{font-size:clamp(24px,6.944cqw,50px);line-height:clamp(34px,8.333cqw,60px)}
+  /* 量尺三格标签在窄屏会被长译文挤破（es/de/fr 的术语译文比中文长得多，11px 下限下仍超出格子
+     十来个像素，被卡片 overflow:hidden 裁掉）。这里放行折行：三格仍等分，刻度尺珠子的落点百分比
+     与标签左缘同源，所以折行不影响标签与珠子的对齐，也不会动 DOM。 */
+  .hd-sl{white-space:normal;overflow-wrap:anywhere}
 }
 
 /* 无障碍：偏好减少动效时，演示卡直接呈现终态，所有爆发一律不播 */
