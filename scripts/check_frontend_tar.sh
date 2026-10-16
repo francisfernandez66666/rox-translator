@@ -103,13 +103,20 @@ entry_shape_ok() { # ${1}＝从 index.html 认出来的入口相对路径；返�
     assets/index-*.js) ;;
     *) return 1 ;;
   esac
-  local rest last
+  local rest
   rest="${1%.js}"
   rest="${rest#assets/index-}"
-  last="${rest##*-}" # 最后一段＝内容哈希（CACHE_BUST 档在它前面另加一段标记）
-  [ "${#last}" -ge 8 ] || return 1
-  case "$last" in
-    *[A-Za-z0-9]*) return 0 ;;
+  # ★ 内容哈希＝`index-` 之后到 `.js` 之前的**整段**（2026-10-16 修）：Vite 的 [hash] 字母表
+  #   是 `[A-Za-z0-9_-]`，**里面就有 `-`**——旧写法取"最后一个 `-` 之后那一段"当哈希，
+  #   碰上 `index-1A-0R5X_.js` 这种哈希自带 `-` 的名字会算成 5 字符 ⇒ 判成"名字不随内容变"的
+  #   假红（本批换源前实测到，实现是对的、判据错了）。
+  #   CACHE_BUST 档在哈希前另加一段标记（`index-20261012a-<hash>`），同样落进这整段里。
+  case "$rest" in
+    *[!A-Za-z0-9_-]*) return 1 ;; # 只许哈希字母表（挡住 `index-中文.js` 这类）
+  esac
+  [ "${#rest}" -ge 8 ] || return 1
+  case "$rest" in
+    *[A-Za-z0-9]*) return 0 ;;    # 还要至少一个字母数字（挡住 `index-________.js`）
     *) return 1 ;;
   esac
 }
@@ -162,12 +169,15 @@ else
   echo "       ⇒ 核 vite.config.ts 的 build：CACHE_BUST 未设时**整段 rollupOptions 都不许出现**（不是把值写成 undefined）"
 fi
 
-# T5b 判据自证：把五种名字喂给**同一个**函数——两正三负，负向腿必须真能判负。
+# T5b 判据自证：把七种名字喂给**同一个**函数——三正四负，负向腿必须真能判负。
 # 没有这一段，「T5 通过」可能只是判据恒真（本仓负向锁的老形态：射程为空比判红更难发现）。
+# ★ 第三枚正向（`index-1A-0R5X_.js`）是 2026-10-16 本批实测出来的**哈希自带 `-`** 形态——
+#   它正是旧判据的盲区（取"最后一个 `-` 之后那一段"⇒ 算成 5 字符 ⇒ 假红），锁住它才不会改回去。
 if entry_shape_ok "assets/index-BBMceqr3.js" && entry_shape_ok "assets/index-20261012a-BRVjfTbB.js" \
+   && entry_shape_ok "assets/index-1A-0R5X_.js" \
    && ! entry_shape_ok "" && ! entry_shape_ok "index.js" && ! entry_shape_ok "assets/index.js" \
-   && ! entry_shape_ok "assets/index-1234567.js"; then
-  echo "  OK   T5b 入口名判据自证（2 例合格放行／固定名＋短哈希名 4 例判负）"
+   && ! entry_shape_ok "assets/index-1234567.js" && ! entry_shape_ok "assets/index-________.js"; then
+  echo "  OK   T5b 入口名判据自证（3 例合格放行／固定名＋短哈希名＋全下划线 5 例判负）"
 else
   echo "  BAD  T5b 入口名判据自证没过 ⇒ T5 这一档的射程不可信"; RC=1
 fi
