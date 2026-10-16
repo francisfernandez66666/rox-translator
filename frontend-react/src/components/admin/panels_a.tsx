@@ -378,7 +378,8 @@ export function AlertsP() {
 
   /** 加载注册与触达配置 */
   const loadRegCfg = useCallback(async () => {
-    const cfg = await adminPackageSettings()
+    const cfg = await runGuarded(() => adminPackageSettings())
+    if (!cfg) return
     if (cfg.success) {
       const c = cfg as Any
       for (const k of ['email_verify_enabled', 'email_notify_enabled',
@@ -434,7 +435,10 @@ export function AlertsP() {
     }
     if (regCfg.captcha_secret_key) payload.captcha_secret_key = String(regCfg.captcha_secret_key)
     // React api 签名仅声明部分字段；后端按 system_config 全量接收
-    void adminPackageSettingsSave(payload as never)
+    // ★ 2026-10-16 静默失败批：旧写法 `void adminPackageSettingsSave(...)` 是纯 fire-and-forget——
+    //   成功没提示、失败也没提示（4xx 还会变成一条未处理 rejection）；改回读结果再出话。
+    const r = await adminPackageSettingsSave(payload as never)
+    toastResp(r, t('common.saved'))
   }
 
   return (

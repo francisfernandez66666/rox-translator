@@ -11,6 +11,8 @@ import { Badge, BellIcon, EmptyState } from '@/ui/langcross/src'
 import { notificationsUnread, notifications, notificationRead, notificationsReadAll } from '@/api'
 import { fmtTime } from '@/lib/ui'
 import { noticeLandingFor } from '@/lib/noticeRouting'
+import { runGuarded } from '@/lib/runGuarded'
+import { toastError } from '@/lib/toastBus'
 import { t } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 
@@ -119,13 +121,20 @@ export function useNotify(): NotifyCtl {
   }, [open])
 
   // 标记单条已读并刷新列表
+  // ★ 2026-10-16 静默失败批：两个接口都是 bizResp（4xx 还原成 success:false 而不抛），
+  //   旧写法不看返回值也不接异常 ⇒ 网络断掉时是一条未处理 rejection（「点了没反应」），
+  //   业务失败时静默刷新、条目还是未读、零提示。现在两条腿都出声。
   const markRead = useCallback(async (id: number) => {
-    await notificationRead(id)
+    const r = await runGuarded(() => notificationRead(id))
+    if (!r) return
+    if (!r.success) { toastError(r.message || t('common.fail')); return }
     void refresh()
   }, [refresh])
   // 标记全部已读并刷新列表（不本地 setUnread(0)：以服务端回读为准）
   const markAll = useCallback(async () => {
-    await notificationsReadAll()
+    const r = await runGuarded(() => notificationsReadAll())
+    if (!r) return
+    if (!r.success) { toastError(r.message || t('common.fail')); return }
     void refresh()
   }, [refresh])
 

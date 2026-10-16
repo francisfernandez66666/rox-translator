@@ -75,6 +75,10 @@ const EXEMPT: Record<string, string> = {
 const READ_THROW_EXEMPT: Record<string, string[]> = {
   'mybilling.ts': ['myOverview', 'myOrders', 'myLedger', 'myRewards', 'myInvoices'],
   'referral.ts': ['referralFunnel', 'referralMy'],
+  // 2026-10-16 租户批：两条纯读取，调用点分别走 runGuarded（TenantsP.load，失败会出红条）
+  // 与 try/catch（admin store.loadTenantList／loadInviteEnabled）。包 bizResp 会把
+  // 「列表取不到」渲染成空表、「开关取不到」渲染成关闭——都是把失败伪装成正常数据。
+  'tenant.ts': ['tenantList', 'tenantInviteEnabledGet'],
 }
 
 /** READ_THROW_EXEMPT 函数体内必须存在的理由标记（b 腿） */
@@ -94,19 +98,18 @@ const isTestFile = (name: string) => name.includes('.test.')
  */
 const LEGACY_UNWRAPPED: Record<string, string[]> = {
   'admin.ts': ['userBulkImport', 'mailTemplatesGet', 'mailTemplatesSave', 'meContext'],
-  'apikeys.ts': ['getOpenAPIDocs', 'saveOpenAPIDocs', 'previewOpenAPIDocs'],
+  'apikeys.ts': ['getOpenAPIDocs', 'previewOpenAPIDocs'],
   'auth.ts': ['login', 'ssoProviders', 'authMe', 'authRegister', 'sendEmailCode', 'registerConfig', 'forgotPassword', 'registerIndustries', 'deactivateAccount'],
-  'billing.ts': ['usageMe', 'usageOrg', 'usageCost', 'billingOrders', 'billingConfigSave', 'billingQuota', 'billingQuotaSave', 'billingInvoices', 'manualConfirmOrders', 'plans', 'myPackage', 'autoRenewGet', 'adminPackageSettings', 'adminPackageSettingsSave', 'adminPayChannels', 'adminPayChannelsSave', 'adminQuoteCurrency', 'adminQuoteCurrencySave'],
+  'billing.ts': ['usageMe', 'usageOrg', 'usageCost', 'billingOrders', 'billingConfigSave', 'billingQuota', 'billingInvoices', 'manualConfirmOrders', 'plans', 'myPackage', 'autoRenewGet', 'adminPackageSettings', 'adminPayChannels', 'adminQuoteCurrency'],
   'coupons.ts': ['adminCoupons', 'adminCouponRedemptions'],
-  'feedback.ts': ['createFeedback'],
   'flow.ts': ['flowConfig'],
-  'kb.ts': ['kbEntriesImport'],
-  'models.ts': ['adminModels', 'adminModelsSave', 'stageModels', 'stageModelsSave', 'adminPolicy'],
-  'org.ts': ['orgBudgetSummary', 'orgTokenLimit'],
+  'models.ts': ['adminModels', 'stageModels', 'adminPolicy'],
+  'org.ts': ['orgBudgetSummary'],
   'scrape.ts': ['scrapeSummary'],
   'system.ts': ['systemHealth'],
   'tasks.ts': ['adminTasks', 'myTasks'],
-  'tenant.ts': ['tenantList', 'tenantCreate', 'tenantUpdate', 'tenantInviteEnabledGet', 'tenantSetStatus', 'tenantDelete', 'tenantExport', 'tenantErase'],
+  // 2026-10-16：租户域 6 个写接口已收敛（tenantCreate/Update/SetStatus/Delete/Export/Erase
+  // 全包 bizResp），两条纯读取转入 READ_THROW_EXEMPT ⇒ 本文件条目整体还清，不再列在此处。
   'tickets.ts': ['ticketDelete', 'getSegments', 'getSegmentsByKey', 'saveSegments'],
   'tmreview.ts': ['adoptFeedbackTranslation', 'listMyTmReview'],
 }

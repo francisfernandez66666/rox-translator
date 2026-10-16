@@ -264,7 +264,7 @@ export function KbP() {
   }
   // removePackage 删除知识包（连带条目；二次确认后执行）。
   async function removePackage(p: Any) {
-    if (!(await confirmDialog({ body: tpl('kb.confirmDeletePackage', { name: String(p.name) }) }))) return
+    if (!(await confirmDialog({ body: tpl('kb.confirmDeletePackage', { name: String(p.name) }), danger: true }))) return
     const r = await kbPackageDelete(Number(p.id))
     if (!r.success) { toastError(r.message); return }
     await loadPackages()
@@ -368,8 +368,9 @@ export function KbP() {
     setEForm({ source_text: String(e.source_text || ''), layer: Number(e.layer) || 2, target_lang: String(e.target_lang || 'en'), target_text: String(e.target_text || ''), module: String(e.module || '') })
   }
   // removeEntry 删除单条条目（走二次确认，安全句不允许误删）。
+  // ★ 2026-10-16 双确认批：这里是删条目**唯一**的确认点（行内 Link 旧写法先弹一次再进来弹一次）
   async function removeEntry(e: Any) {
-    if (!(await confirmDialog({ body: t('kb.delete') }))) return
+    if (!(await confirmDialog({ body: t('kb.delete'), danger: true }))) return
     const r = await kbEntryDelete(Number(e.id))
     if (!r.success) { toastError(r.message); return }
     const p = pkgs.find((x: Any) => x.id === selectedPkg)
@@ -457,7 +458,7 @@ export function KbP() {
   }
   // removeSafety 删除安全句（内部已二次确认）。
   async function removeSafety(sp: Any) {
-    if (!(await confirmDialog({ body: t('kb.deleteConfirm') }))) return
+    if (!(await confirmDialog({ body: t('kb.deleteConfirm'), danger: true }))) return
     const r = await safetyPhraseDelete(Number(sp.id))
     if (!r.success) { toastError(r.message); return }
     await reloadSafety()
@@ -646,7 +647,7 @@ export function KbP() {
           { key: 'op', title: '', width: 130, render: (row) => (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               <Link onClick={() => void startEditEntry(row)}>{t('kb.edit')}</Link>
-              <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('kb.delete') }))) return; removeEntry(row) }}>{t('kb.delete')}</Link>
+              <Link tone="danger" onClick={() => { void removeEntry(row) }}>{t('kb.delete')}</Link>
             </div>
           ) },
         ]} />

@@ -91,7 +91,7 @@ export async function kbEntryDelete(id: number): Promise<AdminResp> {
 
 /** 批量导入 KB 条目（租户管理员） */
 export async function kbEntriesImport(data: { package_id: number; entries: { source_text: string; target_lang: string; target_text: string; layer?: number; module?: string }[] }): Promise<AdminResp> {
-  return request('/api/admin/kb-entries/import', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/kb-entries/import', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ==================== KB 文件上传（后台，租户管理员及以上） ====================

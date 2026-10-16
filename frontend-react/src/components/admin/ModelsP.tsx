@@ -12,6 +12,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button, Link } from '@/ui/langcross/src'
 // toastBus 是同步总线（不返回 Promise），所以调用点去掉了原先的 void 吞返回值写法
 import { toastSuccess, toastError } from '@/lib/toastBus'
+// ★ 2026-10-16 静默失败批：三条只读加载腿（主模型/策略/分阶段）旧写法裸 await、无 catch
+//   ⇒ 接口一挂就是未处理 rejection + 一张空表单，超管分不清「没配置」与「请求失败」（#42 同族）
+import { runGuarded } from '@/lib/runGuarded'
 import {
   adminModels, adminModelsSave, stageModels, stageModelsSave,
   adminPolicy, adminPolicySave, type Any,
@@ -72,7 +75,8 @@ export function ModelsP() {
 
   // loadModels 拉取主模型/embedding/多供应商路由（密钥只回掩码，不回明文）
   const loadModels = useCallback(async () => {
-    const r = await adminModels()
+    const r = await runGuarded(() => adminModels())
+    if (!r) return
     if (r.success) {
       const d = r as unknown as { model?: Any; embedding?: Any; routes?: Any[] }
       setMForm(d.model || {})
@@ -83,12 +87,14 @@ export function ModelsP() {
   }, [])
   // loadPolicy 拉取模型调度策略（熔断阈值/采样/兜底链）
   const loadPolicy = useCallback(async () => {
-    const r = await adminPolicy()
+    const r = await runGuarded(() => adminPolicy())
+    if (!r) return
     if (r.success) setPForm2((r as unknown as { policy?: Any }).policy || {})
   }, [])
   // loadStages 拉取分阶段模型（初翻/校对/Judge 各自模型）并回填表单
   const loadStages = useCallback(async () => {
-    const r = await stageModels()
+    const r = await runGuarded(() => stageModels())
+    if (!r) return
     if (r.success) {
       const st = (r as unknown as { stages?: Record<string, Any> }).stages || {}
       const nf: Any = {}

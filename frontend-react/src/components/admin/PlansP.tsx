@@ -699,11 +699,18 @@ async function createPkg() {
     if (toastResp(r)) { setPkgForm({ code: '', name: '', ptype: 'paid', sentences: 0, points: 1000, price_money: 0, duration_days: 30 }); void loadPkgs() }
   }
     // togglePkg 套餐上下架
-async function togglePkg(p: Any) { await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 }); void loadPkgs() }
+async function togglePkg(p: Any) {
+  // ★ 2026-10-16 D 族：两个接口都是 bizResp（4xx 不抛）⇒ 必须看返回值，否则上下架失败的观感是「点了没反应」
+  const r: Any = await adminPackageUpdate({ id: Number(p.id), enabled: p.enabled ? 0 : 1 })
+  if (!toastResp(r)) return
+  void loadPkgs()
+}
     // deletePkg 删除套餐
 async function deletePkg(p: Any) {
-    if (!(await confirmDialog({ body: t('packages.confirmDeletePkg') }))) return
-    await adminPackageDelete(Number(p.id)); void loadPkgs()
+    if (!(await confirmDialog({ body: t('packages.confirmDeletePkg'), danger: true }))) return
+    const r: Any = await adminPackageDelete(Number(p.id))
+    if (!toastResp(r)) return
+    void loadPkgs()
   }
     // loadFunnel 拉取 S4 注册 cohort 增长漏斗
 async function loadFunnel() {

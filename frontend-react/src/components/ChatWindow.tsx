@@ -48,6 +48,9 @@ import { setChatMaxChars } from '../lib/chatLimit'
 // ★ P3 语音两件套（麦克风录音 / 译文朗读）：录放链路在 api/chatVoice.ts；
 //   识别引擎（服务端 / 端侧 WASM）的可插拔接缝在 api/asrEngines.ts（P4）。
 import { micSupported } from '@/api/chatVoice'
+// ★ 2026-10-16 能力门批：麦克风这条链的上游是服务端 ASR（部署机没装 sherpa/ffmpeg 时 asr_ready=false，
+//   识别接口恒回 capability_missing）。与「浏览器不支持就不渲染」同一口径，这里再加一道**服务端能力门**。
+import { useVoiceCapability } from '@/api/voiceCapability'
 import { getAsrEngine, ServerAsrEngine, type AsrSession } from '@/api/asrEngines'
 // ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
 import { slowVerdict } from '../lib/slowEstimate'
@@ -404,7 +407,10 @@ export default function ChatWindow() {
   //   现在的口径＝**一次手势走完**：按下录音 → 松开 → 立即把识别文本发出去翻译，不再要求用户
   //   在输入框里再点一次「翻译」。识别失败仍只提示、不发送（错原文发出去既费积分又没法挽回）。
   // 可用性：浏览器不支持就直接**不渲染这颗按钮**（不给一个点了必然报错的入口）。
-  const canMic = micSupported()
+  // ★ 2026-10-16：再加一道服务端能力门——cap.asr===false（服务端没装识别模型）时同样整颗不渲染；
+  //   cap.asr===null（探不到）走 fail-open 照常渲染，真点了仍有识别失败的本地化提示兜底。
+  const cap = useVoiceCapability()
+  const canMic = micSupported() && cap.asr !== false
   const micRef = useRef<AsrSession | null>(null)
   const [micOn, setMicOn] = useState(false)
   const [micBusy, setMicBusy] = useState(false)

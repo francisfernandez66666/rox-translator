@@ -18,13 +18,28 @@
 // ============================================================================
 import { useEffect, useSyncExternalStore } from 'react'
 
-// VoiceCap 语音能力快照：null＝未知（探不到，按可用处理）
+// VoiceCap 能力快照：null＝未知（探不到，按可用处理）。
+// ★ 2026-10-16 能力门批：把同一把尺子从「TTS」扩到三条**服务端识别/合成能力**——
+//   tts（语音合成，朗读译文）/ asr（语音识别，工作台麦克风说话转文字）/ ocr（图片文字识别，工单图片翻译）。
+//   三档语义完全一致（false＝已知不可用 ⇒ 对应入口整颗不渲染；null＝未知 ⇒ fail-open 照常渲染），
+//   并且一律**只在本文件读 /api/health**：组件各自 fetch 一次就会长出第二把尺子（同 §一·17 那条）。
 // ★ langs（2026-10-16 补）：TTS 覆盖的目标语种清单（/api/health.tts_langs，**有效档**：
 //   中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar，按服务端两条路线资产实况收敛）。
 //   语音是**按语种**的能力——"服务器有 TTS" 不等于"这个语种有语音"，
 //   只有 tts 一个布尔时，未覆盖语种（如 th）译文的同一排会摆出一颗点下去必然失败的朗读钮。
 //   null＝未知（字段缺失/形态不对/探不到）⇒ 照旧 fail-open 露出按钮。
-export type VoiceCap = { tts: boolean | null; langs: string[] | null }
+export type VoiceCap = {
+  tts: boolean | null
+  langs: string[] | null
+  /** asr：语音识别（/api/health.asr_ready）——工作台麦克风把说的话转成待翻译文本的那条链 */
+  asr: boolean | null
+  /** ocr：图片文字识别（/api/health.ocr_ready）——工单里图片文件进翻译前的那一步 */
+  ocr: boolean | null
+}
+
+// UNKNOWN_CAP 未知档（三档全未知）：也是测试复位用的初值，
+// 抽成常量是为了让「复位 = 回到未知」这件事只有一处写法（写散了就会有一处漏掉新字段）。
+const UNKNOWN_CAP: VoiceCap = { tts: null, langs: null, asr: null, ocr: null }
 
 const HEALTH_URL = '/api/health'
 // 探针 TTL：健康读数变化很慢（要重投放权重才有意义），5 分钟一次足够；
@@ -39,7 +54,7 @@ export function normTtsLang(lang: string): string {
   return (lang || '').trim().toLowerCase().replace('_', '-').split('-')[0]
 }
 
-let snap: VoiceCap = { tts: null, langs: null }
+let snap: VoiceCap = UNKNOWN_CAP
 // listeners 订阅者集合（各气泡的 useSyncExternalStore 各订一份，状态只此一份）
 const listeners = new Set<() => void>()
 let inflight: Promise<void> | null = null
@@ -48,16 +63,20 @@ let fetchedAt = 0
 // emit 只在**值真的变了**时通知订阅者：useSyncExternalStore 的语义是"快照没变就不重渲染"，
 // 无条件 emit 会让每个气泡空转（同 frontend 那条「词典到达要进快照」的坑，反过来用）。
 function emit(next: VoiceCap) {
-  // 两个字段任一变化都要发通知：只比 tts 会让"覆盖语种补齐/收回"永远不重渲染
+  // 四个字段任一变化都要发通知：只比 tts 会让"覆盖语种补齐/收回""asr/ocr 从探不到变成已知"永远不重渲染
   // （形态同那条「emit 说变了才算变」的反向坑：这里漏比一个字段，界面上就是按钮该出现时不出现）。
   const sameLangs =
     (next.langs === null && snap.langs === null) ||
     (next.langs !== null && snap.langs !== null &&
       next.langs.length === snap.langs.length && next.langs.every((l, i) => l === snap.langs![i]))
-  if (next.tts === snap.tts && sameLangs) return
+  if (next.tts === snap.tts && sameLangs && next.asr === snap.asr && next.ocr === snap.ocr) return
   snap = next
   listeners.forEach((l) => l())
 }
+
+// boolOrNull 把健康读数收成三档：布尔照收，其余（缺失/null/字符串）一律「未知」。
+//   ★ 不许把"读到别的类型"当成 false——那会把一次字段改名打成"全站摘掉所有语音/图片入口"。
+function boolOrNull(v: unknown): boolean | null { return typeof v === 'boolean' ? v : null }
 
 // probeVoiceCapability 拨一次健康接口（幂等：同一次在途复用，TTL 内不重复拨）。
 export function probeVoiceCapability(force = false): Promise<void> {
@@ -67,9 +86,15 @@ export function probeVoiceCapability(force = false): Promise<void> {
     try {
       const r = await fetch(HEALTH_URL, { headers: { accept: 'application/json' } })
       if (!r.ok) throw new Error('http-' + r.status)
-      const j = (await r.json()) as { tts_ready?: unknown; tts_langs?: unknown }
-      // 字段不是布尔 ⇒ 保持「未知」：把「读不到」写成「不可用」就会无端摘掉入口
-      if (typeof j?.tts_ready === 'boolean') {
+      const j = (await r.json()) as { tts_ready?: unknown; tts_langs?: unknown; asr_ready?: unknown; ocr_ready?: unknown }
+      // 字段不是布尔 ⇒ 该档保持「未知」：把「读不到」写成「不可用」就会无端摘掉入口
+      const tts = boolOrNull(j?.tts_ready)
+      const asr = boolOrNull(j?.asr_ready)
+      const ocr = boolOrNull(j?.ocr_ready)
+      // 三档全不可读（接口形态不是我们认识的那一份）⇒ 整次探测按失败处理，快照一个字段都不动：
+      //   否则「什么都没读到」会被写成"三档全未知"，看着等价，实则把 TTL 时间戳也刷了
+      //   （下次真读数要再等 5 分钟才可能被采到）。
+      if (tts !== null || asr !== null || ocr !== null) {
         // 覆盖语种：只认"非空字符串数组"，其余（缺失/null/混进非字符串/空数组）一律按**未知**处理。
         //   空数组若被当成"一个语种都不支持"，一次字段解析意外就会把全站朗读钮摘光；
         //   而"未知"的代价只是回到 2026-10-16 之前的形态（露出按钮，失败有本地化 toast 兜底）。
@@ -79,7 +104,7 @@ export function probeVoiceCapability(force = false): Promise<void> {
             ? raw.map((x) => normTtsLang(x as string))
             : null
         fetchedAt = Date.now()
-        emit({ tts: j.tts_ready, langs })
+        emit({ tts, langs, asr, ocr })
       }
     } catch { /* 探不到 ⇒ 保持未知，按钮照旧露出（fail-open） */ } finally {
       inflight = null
@@ -109,7 +134,7 @@ export function subscribeVoiceCapability(fn: () => void): () => void {
 
 // resetVoiceCapability 复位（仅测试用：模块级单例要能一例一清，否则用例间互相污染）
 export function resetVoiceCapability() {
-  snap = { tts: null, langs: null }
+  snap = UNKNOWN_CAP
   inflight = null
   fetchedAt = 0
   listeners.clear()

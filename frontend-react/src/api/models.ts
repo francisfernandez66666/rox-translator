@@ -30,7 +30,9 @@ export async function adminModelsSave(data: {
   clear_keys?: string[];
   routes?: { provider: string; api_base: string; api_key: string; model: string; weight: number }[]
 }): Promise<AdminResp> {
-  return request('/api/admin/models/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  // ★ 2026-10-16 静默失败批：调用点全是 `if (!r.success) toastError(r.message)`，而裸 request 在 4xx 抛异常
+  //   ⇒ 参数被拒时「保存」按钮点了没反应（唯一提示面就是这行 success 分支）。包 bizResp 让后端原文上屏。
+  return bizResp(() => request('/api/admin/models/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ==================== 各流程阶段模型配置（super_admin） ====================
@@ -50,7 +52,7 @@ export async function stageModels(): Promise<AdminResp> {
 
 /** 保存各流程阶段模型配置（全量提交；某项为空=清空该阶段） */
 export async function stageModelsSave(stages: Record<string, StageModelConfig>): Promise<AdminResp> {
-  return request('/api/admin/models/stage/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stages }) })
+  return bizResp(() => request('/api/admin/models/stage/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ stages }) }))
 }
 
 /** 读取匹配策略参数 */

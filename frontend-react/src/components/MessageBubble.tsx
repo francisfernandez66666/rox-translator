@@ -19,7 +19,7 @@ import WordSwap from './WordSwap'
 // ★ P3 译文朗读（api/chatVoice.ts 是自包含模块，删掉本行与 SpeakButton 即回退到无语音形态）
 import { speakAloud } from '@/api/chatVoice'
 import { useVoiceCapability, ttsLangCovered } from '@/api/voiceCapability'
-import { toastWarn } from '@/lib/toastBus'
+import { toastWarn, toastError } from '@/lib/toastBus'
 // ★ 语音失败文案的唯一取词口（改造方案 §六 第 9 条）：按后端 reason 档位取当前界面语言的词典键，
 //   绝不要把后端那句中文话术 toast 给非中文访客。
 import { voiceFailText } from '@/lib/voiceFail'
@@ -193,26 +193,30 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   //   但裸用不等于裸奔：旧实现对 401 与其余非 2xx 一律 `return ''`，登录态过期时用户只看到
   //   「附件图片打不开、点了没反应」，界面还停在已登录态（半登录状态）。现补 handleUnauthorized，
   //   与 core.request 同口径清登录态并落回登录页。
-  async function loadBlobUrl(fp: string): Promise<string> {
+  // ★ 2026-10-16 静默失败批：失败时把「失败档」回给调用方（auth/http/net），
+  //   由调用方决定是否出声——预取路径（useEffect）要保持静默，下载路径必须出声。
+  //   旧写法一律 `return ''`，于是 403/404/500 时点下载**零反应**（既不下载也不提示）。
+  async function loadBlobUrl(fp: string, onFail?: (kind: 'auth' | 'http' | 'net') => void): Promise<string> {
     if (blobUrls[fp]) return blobUrls[fp]
     try {
       const resp = await fetch(`${API_BASE}/api/download/?path=${encodeURIComponent(fp)}`, {
         headers: { Authorization: `Bearer ${getAuthToken()}` },
       })
-      if (resp.status === 401) { handleUnauthorized('/api/download/'); return '' }
-      if (!resp.ok) return ''
+      if (resp.status === 401) { handleUnauthorized('/api/download/'); onFail?.('auth'); return '' }
+      if (!resp.ok) { onFail?.('http'); return '' }
       const url = URL.createObjectURL(await resp.blob())
       // 拉取期间组件可能已卸载：此时无人再 revoke，立即就地释放，避免登记到已销毁实例的集合里泄漏
       if (!aliveRef.current) { URL.revokeObjectURL(url); return '' }
       createdUrlsRef.current.add(url) // 纳入登记表，卸载时统一释放（create↔revoke 配对）
       setBlobUrls((prev) => ({ ...prev, [fp]: url }))
       return url
-    } catch { return '' }
+    } catch { onFail?.('net'); return '' }
   }
 
   // 下载并触发文件保存：复用以鉴权拉取的 blob URL，创建临时 <a> 执行下载
   async function downloadFile(fp: string) {
-    const url = await loadBlobUrl(fp)
+    // 401 已由 handleUnauthorized 统一收尾（清态回登录），不再叠一句红条
+    const url = await loadBlobUrl(fp, (kind) => { if (kind !== 'auth') toastError(t('common.fail')) })
     if (!url) return
     const a = document.createElement('a')
     a.href = url
@@ -566,7 +570,18 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
               )}
               {!!copyText && (
                 <button type="button" className="msg-act-btn" aria-label={t('msg.copy')} data-testid="copy-translation"
-                        onClick={() => { void navigator.clipboard?.writeText(copyText); setCopied(true); window.setTimeout(() => setCopied(false), 1500) }}>
+                        onClick={() => {
+                          // ★ 2026-10-16：剪贴板写入是 Promise 且**会被拒**（非安全上下文 / 无权限 / 用户手势外），
+                          //   旧写法 `void navigator.clipboard?.writeText(...)` 不看结果却无条件翻成「已复制」
+                          //   ＝一次假成功：用户以为复制到了，粘出来是空的。现在只有真成功才翻文案。
+                          void (async () => {
+                            try {
+                              await navigator.clipboard.writeText(copyText)
+                              setCopied(true)
+                              window.setTimeout(() => setCopied(false), 1500)
+                            } catch { toastError(t('common.fail')) }
+                          })()
+                        }}>
                   {copied ? t('msg.copied') : t('msg.copy')}
                 </button>
               )}

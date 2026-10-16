@@ -48,7 +48,10 @@ export function ApiKeysP() {
   }, [])
   useEffect(() => {
     void loadKeys()
-    void (async () => { const d: Any = await getOpenAPIDocs(); if (d.success) { setDocsMDZh(d.md_zh || ''); setDocsMDEn(d.md_en || ''); setDocsDefaultBadge(!!d.default_zh && !!d.default_en) } })()
+    // ★ 2026-10-16：这条预取是「有则填、无则静默」（非超管打这里恒 403），静默是设计；
+    //   但旧写法连 catch 都没有 ⇒ 403 会变成一条未处理 rejection（控制台红字）。
+    //   保留静默，只把异常收干净。
+    void (async () => { const d: Any = await getOpenAPIDocs(); if (d.success) { setDocsMDZh(d.md_zh || ''); setDocsMDEn(d.md_en || ''); setDocsDefaultBadge(!!d.default_zh && !!d.default_en) } })().catch(() => { /* 非超管/网络失败：静默（上方 docsCardOpen 时另有带提示的 loadDocs） */ })
   }, [loadKeys])
 
   async function copyNewKey() {
@@ -63,10 +66,20 @@ export function ApiKeysP() {
     setKForm({ name: '', perms: 'translate', daily_call_limit: '' })
     await loadKeys()
   }
-  async function toggleKey(k: Any) { await apiKeyStatus(Number(k.id), k.status === 'active' ? 'disabled' : 'active'); await loadKeys() }
+  // ★ 2026-10-16 D 族：apiKeyStatus 是 bizResp（4xx 不抛）⇒ 旧写法启停失败时界面上什么都没发生、也没有一句提示
+  async function toggleKey(k: Any) {
+    const r: Any = await apiKeyStatus(Number(k.id), k.status === 'active' ? 'disabled' : 'active')
+    if (!r.success) toastError(r.message || '')
+    await loadKeys() // 成功/失败都回读：以库里的真实状态为准
+  }
+  // ★ 2026-10-16：确认框只在这里弹一次。旧形态是操作列的 Link 先 confirmDialog 一次、
+  //   deleteKey 里又 confirmDialog 一次 ⇒ 用户要点两次「确定」才真删（现网报「弹窗两次」），
+  //   而且点第一次「确定」时请求还没发出去、列表自然一动不动（现网报「列表不刷新」）。
   async function deleteKey(k: Any) {
-    if (!(await confirmDialog({ body: t('apikeys.confirmDelete') }))) return
-    await apiKeyDelete(Number(k.id)); await loadKeys()
+    if (!(await confirmDialog({ body: t('apikeys.confirmDelete'), danger: true }))) return
+    const r: Any = await apiKeyDelete(Number(k.id))
+    if (!r.success) toastError(r.message || '')
+    await loadKeys() // 成功/失败都刷新：失败可能是「已被别处删掉」，界面必须以库为准
   }
   async function rotateKey(k: Any) {
     if (!(await confirmDialog({ body: tpl('apikeys.confirmRotate', { name: k.name }) }))) return
@@ -191,7 +204,7 @@ export function ApiKeysP() {
                      <Link onClick={() => toggleKey(row)}>{row.status === 'active' ? t('apikeys.disable') : t('apikeys.enable')}</Link>
                      <Link onClick={() => rotateKey(row)}>{t('apikeys.rotate')}</Link>
                      <Link onClick={() => setLimit(row)}><Icon n="gauge" style={MI} />{t('apikeys.setLimit')}</Link>
-                     <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('apikeys.confirmDelete') }))) return; deleteKey(row) }}>{t('apikeys.delete')}</Link>
+                     <Link tone="danger" onClick={() => deleteKey(row)}>{t('apikeys.delete')}</Link>
           </div>
                  ) },
                ]}  />

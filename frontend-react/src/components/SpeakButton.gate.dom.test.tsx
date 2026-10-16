@@ -29,7 +29,7 @@ vi.mock('@/api', () => ({ API_BASE: '', getAuthToken: () => '', handleUnauthoriz
 // ★ 只替换"取快照"与"拨探针"两条：`ttsLangCovered` 用**模块真实实现**——
 //   归一化那把尺子（zh-hant → zh）是前后端共用的，在接线测试里再抄一遍就等于把它从射程里摘掉
 //   （同 §三「判据级断言代替不了守卫级」：本文件要判的是"门有没有接到那把尺子上"）。
-const cap = { tts: null as boolean | null, langs: null as string[] | null }
+const cap = { tts: null as boolean | null, langs: null as string[] | null, asr: null as boolean | null, ocr: null as boolean | null }
 vi.mock('@/api/voiceCapability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/voiceCapability')>()
   return {

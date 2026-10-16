@@ -105,9 +105,10 @@ export async function orgBudgetSummary(): Promise<AdminResp & {
 
 /** orgTokenLimit 设置部门月度积分预算（0=关闭该部门的部门墙）。 */
 export async function orgTokenLimit(orgId: number, limitPoints: number): Promise<AdminResp> {
-  return request('/api/admin/orgs/token-limit', {
+  // ★ 2026-10-16 静默失败批：OrgP.saveBudget 判 `!r.success` 出话，裸 request 下 4xx 抛穿＝预算存不上也没提示
+  return bizResp(() => request('/api/admin/orgs/token-limit', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify({ org_id: orgId, limit_points: limitPoints }),
-  })
+  }))
 }

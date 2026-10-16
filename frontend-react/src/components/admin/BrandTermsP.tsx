@@ -179,12 +179,16 @@ export default function BrandTermsP(_props: Props) {
     // 空译文复用现成 bt.needEn 文案提示（语义即「请输入品牌译法」），F-25 不为此再造新键
     if (!text) { toastWarn(t('bt.needEn')); return }
     try {
+      // ★ 2026-10-16 D 族：kbEntryUpdate/kbEntryAdd 都是 bizResp（4xx 还原成 success:false 而**不抛**），
+      //   旧写法只靠 catch 判失败 ⇒ 业务失败时照样弹「已更新」并把弹窗关掉（假成功）。
       if (editDlg.entryId > 0) {
-        await kbEntryUpdate({ id: editDlg.entryId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        const r = await kbEntryUpdate({ id: editDlg.entryId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        if (!r.success) { toastError(gtpl('bt.updateFail', { err: String(r.message || '') })); return }
         toastSuccess(t('bt.updated'))
         setEditDlg((d) => ({ ...d, open: false }))
       } else {
-        await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        const r = await kbEntryAdd({ package_id: pkgId, layer: 1, source_text: brand, target_lang: editDlg.lang, target_text: text, module: 'brand' })
+        if (!r.success) { toastError(gtpl('bt.langFail', { err: String(r.message || '') })); return }
         toastSuccess(gtpl('bt.langAdded', { lang: editDlg.lang }))
         setEditDlg((d) => ({ ...d, open: false }))
       }
@@ -206,7 +210,9 @@ export default function BrandTermsP(_props: Props) {
     })
     if (!ok) return
     try {
-      await kbEntryDelete(id)
+      // ★ 2026-10-16 D 族：同上，kbEntryDelete 的 4xx 走 success:false 不抛 ⇒ 必须看返回值
+      const r = await kbEntryDelete(id)
+      if (!r.success) { toastError(gtpl('bt.deleteFail', { err: String(r.message || '') })); return }
       toastSuccess(t('bt.entryDeleted'))
       await load()
     } catch (e) { toastError(gtpl('bt.deleteFail', { err: String((e as any)?.message || e) })) }

@@ -7,13 +7,15 @@
 //   P3 网络失败／非 2xx ⇒ 保持「未知」，且**不写状态**（下一次调用必须重拨——一次抖动
 //      不该把「这个站永远没有语音」钉死，同 ensureLocale 那条「失败不写状态」）；
 //   P4 TTL 内不重复拨网络；force 能强制重拨；
-//   P5 值没变不发通知（emit 只对变化发，否则每个气泡空转重渲染）。
+//   P5 值没变不发通知（emit 只对变化发，否则每个气泡空转重渲染）；
+//   ★ 2026-10-16 能力门批补：探针从「只有 TTS」扩成 tts/asr/ocr 三档同一把尺子——
+//   P9 asr_ready/ocr_ready 如实落快照；P10 形态不对／缺失按**未知**（不误摘入口）；
+//   P11 只改 asr 也必须发通知（emit 漏比一个字段＝界面上那颗按钮该出现时不出现）；
+//   P12 三档全不可读（响应形态不是认识的那一份）⇒ 整次探测按失败处理（TTL 时间戳都不刷）。
 // 运行：npx vitest run src/api/voiceCapability.test.ts
 // ============================================================================
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import {
-  probeVoiceCapability, voiceCapability, subscribeVoiceCapability, resetVoiceCapability, ttsLangCovered,
-} from './voiceCapability'
+import { probeVoiceCapability, voiceCapability, subscribeVoiceCapability, resetVoiceCapability, ttsLangCovered, VoiceCap } from './voiceCapability'
 
 // healthReply 造一个 /api/health 响应
 const healthReply = (body: unknown, ok = true) => ({
@@ -121,11 +123,53 @@ describe('语音能力探针（/api/health.tts_ready）', () => {
     }
   })
 
+  // capOf 组装一份能力快照：ttsLangCovered 只吃 tts/langs，另两档（asr/ocr）显式写"未知"，
+  // 免得这段测试因为新增字段而变成"顺手把别的档位也钉死"（那不是这条用例的射程）。
+  const capOf = (tts: boolean | null, langs: string[] | null): VoiceCap => ({ tts, langs, asr: null, ocr: null })
+
+  it('P9 asr_ready/ocr_ready 如实落到快照（三档同一把尺子）', async () => {
+    impl = () => healthReply({ tts_ready: true, asr_ready: false, ocr_ready: true })
+    await probeVoiceCapability(true)
+    const c = voiceCapability()
+    expect(c.asr, 'asr_ready=false 必须落到快照（麦克风那颗按钮的渲染门）').toBe(false)
+    expect(c.ocr, 'ocr_ready=true 必须落到快照（工单图片后缀的准入）').toBe(true)
+  })
+
+  it('P10 asr/ocr 形态不对或缺失 ⇒ 未知（不能把"读不到"写成"不可用"）', async () => {
+    impl = () => healthReply({ tts_ready: true, asr_ready: 'false', ocr_ready: null })
+    await probeVoiceCapability(true)
+    const c = voiceCapability()
+    expect(c.asr, '字符串 "false" 不是布尔 ⇒ 未知').toBeNull()
+    expect(c.ocr, 'null ⇒ 未知').toBeNull()
+  })
+
+  it('P11 只有 asr 变化也必须发通知（emit 漏比字段＝按钮该出现时不出现）', async () => {
+    const seen: Array<string> = []
+    subscribeVoiceCapability(() => seen.push(`tts=${voiceCapability().tts},asr=${voiceCapability().asr}`))
+    impl = () => healthReply({ tts_ready: true, asr_ready: true, ocr_ready: true })
+    await probeVoiceCapability(true)
+    impl = () => healthReply({ tts_ready: true, asr_ready: false, ocr_ready: true })
+    await probeVoiceCapability(true)
+    expect(seen, 'tts 没变但 asr 翻了，也必须重渲染一次').toEqual(['tts=true,asr=true', 'tts=true,asr=false'])
+  })
+
+  it('P12 三档全不可读 ⇒ 整次探测按失败处理（TTL 时间戳不刷，下一次调用照旧重拨）', async () => {
+    // 先拿到一份正常读数（把 fetchedAt 打上）
+    impl = () => healthReply({ tts_ready: true, asr_ready: true, ocr_ready: true })
+    await probeVoiceCapability(true)
+    expect(calls).toBe(1)
+    // 接口形态变成"另一种东西"：三档都读不出来 ⇒ 快照一个字都不许动
+    impl = () => healthReply({ capabilities: { tts: true } })
+    await probeVoiceCapability(true)
+    const c = voiceCapability()
+    expect([c.tts, c.asr, c.ocr], '读不到任何一档时不许把快照改写').toEqual([true, true, true])
+  })
+
   it('P7 ttsLangCovered 三档：未知放行 / 空码放行 / 命中放行 / 越界收门', () => {
     // 未知（探不到）⇒ 放行：探针坏了不等于能力没了
-    expect(ttsLangCovered({ tts: null, langs: null }, 'ja')).toBe(true)
+    expect(ttsLangCovered(capOf(null, null), 'ja')).toBe(true)
     // 已知覆盖清单：命中（含地域段与大小写）放行
-    const cap = { tts: true, langs: ['zh', 'en'] }
+    const cap = capOf(true, ['zh', 'en'])
     expect(ttsLangCovered(cap, 'zh')).toBe(true)
     expect(ttsLangCovered(cap, 'en')).toBe(true)
     expect(ttsLangCovered(cap, 'ZH-hant'), '地域段/大小写都要归一化后再判').toBe(true)

@@ -28,11 +28,13 @@ export async function createFeedback(payload: {
   target_langs?: string
   mode?: string
 }): Promise<AdminResp> {
-  return request('/api/feedback', {
+  // ★ 2026-10-16：本文件其余接口早已全走 bizResp，唯独这条裸返 ⇒ 后台 TicketsP.submitFeedback
+  //   （只有 try/finally、没有 catch）在 4xx 时静默；一并收敛，与本文件头注释的口径对齐。
+  return bizResp(() => request('/api/feedback', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(payload),
-  })
+  }))
 }
 
 // resolveFeedback 超管标记已处理并附备注。

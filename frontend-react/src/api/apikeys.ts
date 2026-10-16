@@ -59,11 +59,13 @@ export async function getOpenAPIDocs(): Promise<AdminResp & { md_zh?: string; md
 
 /** saveOpenAPIDocs 保存指定语言的文档源码（空串=恢复该语言内置默认） */
 export async function saveOpenAPIDocs(data: { lang: string; md: string }): Promise<AdminResp> {
-  return request('/api/admin/openapi-docs/save', {
+  // ★ 2026-10-16 静默失败批：两个调用点（saveDocs 只有 finally、resetDocs 完全裸 await）都靠
+  //   `if (!r.success) toastError(...)` 出话 ⇒ 裸 request 时 4xx 直接抛穿、保存失败零提示。
+  return bizResp(() => request('/api/admin/openapi-docs/save', {
     method: 'POST',
     headers: authHeaders(),
     body: JSON.stringify(data),
-  })
+  }))
 }
 
 /** previewOpenAPIDocs 预览渲染结果 */

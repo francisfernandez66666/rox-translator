@@ -33,7 +33,8 @@ export default function MailTplP() {
         setDraft(d)
         setLoaded(true)
       })
-      .catch(() => setLoaded(true))
+      // ★ 2026-10-16：失败静默成「空列表」会让人以为模板本来就没有，出话才算取数失败可见
+      .catch(() => { setLoaded(true); toastError(t('common.fail')) })
     return () => { alive = false }
   }, [])
 

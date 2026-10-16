@@ -76,7 +76,7 @@ export async function billingQuota(): Promise<AdminResp> {
 /** 保存当前租户配额（QPS/并发/每日字符与积分上限） */
 /** 保存租户配额（qps/并发，管理员） */
 export async function billingQuotaSave(data: { qps: number; concurrent: number; max_daily_chars: number; max_daily_points?: number }): Promise<AdminResp> {
-  return request('/api/billing/quota/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/billing/quota/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ==================== 发票 ====================
@@ -252,7 +252,10 @@ export async function adminPackageSettingsSave(data: {
   wecom_webhook_url?: string
   dingtalk_webhook_url?: string
 }): Promise<AdminResp> {
-  return request('/api/admin/packages/settings/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  // ★ 2026-10-16 静默失败批：PlansP 六个调用点（含 saveEnforce/saveSensitiveGate/saveStaticQR 这类
+  //   一行式 toastResp）与 panels_a 的触达配置保存都靠 success 分支出话；裸 request 下 4xx 抛穿
+  //   ⇒ 「保存」点了没反应。
+  return bizResp(() => request('/api/admin/packages/settings/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ============================================================================
@@ -280,7 +283,7 @@ export async function adminPayChannels(): Promise<AdminResp & { fields?: Record<
 
 /** 管理台：保存支付渠道凭据（值留空=清除该项；掩码值=保持不动） */
 export async function adminPayChannelsSave(fields: Partial<Record<PayChField, string>>): Promise<AdminResp> {
-  return request('/api/admin/pay/channels/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ fields }) })
+  return bizResp(() => request('/api/admin/pay/channels/save', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ fields }) }))
 }
 
 // ============================================================================
@@ -303,7 +306,7 @@ export async function adminQuoteCurrency(): Promise<AdminResp & {
 
 /** 管理台：保存报价币种与汇率倍率（currency 空串=不表态；rates 不含 CNY——基准恒为 1） */
 export async function adminQuoteCurrencySave(data: { currency: string; rates: Record<string, number> }): Promise<AdminResp & { currency?: string; rates?: Record<string, number> }> {
-  return request('/api/admin/config/quote-currency', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) })
+  return bizResp(() => request('/api/admin/config/quote-currency', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
 // ============================================================================

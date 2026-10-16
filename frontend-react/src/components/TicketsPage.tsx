@@ -5,7 +5,7 @@
 // 2026-09-22 全站还原 UI 真值：本文件字号回退 #35 的整体 +1px（11.5/12/13 档），
 //       质检徽章由浅色主题遗留（#fdecea/#c5221f 等）改为交付包语义档（danger/warn 10% 底 + 真值前景）。
 // ============================================================================
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { Button, DataTable, Link, Switch } from '@/ui/langcross/src'
 import { toastSuccess, toastError } from '@/lib/toastBus'
@@ -16,7 +16,12 @@ import {
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
 import type { Ticket, TicketResp, TicketQuality, QAReportIssue } from '@/api/tickets'
-import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TEXT_DELIVERY_ACCEPT, validateTranslateFile } from '@/api/translate'
+import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TRANSLATE_FILE_EXTS, TEXT_DELIVERY_ACCEPT, TEXT_DELIVERY_ONLY_EXTS, validateTranslateFile } from '@/api/translate'
+// ★ 2026-10-16 能力门批：图片/音频这两类素材**不是**纯文本链路，要先经服务端的识别能力
+//   （图片 → OCR，音频 → ASR）。部署机没投放对应模型时这两个接口恒回 capability_missing，
+//   而 accept 里照样列着那八个图片后缀与七个音频后缀 ⇒ 客户选完、建单、等一会儿才吃一句失败：
+//   入口本身在承诺一件服务端做不到的事（同 ChatWindow 麦克风那条口径）。
+import { useVoiceCapability } from '@/api/voiceCapability'
 import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
@@ -296,6 +301,25 @@ export default function TicketsPage() {
   // ★ 工单双模式（2026-09-13）：交付方式 restore 还原文件模式（默认）/ text 纯文案模式
   const [delivery, setDelivery] = useState<string>(localStorage.getItem('ticket_delivery') || 'restore')
 
+  // ★ 2026-10-16 能力门：服务端识别能力快照（探针全站一份，见 api/voiceCapability.ts）。
+  //   null（探不到）⇒ 放行，与另两个消费点同档（fail-open：探针坏了不该摘产品入口）。
+  const cap = useVoiceCapability()
+  // 收门后的 accept：ocr=false 摘掉八个图片后缀、asr=false 摘掉七个音频后缀。
+  //   ★ 与后端 fileproc 的准入是两件事：这里收的是"这台机器现在能不能处理"，
+  //   后端那份清单管"这个格式受不受支持"（translateFormats.lock.test.ts 钉住的是那份**清单内容**，
+  //   本处只是按能力过滤它，不新增/删除清单项）。
+  const fileAccept = useMemo(() => {
+    const drop = new Set<string>()
+    if (cap.ocr === false) for (const e of IMAGE_EXTS) drop.add(e)
+    if (cap.asr === false) for (const e of AUDIO_EXTS) drop.add(e)
+    const base: readonly string[] = delivery === 'text'
+      ? [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS]
+      : TRANSLATE_FILE_EXTS
+    const kept = base.filter((e) => !drop.has(e))
+    // 一个都不剩不可能（文本类永远在），保底回退到原常量：accept 为空串＝浏览器认为"任何文件都能选"
+    return kept.length ? kept.join(',') : (delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT)
+  }, [cap.ocr, cap.asr, delivery])
+
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [detail, setDetail] = useState<TicketResp | null>(null)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
@@ -427,6 +451,11 @@ export default function TicketsPage() {
     const exist = new Set(files.map((f) => f.name + f.size))
     const next = [...files]
     for (const f of list) {
+      // ★ 2026-10-16 能力门：accept 只是选择框的过滤器（客户把筛选切到「所有文件」就能选进来），
+      //   所以被禁用那一类必须在这里再拒一次——否则坏体验会挪到"建单后等一会儿才失败"。
+      const ext = '.' + (f.name.split('.').pop() || '').toLowerCase()
+      if (cap.ocr === false && (IMAGE_EXTS as readonly string[]).includes(ext)) { toastError(t('tk.mediaNoOcr')); continue }
+      if (cap.asr === false && (AUDIO_EXTS as readonly string[]).includes(ext)) { toastError(t('tk.mediaNoAsr')); continue }
       // 逐个校验：不合规的弹一条 toast 后 continue（不清空整批，其余文件照收）；
       // 纯文案模式允许的格式集与还原模式不同，故把 delivery 传进去决定白名单
       const reason = validateTranslateFile(f, delivery === 'text')
@@ -609,7 +638,9 @@ export default function TicketsPage() {
               {/* 拖放区/文件片的面取面板面（= --lc-panel，★ 2026-10-10 新档 #14171C），框线一律走令牌 */}
               <div onClick={() => document.getElementById('tk-file-input')?.click()}
                 style={{ border: '1.2px dashed var(--lc-border-input)', borderRadius: 8, padding: 34, textAlign: 'center', cursor: 'pointer', color: 'var(--lc-text-3)', background: 'var(--lc-panel)' }}>
-                <input id="tk-file-input" type="file" multiple hidden accept={delivery === 'text' ? TEXT_DELIVERY_ACCEPT : TRANSLATE_FILE_ACCEPT} onChange={onFileSelect} />
+                {/* accept 是本页「这台机器现在能收什么」的对外承诺（服务端缺 OCR/ASR 时摘掉那两类），
+                    与后端白名单不是同一件事：后者管格式支不支持，由 translateFormats.lock.test.ts 钉住 */}
+                <input id="tk-file-input" type="file" multiple hidden accept={fileAccept} onChange={onFileSelect} />
               <div>{delivery === 'text' ? t('tk.fileHintText') : t('tk.fileHint')}<br /><span style={{ fontSize: 14 }}>{t('tk.multiHint')}</span></div>
             </div>
               {files.length > 0 && (

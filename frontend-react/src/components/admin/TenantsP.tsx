@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from 'react'
 //   ③ 新底座没有 Popconfirm 与 Space，气泡确认改走 uiDialogs.confirmDialog，行内动作容器改 flex div。
 import { Button, DataTable, Dialog, Switch, StatusPill, Link } from '@/ui/langcross/src'
 // toastBus 是同步总线（不像 MessagePlugin 返回 Promise），旧调用点的 void 前缀因此全部去掉
-import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
+import { toastSuccess, toastError } from '@/lib/toastBus'
 import { confirmDialog, promptText } from '@/components/uiDialogs'
 import {
   tenantList, tenantCreate, tenantUpdate, tenantSetStatus, tenantDelete,
@@ -44,6 +44,10 @@ export function TenantsP() {
   const [form, setForm] = useState<Any>({})
   // indList 行业枚举：列表展示名与表单下拉共用一份；拉取失败静默降级为「—」，不阻塞建租户
   const [indList, setIndList] = useState<Array<{ code: string; name: string; enabled: number }>>([])
+  // codeErr 编码必填的就地错误文案（2026-10-16 用户报障「点确定完全没反应」的收口之一）：
+  // 旧写法只弹一条 warn toast 就 return，用户没注意到 toast 时整个动作看上去什么都没发生；
+  // 现在把这句话钉在输入框下方（移开视线也还在），并给输入框加 aria-invalid。
+  const [codeErr, setCodeErr] = useState('')
 
   // loadInd 拉取行业枚举（租户表单行业下拉数据源）
   const loadInd = useCallback(async () => {
@@ -65,32 +69,34 @@ export function TenantsP() {
 
   // save 新建/编辑同一入口：code、管理员账号、初始密码只在创建态提交，
   // 编辑分支刻意不带这三项（改码会断外链映射，重置密码更不该由普通编辑动作顺带发生）
+  // save 新建/编辑同一入口：每个写入都必须是「有结果」的——runGuarded 接网络/超时/401/403，
+  // toastResp 接业务失败（4xx 经 bizResp 还原成 success:false）。两者各出一句红条，
+  // 绝不允许再出现「点确定之后什么都没发生」的分支（2026-10-16 用户报障的定性落点）。
   async function save() {
     if (dlg === 'create') {
-      // code 必填先在前端拦一刀（后端同校验），少一次往返；此处残留的 void 是 MessagePlugin 时代的痕迹，
-      // toastWarn 无返回值，留着只是无害冗余
-      if (!String(form.code || '').trim()) { void toastWarn(t('tenants.codeRequired')); return }
-      const r: any = await tenantCreate({
+      // code 必填先在前端拦一刀（后端同校验），少一次往返；就地报错而不是只弹 toast
+      if (!String(form.code || '').trim()) { setCodeErr(t('tenants.codeRequired')); return }
+      const r = await runGuarded(() => tenantCreate({
         code: String(form.code || ''), name: String(form.name || ''),
         expires_at: String(form.expires_at || ''), permissions: String(form.permissions || '{}'),
         admin_user: form.admin_user ? String(form.admin_user) : undefined,
         admin_pass: form.admin_pass ? String(form.admin_pass) : undefined,
         industry: form.industry ? String(form.industry) : undefined,
-      })
-      if (!r.success) { toastError(r.message); return }
+      }))
+      if (!r || !toastResp(r)) return
       // 建完除了刷本页列表还要 ad.loadTenants()：顶栏租户切换器读的是 store 缓存，
       // 只刷本页会出现「列表里有、切不过去」的割裂状态
-      setForm({}); setDlg(null); await load(); ad.loadTenants()
+      setForm({}); setCodeErr(''); setDlg(null); await load(); ad.loadTenants()
     } else if (dlg && typeof dlg === 'object' && 'edit' in dlg) {
       const tt = dlg.edit
-      const r: any = await tenantUpdate({
+      const r = await runGuarded(() => tenantUpdate({
         id: tt.id, name: String(form.name ?? tt.name),
         expires_at: String(form.expires_at ?? tt.expires_at ?? ''),
         permissions: String(form.permissions ?? tt.permissions ?? '{}'),
         // 下拉里可能是展示名也可能是 code（历史数据未归一），提交前统一折回 code
         industry: String(form.industry ? industryCodeOf(String(form.industry)) : (tt.industry ?? '')),
-      })
-      if (!r.success) { toastError(r.message); return }
+      }))
+      if (!r || !toastResp(r)) return
       setDlg(null); await load()
     }
   }
@@ -120,6 +126,8 @@ export function TenantsP() {
       // 用完立刻 revoke：不释放的话每次导出的整包 JSON 都会挂在内存里
       URL.revokeObjectURL(a.href)
     }
+    // 链路断掉时 onload 根本不会触发（旧写法只有 onload）⇒ 点导出什么都没发生；这里补一句出声
+    xhr.onerror = () => toastError(t('tenants.exportFailed'))
     xhr.send(JSON.stringify({ id: tt.id }))
   }
 
@@ -130,12 +138,14 @@ export function TenantsP() {
     const points = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
     // 取消输入或填 0/负数都静默返回：取消不是错误，不该弹红条吓人
     if (!points || Number(points) <= 0) return
-    const r: any = await adminOrderCreate({ tenant_id: tt.id, points: Number(points), money: 0 })
-    if (!r.success) { toastError(r.message); return }
-    const o = r.order
+    const r = await runGuarded(() => adminOrderCreate({ tenant_id: tt.id, points: Number(points), money: 0 }))
+    if (!r || !toastResp(r)) return
+    // r.order 未在 AdminResp 里声明（后端随成功体附带），取用时按宽松别名读
+    const o = (r as Any).order
     // 支付这步不再判 success：钱已由 create 记账，置付失败宁可留在「待支付」让人工接手，
-    // 也不能在这里回滚或重复下单
-    if (o && o.id) await adminOrderPay(o.id, tt.id)
+    // 也不能在这里回滚或重复下单。但「网络断了」必须出声——旧写法裸 await，
+    // 置付请求连不上时是一条未处理 rejection，超管以为已经到账。
+    if (o && o.id) await runGuarded(() => adminOrderPay(o.id, tt.id))
     toastSuccess(tpl('tenants.charged', { points }))
     await load()
   }
@@ -143,19 +153,20 @@ export function TenantsP() {
   // removeTenant 删的是租户行本身：后端在单事务里连带清该 tenant_id 作用域下的各业务表（旧库缺表跳过），
   // 所以前端一次确认即够；删完必须刷 store，否则顶栏还能切到已不存在的租户
   async function removeTenant(tt: TenantInfo) {
-    if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }) }))) return
-    const r: any = await tenantDelete(tt.id)
-    if (!r.success) { toastError(r.message); return }
+    // ★ 这里是删租户唯一的确认点（行内 Link 不再叠一层，详见操作列注释）；破坏性动作走 danger 档
+    if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }), danger: true }))) return
+    const r = await runGuarded(() => tenantDelete(tt.id))
+    if (!r || !toastResp(r)) return
     await load(); ad.loadTenants()
   }
 
   // erase 走 GDPR 删除权：清空该租户全部业务数据（含磁盘产物），但租户行与账号本身保留，
   // 所以它是 removeTenant 之外的独立入口、不可逆，故意连做两次不同文案的确认
   async function erase(tt: TenantInfo) {
-    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm', { name: tt.name }) }))) return
-    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm2', { name: tt.name }) }))) return
-    const r: any = await tenantErase(tt.id)
-    if (!r.success) { toastError(r.message); return }
+    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm', { name: tt.name }), danger: true }))) return
+    if (!(await confirmDialog({ body: tpl('tenants.eraseConfirm2', { name: tt.name }), danger: true }))) return
+    const r = await runGuarded(() => tenantErase(tt.id))
+    if (!r || !toastResp(r)) return
     toastSuccess(t('tenants.erased'))
     await load()
   }
@@ -163,11 +174,12 @@ export function TenantsP() {
   // setInvite 开关即落库，没有「保存」这一步：tenantUpdate 是全字段接口，
   // 所以未改动的 name/expires_at/permissions 必须原值带上，否则会被空值覆盖
   async function setInvite(tt: TenantInfo, val: boolean) {
-    const r: any = await tenantUpdate({
+    const r = await runGuarded(() => tenantUpdate({
       id: tt.id, name: tt.name, expires_at: tt.expires_at || '',
       permissions: tt.permissions || '{}', invite_enabled: val,
-    })
-    if (!r.success) { toastError(r.message); return }
+    }))
+    // 开关失败必须回读列表把开关拨回真实状态，否则界面停在用户拨的那一格＝显示与库不一致
+    if (!r || !toastResp(r)) { void load(); return }
     await load()
   }
 
@@ -175,14 +187,14 @@ export function TenantsP() {
   // 免得两端各存一套试用口径导致「显示 30 天实到 14 天」这类对不上
   async function grantTrial(tt: TenantInfo) {
     if (!(await confirmDialog({ body: tpl('tenants.grantTrialConfirm', { name: tt.name }) }))) return
-    const r: any = await tenantGrantTrial(tt.id)
-    if (!r.success) { toastError(r.message); return }
+    const r = await runGuarded(() => tenantGrantTrial(tt.id))
+    if (!r || !toastResp(r)) return
     toastSuccess(t('tenants.grantTrialDone'))
     await load()
   }
 
   return (
-    <Panel title={t('tenants.title')} extra={<Button variant="primary" onClick={() => { setForm({ permissions: '{}' }); setDlg('create') }}>{t('tenants.create')}</Button>}>
+    <Panel title={t('tenants.title')} extra={<Button variant="primary" onClick={() => { setForm({ permissions: '{}' }); setCodeErr(''); setDlg('create') }}>{t('tenants.create')}</Button>}>
       {/* 数据表格 */}
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
              columns={[
@@ -208,14 +220,21 @@ export function TenantsP() {
                  <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                    <Link onClick={() => { setForm({ name: row.name, expires_at: row.expires_at || '', permissions: row.permissions || '{}', industry: row.industry || '' }); setDlg({ edit: row }) }}>{t('tenants.edit')}</Link>
                    <Link onClick={() => grantTrial(row)}>{t('tenants.grantTrial')}</Link>
-                   <Link
-                            onClick={async () => { const r: any = await tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'); if (!r.success) toastError(r.message); await load() }}>
-                     {row.status === 'active' ? t('tenants.disable') : t('tenants.enable')}
-                   </Link>
+                    <Link
+                             onClick={async () => {
+                               const r = await runGuarded(() => tenantSetStatus(row.id, row.status === 'active' ? 'disabled' : 'active'))
+                               if (!r || !toastResp(r)) return
+                               await load()
+                             }}>
+                      {row.status === 'active' ? t('tenants.disable') : t('tenants.enable')}
+                    </Link>
                    {/* id===1 是内置超管租户：删除与擦除入口整体不渲染（后端同样会拦，这里先不给按钮），
-                       充值/导出/启停不在此限，超管租户也要能对账 */}
+                       充值/导出/启停不在此限，超管租户也要能对账。
+                       ★ 删除确认只在 removeTenant() 里那一次（2026-10-16 双确认批）：
+                         旧写法这里先 confirm 一次、进去又 confirm 一次（且后面那次的文案不带租户名），
+                         点第一次「确定」时请求还没发、列表不动——与 ApiKeysP 删除同形，一起收敛。 */}
                    {row.id !== 1 && (
-                     <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('tenants.deleteConfirm') }))) return; await removeTenant(row) }}>{t('tenants.delete')}</Link>
+                     <Link tone="danger" onClick={() => { void removeTenant(row) }}>{t('tenants.delete')}</Link>
                    )}
                    <Link onClick={() => charge(row)}>{t('tenants.charge')}</Link>
                    <Link onClick={() => doExport(row)}>{t('tenants.exportData')}</Link>
@@ -234,7 +253,12 @@ export function TenantsP() {
         {(dlg === 'create' || (dlg && typeof dlg === 'object' && 'edit' in dlg)) && (
           <>
             {dlg === 'create' && (
-              <Field label={t('tenants.codePlaceholder')}><input className="lc-input" value={String(form.code || '')} onChange={(e) => setForm({ ...form, code: e.target.value })} /></Field>
+              <Field label={t('tenants.codePlaceholder')}>
+                <input className="lc-input" aria-invalid={codeErr ? true : undefined} value={String(form.code || '')}
+                       onChange={(e) => { setForm({ ...form, code: e.target.value }); if (codeErr) setCodeErr('') }} />
+                {/* 就地错误：只弹一条 toast 就静默 return 的旧形态正是「点确定完全没反应」的观感来源 */}
+                {codeErr ? <div role="alert" data-testid="tenant-code-err" style={{ color: 'var(--lc-danger, #E5484D)', fontSize: 13, marginTop: 4 }}>{codeErr}</div> : null}
+              </Field>
             )}
             <Field label={t('tenants.namePlaceholder')}><input className="lc-input" value={String(form.name ?? '')} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             {/* 有效期用手填 YYYY-MM-DD：与后端按日解析的口径一致，日期控件容易多带时分/时区而差一天 */}
@@ -266,11 +290,12 @@ export function TenantsP() {
               onConfirm={async () => {
                 if (!(dlg && typeof dlg === 'object' && 'order' in dlg)) return
                 const tt = (dlg as { order: TenantInfo }).order
-                const r: any = await adminOrderCreate({ tenant_id: tt.id, points: Number(form.tokens || 0), money: Number(form.money || 0) })
+                const r = await runGuarded(() => adminOrderCreate({ tenant_id: tt.id, points: Number(form.tokens || 0), money: Number(form.money || 0) }))
                 // toastResp 已负责失败弹错/成功提示：返回 false 时保持弹窗不关，让超管改数重试而不是白丢一张单
-                if (toastResp(r, t('tenants.charged'))) {
-                  const oid = Number(r.order?.id ?? r.id ?? 0)
-                  if (oid > 0) await adminOrderPay(oid, tt.id)
+                if (r && toastResp(r, t('tenants.charged'))) {
+                  const oid = Number((r as Any).order?.id ?? (r as Any).id ?? 0)
+                  // 置付失败只出声不回滚（订单留在待支付），理由同 charge()
+                  if (oid > 0) await runGuarded(() => adminOrderPay(oid, tt.id))
                   setDlg(null)
                 }
               }}>

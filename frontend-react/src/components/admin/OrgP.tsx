@@ -254,7 +254,8 @@ export function OrgP() {
 
   // 删除成员（二次确认）
   async function deleteUser(u: Any) {
-    if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }) }))) return
+    // ★ 2026-10-16 双确认批：这里是删成员**唯一**的确认点（行内 Link 不再叠一层）
+    if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: u.username }), danger: true }))) return
     const r: any = await adminUserDelete(u.id)
     if (!r.success) { toastError(r.message); return }
     await loadAll()
@@ -317,7 +318,7 @@ export function OrgP() {
 
   // 删除组织（后端守卫：有子节点/成员时拒绝），当前选中则回落到根
   async function deleteOrg(o: OrgInfo) {
-    if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }) }))) return
+    if (!(await confirmDialog({ body: tpl('org.deleteConfirm', { name: o.name }), danger: true }))) return
     const r: any = await orgDelete(o.id)
     if (!r.success) { toastError(r.message); return }
     if (selectedOrg === o.id) setSelectedOrg(0)
@@ -507,7 +508,7 @@ export function OrgP() {
                        {row.status === 'disabled'
                          ? <Link onClick={() => setStatus(row, 'active')}>{t('org.enable')}</Link>
                          : <Link tone="danger" onClick={() => setStatus(row, 'disabled')}>{t('org.disable')}</Link>}
-                       <Link tone="danger" onClick={async () => { if (!(await confirmDialog({ body: t('common.delete') }))) return; deleteUser(row) }}>{t('common.delete')}</Link>
+                       <Link tone="danger" onClick={() => { void deleteUser(row) }}>{t('common.delete')}</Link>
                      </div>
                    ) },
                   ]} />
