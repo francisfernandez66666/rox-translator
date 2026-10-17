@@ -546,6 +546,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   否则漏掉一路就会把「无需翻译」的段重新送去换 "and"（下一批同样的报障）。
 	preFilled := mergeSegSets(blockedSeg, identitySeg)
 
+	// 现网排障抓手：本批确实有段被判「无需翻译」⇒ 原文直出、零上游暴露。
+	// 这行同时是 identityPrefillMarker 的运行时引用点（不留这行，常量会被编掉、发布脚本的特征串就失去对象，
+	// 见 translation_guard.go 里该常量的注释）。
+	if len(identitySeg) > 0 {
+		observability.Info(ctx, "文件翻译：无需翻译段按原文预填交付",
+			"marker", identityPrefillMarker, "segments", len(identitySeg))
+	}
+
 	// ★B3（A2）：逐段事件发射器（emit=nil 时 nil-safe 全空转，工单/非流式路径零开销）。
 	// 挂载点=方案 A2 第 2 条：KB 直译即中即推 / 批回调按块推初翻 / 语言收尾 diff+封印。
 	se := newSegEmitter(emit, texts, blockedSeg)

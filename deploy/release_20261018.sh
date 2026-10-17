@@ -78,13 +78,18 @@ echo "===== P0-B 后端件（本批 engine 判定加固 ＋ spa.go 预加载头�
   || { echo "ABORT=3 server 编译失败"; exit 2; }
 # 特征串证明"编译的是本工作树 HEAD"：本批两处形状必须都在件里。
 # ⚠️ 必须带 LC_ALL=C：macOS/BSD grep 多字节 locale 下拿中文模式**恒 0 命中**（17c 首跑真踩）。
+# ⚠️ #4 那一侧不许拿**函数名**当特征串（首跑真踩）：`-ldflags="-s -w"` 之下内联掉的函数不进名字表，
+#   同一棵树同一个件里 degenerateToFunctionWord 命中 1、identityDelivery 命中 0 ⇒ 会把编好的件判成"编错树"。
+#   用的是 engine 侧**被真实引用**的常量 identityPrefillMarker 与其日志字面量，与这里**逐字等值**
+#   （等值锁＝backend-go/internal/engine/release_marker_gate_test.go 的
+#    TestIdentityPrefillMarkerMatchesReleaseScript，含三枚反证）。
 W_LINK=$(LC_ALL=C grep -a -c -F -- "rel=preload; as=script; crossorigin" "$SERVER_BIN" || true)
-W_IDENT=$(LC_ALL=C grep -a -c -F -- "identityDelivery" "$SERVER_BIN" || true)
-W_FUNC=$(LC_ALL=C grep -a -c -F -- "degenerateToFunctionWord" "$SERVER_BIN" || true)
-echo "server size=$(wc -c <"$SERVER_BIN" | tr -d ' ') sha=$(sha_local "$SERVER_BIN") ｜ preload=${W_LINK} identity=${W_IDENT} funcword=${W_FUNC}（期望都 ≥1）"
+W_PREFILL=$(LC_ALL=C grep -a -c -F -- "PREFILL_IDENTITY_SEGMENTS_V1" "$SERVER_BIN" || true)
+W_PRELOG=$(LC_ALL=C grep -a -c -F -- "文件翻译：无需翻译段按原文预填交付" "$SERVER_BIN" || true)
+echo "server size=$(wc -c <"$SERVER_BIN" | tr -d ' ') sha=$(sha_local "$SERVER_BIN") ｜ preload=${W_LINK} prefill=${W_PREFILL} prefill_log=${W_PRELOG}（期望都 ≥1）"
 [ "$W_LINK" != "0" ] || { echo "ABORT=3 缺特征串「rel=preload; as=script; crossorigin」⇒ 编译的不是含本批改动的树"; exit 3; }
-[ "$W_IDENT" != "0" ] || { echo "ABORT=3 缺特征串 identityDelivery（#4 原文预填）"; exit 3; }
-[ "$W_FUNC" != "0" ] || { echo "ABORT=3 缺特征串 degenerateToFunctionWord（#4 判据②）"; exit 3; }
+[ "$W_PREFILL" != "0" ] || { echo "ABORT=3 缺特征串 PREFILL_IDENTITY_SEGMENTS_V1（#4 原文预填）"; exit 3; }
+[ "$W_PRELOG" != "0" ] || { echo "ABORT=3 缺预填日志字面量（#4 预填没走到运行期引用点）"; exit 3; }
 
 TAR_SHA=$(sha_local "$TAR")
 BIN_SHA=$(sha_local "$SERVER_BIN")

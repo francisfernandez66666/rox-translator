@@ -377,6 +377,15 @@ func letterishCount(s string) int {
 // 这一豁免形态按名字认出来——否则下一个人看不出这里那处裸 addTrans 是设计内还是漏判。
 func identityDelivery(src string) string { return src }
 
+// identityPrefillMarker —— 「无需翻译段按原文预填交付」这一形态在二进制里的**字面证据**。
+// 为什么要有它（口径同 cmd/server/listen_systemd.go 的 sdTakeoverMarker，2026-10-18 真踩）：
+// 发布件是 `-ldflags="-s -w"` 编出来的，而"函数名留不留在件里"**不可依赖**——同一棵树同一个件，
+// `degenerateToFunctionWord` 命中 1、`identityDelivery` 命中 0（后者被内联后不进名字表）。
+// 于是"编的是不是本棵工作树"只能靠一个**被真正引用**的字符串常量：本常量在 file.go 的预填日志里出现，
+// 发布脚本 `deploy/release_20261018.sh` 的 P0-B 特征串与它**逐字等值**。
+// 等值锁＝translation_guard_test.go 的 TestIdentityPrefillMarkerMatchesReleaseScript（现读脚本现算）。
+const identityPrefillMarker = "PREFILL_IDENTITY_SEGMENTS_V1"
+
 // identitySegments 汇总「交付形态就是原文本身」的段（NeedsIdentityDelivery 为真），
 // 并为每种目标语言预填原文；返回值供调用方并入「不进上游」的段集合（见 HandleFile）。
 // 三个目的：① 不送上游（数字/日期送翻只换来 "and" 这类幻觉，白花时间与积分）；
