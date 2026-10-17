@@ -25,11 +25,22 @@
    .lc-mob-topbar.fs-mob-topbar —— 不能用 space-between，那会把品牌名也推离汉堡）。
    flex:none 保证窄机（320）下被压缩的是品牌名而不是这两枚入口本身。 */
 .pub-topbar-actions { display: inline-flex; align-items: center; gap: 10px; margin-inline-start: auto; flex: none; }
-/* 登录钮＝次级幽灵件：与桌面档 .lc-nav-cta 的登录钮同档（描边 1.2/圆角 999/次级文字色），
-   只用既有令牌，不新增裸色值（readability.test.ts 会扫本文件）。 */
+/* ★★ 右簇两枚入口**一律同一档**（★ 2026-10-17 用户报「首页两个按钮组件样式都不统一」并附截图）：
+   语言钮是库件 .lang-sel-btn（交付档 8px 圆角／内垫 10／行高 1），登录钮是本壳新增件（999／内垫 12／
+   行高继承 1.6）——并排就是「圆角矩形 ＋ 胶囊」两种形态（实测 390 档：lang w73×h30 r8 pad10 vs
+   login w66×h30 r999 pad12），用户一眼就看出不统一。
+   修法＝两枚写进**同一条规则**（不是各写一份），一律按「幽灵胶囊」档：padd 12／圆角 999／
+   1.2px 描边／14px·500 字档／行高 1（行高不统一会让两枚文字的视觉中线差半像素）。
+   ⚠️ 写在同一条规则里是刻意的：拆成两份＝下一个人只改一份的温床，
+   `PublicShell.lock.test.ts` 的 L6 按"同一条规则同时列出两个选择器"机械判，正反两向都锁。
+   只覆盖几何与面色，不动库件的 :hover／.is-open 交互态（那些仍由 theme.css 管）。
+   ⚠️ 只作用于本壳顶栏（`.pub-topbar-actions` 作用域）：桌面档 `.lc-nav-cta` 里那枚语言钮
+   仍在交付的导航宽度预算里（LangSelect 107px，见 Landing.marketingOverflow.lock.test.ts），
+   本批**不动它**——动它＝重算 1181~1439 各档余量，那是另一件事。 */
+.pub-topbar-actions .lang-sel-btn,
 .pub-topbar-login { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; flex: none;
   border: 1.2px solid var(--lc-border-faint); border-radius: 999px; background: none;
-  color: var(--lc-text-btn-secondary); font-size: 14px; font-weight: 500;
+  color: var(--lc-text-btn-secondary); font-size: 14px; font-weight: 500; line-height: 1; gap: 6px;
   text-decoration: none; white-space: nowrap; }
 .pub-drawer__brand { color: var(--lc-text); text-decoration: none; }
 .pub-drawer__item { text-decoration: none; }

@@ -19,7 +19,10 @@
 //   L5 右簇归属（★ 2026-10-17 用户令「小屏幕把 language 选择器和登录按钮拿出来放右上角」）：
 //      顶栏右簇必须有语言钮与登录入口，**抽屉里两者都不许再有**——「搬过去」不是「多放一份」，
 //      只查一半（顶栏有没有）会让"抽屉里还留着旧的那份"一路绿（两处入口并存＝改一处漏一处的温床）。
-// 反证 R1/R2/R3/R4：分别把四处改坏，必须各自判红（先证明响应，再证明修法正当）。
+//   L6 右簇同档（★ 2026-10-17 用户报「首页两个按钮组件样式都不统一」附截图）：
+//      两枚入口必须写在**同一条规则**里（拆成两份＝只改一份的温床），且那条规则把几何档写全
+//      （999 圆角／高 30／内垫 0 12／1.2px 描边／14px·500／行高 1）；别的规则不许单独覆写它们的几何。
+// 反证 R1~R6：分别把六处改坏，必须各自判红（先证明响应，再证明修法正当）。
 //
 // ⚠️ 本锁只问**剥注释之后**的正文：注释里出现类名/说明是记录，不是实现（同 §一·5「注释不许冒充实现」）。
 // 运行：npx vitest run src/components/publicshell/PublicShell.lock.test.ts
@@ -152,6 +155,57 @@ function anchorFailures(shell: string, spec: string): string[] {
   return bad
 }
 
+/** 把样式表拆成 `{选择器列表, 规则体}` 序列（按大括号配对切；@media 里的内层规则也会各自成条）。 */
+function cssRules(css: string): Array<{ sel: string; body: string; i: number }> {
+  const out: Array<{ sel: string; body: string; i: number }> = []
+  const re = /([^{}]+)\{([^{}]*)\}/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(css)) !== null) {
+    out.push({ sel: m[1].split(',').map((s) => s.trim()).filter(Boolean).join(','), body: m[2], i: m.index })
+  }
+  return out
+}
+
+/**
+ * L6 判据：顶栏右簇两枚入口（语言钮／登录钮）必须**同档**——且是写在**同一条规则**里的那种同档。
+ *
+ * 由来（2026-10-17 用户报「首页两个按钮组件样式都不统一」并附截图）：语言钮是库件 .lang-sel-btn
+ * （交付档 8px 圆角／内垫 10／行高 1），登录钮是本壳新增件（999／内垫 12／行高继承 1.6），
+ * 并排＝圆角矩形＋胶囊两种形态。这类"两枚并排件各写一份"的漂移，只锁"两处取值相等"是不够的
+ * （下一批仍会各改一份、且当两处同时被改成另一个不同的值时就永远相等地错）——所以判据问的是
+ * **同一条规则同时列出这两个选择器**，再要求那条规则把几何档写全。
+ * 另配两条负向：别的规则不许单独覆写这两枚的几何（拆出去＝两把尺子）。
+ */
+function topbarPairFailures(css: string): string[] {
+  const rules = cssRules(stripComments(css))
+  const bad: string[] = []
+  const GEO = /(?:^|;)\s*(height|padding|border-radius|font-size|font-weight|line-height)\s*:/
+  const both = rules.filter((r) =>
+    r.sel.includes('.pub-topbar-actions .lang-sel-btn') && r.sel.includes('.pub-topbar-login'))
+  if (both.length === 0) {
+    return ['语言钮与登录钮不在同一条规则里（拆成两份＝下一个人只改一份的温床；用户已报过一次样式不统一）']
+  }
+  if (both.length > 1) bad.push(`右簇同档规则重复定义了 ${both.length} 次（后一条会压前一条＝等于又拆成两份）`)
+  const body = both[0].body
+  for (const [key, want] of [['border-radius', '999px'], ['height', '30px'], ['padding', '0 12px'],
+    ['font-size', '14px'], ['font-weight', '500'], ['line-height', '1']] as const) {
+    if (!new RegExp(`(?:^|;)\\s*${key}\\s*:\\s*${want.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*(?:;|$)`).test(body)) {
+      bad.push(`右簇同档规则里 ${key} 不是 ${want}（两枚并排就不一致了）`)
+    }
+  }
+  if (!/(?:^|;)\s*border\s*:\s*1\.2px/.test(body)) bad.push('右簇同档规则里描边不是 1.2px（〇-P 交付档）')
+  // 负向：别的规则不许单独覆写这两枚中任一枚的几何（拆出去＝两处尺子）
+  for (const r of rules) {
+    if (r.i === both[0].i) continue
+    const touches = (r.sel.includes('.pub-topbar-login') || r.sel.includes('.lang-sel-btn')) &&
+      r.sel.includes('.pub-topbar-actions')
+    if (touches && GEO.test(r.body)) {
+      bad.push(`另有规则单独覆写右簇入口几何（${r.sel}）⇒ 两处尺子，改一处漏一处`)
+    }
+  }
+  return bad
+}
+
 describe('未登录门面移动壳（PublicShell）锁', () => {
   const appRaw = readFileSync(APP, 'utf8')
   const shellRaw = readFileSync(SHELL, 'utf8')
@@ -183,6 +237,11 @@ describe('未登录门面移动壳（PublicShell）锁', () => {
     expect(bad, bad.join('\n')).toEqual([])
   })
 
+  it('L6 右簇同档：语言钮与登录钮写在同一条规则里且几何档写全', () => {
+    const bad = topbarPairFailures(cssRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
   it('R1 反证：摘掉一支 <PublicShell> 必须被 L1 判红', () => {
     const mutated = appRaw.replace(/(\s*)<PublicShell>(\s*)<RouteBoundary>/, '$1<RouteBoundary>')
     expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(appRaw)
@@ -211,5 +270,24 @@ describe('未登录门面移动壳（PublicShell）锁', () => {
     expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(shellRaw)
     expect(topbarFailures(mutated).length, 'R4 失效：语言钮被挪回抽屉却没判红').toBeGreaterThan(0)
     expect(topbarFailures(shellRaw)).toEqual([])
+  })
+
+  it('R5 反证：把两枚入口拆成两条规则必须被 L6 判红', () => {
+    // 拆法＝把登录钮单独提出来、给回"原来的"圆角矩形档（正是用户截图里那个形态）
+    const mutated = cssRaw.replace(
+      '.pub-topbar-actions .lang-sel-btn,\n.pub-topbar-login { display: inline-flex;',
+      '.pub-topbar-actions .lang-sel-btn { display: inline-flex;')
+      .replace('  text-decoration: none; white-space: nowrap; }',
+        '  text-decoration: none; white-space: nowrap; }\n.pub-topbar-login { height: 30px; padding: 0 10px; border-radius: 8px; }')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(cssRaw)
+    expect(topbarPairFailures(mutated).length, 'R5 失效：两枚入口被拆成两条规则却没判红').toBeGreaterThan(0)
+    expect(topbarPairFailures(cssRaw)).toEqual([])
+  })
+
+  it('R6 反证：同一条规则里把圆角改回 8px 必须被 L6 判红（等值档不许退化）', () => {
+    const mutated = cssRaw.replace('border-radius: 999px; background: none;', 'border-radius: 8px; background: none;')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(cssRaw)
+    expect(topbarPairFailures(mutated).length, 'R6 失效：圆角退化回 8px 却没判红').toBeGreaterThan(0)
+    expect(topbarPairFailures(cssRaw)).toEqual([])
   })
 })

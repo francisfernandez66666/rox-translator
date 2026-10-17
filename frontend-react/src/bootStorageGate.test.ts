@@ -230,6 +230,64 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     expect(code).toMatch(/rootEmpty\(\)[\s\S]{0,120}clearInterval/)
   })
 
+  // ★★ 2026-10-17 现网第二次实证（访客交回的 ② 读数指向**刚换上去的新入口**）：真身不是某个坏文件，
+  //   而是这一跳确实慢（本机跨境实测：163 KB 的 br 入口 12.8 s 才完，另两次 60 s 都没下完；
+  //   同一台打源站只要几十毫秒）——于是**哨兵自己**成了那块黑屏：
+  //     ① 6s 固定截止把「还在下载」误报成「下载没完成」（用户被引导去点重新加载＝从零再下一遍）；
+  //     ② 面板一旦显示就再也不会撤（旧形态只在「#root 空着」时轮询收摊，`show()` 之后 #root
+  //        才填上的那一档没人管）⇒ 界面其实已经挂载、用户脸上还盖着「页面没能加载起来」。
+  //   三条新锁与它们的反证共用同一把尺子（下面的两个判据函数）。
+  function adaptiveFailures(src: string): string[] {
+    const bad: string[] = []
+    if (!/navigator\.connection/.test(src)) bad.push('没有现读网络档（慢链路判据缺输入）')
+    if (!/DEADLINE_MS = SLOW_LINK \? 30000 : 8000/.test(src)) bad.push('截止没有按网络档分档')
+    if (!/CEILING_MS\s*=\s*60000/.test(src)) bad.push('缺上限（慢链路上会无限等下去）')
+    if (!/function resCount\(\)[\s\S]{0,200}getEntriesByType\('resource'\)/.test(src)) bad.push('缺「链路还在动」这一读数')
+    if (!/DEADLINE_MS = Math\.min\(Date\.now\(\) - startAt \+ 8000, CEILING_MS\)/.test(src)) {
+      bad.push('到期后没有再等一拍（会把"还在下载"误报成"没下完"）')
+    }
+    return bad
+  }
+  function slowPathFailures(src: string): string[] {
+    const bad: string[] = []
+    if (!/show\('slow'\)/.test(src)) bad.push('慢链路没有单独的展示档（会和确定失效混为一谈）')
+    if (!/data-kind', 'slow'/.test(src)) bad.push('横幅没有形态标记（撤销与判据都认不出它）')
+    if (!/clearInterval\(timer\);\s*dismissBootNotice\(\)/.test(src)) bad.push('挂载后没有撤销哨兵产物')
+    const i = src.indexOf("kind === 'slow'")
+    const j = src.indexOf('box = document.createElement')
+    if (i < 0 || j < i) bad.push('慢链路分支读不到（判据射程失效）')
+    else if (/inset:0/.test(src.slice(i, j))) bad.push('慢链路横幅用了全屏铺满（会盖住已经挂载好的界面）')
+    return bad
+  }
+
+  it('哨兵三期口径：网络档自适应＋上限＋链路还在动就再等一拍', () => {
+    const bad = adaptiveFailures(code)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('慢链路只出底部横幅（不挡界面）且挂载后必须撤销', () => {
+    const bad = slowPathFailures(code)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  // 反证 9：三条腿各摘一条（写回固定截止／慢链路改回全屏面板／撤掉撤销调用），必须各自判红
+  it('反证 9：固定截止／慢链路走全屏／不撤销 —— 三处各自改坏都要判红', () => {
+    const fixed = code.replace('var DEADLINE_MS = SLOW_LINK ? 30000 : 8000', 'var DEADLINE_MS = 6000')
+    expect(fixed, '反证失效：变异没落地').not.toBe(code)
+    expect(adaptiveFailures(fixed).length, '固定 6s 截止没被判红').toBeGreaterThan(0)
+    expect(adaptiveFailures(code)).toEqual([])
+
+    const blocked = code.replace("show('slow')", "show('panel')")
+    expect(blocked, '反证失效：变异没落地').not.toBe(code)
+    expect(slowPathFailures(blocked).length, '慢链路改回全屏面板没被判红').toBeGreaterThan(0)
+
+    const noDismiss = code.replace('clearInterval(timer); dismissBootNotice(); return',
+      'clearInterval(timer); return')
+    expect(noDismiss, '反证失效：变异没落地').not.toBe(code)
+    expect(slowPathFailures(noDismiss).length, '挂载后不撤销没被判红').toBeGreaterThan(0)
+    expect(slowPathFailures(code)).toEqual([])
+  })
+
   // 反证 5：摘掉哨兵那一段 `<script>` 后，三段哨兵判据必须全部失效
   //         （以前这里是「按注释起点切到 </head>」——注释一剥，那种切法既切不干净又会连带把
   //          body 里的 noscript 判没，属于「反证自己不可信」。改成按结构剥那一个脚本块。）

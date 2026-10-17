@@ -33,19 +33,54 @@
          （不是 type=module），因此它比入口包先执行、也不受入口包失败的影响。
           三条口径：① 只在 #root 一直空着时才显示，界面正常起来就自己收摊（零打扰）；
           ② 只做**读数**不做猜测——把「站点数据是否被拒」「哪个脚本没加载」「哪一行抛了异常」
-          以及「哪个界面模块的加载被拒绝了」（★ 2026-10-17 补：路由 chunk 的 import 失败只走
-          rejection 通道，前三条腿一条都收不到）四件它能亲自验的事分别报出来，
+          「哪个界面模块的加载被拒绝了」（★ 2026-10-17 补：路由 chunk 的 import 失败只走
+          rejection 通道，前三条腿一条都收不到）以及「哪个脚本还在下载」（有 fetch 就有 Resource
+          Timing 条目，没条目＝这一跳还在飞）五件它能亲自验的事分别报出来，
           报不出来就只说「没起来」，不写「一定是缓存」这类误导文案；
           ③ 文案给人话＋一个重载按钮，不出现 token／堆栈／内部路径。
+         ★★ 2026-10-17 现网第二次实证（同一台访客又交回 ② 读数，而这次指向的是**刚换上去的新入口**，
+         不是旧缓存件）⇒ 真身不是某个坏文件，而是**这一跳确实很慢**（跨境取 163 KB 的 br 入口实测
+         12.8 s，另有两次 60 s 都没下完；同一台打源站只要几十毫秒）。由此暴露本哨兵自己的两个缺陷：
+           · **6s 固定截止把「还在下载」误报成「下载没完成」**——用户被引导去点重新加载，
+             而重新加载只会从零再下一遍（慢链路越点越慢）。现改：截止按网络档自适应
+             （`navigator.connection` 现读；取不到按默认档），且到期时**只要链路还在动**（Resource
+             Timing 条目数又变了）就再等一拍，直到 CEILING_MS 上限；
+           · **面板一旦显示就再也不会撤**（旧形态只在「#root 空着」时轮询收摊，`show()` 之后
+             #root 才填上的那一档没人管）⇒ 界面其实已经挂载、用户脸上却盖着一块「页面没能加载起来」。
+             现改：`#root` 一填上就把哨兵产物撤掉（面板与慢链路横幅都撤）。
+           并且把「还在下载」这一类**降级成不挡界面的底部横幅**（它大概率只是慢，不是坏），
+           只有站点数据被拒／脚本真失败／执行抛异常这些**确定失效**才盖全屏面板。
          CSP 侧放行内联：deploy/caddy/*.conf 的 script-src 已含 'unsafe-inline'。
          ⚠️ 语法坑（2026-10-12 首跑真踩）：<noscript> 放 <head> 里时 HTML5 解析器进的是
          「in-head noscript」模式，只认 link/style/meta——里面写 <div> 会让 **vite build 当场解析报错**
          （`startTagInHeadNoScript`），界面照常开发热更却根本出不了包。兜底文案必须放 <body>。 -->
     <script>
       (function () {
-        var DEADLINE_MS = 6000
         var TICK_MS = 400
         var startAt = Date.now()
+        // ★ 自适应截止（见上方说明）：网络档现读，取不到就按默认档；CEILING_MS 是「还在动也别无限等」的上限。
+        var SLOW_LINK = false
+        var connType = ''
+        ;(function () {
+          try {
+            var c = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+            if (!c) return
+            connType = String(c.effectiveType || '')
+            if (typeof c.downlink === 'number' && c.downlink > 0) connType += '/dl' + c.downlink
+            if (typeof c.rtt === 'number' && c.rtt > 0) connType += '/rtt' + c.rtt
+            if (c.effectiveType === 'slow-2g' || c.effectiveType === '2g' || c.effectiveType === '3g') SLOW_LINK = true
+            else if (typeof c.downlink === 'number' && c.downlink > 0 && c.downlink < 1.5) SLOW_LINK = true
+            else if (typeof c.rtt === 'number' && c.rtt > 400) SLOW_LINK = true
+          } catch (err) { /* 网络档读不到＝不猜，按默认档跑 */ }
+        })()
+        var DEADLINE_MS = SLOW_LINK ? 30000 : 8000
+        var CEILING_MS = 60000
+        var lastResCount = -1
+        // 「这一跳还在动吗」＝Resource Timing 里的资源条目数有没有再变（变了＝又落了东西，
+        // 慢链路正是这个形态）。取不到 Performance API 时返回上一次读数（＝判不出"在动"，不猜）。
+        function resCount() {
+          try { return performance.getEntriesByType('resource').length } catch (err) { return lastResCount }
+        }
         var deadScripts = []
         var uncaught = ''
         var rejected = ''
@@ -121,25 +156,68 @@
           p.textContent = txt
           return p
         }
-        function show() {
-          if (document.getElementById('__boot_fail')) return
-          var box = document.createElement('div')
+        // ★ 撤哨兵产物：界面挂载上来就撤（旧形态只在「#root 空着」时轮询收摊——`show()` 之后
+        //   #root 才填上的那一档没人管，于是界面其实已经好了、用户脸上还盖着「页面没能加载起来」）。
+        function dismissBootNotice() {
+          var box = document.getElementById('__boot_fail')
+          if (box && box.parentNode) box.parentNode.removeChild(box)
+        }
+        function waitedLine() {
+          var s = Math.round((Date.now() - startAt) / 1000)
+          return '已等待约 ' + s + ' 秒' + (connType ? '（网络档 ' + connType + '）' : '')
+        }
+        function reloadBtn(css) {
+          var b = document.createElement('button')
+          b.textContent = '重新加载'
+          b.style.cssText = css
+          b.onclick = function () { location.reload() }
+          return b
+        }
+        // kind='slow' ⇒ 只是慢（脚本还在下载）：只出**不挡界面的底部横幅**——这一档大概率自己会好，
+        //   旧形态把它当失效盖满屏，用户看到的就是「页面没能加载起来」（2026-10-17 报障的真身）。
+        // kind='panel'⇒ 确定失效（站点数据被拒／脚本真失败／执行抛异常／什么都没抓到）：盖全屏、信息给全。
+        function show(kind) {
+          var box = document.getElementById('__boot_fail')
+          if (box && kind === 'slow' && box.getAttribute('data-kind') === 'slow') {
+            box.parentNode.removeChild(box)
+            box = null
+          }
+          if (box) return
+          var pending = pendingScripts()
+          if (kind === 'slow') {
+            var bar = document.createElement('div')
+            bar.id = '__boot_fail'
+            bar.setAttribute('data-kind', 'slow')
+            bar.setAttribute('role', 'status')
+            bar.style.cssText =
+              'position:fixed;left:0;right:0;bottom:0;background:#16181C;color:#E7E9EA;' +
+              'border-top:1.2px solid #6E7683;padding:12px 16px;z-index:99999;' +
+              'font:15px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif'
+            bar.appendChild(line('界面还在加载：' + waitedLine() + '。' +
+              (pending.length ? '还在下载：' + pending.slice(0, 2).join('；') : '界面脚本还没下载完') +
+              '。本站网络偏慢时入口脚本要十几秒，请再等一会儿；若一直不进，点这里重新加载（会从头再下一遍）。'))
+            bar.appendChild(reloadBtn('margin-top:8px;padding:8px 16px;font:14px/1 system-ui,sans-serif;' +
+              'background:none;color:#E7E9EA;border:1.2px solid #6E7683;border-radius:8px;cursor:pointer'))
+            ;(document.body || document.documentElement).appendChild(bar)
+            return
+          }
+          box = document.createElement('div')
           box.id = '__boot_fail'
+          box.setAttribute('data-kind', 'panel')
           box.setAttribute('role', 'alert')
           box.style.cssText =
             'position:fixed;inset:0;background:#0B0C0E;color:#E7E9EA;padding:32px;' +
             'font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;z-index:99999;overflow:auto'
           box.appendChild(line('页面没能加载起来', true))
-          box.appendChild(line('标题能显示说明站点本身是通的，是界面脚本这一步没跑完。下面这几条是刚才实测到的，可以直接拿给技术支持。'))
+          box.appendChild(line('标题能显示说明站点本身是通的，是界面脚本这一步没跑完（' + waitedLine() + '）。下面这几条是刚才实测到的，可以直接拿给技术支持。'))
           var blocked = storageBlocked()
-          var pending = pendingScripts()
           if (blocked.length) {
             box.appendChild(line('① 这台浏览器拒绝本站保存数据：' + blocked.join('、') + '。请在 Edge/Chrome 的「Cookie 和网站数据」里允许本站保存数据（隐私模式或「阻止所有 Cookie」会命中这一条），然后重新加载。'))
           }
           if (deadScripts.length) {
-            box.appendChild(line('② 有脚本没能加载：' + deadScripts.slice(0, 3).join('；')))
+            box.appendChild(line('② 有脚本没能加载：' + deadScripts.slice(0, 3).join('；') + '。多半是这一跳网络断了，或浏览器扩展拦下了这个文件；重新加载通常就能恢复。'))
           } else if (pending.length) {
-            box.appendChild(line('② 有个脚本的下载一直没完成：' + pending.slice(0, 2).join('；') + '。多半是这一跳网络被卡住了（也可能是浏览器扩展拦下了这个文件），先点下面重新加载；仍旧不行请把这一行原样交给技术支持。'))
+            box.appendChild(line('② 有个脚本的下载一直没完成：' + pending.slice(0, 2).join('；') + '。多半是这一跳网络太慢或被卡住了（也可能是浏览器扩展拦下了这个文件），点下面重新加载；仍旧不行请把这一行原样交给技术支持。'))
           }
           if (uncaught) {
             box.appendChild(line('③ 脚本执行时出错：' + uncaught))
@@ -150,18 +228,33 @@
           if (!blocked.length && !deadScripts.length && !pending.length && !uncaught && !rejected) {
             box.appendChild(line('② 没有抓到具体报错，常见原因是网络中断或浏览器扩展拦截了脚本。'))
           }
-          var btn = document.createElement('button')
-          btn.textContent = '重新加载'
-          btn.style.cssText =
-            'margin-top:8px;padding:10px 20px;font:15px/1 system-ui,-apple-system,"Segoe UI",sans-serif;' +
-            'background:#FFFFFF;color:#0B0C0E;border-radius:8px;cursor:pointer'
-          btn.onclick = function () { location.reload() }
-          box.appendChild(btn)
+          box.appendChild(reloadBtn('margin-top:8px;padding:10px 20px;font:15px/1 system-ui,sans-serif;' +
+            'background:#FFFFFF;color:#0B0C0E;border-radius:8px;cursor:pointer'))
           ;(document.body || document.documentElement).appendChild(box)
         }
         var timer = setInterval(function () {
-          if (!rootEmpty()) { clearInterval(timer); return }
-          if (Date.now() - startAt >= DEADLINE_MS) { clearInterval(timer); show() }
+          if (!rootEmpty()) { clearInterval(timer); dismissBootNotice(); return }
+          if (Date.now() - startAt < DEADLINE_MS) return
+          // 到期了：先问「这一跳还在动吗」——还有脚本在下载时，**只要链路还在动就再等一拍**
+          // （慢链路上 Resource Timing 条目数会陆续增加）；直到 CEILING_MS 上限。
+          var pending = pendingScripts()
+          var n = resCount()
+          var progressed = n !== lastResCount
+          lastResCount = n
+          var definitive = !!(deadScripts.length || rejected || uncaught || storageBlocked().length)
+          if (!definitive && pending.length) {
+            if (Date.now() - startAt < CEILING_MS) {
+              show('slow')
+              DEADLINE_MS = Math.min(Date.now() - startAt + 8000, CEILING_MS)
+              return
+            }
+          } else if (progressed && Date.now() - startAt < CEILING_MS) {
+            // 判不出确定失效、又没有"在下载的脚本"：只在链路明显还在动时多给一拍（避免误报）
+            DEADLINE_MS = Math.min(Date.now() - startAt + 8000, CEILING_MS)
+            return
+          }
+          clearInterval(timer)
+          show('panel')
         }, TICK_MS)
       })()
     </script>

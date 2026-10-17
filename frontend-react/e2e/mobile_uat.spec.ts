@@ -253,7 +253,8 @@ test('移动端全站页面无横向溢出巡检', async ({ page }) => {
 //   (.pub-topbar-login → /login)在位，且**抽屉里不能再有第二份**（搬过去≠两处并存）；
 //   ③ 点汉堡出抽屉＋遮罩、抽屉内跨页入口逐条可见、点遮罩收起；④ 各页自带头部**仍在 DOM**（页面真渲染）
 //   但移动档 `:visible` 清零——两条一起才证明是「壳把页头收起」而不是「页头压根没渲染」；
-//   ⑤ 无横向溢出；⑥ 桌面负向：1440 档不得出未登录移动顶栏（证明整个壳是移动档门禁的），页面自带头部须在。
+//   ⑤ 无横向溢出；⑥ 桌面负向：1440 档不得出未登录移动顶栏（证明整个壳是移动档门禁的），页面自带头部须在；
+//   ⑦ ★ 2026-10-17 用户报「两个按钮样式不统一」补：右簇两枚入口运行时**逐维同档**（高/圆角/内垫/字档/描边宽/行高）。
 test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋无溢出', async ({ page }) => {
   test.setTimeout(90000);
   // [路由, 该页自带的营销头部类名]——三支公开门面（登录页在末段单独判）
@@ -273,6 +274,21 @@ test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋�
     await expect(loginBtn, `${r} 顶栏缺登录入口`).toBeVisible();
     expect(await loginBtn.getAttribute('href'), `${r} 顶栏登录入口不指向 /login`).toBe('/login');
     expect(await page.locator('.pub-drawer .lang-sel-btn').count(), `${r} 抽屉里还留着语言钮（应只在顶栏）`).toBe(0);
+
+    // ②b ★ 2026-10-17 用户报「首页两个按钮组件样式都不统一」：右簇两枚入口必须**同档**——
+    //   源码侧由 PublicShell.lock L6 锁"写在同一条规则里"，这一腿是运行时侧：
+    //   逐维比对两枚的**计算样式**（高/圆角/内垫/字档/描边宽/行高），任一维不等即红。
+    //   ⚠️ 只比两枚彼此，不与源码字面值比：Chrome 的 CSSOM 把 1.2px 亚像素描边按设备像素取整上报
+    //   （dpr=1/2.5 实测都回 1px，见 AGENTS §一·5 〇-P 那条），拿字面值当运行时返回值会恒红。
+    //   宽度刻意不比：语言钮多一枚地球图标，宽度本来就不等（那不是"样式不统一"）。
+    const geo = (sel: string) => page.locator(sel).evaluate((el) => {
+      const cs = getComputedStyle(el); const r = el.getBoundingClientRect()
+      return { h: Math.round(r.height), radius: cs.borderRadius, pad: cs.paddingLeft + '/' + cs.paddingRight,
+        font: cs.fontSize + '/' + cs.fontWeight, bw: cs.borderTopWidth, lh: cs.lineHeight }
+    })
+    const gLang = await geo('.pub-topbar-actions .lang-sel-btn')
+    const gLogin = await geo('.pub-topbar-login')
+    expect(gLang, `${r} 右簇两枚入口样式不统一：语言钮 ${JSON.stringify(gLang)} vs 登录钮 ${JSON.stringify(gLogin)}`).toEqual(gLogin);
 
     // ③ 各页自带头部：必须仍在 DOM（页面真渲染了），但移动档不可见（壳把它收起）
     const head = page.locator(headCls);
