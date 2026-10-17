@@ -104,7 +104,9 @@ test.describe('像素级 UAT', () => {
 
   // ★ #36 + UI 真值（2026-09-22 口径改向）结构/字阶双断言：
   //   #36 即时翻译的输入框与译文合并进同一张对话框卡（旧版是「输入卡 + 下方消息流」两块），
-  //      同时文件翻译入口从即时翻译下线（文件翻译统一走工单通道），故卡内不得再有 file input；
+  //      同时**文档**文件翻译入口从即时翻译下线（文件翻译统一走工单通道），故卡内不得再有文档类 file input；
+  //      ★ 2026-10-17 bug8：用户令翻转「即时翻译只做文本」，新开**图片**上传（唯一允许的 file input 是 accept=image/*），
+  //      判据见下方 P2b 内的按形态分派断言。
   //   字阶/灰阶这一半原先钉的是「#35 整体上调一档」的结果，现已随全站按 UI 交付稿还原改为
   //      等值锁（真值来自 前端及UI相关/UI-ANNOTATIONS.md 与交付包）——这里用 getComputedStyle
   //      实测的是「渲染出来的值等于交付值」，与 readability.test.ts 的源码级锁互补：
@@ -231,8 +233,19 @@ test.describe('像素级 UAT', () => {
       expect(contrastOnCard(o.color, optInfo.panelBg), `${k}项文字色 ${o.color} 对面板底 ${optInfo.panelBg} 不应低于 4.5:1（正文档）`).toBeGreaterThanOrEqual(4.5);
     }
     await page.locator('[data-testid="lang-multi-trigger"]').click(); // 收起，别把浮层留给后续断言
-    // 文件入口下线：全站工作台不应再挂隐藏的原生 file input
-    expect(await page.locator('input[type="file"]').count(), '即时翻译已移除文件上传入口').toBe(0);
+    // 文件入口口径（★ 2026-10-17 bug8 按用户令**翻转**旧期望）：工作台不得再挂**文档类** file input；
+    //   图片翻译入口（bug8）允许、至多一枚，其 accept 必须是 image/*（不得出现文档扩展名）。
+    //   旧口径是「全站零 input[type=file]」（#36/〇-LJ 的下线决定），已被「即时翻译加图片上传」推翻——
+    //   留着旧期望会让下一个人按旧稿把图片入口删掉，与 ChatWindow.dom.test.tsx ② 同源。
+    //   只判「不得出现文档入口」而不写死「恰好一枚」：图片钮受 /api/health 的 ocr 能力门约束，能力缺失时整颗不渲染。
+    const fileInputs = page.locator('input[type="file"]');
+    const fileCount = await fileInputs.count();
+    expect(fileCount, '工作台的 file input 至多只许那一枚图片入口').toBeLessThanOrEqual(1);
+    for (let i = 0; i < fileCount; i++) {
+      const accept = (await fileInputs.nth(i).getAttribute('accept')) ?? '';
+      expect(accept, `工作台唯一 file input 必须是图片入口（accept=image/*），实得 ${JSON.stringify(accept)}`).toContain('image/');
+      expect(accept, '工作台不得出现文档类上传入口').not.toMatch(/\.(docx?|xlsx?|pptx?|pdf|csv)/i);
+    }
     // 字号真值等值锁（★ 2026-09-22 全站还原批立锁，★ 〇-N 2026-09-23 按新档重定）：
     // 单向下限锁正是把配色与字阶一路推离交付稿的元凶（它只拦变小，不拦变大），所以一律写「恰等于」。
     // 〇-N 的用户后令是「字号 +2px、线框加粗、不改颜色」，故这里全部由交付档整体 +2：

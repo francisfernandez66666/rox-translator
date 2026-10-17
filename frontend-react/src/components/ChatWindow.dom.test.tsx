@@ -128,7 +128,7 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
     expect(!!(body.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   })
 
-  it('② 不再渲染「文档」文件上传入口，页面文案不提「上传/文件翻译」', () => {
+  it('② 不再渲染「文档」文件上传入口（图片入口除外），页面文案不提「上传/文件翻译」', () => {
     const { container } = renderWindow()
     // ★ 2026-10-17 用户令翻转本条期望：**文档**文件翻译入口照旧不在（仍统一走工单页），
     //   但即时翻译**新开了图片上传**（用户明确推翻 #36「只做文本」旧决策）。
