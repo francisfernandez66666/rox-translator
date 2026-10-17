@@ -16,8 +16,21 @@
 /* 顶栏 sticky：营销页很长，汉堡要一直够得到（登录态顶栏在 flex 列里不滚动，这里必须 sticky）；
    z-index 40 < 遮罩 50 < 抽屉 60，抽屉展开时遮罩压住顶栏。 */
 .pub-mob-topbar { position: sticky; top: 0; z-index: 40; background: var(--lc-bg); }
-/* 品牌簇做成链接（回首页）：去下划线、吃正文色 */
+/* 品牌簇做成链接（回首页）：去下划线、吃正文色。min-width:0 让它先被压窄，
+   把宽度让给右簇（长品牌名走 .fs-mob-brand__name 的省略号）。 */
 .pub-mob-brand { color: var(--lc-text); text-decoration: none; }
+
+/* 顶栏右簇（★ 2026-10-17 用户令）：语言钮 ＋ 登录钮顶到最右端。margin-inline-start:auto
+   是「把这一簇推到主轴末端」的唯一手法（顶栏主轴是 flex-start，见 frontshell.css
+   .lc-mob-topbar.fs-mob-topbar —— 不能用 space-between，那会把品牌名也推离汉堡）。
+   flex:none 保证窄机（320）下被压缩的是品牌名而不是这两枚入口本身。 */
+.pub-topbar-actions { display: inline-flex; align-items: center; gap: 10px; margin-inline-start: auto; flex: none; }
+/* 登录钮＝次级幽灵件：与桌面档 .lc-nav-cta 的登录钮同档（描边 1.2/圆角 999/次级文字色），
+   只用既有令牌，不新增裸色值（readability.test.ts 会扫本文件）。 */
+.pub-topbar-login { display: inline-flex; align-items: center; height: 30px; padding: 0 12px; flex: none;
+  border: 1.2px solid var(--lc-border-faint); border-radius: 999px; background: none;
+  color: var(--lc-text-btn-secondary); font-size: 14px; font-weight: 500;
+  text-decoration: none; white-space: nowrap; }
 .pub-drawer__brand { color: var(--lc-text); text-decoration: none; }
 .pub-drawer__item { text-decoration: none; }
 /* 抽屉底部主 CTA：实心白填充（--lc-fill-white，与登录态主按钮同档），非文字链 */

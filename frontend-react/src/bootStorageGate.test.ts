@@ -152,12 +152,77 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     expect(openTag).not.toContain('type="module"')
   })
 
-  it('哨兵三件读数都在：站点数据探测／脚本加载失败／未捕获异常，外加一个重载按钮', () => {
+  it('哨兵五件读数都在：站点数据／脚本加载失败／未捕获异常／模块加载被拒／下载未完成，外加重载按钮', () => {
     expect(code).toContain('storageBlocked')
     expect(code).toContain("tagName === 'SCRIPT'")
     expect(code).toContain('uncaught')
+    // ★ 2026-10-17 第四件：路由 chunk 的 import 失败只走 rejection 通道，
+    //   缺这一腿时屏幕上只剩「没有抓到具体报错」那句零信息量文案（现网实证）。
+    expect(code).toContain('unhandledrejection')
+    expect(code).toContain('rejected')
+    // ★ 第五件：请求卡住（既不报错也不抛异常）时唯一的读数来源＝Resource Timing 没有条目
+    expect(code).toContain('pendingScripts')
+    expect(code).toContain('getEntriesByName')
     expect(code).toMatch(/重新加载/)
     expect(code).toContain('location.reload()')
+  })
+
+  // 反证 8：摘掉「下载未完成」腿 ⇒ 第五件读数判不到；且兜底那句必须同步收口
+  //   （只加读数不改兜底条件 ⇒ 界面上同时出现「下载没完成」和「没抓到具体报错」两句自相矛盾的话）。
+  it('反证 8：摘掉下载未完成腿后第五件读数判不到（并钉住兜底条件同步收口）', () => {
+    const stripped = code.replace(/function pendingScripts\(\)[\s\S]*?\n        \}\n/, '')
+    expect(stripped, '反证失效：变异没落地（正则没命中＝没反证）').not.toBe(code)
+    // 只判**调用形态**：说明注释里本来就会写到这个词（JS 注释不归 stripHtmlComments 管，
+    // 拿裸词判＝被自己的注释喂饱，本仓踩过）
+    expect(stripped).not.toContain('function pendingScripts')
+    expect(stripped).not.toContain('getEntriesByName')
+    // 对照腿：没摘的正文里两件都在
+    expect(code).toContain('function pendingScripts()')
+    expect(code).toContain('getEntriesByName')
+    // 兜底收口：两句不许同框（摘掉 !pending.length 也必须判到）
+    expect(code).toMatch(/!deadScripts\.length && !pending\.length/)
+    const noPendingGuard = code.replace('&& !pending.length', '')
+    expect(noPendingGuard, '反证失效：兜底条件变异没落地').not.toBe(code)
+    expect(noPendingGuard).not.toMatch(/!deadScripts\.length && !pending\.length/)
+  })
+
+  // 反证 7：摘掉 unhandledrejection 那一腿（回到旧形态）⇒ 第四件读数必须判不到。
+  //   ⚠️ 剥的是**调用形态**不是那串词：说明注释里本来就会写到 unhandledrejection
+  //   （「按字面量判据会被自己的注释喂饱」是本仓反复踩过的形态，同 §一·9 那条）。
+  //   两截各摘一次：只听事件不收口、只收口不监听，都必须是红。
+  const REJ_LISTEN = "window.addEventListener('unhandledrejection'"
+  it('反证 7：摘掉 unhandledrejection 监听后第四件读数判不到（回到旧形态即红）', () => {
+    const stripped = code.replace(/window\.addEventListener\('unhandledrejection'[\s\S]*?\n        \}\)\n/, '')
+    expect(stripped, '反证失效：变异没落地（正则没命中＝没反证）').not.toBe(code)
+    expect(stripped).not.toContain(REJ_LISTEN)
+    // 对照腿：没摘的正文里两件都在（否则上面是空转）
+    expect(code).toContain(REJ_LISTEN)
+    expect(code).toMatch(/界面模块没能加载/)
+    // 兜底那句必须已被 rejected 收口——只加读数不接收口条件，等于"有读数但照样说没抓到"
+    //   ⚠️ 判据只问相邻两片（!uncaught && !rejected）：这一行后面还挂着第五腿（!pending.length），
+    //   把整串写死＝下一腿加进来就假红（那正是本文件最该避免的"判据自己过时"）。
+    expect(code).toMatch(/!uncaught && !rejected\)/)
+    const noGuard = code.replace('&& !rejected', '')
+    expect(noGuard, '反证失效：收口条件变异没落地').not.toBe(code)
+    expect(noGuard).not.toMatch(/!uncaught && !rejected\)/)
+  })
+
+  // ★ 2026-10-17 新锁（本次真踩）：index.html 里**不许出现形如构建产物的 assets/ 路径**——
+  //   连注释里也不行。理由是 deploy/swap_web_and_binary.sh 的备料段会把 index.html 里
+  //   所有 `assets/….js|css` 当成"首页引用的 asset"逐个查落盘，注释里写一个不存在的名字
+  //   会让它在**换源前**判 BAD、整批停在备料段（本次首跑实测：`BAD 首页引用的 assets/Landing-xxxx.js 未落盘`，
+  //   而那一串只是我写在哨兵注释里的举例）。改法只有"注释别写出那个形状"，
+  //   因为"注释喂饱下游判据"是本仓反复出现的形态（AGENTS §一·9 那条）。
+  const assetPathLines = (src: string) =>
+    src.split('\n').map((l, i) => [i + 1, l] as const).filter(([, l]) => /assets\//.test(l)).map(([n]) => n)
+
+  it('index.html 内零 assets/ 路径字面量（写出会被换源脚本当引用去查落盘）', () => {
+    const hits = assetPathLines(code)
+    expect(hits, '这些行含 assets/ 路径，换源备料段会逐条查落盘：\n' + hits.map((n) => `${n}: ${code.split('\n')[n - 1].trim()}`).join('\n')).toEqual([])
+    // 对照腿：同一判据函数喂一行带假路径的源码必须报出来（否则上面那条是空转）
+    expect(assetPathLines('<a href="/assets/index-zzz.js">x</a>')).toEqual([1])
+    expect(assetPathLines('// 举个例：assets/Landing-xxx.js')).toEqual([1])
+    expect(assetPathLines('<a href="/logo.svg">x</a>')).toEqual([])
   })
 
   it('只在 #root 一直空着时才显示（正常挂载即收摊，不许打扰健康访问）', () => {

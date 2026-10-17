@@ -31,10 +31,12 @@
          （脚本没下载到／模块评估中途抛异常／浏览器拒绝站点数据），用户拿到的就是**纯黑屏零提示**，
          连「打开控制台看红字」都没法要求普通访客做到。哨兵放在 <head>、且是**普通内联脚本**
          （不是 type=module），因此它比入口包先执行、也不受入口包失败的影响。
-         三条口径：① 只在 #root 一直空着时才显示，界面正常起来就自己收摊（零打扰）；
-         ② 只做**读数**不做猜测——把「站点数据是否被拒」「哪个脚本没加载」「哪一行抛了异常」
-         三件它能亲自验的事分别报出来，报不出来就只说「没起来」，不写「一定是缓存」这类误导文案；
-         ③ 文案给人话＋一个重载按钮，不出现 token／堆栈／内部路径。
+          三条口径：① 只在 #root 一直空着时才显示，界面正常起来就自己收摊（零打扰）；
+          ② 只做**读数**不做猜测——把「站点数据是否被拒」「哪个脚本没加载」「哪一行抛了异常」
+          以及「哪个界面模块的加载被拒绝了」（★ 2026-10-17 补：路由 chunk 的 import 失败只走
+          rejection 通道，前三条腿一条都收不到）四件它能亲自验的事分别报出来，
+          报不出来就只说「没起来」，不写「一定是缓存」这类误导文案；
+          ③ 文案给人话＋一个重载按钮，不出现 token／堆栈／内部路径。
          CSP 侧放行内联：deploy/caddy/*.conf 的 script-src 已含 'unsafe-inline'。
          ⚠️ 语法坑（2026-10-12 首跑真踩）：<noscript> 放 <head> 里时 HTML5 解析器进的是
          「in-head noscript」模式，只认 link/style/meta——里面写 <div> 会让 **vite build 当场解析报错**
@@ -46,6 +48,7 @@
         var startAt = Date.now()
         var deadScripts = []
         var uncaught = ''
+        var rejected = ''
         // 资源级失败（script/link 没加载成）只在捕获阶段能拿到，必须现在就挂上
         window.addEventListener('error', function (e) {
           var t = e && e.target
@@ -55,6 +58,42 @@
             uncaught = String(e.message)
           }
         }, true)
+        // ★ 2026-10-17 补第四件读数：未处理的 Promise 拒绝（unhandledrejection）。
+        //   现状实证：路由 chunk 的动态 import 失败抛的是**模块级**异常，它走 rejection 通道、
+        //   window.onerror 与上面的捕获阶段 error 都收不到，于是屏幕上只剩「② 没有抓到具体报错，
+        //   常见原因是网络中断或浏览器扩展拦截了脚本」——那句话对排障零信息量。
+        //   这里把 reason 翻成人能读的一行（Error.message 里就带失败的文件名，
+        //   形如「Failed to fetch dynamically imported module: …/Landing-<哈希>.js」——本注释**故意
+        //   不写出可被当路径抓取的完整字面量**：换源执行体会把 index.html 里形如构建产物的路径逐个
+        //   当"首页引用的 asset"去查落盘，注释里放一个不存在的名字会让它判 BAD、整批换源停在备料段），
+        //   仍只取**一条**、不做堆栈、不记录 token（口径同哨兵其余三腿）。
+        window.addEventListener('unhandledrejection', function (e) {
+          if (rejected) return
+          var r = e && e.reason
+          var msg = ''
+          if (typeof r === 'string') msg = r
+          else if (r && r.message) msg = String(r.message)
+          else if (r) msg = String(r)
+          if (!msg) msg = '（模块没能加载，浏览器没有给出原因）'
+          rejected = msg.slice(0, 200)
+        })
+        // ★ 2026-10-17 补第五件读数：**下载一直没完成的脚本**。
+        //   现网那一档「没有抓到任何报错、界面又没起来」最可能的真身是「请求卡住了」——
+        //   既不触发 error 事件、也不抛异常，前四条腿一条都收不到。
+        //   判据＝该 script 的 src 在 Resource Timing 里**没有条目**（有 fetch 就有条目，哪怕回 404；
+        //   没有条目＝这一跳还在飞或压根没发出去）。只报读数，不改任何行为。
+        function pendingScripts() {
+          var out = []
+          var list = document.querySelectorAll('script[src]')
+          for (var i = 0; i < list.length; i++) {
+            var u = list[i].src || ''
+            if (!u) continue
+            try {
+              if (!performance.getEntriesByName(u).length) out.push(u)
+            } catch (err) { /* 取不到就当这条腿不适用，不猜 */ }
+          }
+          return out
+        }
         function rootEmpty() {
           var r = document.getElementById('root')
           return !r || r.childElementCount === 0
@@ -93,16 +132,22 @@
           box.appendChild(line('页面没能加载起来', true))
           box.appendChild(line('标题能显示说明站点本身是通的，是界面脚本这一步没跑完。下面这几条是刚才实测到的，可以直接拿给技术支持。'))
           var blocked = storageBlocked()
+          var pending = pendingScripts()
           if (blocked.length) {
             box.appendChild(line('① 这台浏览器拒绝本站保存数据：' + blocked.join('、') + '。请在 Edge/Chrome 的「Cookie 和网站数据」里允许本站保存数据（隐私模式或「阻止所有 Cookie」会命中这一条），然后重新加载。'))
           }
           if (deadScripts.length) {
             box.appendChild(line('② 有脚本没能加载：' + deadScripts.slice(0, 3).join('；')))
+          } else if (pending.length) {
+            box.appendChild(line('② 有个脚本的下载一直没完成：' + pending.slice(0, 2).join('；') + '。多半是这一跳网络被卡住了（也可能是浏览器扩展拦下了这个文件），先点下面重新加载；仍旧不行请把这一行原样交给技术支持。'))
           }
           if (uncaught) {
             box.appendChild(line('③ 脚本执行时出错：' + uncaught))
           }
-          if (!blocked.length && !deadScripts.length && !uncaught) {
+          if (rejected) {
+            box.appendChild(line('④ 有个界面模块没能加载（多半是加载那一瞬间网络断了，或浏览器扩展拦下了这个文件）：' + rejected + '。重新加载通常就能恢复。'))
+          }
+          if (!blocked.length && !deadScripts.length && !pending.length && !uncaught && !rejected) {
             box.appendChild(line('② 没有抓到具体报错，常见原因是网络中断或浏览器扩展拦截了脚本。'))
           }
           var btn = document.createElement('button')

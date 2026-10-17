@@ -1,0 +1,673 @@
+slug,keyword,intent,page_type,src,dst,fmt,scenario,volume_tier,competition_tier,fit,score,priority,zh_hint
+translate-docx-en-to-es-preserving-formatting,translate word docx from English to Spanish preserving formatting,L2,tool,en,es,docx,,high,high,format,22.5,P0,English→Spanish · Word · 保格式（最强战场）
+translate-docx-en-to-zh-preserving-formatting,translate word docx from English to Chinese preserving formatting,L2,tool,en,zh,docx,,high,high,format,22.5,P0,English→Chinese · Word · 保格式（最强战场）
+translate-docx-zh-to-en-preserving-formatting,translate word docx from Chinese to English preserving formatting,L2,tool,zh,en,docx,,high,high,format,22.5,P0,Chinese→English · Word · 保格式（最强战场）
+translate-pdf-en-to-es-preserving-formatting,translate pdf from English to Spanish preserving formatting,L2,tool,en,es,pdf,,high,high,format,22.5,P0,English→Spanish · PDF · 保格式（最强战场）
+translate-pdf-en-to-zh-preserving-formatting,translate pdf from English to Chinese preserving formatting,L2,tool,en,zh,pdf,,high,high,format,22.5,P0,English→Chinese · PDF · 保格式（最强战场）
+translate-pdf-zh-to-en-preserving-formatting,translate pdf from Chinese to English preserving formatting,L2,tool,zh,en,pdf,,high,high,format,22.5,P0,Chinese→English · PDF · 保格式（最强战场）
+translate-docx-en-to-ar-preserving-formatting,translate word docx from English to Arabic preserving formatting,L2,tool,en,ar,docx,,mid,mid,format,12.857,P0,English→Arabic · Word · 保格式（最强战场）
+translate-docx-en-to-de-preserving-formatting,translate word docx from English to German preserving formatting,L2,tool,en,de,docx,,mid,mid,format,12.857,P0,English→German · Word · 保格式（最强战场）
+translate-docx-en-to-fr-preserving-formatting,translate word docx from English to French preserving formatting,L2,tool,en,fr,docx,,mid,mid,format,12.857,P0,English→French · Word · 保格式（最强战场）
+translate-docx-en-to-ja-preserving-formatting,translate word docx from English to Japanese preserving formatting,L2,tool,en,ja,docx,,mid,mid,format,12.857,P0,English→Japanese · Word · 保格式（最强战场）
+translate-docx-en-to-pt-preserving-formatting,translate word docx from English to Portuguese preserving formatting,L2,tool,en,pt,docx,,mid,mid,format,12.857,P0,English→Portuguese · Word · 保格式（最强战场）
+translate-docx-ja-to-en-preserving-formatting,translate word docx from Japanese to English preserving formatting,L2,tool,ja,en,docx,,mid,mid,format,12.857,P0,Japanese→English · Word · 保格式（最强战场）
+translate-docx-ja-to-zh-preserving-formatting,translate word docx from Japanese to Chinese preserving formatting,L2,tool,ja,zh,docx,,mid,mid,format,12.857,P0,Japanese→Chinese · Word · 保格式（最强战场）
+translate-docx-zh-to-de-preserving-formatting,translate word docx from Chinese to German preserving formatting,L2,tool,zh,de,docx,,mid,mid,format,12.857,P0,Chinese→German · Word · 保格式（最强战场）
+translate-docx-zh-to-es-preserving-formatting,translate word docx from Chinese to Spanish preserving formatting,L2,tool,zh,es,docx,,mid,mid,format,12.857,P0,Chinese→Spanish · Word · 保格式（最强战场）
+translate-docx-zh-to-fr-preserving-formatting,translate word docx from Chinese to French preserving formatting,L2,tool,zh,fr,docx,,mid,mid,format,12.857,P0,Chinese→French · Word · 保格式（最强战场）
+translate-docx-zh-to-ja-preserving-formatting,translate word docx from Chinese to Japanese preserving formatting,L2,tool,zh,ja,docx,,mid,mid,format,12.857,P0,Chinese→Japanese · Word · 保格式（最强战场）
+translate-docx-zh-to-ko-preserving-formatting,translate word docx from Chinese to Korean preserving formatting,L2,tool,zh,ko,docx,,mid,mid,format,12.857,P0,Chinese→Korean · Word · 保格式（最强战场）
+translate-pdf-en-to-ar-preserving-formatting,translate pdf from English to Arabic preserving formatting,L2,tool,en,ar,pdf,,mid,mid,format,12.857,P0,English→Arabic · PDF · 保格式（最强战场）
+translate-pdf-en-to-de-preserving-formatting,translate pdf from English to German preserving formatting,L2,tool,en,de,pdf,,mid,mid,format,12.857,P0,English→German · PDF · 保格式（最强战场）
+translate-pdf-en-to-fr-preserving-formatting,translate pdf from English to French preserving formatting,L2,tool,en,fr,pdf,,mid,mid,format,12.857,P0,English→French · PDF · 保格式（最强战场）
+translate-pdf-en-to-ja-preserving-formatting,translate pdf from English to Japanese preserving formatting,L2,tool,en,ja,pdf,,mid,mid,format,12.857,P0,English→Japanese · PDF · 保格式（最强战场）
+translate-pdf-en-to-pt-preserving-formatting,translate pdf from English to Portuguese preserving formatting,L2,tool,en,pt,pdf,,mid,mid,format,12.857,P0,English→Portuguese · PDF · 保格式（最强战场）
+translate-pdf-ja-to-en-preserving-formatting,translate pdf from Japanese to English preserving formatting,L2,tool,ja,en,pdf,,mid,mid,format,12.857,P0,Japanese→English · PDF · 保格式（最强战场）
+translate-pdf-ja-to-zh-preserving-formatting,translate pdf from Japanese to Chinese preserving formatting,L2,tool,ja,zh,pdf,,mid,mid,format,12.857,P0,Japanese→Chinese · PDF · 保格式（最强战场）
+translate-pdf-zh-to-de-preserving-formatting,translate pdf from Chinese to German preserving formatting,L2,tool,zh,de,pdf,,mid,mid,format,12.857,P0,Chinese→German · PDF · 保格式（最强战场）
+translate-pdf-zh-to-es-preserving-formatting,translate pdf from Chinese to Spanish preserving formatting,L2,tool,zh,es,pdf,,mid,mid,format,12.857,P0,Chinese→Spanish · PDF · 保格式（最强战场）
+translate-pdf-zh-to-fr-preserving-formatting,translate pdf from Chinese to French preserving formatting,L2,tool,zh,fr,pdf,,mid,mid,format,12.857,P0,Chinese→French · PDF · 保格式（最强战场）
+translate-pdf-zh-to-ja-preserving-formatting,translate pdf from Chinese to Japanese preserving formatting,L2,tool,zh,ja,pdf,,mid,mid,format,12.857,P0,Chinese→Japanese · PDF · 保格式（最强战场）
+translate-pdf-zh-to-ko-preserving-formatting,translate pdf from Chinese to Korean preserving formatting,L2,tool,zh,ko,pdf,,mid,mid,format,12.857,P0,Chinese→Korean · PDF · 保格式（最强战场）
+translate-pptx-en-to-ar-preserving-formatting,translate powerpoint from English to Arabic preserving formatting,L2,tool,en,ar,pptx,,mid,mid,format,12.857,P0,English→Arabic · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-de-preserving-formatting,translate powerpoint from English to German preserving formatting,L2,tool,en,de,pptx,,mid,mid,format,12.857,P0,English→German · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-fr-preserving-formatting,translate powerpoint from English to French preserving formatting,L2,tool,en,fr,pptx,,mid,mid,format,12.857,P0,English→French · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-ja-preserving-formatting,translate powerpoint from English to Japanese preserving formatting,L2,tool,en,ja,pptx,,mid,mid,format,12.857,P0,English→Japanese · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-pt-preserving-formatting,translate powerpoint from English to Portuguese preserving formatting,L2,tool,en,pt,pptx,,mid,mid,format,12.857,P0,English→Portuguese · PowerPoint · 保格式（最强战场）
+translate-pptx-ja-to-en-preserving-formatting,translate powerpoint from Japanese to English preserving formatting,L2,tool,ja,en,pptx,,mid,mid,format,12.857,P0,Japanese→English · PowerPoint · 保格式（最强战场）
+translate-pptx-ja-to-zh-preserving-formatting,translate powerpoint from Japanese to Chinese preserving formatting,L2,tool,ja,zh,pptx,,mid,mid,format,12.857,P0,Japanese→Chinese · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-de-preserving-formatting,translate powerpoint from Chinese to German preserving formatting,L2,tool,zh,de,pptx,,mid,mid,format,12.857,P0,Chinese→German · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-es-preserving-formatting,translate powerpoint from Chinese to Spanish preserving formatting,L2,tool,zh,es,pptx,,mid,mid,format,12.857,P0,Chinese→Spanish · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-fr-preserving-formatting,translate powerpoint from Chinese to French preserving formatting,L2,tool,zh,fr,pptx,,mid,mid,format,12.857,P0,Chinese→French · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-ja-preserving-formatting,translate powerpoint from Chinese to Japanese preserving formatting,L2,tool,zh,ja,pptx,,mid,mid,format,12.857,P0,Chinese→Japanese · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-ko-preserving-formatting,translate powerpoint from Chinese to Korean preserving formatting,L2,tool,zh,ko,pptx,,mid,mid,format,12.857,P0,Chinese→Korean · PowerPoint · 保格式（最强战场）
+translate-srt-en-to-ar-preserving-formatting,translate srt subtitle from English to Arabic preserving formatting,L2,tool,en,ar,srt,,mid,mid,format,12.857,P0,English→Arabic · SRT · 保格式（最强战场）
+translate-srt-en-to-de-preserving-formatting,translate srt subtitle from English to German preserving formatting,L2,tool,en,de,srt,,mid,mid,format,12.857,P0,English→German · SRT · 保格式（最强战场）
+translate-srt-en-to-fr-preserving-formatting,translate srt subtitle from English to French preserving formatting,L2,tool,en,fr,srt,,mid,mid,format,12.857,P0,English→French · SRT · 保格式（最强战场）
+translate-srt-en-to-ja-preserving-formatting,translate srt subtitle from English to Japanese preserving formatting,L2,tool,en,ja,srt,,mid,mid,format,12.857,P0,English→Japanese · SRT · 保格式（最强战场）
+translate-srt-en-to-pt-preserving-formatting,translate srt subtitle from English to Portuguese preserving formatting,L2,tool,en,pt,srt,,mid,mid,format,12.857,P0,English→Portuguese · SRT · 保格式（最强战场）
+translate-srt-ja-to-en-preserving-formatting,translate srt subtitle from Japanese to English preserving formatting,L2,tool,ja,en,srt,,mid,mid,format,12.857,P0,Japanese→English · SRT · 保格式（最强战场）
+translate-srt-ja-to-zh-preserving-formatting,translate srt subtitle from Japanese to Chinese preserving formatting,L2,tool,ja,zh,srt,,mid,mid,format,12.857,P0,Japanese→Chinese · SRT · 保格式（最强战场）
+translate-srt-zh-to-de-preserving-formatting,translate srt subtitle from Chinese to German preserving formatting,L2,tool,zh,de,srt,,mid,mid,format,12.857,P0,Chinese→German · SRT · 保格式（最强战场）
+translate-srt-zh-to-es-preserving-formatting,translate srt subtitle from Chinese to Spanish preserving formatting,L2,tool,zh,es,srt,,mid,mid,format,12.857,P0,Chinese→Spanish · SRT · 保格式（最强战场）
+translate-srt-zh-to-fr-preserving-formatting,translate srt subtitle from Chinese to French preserving formatting,L2,tool,zh,fr,srt,,mid,mid,format,12.857,P0,Chinese→French · SRT · 保格式（最强战场）
+translate-srt-zh-to-ja-preserving-formatting,translate srt subtitle from Chinese to Japanese preserving formatting,L2,tool,zh,ja,srt,,mid,mid,format,12.857,P0,Chinese→Japanese · SRT · 保格式（最强战场）
+translate-srt-zh-to-ko-preserving-formatting,translate srt subtitle from Chinese to Korean preserving formatting,L2,tool,zh,ko,srt,,mid,mid,format,12.857,P0,Chinese→Korean · SRT · 保格式（最强战场）
+translate-xlsx-en-to-ar-preserving-formatting,translate excel from English to Arabic preserving formatting,L2,tool,en,ar,xlsx,,mid,mid,format,12.857,P0,English→Arabic · Excel · 保格式（最强战场）
+translate-xlsx-en-to-de-preserving-formatting,translate excel from English to German preserving formatting,L2,tool,en,de,xlsx,,mid,mid,format,12.857,P0,English→German · Excel · 保格式（最强战场）
+translate-xlsx-en-to-fr-preserving-formatting,translate excel from English to French preserving formatting,L2,tool,en,fr,xlsx,,mid,mid,format,12.857,P0,English→French · Excel · 保格式（最强战场）
+translate-xlsx-en-to-ja-preserving-formatting,translate excel from English to Japanese preserving formatting,L2,tool,en,ja,xlsx,,mid,mid,format,12.857,P0,English→Japanese · Excel · 保格式（最强战场）
+translate-xlsx-en-to-pt-preserving-formatting,translate excel from English to Portuguese preserving formatting,L2,tool,en,pt,xlsx,,mid,mid,format,12.857,P0,English→Portuguese · Excel · 保格式（最强战场）
+translate-xlsx-ja-to-en-preserving-formatting,translate excel from Japanese to English preserving formatting,L2,tool,ja,en,xlsx,,mid,mid,format,12.857,P0,Japanese→English · Excel · 保格式（最强战场）
+translate-xlsx-ja-to-zh-preserving-formatting,translate excel from Japanese to Chinese preserving formatting,L2,tool,ja,zh,xlsx,,mid,mid,format,12.857,P0,Japanese→Chinese · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-de-preserving-formatting,translate excel from Chinese to German preserving formatting,L2,tool,zh,de,xlsx,,mid,mid,format,12.857,P0,Chinese→German · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-es-preserving-formatting,translate excel from Chinese to Spanish preserving formatting,L2,tool,zh,es,xlsx,,mid,mid,format,12.857,P0,Chinese→Spanish · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-fr-preserving-formatting,translate excel from Chinese to French preserving formatting,L2,tool,zh,fr,xlsx,,mid,mid,format,12.857,P0,Chinese→French · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-ja-preserving-formatting,translate excel from Chinese to Japanese preserving formatting,L2,tool,zh,ja,xlsx,,mid,mid,format,12.857,P0,Chinese→Japanese · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-ko-preserving-formatting,translate excel from Chinese to Korean preserving formatting,L2,tool,zh,ko,xlsx,,mid,mid,format,12.857,P0,Chinese→Korean · Excel · 保格式（最强战场）
+manual-translation-en-to-es,user manual translation English to Spanish,L3,scenario,en,es,,manual,high,high,format,11.786,P0,English→Spanish · 产品说明书/手册
+manual-translation-en-to-zh,user manual translation English to Chinese,L3,scenario,en,zh,,manual,high,high,format,11.786,P0,English→Chinese · 产品说明书/手册
+manual-translation-zh-to-en,user manual translation Chinese to English,L3,scenario,zh,en,,manual,high,high,format,11.786,P0,Chinese→English · 产品说明书/手册
+translate-docx-en-to-es,translate word docx from English to Spanish,L1,tool,en,es,docx,,high,high,format,11.25,P0,English→Spanish · Word
+translate-docx-en-to-zh,translate word docx from English to Chinese,L1,tool,en,zh,docx,,high,high,format,11.25,P0,English→Chinese · Word
+translate-docx-zh-to-en,translate word docx from Chinese to English,L1,tool,zh,en,docx,,high,high,format,11.25,P0,Chinese→English · Word
+translate-pdf-en-to-es,translate pdf from English to Spanish,L1,tool,en,es,pdf,,high,high,format,11.25,P0,English→Spanish · PDF
+translate-pdf-en-to-zh,translate pdf from English to Chinese,L1,tool,en,zh,pdf,,high,high,format,11.25,P0,English→Chinese · PDF
+translate-pdf-zh-to-en,translate pdf from Chinese to English,L1,tool,zh,en,pdf,,high,high,format,11.25,P0,Chinese→English · PDF
+contract-translation-en-to-es,contract translation English to Spanish,L3,scenario,en,es,,contract,high,high,terminology,10.214,P0,English→Spanish · 合同/协议
+contract-translation-en-to-zh,contract translation English to Chinese,L3,scenario,en,zh,,contract,high,high,terminology,10.214,P0,English→Chinese · 合同/协议
+contract-translation-zh-to-en,contract translation Chinese to English,L3,scenario,zh,en,,contract,high,high,terminology,10.214,P0,Chinese→English · 合同/协议
+product-listing-translation-en-to-es,product listing translation English to Spanish,L3,scenario,en,es,,product-listing,high,high,terminology,10.214,P0,English→Spanish · 跨境电商商品详情
+product-listing-translation-en-to-zh,product listing translation English to Chinese,L3,scenario,en,zh,,product-listing,high,high,terminology,10.214,P0,English→Chinese · 跨境电商商品详情
+product-listing-translation-zh-to-en,product listing translation Chinese to English,L3,scenario,zh,en,,product-listing,high,high,terminology,10.214,P0,Chinese→English · 跨境电商商品详情
+translate-docx-de-to-zh-preserving-formatting,translate word docx from German to Chinese preserving formatting,L2,tool,de,zh,docx,,low,low,format,9.0,P1,German→Chinese · Word · 保格式（最强战场）
+translate-docx-en-to-ru-preserving-formatting,translate word docx from English to Russian preserving formatting,L2,tool,en,ru,docx,,low,low,format,9.0,P1,English→Russian · Word · 保格式（最强战场）
+translate-docx-fr-to-zh-preserving-formatting,translate word docx from French to Chinese preserving formatting,L2,tool,fr,zh,docx,,low,low,format,9.0,P1,French→Chinese · Word · 保格式（最强战场）
+translate-docx-ko-to-en-preserving-formatting,translate word docx from Korean to English preserving formatting,L2,tool,ko,en,docx,,low,low,format,9.0,P1,Korean→English · Word · 保格式（最强战场）
+translate-docx-zh-to-ar-preserving-formatting,translate word docx from Chinese to Arabic preserving formatting,L2,tool,zh,ar,docx,,low,low,format,9.0,P1,Chinese→Arabic · Word · 保格式（最强战场）
+translate-docx-zh-to-pt-preserving-formatting,translate word docx from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,docx,,low,low,format,9.0,P1,Chinese→Portuguese · Word · 保格式（最强战场）
+translate-docx-zh-to-ru-preserving-formatting,translate word docx from Chinese to Russian preserving formatting,L2,tool,zh,ru,docx,,low,low,format,9.0,P1,Chinese→Russian · Word · 保格式（最强战场）
+translate-docx-zh-to-th-preserving-formatting,translate word docx from Chinese to Thai preserving formatting,L2,tool,zh,th,docx,,low,low,format,9.0,P1,Chinese→Thai · Word · 保格式（最强战场）
+translate-pdf-de-to-zh-preserving-formatting,translate pdf from German to Chinese preserving formatting,L2,tool,de,zh,pdf,,low,low,format,9.0,P1,German→Chinese · PDF · 保格式（最强战场）
+translate-pdf-en-to-ru-preserving-formatting,translate pdf from English to Russian preserving formatting,L2,tool,en,ru,pdf,,low,low,format,9.0,P1,English→Russian · PDF · 保格式（最强战场）
+translate-pdf-fr-to-zh-preserving-formatting,translate pdf from French to Chinese preserving formatting,L2,tool,fr,zh,pdf,,low,low,format,9.0,P1,French→Chinese · PDF · 保格式（最强战场）
+translate-pdf-ko-to-en-preserving-formatting,translate pdf from Korean to English preserving formatting,L2,tool,ko,en,pdf,,low,low,format,9.0,P1,Korean→English · PDF · 保格式（最强战场）
+translate-pdf-zh-to-ar-preserving-formatting,translate pdf from Chinese to Arabic preserving formatting,L2,tool,zh,ar,pdf,,low,low,format,9.0,P1,Chinese→Arabic · PDF · 保格式（最强战场）
+translate-pdf-zh-to-pt-preserving-formatting,translate pdf from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,pdf,,low,low,format,9.0,P1,Chinese→Portuguese · PDF · 保格式（最强战场）
+translate-pdf-zh-to-ru-preserving-formatting,translate pdf from Chinese to Russian preserving formatting,L2,tool,zh,ru,pdf,,low,low,format,9.0,P1,Chinese→Russian · PDF · 保格式（最强战场）
+translate-pdf-zh-to-th-preserving-formatting,translate pdf from Chinese to Thai preserving formatting,L2,tool,zh,th,pdf,,low,low,format,9.0,P1,Chinese→Thai · PDF · 保格式（最强战场）
+translate-pptx-de-to-zh-preserving-formatting,translate powerpoint from German to Chinese preserving formatting,L2,tool,de,zh,pptx,,low,low,format,9.0,P1,German→Chinese · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-es-preserving-formatting,translate powerpoint from English to Spanish preserving formatting,L2,tool,en,es,pptx,,mid,high,format,9.0,P0,English→Spanish · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-ru-preserving-formatting,translate powerpoint from English to Russian preserving formatting,L2,tool,en,ru,pptx,,low,low,format,9.0,P1,English→Russian · PowerPoint · 保格式（最强战场）
+translate-pptx-en-to-zh-preserving-formatting,translate powerpoint from English to Chinese preserving formatting,L2,tool,en,zh,pptx,,mid,high,format,9.0,P1,English→Chinese · PowerPoint · 保格式（最强战场）
+translate-pptx-fr-to-zh-preserving-formatting,translate powerpoint from French to Chinese preserving formatting,L2,tool,fr,zh,pptx,,low,low,format,9.0,P1,French→Chinese · PowerPoint · 保格式（最强战场）
+translate-pptx-ko-to-en-preserving-formatting,translate powerpoint from Korean to English preserving formatting,L2,tool,ko,en,pptx,,low,low,format,9.0,P1,Korean→English · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-ar-preserving-formatting,translate powerpoint from Chinese to Arabic preserving formatting,L2,tool,zh,ar,pptx,,low,low,format,9.0,P1,Chinese→Arabic · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-en-preserving-formatting,translate powerpoint from Chinese to English preserving formatting,L2,tool,zh,en,pptx,,mid,high,format,9.0,P1,Chinese→English · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-pt-preserving-formatting,translate powerpoint from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,pptx,,low,low,format,9.0,P1,Chinese→Portuguese · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-ru-preserving-formatting,translate powerpoint from Chinese to Russian preserving formatting,L2,tool,zh,ru,pptx,,low,low,format,9.0,P1,Chinese→Russian · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-th-preserving-formatting,translate powerpoint from Chinese to Thai preserving formatting,L2,tool,zh,th,pptx,,low,low,format,9.0,P1,Chinese→Thai · PowerPoint · 保格式（最强战场）
+translate-srt-de-to-zh-preserving-formatting,translate srt subtitle from German to Chinese preserving formatting,L2,tool,de,zh,srt,,low,low,format,9.0,P1,German→Chinese · SRT · 保格式（最强战场）
+translate-srt-en-to-es-preserving-formatting,translate srt subtitle from English to Spanish preserving formatting,L2,tool,en,es,srt,,mid,high,format,9.0,P1,English→Spanish · SRT · 保格式（最强战场）
+translate-srt-en-to-ru-preserving-formatting,translate srt subtitle from English to Russian preserving formatting,L2,tool,en,ru,srt,,low,low,format,9.0,P1,English→Russian · SRT · 保格式（最强战场）
+translate-srt-en-to-zh-preserving-formatting,translate srt subtitle from English to Chinese preserving formatting,L2,tool,en,zh,srt,,mid,high,format,9.0,P1,English→Chinese · SRT · 保格式（最强战场）
+translate-srt-fr-to-zh-preserving-formatting,translate srt subtitle from French to Chinese preserving formatting,L2,tool,fr,zh,srt,,low,low,format,9.0,P1,French→Chinese · SRT · 保格式（最强战场）
+translate-srt-ko-to-en-preserving-formatting,translate srt subtitle from Korean to English preserving formatting,L2,tool,ko,en,srt,,low,low,format,9.0,P1,Korean→English · SRT · 保格式（最强战场）
+translate-srt-zh-to-ar-preserving-formatting,translate srt subtitle from Chinese to Arabic preserving formatting,L2,tool,zh,ar,srt,,low,low,format,9.0,P1,Chinese→Arabic · SRT · 保格式（最强战场）
+translate-srt-zh-to-en-preserving-formatting,translate srt subtitle from Chinese to English preserving formatting,L2,tool,zh,en,srt,,mid,high,format,9.0,P1,Chinese→English · SRT · 保格式（最强战场）
+translate-srt-zh-to-pt-preserving-formatting,translate srt subtitle from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,srt,,low,low,format,9.0,P1,Chinese→Portuguese · SRT · 保格式（最强战场）
+translate-srt-zh-to-ru-preserving-formatting,translate srt subtitle from Chinese to Russian preserving formatting,L2,tool,zh,ru,srt,,low,low,format,9.0,P1,Chinese→Russian · SRT · 保格式（最强战场）
+translate-srt-zh-to-th-preserving-formatting,translate srt subtitle from Chinese to Thai preserving formatting,L2,tool,zh,th,srt,,low,low,format,9.0,P1,Chinese→Thai · SRT · 保格式（最强战场）
+translate-xlsx-de-to-zh-preserving-formatting,translate excel from German to Chinese preserving formatting,L2,tool,de,zh,xlsx,,low,low,format,9.0,P1,German→Chinese · Excel · 保格式（最强战场）
+translate-xlsx-en-to-es-preserving-formatting,translate excel from English to Spanish preserving formatting,L2,tool,en,es,xlsx,,mid,high,format,9.0,P1,English→Spanish · Excel · 保格式（最强战场）
+translate-xlsx-en-to-ru-preserving-formatting,translate excel from English to Russian preserving formatting,L2,tool,en,ru,xlsx,,low,low,format,9.0,P1,English→Russian · Excel · 保格式（最强战场）
+translate-xlsx-en-to-zh-preserving-formatting,translate excel from English to Chinese preserving formatting,L2,tool,en,zh,xlsx,,mid,high,format,9.0,P1,English→Chinese · Excel · 保格式（最强战场）
+translate-xlsx-fr-to-zh-preserving-formatting,translate excel from French to Chinese preserving formatting,L2,tool,fr,zh,xlsx,,low,low,format,9.0,P1,French→Chinese · Excel · 保格式（最强战场）
+translate-xlsx-ko-to-en-preserving-formatting,translate excel from Korean to English preserving formatting,L2,tool,ko,en,xlsx,,low,low,format,9.0,P1,Korean→English · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-ar-preserving-formatting,translate excel from Chinese to Arabic preserving formatting,L2,tool,zh,ar,xlsx,,low,low,format,9.0,P1,Chinese→Arabic · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-en-preserving-formatting,translate excel from Chinese to English preserving formatting,L2,tool,zh,en,xlsx,,mid,high,format,9.0,P1,Chinese→English · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-pt-preserving-formatting,translate excel from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,xlsx,,low,low,format,9.0,P1,Chinese→Portuguese · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-ru-preserving-formatting,translate excel from Chinese to Russian preserving formatting,L2,tool,zh,ru,xlsx,,low,low,format,9.0,P1,Chinese→Russian · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-th-preserving-formatting,translate excel from Chinese to Thai preserving formatting,L2,tool,zh,th,xlsx,,low,low,format,9.0,P1,Chinese→Thai · Excel · 保格式（最强战场）
+manual-translation-en-to-ar,user manual translation English to Arabic,L3,scenario,en,ar,,manual,mid,mid,format,6.735,P1,English→Arabic · 产品说明书/手册
+manual-translation-en-to-de,user manual translation English to German,L3,scenario,en,de,,manual,mid,mid,format,6.735,P1,English→German · 产品说明书/手册
+manual-translation-en-to-fr,user manual translation English to French,L3,scenario,en,fr,,manual,mid,mid,format,6.735,P1,English→French · 产品说明书/手册
+manual-translation-en-to-ja,user manual translation English to Japanese,L3,scenario,en,ja,,manual,mid,mid,format,6.735,P1,English→Japanese · 产品说明书/手册
+manual-translation-en-to-pt,user manual translation English to Portuguese,L3,scenario,en,pt,,manual,mid,mid,format,6.735,P1,English→Portuguese · 产品说明书/手册
+manual-translation-ja-to-en,user manual translation Japanese to English,L3,scenario,ja,en,,manual,mid,mid,format,6.735,P1,Japanese→English · 产品说明书/手册
+manual-translation-ja-to-zh,user manual translation Japanese to Chinese,L3,scenario,ja,zh,,manual,mid,mid,format,6.735,P1,Japanese→Chinese · 产品说明书/手册
+manual-translation-zh-to-de,user manual translation Chinese to German,L3,scenario,zh,de,,manual,mid,mid,format,6.735,P1,Chinese→German · 产品说明书/手册
+manual-translation-zh-to-es,user manual translation Chinese to Spanish,L3,scenario,zh,es,,manual,mid,mid,format,6.735,P1,Chinese→Spanish · 产品说明书/手册
+manual-translation-zh-to-fr,user manual translation Chinese to French,L3,scenario,zh,fr,,manual,mid,mid,format,6.735,P1,Chinese→French · 产品说明书/手册
+manual-translation-zh-to-ja,user manual translation Chinese to Japanese,L3,scenario,zh,ja,,manual,mid,mid,format,6.735,P1,Chinese→Japanese · 产品说明书/手册
+manual-translation-zh-to-ko,user manual translation Chinese to Korean,L3,scenario,zh,ko,,manual,mid,mid,format,6.735,P1,Chinese→Korean · 产品说明书/手册
+marketing-translation-en-to-ar,marketing material translation English to Arabic,L3,scenario,en,ar,,marketing,mid,mid,format,6.735,P1,English→Arabic · 市场物料/宣传册
+marketing-translation-en-to-de,marketing material translation English to German,L3,scenario,en,de,,marketing,mid,mid,format,6.735,P1,English→German · 市场物料/宣传册
+marketing-translation-en-to-fr,marketing material translation English to French,L3,scenario,en,fr,,marketing,mid,mid,format,6.735,P1,English→French · 市场物料/宣传册
+marketing-translation-en-to-ja,marketing material translation English to Japanese,L3,scenario,en,ja,,marketing,mid,mid,format,6.735,P1,English→Japanese · 市场物料/宣传册
+marketing-translation-en-to-pt,marketing material translation English to Portuguese,L3,scenario,en,pt,,marketing,mid,mid,format,6.735,P1,English→Portuguese · 市场物料/宣传册
+marketing-translation-ja-to-en,marketing material translation Japanese to English,L3,scenario,ja,en,,marketing,mid,mid,format,6.735,P1,Japanese→English · 市场物料/宣传册
+marketing-translation-ja-to-zh,marketing material translation Japanese to Chinese,L3,scenario,ja,zh,,marketing,mid,mid,format,6.735,P1,Japanese→Chinese · 市场物料/宣传册
+marketing-translation-zh-to-de,marketing material translation Chinese to German,L3,scenario,zh,de,,marketing,mid,mid,format,6.735,P1,Chinese→German · 市场物料/宣传册
+marketing-translation-zh-to-es,marketing material translation Chinese to Spanish,L3,scenario,zh,es,,marketing,mid,mid,format,6.735,P1,Chinese→Spanish · 市场物料/宣传册
+marketing-translation-zh-to-fr,marketing material translation Chinese to French,L3,scenario,zh,fr,,marketing,mid,mid,format,6.735,P1,Chinese→French · 市场物料/宣传册
+marketing-translation-zh-to-ja,marketing material translation Chinese to Japanese,L3,scenario,zh,ja,,marketing,mid,mid,format,6.735,P1,Chinese→Japanese · 市场物料/宣传册
+marketing-translation-zh-to-ko,marketing material translation Chinese to Korean,L3,scenario,zh,ko,,marketing,mid,mid,format,6.735,P1,Chinese→Korean · 市场物料/宣传册
+translate-docx-en-to-ar,translate word docx from English to Arabic,L1,tool,en,ar,docx,,mid,mid,format,6.429,P1,English→Arabic · Word
+translate-docx-en-to-de,translate word docx from English to German,L1,tool,en,de,docx,,mid,mid,format,6.429,P1,English→German · Word
+translate-docx-en-to-fr,translate word docx from English to French,L1,tool,en,fr,docx,,mid,mid,format,6.429,P1,English→French · Word
+translate-docx-en-to-ja,translate word docx from English to Japanese,L1,tool,en,ja,docx,,mid,mid,format,6.429,P1,English→Japanese · Word
+translate-docx-en-to-pt,translate word docx from English to Portuguese,L1,tool,en,pt,docx,,mid,mid,format,6.429,P1,English→Portuguese · Word
+translate-docx-ja-to-en,translate word docx from Japanese to English,L1,tool,ja,en,docx,,mid,mid,format,6.429,P1,Japanese→English · Word
+translate-docx-ja-to-zh,translate word docx from Japanese to Chinese,L1,tool,ja,zh,docx,,mid,mid,format,6.429,P1,Japanese→Chinese · Word
+translate-docx-ko-to-zh-preserving-formatting,translate word docx from Korean to Chinese preserving formatting,L2,tool,ko,zh,docx,,low,mid,format,6.429,P1,Korean→Chinese · Word · 保格式（最强战场）
+translate-docx-zh-to-de,translate word docx from Chinese to German,L1,tool,zh,de,docx,,mid,mid,format,6.429,P1,Chinese→German · Word
+translate-docx-zh-to-es,translate word docx from Chinese to Spanish,L1,tool,zh,es,docx,,mid,mid,format,6.429,P1,Chinese→Spanish · Word
+translate-docx-zh-to-fr,translate word docx from Chinese to French,L1,tool,zh,fr,docx,,mid,mid,format,6.429,P1,Chinese→French · Word
+translate-docx-zh-to-ja,translate word docx from Chinese to Japanese,L1,tool,zh,ja,docx,,mid,mid,format,6.429,P1,Chinese→Japanese · Word
+translate-docx-zh-to-ko,translate word docx from Chinese to Korean,L1,tool,zh,ko,docx,,mid,mid,format,6.429,P1,Chinese→Korean · Word
+translate-pdf-en-to-ar,translate pdf from English to Arabic,L1,tool,en,ar,pdf,,mid,mid,format,6.429,P1,English→Arabic · PDF
+translate-pdf-en-to-de,translate pdf from English to German,L1,tool,en,de,pdf,,mid,mid,format,6.429,P1,English→German · PDF
+translate-pdf-en-to-fr,translate pdf from English to French,L1,tool,en,fr,pdf,,mid,mid,format,6.429,P1,English→French · PDF
+translate-pdf-en-to-ja,translate pdf from English to Japanese,L1,tool,en,ja,pdf,,mid,mid,format,6.429,P1,English→Japanese · PDF
+translate-pdf-en-to-pt,translate pdf from English to Portuguese,L1,tool,en,pt,pdf,,mid,mid,format,6.429,P1,English→Portuguese · PDF
+translate-pdf-ja-to-en,translate pdf from Japanese to English,L1,tool,ja,en,pdf,,mid,mid,format,6.429,P1,Japanese→English · PDF
+translate-pdf-ja-to-zh,translate pdf from Japanese to Chinese,L1,tool,ja,zh,pdf,,mid,mid,format,6.429,P1,Japanese→Chinese · PDF
+translate-pdf-ko-to-zh-preserving-formatting,translate pdf from Korean to Chinese preserving formatting,L2,tool,ko,zh,pdf,,low,mid,format,6.429,P1,Korean→Chinese · PDF · 保格式（最强战场）
+translate-pdf-zh-to-de,translate pdf from Chinese to German,L1,tool,zh,de,pdf,,mid,mid,format,6.429,P1,Chinese→German · PDF
+translate-pdf-zh-to-es,translate pdf from Chinese to Spanish,L1,tool,zh,es,pdf,,mid,mid,format,6.429,P1,Chinese→Spanish · PDF
+translate-pdf-zh-to-fr,translate pdf from Chinese to French,L1,tool,zh,fr,pdf,,mid,mid,format,6.429,P1,Chinese→French · PDF
+translate-pdf-zh-to-ja,translate pdf from Chinese to Japanese,L1,tool,zh,ja,pdf,,mid,mid,format,6.429,P1,Chinese→Japanese · PDF
+translate-pdf-zh-to-ko,translate pdf from Chinese to Korean,L1,tool,zh,ko,pdf,,mid,mid,format,6.429,P1,Chinese→Korean · PDF
+translate-pptx-en-to-ar,translate powerpoint from English to Arabic,L1,tool,en,ar,pptx,,mid,mid,format,6.429,P1,English→Arabic · PowerPoint
+translate-pptx-en-to-de,translate powerpoint from English to German,L1,tool,en,de,pptx,,mid,mid,format,6.429,P1,English→German · PowerPoint
+translate-pptx-en-to-fr,translate powerpoint from English to French,L1,tool,en,fr,pptx,,mid,mid,format,6.429,P1,English→French · PowerPoint
+translate-pptx-en-to-ja,translate powerpoint from English to Japanese,L1,tool,en,ja,pptx,,mid,mid,format,6.429,P1,English→Japanese · PowerPoint
+translate-pptx-en-to-pt,translate powerpoint from English to Portuguese,L1,tool,en,pt,pptx,,mid,mid,format,6.429,P1,English→Portuguese · PowerPoint
+translate-pptx-ja-to-en,translate powerpoint from Japanese to English,L1,tool,ja,en,pptx,,mid,mid,format,6.429,P1,Japanese→English · PowerPoint
+translate-pptx-ja-to-zh,translate powerpoint from Japanese to Chinese,L1,tool,ja,zh,pptx,,mid,mid,format,6.429,P1,Japanese→Chinese · PowerPoint
+translate-pptx-ko-to-zh-preserving-formatting,translate powerpoint from Korean to Chinese preserving formatting,L2,tool,ko,zh,pptx,,low,mid,format,6.429,P1,Korean→Chinese · PowerPoint · 保格式（最强战场）
+translate-pptx-zh-to-de,translate powerpoint from Chinese to German,L1,tool,zh,de,pptx,,mid,mid,format,6.429,P1,Chinese→German · PowerPoint
+translate-pptx-zh-to-es,translate powerpoint from Chinese to Spanish,L1,tool,zh,es,pptx,,mid,mid,format,6.429,P1,Chinese→Spanish · PowerPoint
+translate-pptx-zh-to-fr,translate powerpoint from Chinese to French,L1,tool,zh,fr,pptx,,mid,mid,format,6.429,P1,Chinese→French · PowerPoint
+translate-pptx-zh-to-ja,translate powerpoint from Chinese to Japanese,L1,tool,zh,ja,pptx,,mid,mid,format,6.429,P1,Chinese→Japanese · PowerPoint
+translate-pptx-zh-to-ko,translate powerpoint from Chinese to Korean,L1,tool,zh,ko,pptx,,mid,mid,format,6.429,P1,Chinese→Korean · PowerPoint
+translate-srt-en-to-ar,translate srt subtitle from English to Arabic,L1,tool,en,ar,srt,,mid,mid,format,6.429,P1,English→Arabic · SRT
+translate-srt-en-to-de,translate srt subtitle from English to German,L1,tool,en,de,srt,,mid,mid,format,6.429,P1,English→German · SRT
+translate-srt-en-to-fr,translate srt subtitle from English to French,L1,tool,en,fr,srt,,mid,mid,format,6.429,P1,English→French · SRT
+translate-srt-en-to-ja,translate srt subtitle from English to Japanese,L1,tool,en,ja,srt,,mid,mid,format,6.429,P1,English→Japanese · SRT
+translate-srt-en-to-pt,translate srt subtitle from English to Portuguese,L1,tool,en,pt,srt,,mid,mid,format,6.429,P1,English→Portuguese · SRT
+translate-srt-ja-to-en,translate srt subtitle from Japanese to English,L1,tool,ja,en,srt,,mid,mid,format,6.429,P1,Japanese→English · SRT
+translate-srt-ja-to-zh,translate srt subtitle from Japanese to Chinese,L1,tool,ja,zh,srt,,mid,mid,format,6.429,P1,Japanese→Chinese · SRT
+translate-srt-ko-to-zh-preserving-formatting,translate srt subtitle from Korean to Chinese preserving formatting,L2,tool,ko,zh,srt,,low,mid,format,6.429,P1,Korean→Chinese · SRT · 保格式（最强战场）
+translate-srt-zh-to-de,translate srt subtitle from Chinese to German,L1,tool,zh,de,srt,,mid,mid,format,6.429,P1,Chinese→German · SRT
+translate-srt-zh-to-es,translate srt subtitle from Chinese to Spanish,L1,tool,zh,es,srt,,mid,mid,format,6.429,P1,Chinese→Spanish · SRT
+translate-srt-zh-to-fr,translate srt subtitle from Chinese to French,L1,tool,zh,fr,srt,,mid,mid,format,6.429,P1,Chinese→French · SRT
+translate-srt-zh-to-ja,translate srt subtitle from Chinese to Japanese,L1,tool,zh,ja,srt,,mid,mid,format,6.429,P1,Chinese→Japanese · SRT
+translate-srt-zh-to-ko,translate srt subtitle from Chinese to Korean,L1,tool,zh,ko,srt,,mid,mid,format,6.429,P1,Chinese→Korean · SRT
+translate-xlsx-en-to-ar,translate excel from English to Arabic,L1,tool,en,ar,xlsx,,mid,mid,format,6.429,P1,English→Arabic · Excel
+translate-xlsx-en-to-de,translate excel from English to German,L1,tool,en,de,xlsx,,mid,mid,format,6.429,P1,English→German · Excel
+translate-xlsx-en-to-fr,translate excel from English to French,L1,tool,en,fr,xlsx,,mid,mid,format,6.429,P1,English→French · Excel
+translate-xlsx-en-to-ja,translate excel from English to Japanese,L1,tool,en,ja,xlsx,,mid,mid,format,6.429,P1,English→Japanese · Excel
+translate-xlsx-en-to-pt,translate excel from English to Portuguese,L1,tool,en,pt,xlsx,,mid,mid,format,6.429,P1,English→Portuguese · Excel
+translate-xlsx-ja-to-en,translate excel from Japanese to English,L1,tool,ja,en,xlsx,,mid,mid,format,6.429,P1,Japanese→English · Excel
+translate-xlsx-ja-to-zh,translate excel from Japanese to Chinese,L1,tool,ja,zh,xlsx,,mid,mid,format,6.429,P1,Japanese→Chinese · Excel
+translate-xlsx-ko-to-zh-preserving-formatting,translate excel from Korean to Chinese preserving formatting,L2,tool,ko,zh,xlsx,,low,mid,format,6.429,P1,Korean→Chinese · Excel · 保格式（最强战场）
+translate-xlsx-zh-to-de,translate excel from Chinese to German,L1,tool,zh,de,xlsx,,mid,mid,format,6.429,P1,Chinese→German · Excel
+translate-xlsx-zh-to-es,translate excel from Chinese to Spanish,L1,tool,zh,es,xlsx,,mid,mid,format,6.429,P1,Chinese→Spanish · Excel
+translate-xlsx-zh-to-fr,translate excel from Chinese to French,L1,tool,zh,fr,xlsx,,mid,mid,format,6.429,P1,Chinese→French · Excel
+translate-xlsx-zh-to-ja,translate excel from Chinese to Japanese,L1,tool,zh,ja,xlsx,,mid,mid,format,6.429,P1,Chinese→Japanese · Excel
+translate-xlsx-zh-to-ko,translate excel from Chinese to Korean,L1,tool,zh,ko,xlsx,,mid,mid,format,6.429,P1,Chinese→Korean · Excel
+translate-epub-de-to-zh-preserving-formatting,translate epub from German to Chinese preserving formatting,L2,tool,de,zh,epub,,low,low,generic,6.0,P1,German→Chinese · EPUB · 保格式（最强战场）
+translate-epub-en-to-ru-preserving-formatting,translate epub from English to Russian preserving formatting,L2,tool,en,ru,epub,,low,low,generic,6.0,P1,English→Russian · EPUB · 保格式（最强战场）
+translate-epub-fr-to-zh-preserving-formatting,translate epub from French to Chinese preserving formatting,L2,tool,fr,zh,epub,,low,low,generic,6.0,P1,French→Chinese · EPUB · 保格式（最强战场）
+translate-epub-ko-to-en-preserving-formatting,translate epub from Korean to English preserving formatting,L2,tool,ko,en,epub,,low,low,generic,6.0,P1,Korean→English · EPUB · 保格式（最强战场）
+translate-epub-zh-to-ar-preserving-formatting,translate epub from Chinese to Arabic preserving formatting,L2,tool,zh,ar,epub,,low,low,generic,6.0,P1,Chinese→Arabic · EPUB · 保格式（最强战场）
+translate-epub-zh-to-pt-preserving-formatting,translate epub from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,epub,,low,low,generic,6.0,P1,Chinese→Portuguese · EPUB · 保格式（最强战场）
+translate-epub-zh-to-ru-preserving-formatting,translate epub from Chinese to Russian preserving formatting,L2,tool,zh,ru,epub,,low,low,generic,6.0,P1,Chinese→Russian · EPUB · 保格式（最强战场）
+translate-epub-zh-to-th-preserving-formatting,translate epub from Chinese to Thai preserving formatting,L2,tool,zh,th,epub,,low,low,generic,6.0,P1,Chinese→Thai · EPUB · 保格式（最强战场）
+translate-md-de-to-zh-preserving-formatting,translate markdown from German to Chinese preserving formatting,L2,tool,de,zh,md,,low,low,generic,6.0,P1,German→Chinese · Markdown · 保格式（最强战场）
+translate-md-en-to-ru-preserving-formatting,translate markdown from English to Russian preserving formatting,L2,tool,en,ru,md,,low,low,generic,6.0,P1,English→Russian · Markdown · 保格式（最强战场）
+translate-md-fr-to-zh-preserving-formatting,translate markdown from French to Chinese preserving formatting,L2,tool,fr,zh,md,,low,low,generic,6.0,P1,French→Chinese · Markdown · 保格式（最强战场）
+translate-md-ko-to-en-preserving-formatting,translate markdown from Korean to English preserving formatting,L2,tool,ko,en,md,,low,low,generic,6.0,P1,Korean→English · Markdown · 保格式（最强战场）
+translate-md-zh-to-ar-preserving-formatting,translate markdown from Chinese to Arabic preserving formatting,L2,tool,zh,ar,md,,low,low,generic,6.0,P1,Chinese→Arabic · Markdown · 保格式（最强战场）
+translate-md-zh-to-pt-preserving-formatting,translate markdown from Chinese to Portuguese preserving formatting,L2,tool,zh,pt,md,,low,low,generic,6.0,P1,Chinese→Portuguese · Markdown · 保格式（最强战场）
+translate-md-zh-to-ru-preserving-formatting,translate markdown from Chinese to Russian preserving formatting,L2,tool,zh,ru,md,,low,low,generic,6.0,P1,Chinese→Russian · Markdown · 保格式（最强战场）
+translate-md-zh-to-th-preserving-formatting,translate markdown from Chinese to Thai preserving formatting,L2,tool,zh,th,md,,low,low,generic,6.0,P1,Chinese→Thai · Markdown · 保格式（最强战场）
+contract-translation-en-to-ar,contract translation English to Arabic,L3,scenario,en,ar,,contract,mid,mid,terminology,5.837,P1,English→Arabic · 合同/协议
+contract-translation-en-to-de,contract translation English to German,L3,scenario,en,de,,contract,mid,mid,terminology,5.837,P1,English→German · 合同/协议
+contract-translation-en-to-fr,contract translation English to French,L3,scenario,en,fr,,contract,mid,mid,terminology,5.837,P1,English→French · 合同/协议
+contract-translation-en-to-ja,contract translation English to Japanese,L3,scenario,en,ja,,contract,mid,mid,terminology,5.837,P1,English→Japanese · 合同/协议
+contract-translation-en-to-pt,contract translation English to Portuguese,L3,scenario,en,pt,,contract,mid,mid,terminology,5.837,P1,English→Portuguese · 合同/协议
+contract-translation-ja-to-en,contract translation Japanese to English,L3,scenario,ja,en,,contract,mid,mid,terminology,5.837,P1,Japanese→English · 合同/协议
+contract-translation-ja-to-zh,contract translation Japanese to Chinese,L3,scenario,ja,zh,,contract,mid,mid,terminology,5.837,P1,Japanese→Chinese · 合同/协议
+contract-translation-zh-to-de,contract translation Chinese to German,L3,scenario,zh,de,,contract,mid,mid,terminology,5.837,P1,Chinese→German · 合同/协议
+contract-translation-zh-to-es,contract translation Chinese to Spanish,L3,scenario,zh,es,,contract,mid,mid,terminology,5.837,P1,Chinese→Spanish · 合同/协议
+contract-translation-zh-to-fr,contract translation Chinese to French,L3,scenario,zh,fr,,contract,mid,mid,terminology,5.837,P1,Chinese→French · 合同/协议
+contract-translation-zh-to-ja,contract translation Chinese to Japanese,L3,scenario,zh,ja,,contract,mid,mid,terminology,5.837,P1,Chinese→Japanese · 合同/协议
+contract-translation-zh-to-ko,contract translation Chinese to Korean,L3,scenario,zh,ko,,contract,mid,mid,terminology,5.837,P1,Chinese→Korean · 合同/协议
+patent-translation-en-to-ar,patent translation English to Arabic,L3,scenario,en,ar,,patent,mid,mid,terminology,5.837,P1,English→Arabic · 专利文件
+patent-translation-en-to-de,patent translation English to German,L3,scenario,en,de,,patent,mid,mid,terminology,5.837,P1,English→German · 专利文件
+patent-translation-en-to-fr,patent translation English to French,L3,scenario,en,fr,,patent,mid,mid,terminology,5.837,P1,English→French · 专利文件
+patent-translation-en-to-ja,patent translation English to Japanese,L3,scenario,en,ja,,patent,mid,mid,terminology,5.837,P1,English→Japanese · 专利文件
+patent-translation-en-to-pt,patent translation English to Portuguese,L3,scenario,en,pt,,patent,mid,mid,terminology,5.837,P1,English→Portuguese · 专利文件
+patent-translation-ja-to-en,patent translation Japanese to English,L3,scenario,ja,en,,patent,mid,mid,terminology,5.837,P1,Japanese→English · 专利文件
+patent-translation-ja-to-zh,patent translation Japanese to Chinese,L3,scenario,ja,zh,,patent,mid,mid,terminology,5.837,P1,Japanese→Chinese · 专利文件
+patent-translation-zh-to-de,patent translation Chinese to German,L3,scenario,zh,de,,patent,mid,mid,terminology,5.837,P1,Chinese→German · 专利文件
+patent-translation-zh-to-es,patent translation Chinese to Spanish,L3,scenario,zh,es,,patent,mid,mid,terminology,5.837,P1,Chinese→Spanish · 专利文件
+patent-translation-zh-to-fr,patent translation Chinese to French,L3,scenario,zh,fr,,patent,mid,mid,terminology,5.837,P1,Chinese→French · 专利文件
+patent-translation-zh-to-ja,patent translation Chinese to Japanese,L3,scenario,zh,ja,,patent,mid,mid,terminology,5.837,P1,Chinese→Japanese · 专利文件
+patent-translation-zh-to-ko,patent translation Chinese to Korean,L3,scenario,zh,ko,,patent,mid,mid,terminology,5.837,P1,Chinese→Korean · 专利文件
+product-listing-translation-en-to-ar,product listing translation English to Arabic,L3,scenario,en,ar,,product-listing,mid,mid,terminology,5.837,P1,English→Arabic · 跨境电商商品详情
+product-listing-translation-en-to-de,product listing translation English to German,L3,scenario,en,de,,product-listing,mid,mid,terminology,5.837,P1,English→German · 跨境电商商品详情
+product-listing-translation-en-to-fr,product listing translation English to French,L3,scenario,en,fr,,product-listing,mid,mid,terminology,5.837,P1,English→French · 跨境电商商品详情
+product-listing-translation-en-to-ja,product listing translation English to Japanese,L3,scenario,en,ja,,product-listing,mid,mid,terminology,5.837,P1,English→Japanese · 跨境电商商品详情
+product-listing-translation-en-to-pt,product listing translation English to Portuguese,L3,scenario,en,pt,,product-listing,mid,mid,terminology,5.837,P1,English→Portuguese · 跨境电商商品详情
+product-listing-translation-ja-to-en,product listing translation Japanese to English,L3,scenario,ja,en,,product-listing,mid,mid,terminology,5.837,P1,Japanese→English · 跨境电商商品详情
+product-listing-translation-ja-to-zh,product listing translation Japanese to Chinese,L3,scenario,ja,zh,,product-listing,mid,mid,terminology,5.837,P1,Japanese→Chinese · 跨境电商商品详情
+product-listing-translation-zh-to-de,product listing translation Chinese to German,L3,scenario,zh,de,,product-listing,mid,mid,terminology,5.837,P1,Chinese→German · 跨境电商商品详情
+product-listing-translation-zh-to-es,product listing translation Chinese to Spanish,L3,scenario,zh,es,,product-listing,mid,mid,terminology,5.837,P1,Chinese→Spanish · 跨境电商商品详情
+product-listing-translation-zh-to-fr,product listing translation Chinese to French,L3,scenario,zh,fr,,product-listing,mid,mid,terminology,5.837,P1,Chinese→French · 跨境电商商品详情
+product-listing-translation-zh-to-ja,product listing translation Chinese to Japanese,L3,scenario,zh,ja,,product-listing,mid,mid,terminology,5.837,P1,Chinese→Japanese · 跨境电商商品详情
+product-listing-translation-zh-to-ko,product listing translation Chinese to Korean,L3,scenario,zh,ko,,product-listing,mid,mid,terminology,5.837,P1,Chinese→Korean · 跨境电商商品详情
+how-to-translate-docx-en-to-es-without-losing-layout,how to translate word docx from English to Spanish without losing layout,L4,guide,en,es,docx,,high,high,format,5.357,P1,English→Spanish · Word · 教程
+how-to-translate-docx-en-to-zh-without-losing-layout,how to translate word docx from English to Chinese without losing layout,L4,guide,en,zh,docx,,high,high,format,5.357,P1,English→Chinese · Word · 教程
+how-to-translate-docx-zh-to-en-without-losing-layout,how to translate word docx from Chinese to English without losing layout,L4,guide,zh,en,docx,,high,high,format,5.357,P1,Chinese→English · Word · 教程
+how-to-translate-pdf-en-to-es-without-losing-layout,how to translate pdf from English to Spanish without losing layout,L4,guide,en,es,pdf,,high,high,format,5.357,P1,English→Spanish · PDF · 教程
+how-to-translate-pdf-en-to-zh-without-losing-layout,how to translate pdf from English to Chinese without losing layout,L4,guide,en,zh,pdf,,high,high,format,5.357,P1,English→Chinese · PDF · 教程
+how-to-translate-pdf-zh-to-en-without-losing-layout,how to translate pdf from Chinese to English without losing layout,L4,guide,zh,en,pdf,,high,high,format,5.357,P1,Chinese→English · PDF · 教程
+manual-translation-de-to-zh,user manual translation German to Chinese,L3,scenario,de,zh,,manual,low,low,format,4.714,P1,German→Chinese · 产品说明书/手册
+manual-translation-en-to-ru,user manual translation English to Russian,L3,scenario,en,ru,,manual,low,low,format,4.714,P1,English→Russian · 产品说明书/手册
+manual-translation-fr-to-zh,user manual translation French to Chinese,L3,scenario,fr,zh,,manual,low,low,format,4.714,P1,French→Chinese · 产品说明书/手册
+manual-translation-ko-to-en,user manual translation Korean to English,L3,scenario,ko,en,,manual,low,low,format,4.714,P1,Korean→English · 产品说明书/手册
+manual-translation-zh-to-ar,user manual translation Chinese to Arabic,L3,scenario,zh,ar,,manual,low,low,format,4.714,P1,Chinese→Arabic · 产品说明书/手册
+manual-translation-zh-to-pt,user manual translation Chinese to Portuguese,L3,scenario,zh,pt,,manual,low,low,format,4.714,P1,Chinese→Portuguese · 产品说明书/手册
+manual-translation-zh-to-ru,user manual translation Chinese to Russian,L3,scenario,zh,ru,,manual,low,low,format,4.714,P1,Chinese→Russian · 产品说明书/手册
+manual-translation-zh-to-th,user manual translation Chinese to Thai,L3,scenario,zh,th,,manual,low,low,format,4.714,P1,Chinese→Thai · 产品说明书/手册
+marketing-translation-de-to-zh,marketing material translation German to Chinese,L3,scenario,de,zh,,marketing,low,low,format,4.714,P1,German→Chinese · 市场物料/宣传册
+marketing-translation-en-to-es,marketing material translation English to Spanish,L3,scenario,en,es,,marketing,mid,high,format,4.714,P1,English→Spanish · 市场物料/宣传册
+marketing-translation-en-to-ru,marketing material translation English to Russian,L3,scenario,en,ru,,marketing,low,low,format,4.714,P1,English→Russian · 市场物料/宣传册
+marketing-translation-en-to-zh,marketing material translation English to Chinese,L3,scenario,en,zh,,marketing,mid,high,format,4.714,P1,English→Chinese · 市场物料/宣传册
+marketing-translation-fr-to-zh,marketing material translation French to Chinese,L3,scenario,fr,zh,,marketing,low,low,format,4.714,P1,French→Chinese · 市场物料/宣传册
+marketing-translation-ko-to-en,marketing material translation Korean to English,L3,scenario,ko,en,,marketing,low,low,format,4.714,P1,Korean→English · 市场物料/宣传册
+marketing-translation-zh-to-ar,marketing material translation Chinese to Arabic,L3,scenario,zh,ar,,marketing,low,low,format,4.714,P1,Chinese→Arabic · 市场物料/宣传册
+marketing-translation-zh-to-en,marketing material translation Chinese to English,L3,scenario,zh,en,,marketing,mid,high,format,4.714,P1,Chinese→English · 市场物料/宣传册
+marketing-translation-zh-to-pt,marketing material translation Chinese to Portuguese,L3,scenario,zh,pt,,marketing,low,low,format,4.714,P1,Chinese→Portuguese · 市场物料/宣传册
+marketing-translation-zh-to-ru,marketing material translation Chinese to Russian,L3,scenario,zh,ru,,marketing,low,low,format,4.714,P1,Chinese→Russian · 市场物料/宣传册
+marketing-translation-zh-to-th,marketing material translation Chinese to Thai,L3,scenario,zh,th,,marketing,low,low,format,4.714,P1,Chinese→Thai · 市场物料/宣传册
+resume-translation-de-to-zh,resume translation German to Chinese,L3,scenario,de,zh,,resume,low,low,format,4.714,P1,German→Chinese · 简历
+resume-translation-en-to-ru,resume translation English to Russian,L3,scenario,en,ru,,resume,low,low,format,4.714,P1,English→Russian · 简历
+resume-translation-fr-to-zh,resume translation French to Chinese,L3,scenario,fr,zh,,resume,low,low,format,4.714,P1,French→Chinese · 简历
+resume-translation-ko-to-en,resume translation Korean to English,L3,scenario,ko,en,,resume,low,low,format,4.714,P1,Korean→English · 简历
+resume-translation-zh-to-ar,resume translation Chinese to Arabic,L3,scenario,zh,ar,,resume,low,low,format,4.714,P2,Chinese→Arabic · 简历
+resume-translation-zh-to-pt,resume translation Chinese to Portuguese,L3,scenario,zh,pt,,resume,low,low,format,4.714,P2,Chinese→Portuguese · 简历
+resume-translation-zh-to-ru,resume translation Chinese to Russian,L3,scenario,zh,ru,,resume,low,low,format,4.714,P2,Chinese→Russian · 简历
+resume-translation-zh-to-th,resume translation Chinese to Thai,L3,scenario,zh,th,,resume,low,low,format,4.714,P2,Chinese→Thai · 简历
+subtitle-translation-de-to-zh,subtitle file translation German to Chinese,L3,scenario,de,zh,,subtitle,low,low,format,4.714,P2,German→Chinese · 字幕文件
+subtitle-translation-en-to-ru,subtitle file translation English to Russian,L3,scenario,en,ru,,subtitle,low,low,format,4.714,P2,English→Russian · 字幕文件
+subtitle-translation-fr-to-zh,subtitle file translation French to Chinese,L3,scenario,fr,zh,,subtitle,low,low,format,4.714,P2,French→Chinese · 字幕文件
+subtitle-translation-ko-to-en,subtitle file translation Korean to English,L3,scenario,ko,en,,subtitle,low,low,format,4.714,P2,Korean→English · 字幕文件
+subtitle-translation-zh-to-ar,subtitle file translation Chinese to Arabic,L3,scenario,zh,ar,,subtitle,low,low,format,4.714,P2,Chinese→Arabic · 字幕文件
+subtitle-translation-zh-to-pt,subtitle file translation Chinese to Portuguese,L3,scenario,zh,pt,,subtitle,low,low,format,4.714,P2,Chinese→Portuguese · 字幕文件
+subtitle-translation-zh-to-ru,subtitle file translation Chinese to Russian,L3,scenario,zh,ru,,subtitle,low,low,format,4.714,P2,Chinese→Russian · 字幕文件
+subtitle-translation-zh-to-th,subtitle file translation Chinese to Thai,L3,scenario,zh,th,,subtitle,low,low,format,4.714,P2,Chinese→Thai · 字幕文件
+translate-docx-de-to-zh,translate word docx from German to Chinese,L1,tool,de,zh,docx,,low,low,format,4.5,P2,German→Chinese · Word
+translate-docx-en-to-ru,translate word docx from English to Russian,L1,tool,en,ru,docx,,low,low,format,4.5,P2,English→Russian · Word
+translate-docx-fr-to-zh,translate word docx from French to Chinese,L1,tool,fr,zh,docx,,low,low,format,4.5,P2,French→Chinese · Word
+translate-docx-ko-to-en,translate word docx from Korean to English,L1,tool,ko,en,docx,,low,low,format,4.5,P2,Korean→English · Word
+translate-docx-zh-to-ar,translate word docx from Chinese to Arabic,L1,tool,zh,ar,docx,,low,low,format,4.5,P2,Chinese→Arabic · Word
+translate-docx-zh-to-pt,translate word docx from Chinese to Portuguese,L1,tool,zh,pt,docx,,low,low,format,4.5,P2,Chinese→Portuguese · Word
+translate-docx-zh-to-ru,translate word docx from Chinese to Russian,L1,tool,zh,ru,docx,,low,low,format,4.5,P2,Chinese→Russian · Word
+translate-docx-zh-to-th,translate word docx from Chinese to Thai,L1,tool,zh,th,docx,,low,low,format,4.5,P2,Chinese→Thai · Word
+translate-pdf-de-to-zh,translate pdf from German to Chinese,L1,tool,de,zh,pdf,,low,low,format,4.5,P2,German→Chinese · PDF
+translate-pdf-en-to-ru,translate pdf from English to Russian,L1,tool,en,ru,pdf,,low,low,format,4.5,P2,English→Russian · PDF
+translate-pdf-fr-to-zh,translate pdf from French to Chinese,L1,tool,fr,zh,pdf,,low,low,format,4.5,P2,French→Chinese · PDF
+translate-pdf-ko-to-en,translate pdf from Korean to English,L1,tool,ko,en,pdf,,low,low,format,4.5,P2,Korean→English · PDF
+translate-pdf-zh-to-ar,translate pdf from Chinese to Arabic,L1,tool,zh,ar,pdf,,low,low,format,4.5,P2,Chinese→Arabic · PDF
+translate-pdf-zh-to-pt,translate pdf from Chinese to Portuguese,L1,tool,zh,pt,pdf,,low,low,format,4.5,P2,Chinese→Portuguese · PDF
+translate-pdf-zh-to-ru,translate pdf from Chinese to Russian,L1,tool,zh,ru,pdf,,low,low,format,4.5,P2,Chinese→Russian · PDF
+translate-pdf-zh-to-th,translate pdf from Chinese to Thai,L1,tool,zh,th,pdf,,low,low,format,4.5,P2,Chinese→Thai · PDF
+translate-pptx-de-to-zh,translate powerpoint from German to Chinese,L1,tool,de,zh,pptx,,low,low,format,4.5,P2,German→Chinese · PowerPoint
+translate-pptx-en-to-es,translate powerpoint from English to Spanish,L1,tool,en,es,pptx,,mid,high,format,4.5,P2,English→Spanish · PowerPoint
+translate-pptx-en-to-ru,translate powerpoint from English to Russian,L1,tool,en,ru,pptx,,low,low,format,4.5,P2,English→Russian · PowerPoint
+translate-pptx-en-to-zh,translate powerpoint from English to Chinese,L1,tool,en,zh,pptx,,mid,high,format,4.5,P2,English→Chinese · PowerPoint
+translate-pptx-fr-to-zh,translate powerpoint from French to Chinese,L1,tool,fr,zh,pptx,,low,low,format,4.5,P2,French→Chinese · PowerPoint
+translate-pptx-ko-to-en,translate powerpoint from Korean to English,L1,tool,ko,en,pptx,,low,low,format,4.5,P2,Korean→English · PowerPoint
+translate-pptx-zh-to-ar,translate powerpoint from Chinese to Arabic,L1,tool,zh,ar,pptx,,low,low,format,4.5,P2,Chinese→Arabic · PowerPoint
+translate-pptx-zh-to-en,translate powerpoint from Chinese to English,L1,tool,zh,en,pptx,,mid,high,format,4.5,P2,Chinese→English · PowerPoint
+translate-pptx-zh-to-pt,translate powerpoint from Chinese to Portuguese,L1,tool,zh,pt,pptx,,low,low,format,4.5,P2,Chinese→Portuguese · PowerPoint
+translate-pptx-zh-to-ru,translate powerpoint from Chinese to Russian,L1,tool,zh,ru,pptx,,low,low,format,4.5,P2,Chinese→Russian · PowerPoint
+translate-pptx-zh-to-th,translate powerpoint from Chinese to Thai,L1,tool,zh,th,pptx,,low,low,format,4.5,P2,Chinese→Thai · PowerPoint
+translate-srt-de-to-zh,translate srt subtitle from German to Chinese,L1,tool,de,zh,srt,,low,low,format,4.5,P2,German→Chinese · SRT
+translate-srt-en-to-es,translate srt subtitle from English to Spanish,L1,tool,en,es,srt,,mid,high,format,4.5,P2,English→Spanish · SRT
+translate-srt-en-to-ru,translate srt subtitle from English to Russian,L1,tool,en,ru,srt,,low,low,format,4.5,P2,English→Russian · SRT
+translate-srt-en-to-zh,translate srt subtitle from English to Chinese,L1,tool,en,zh,srt,,mid,high,format,4.5,P2,English→Chinese · SRT
+translate-srt-fr-to-zh,translate srt subtitle from French to Chinese,L1,tool,fr,zh,srt,,low,low,format,4.5,P2,French→Chinese · SRT
+translate-srt-ko-to-en,translate srt subtitle from Korean to English,L1,tool,ko,en,srt,,low,low,format,4.5,P2,Korean→English · SRT
+translate-srt-zh-to-ar,translate srt subtitle from Chinese to Arabic,L1,tool,zh,ar,srt,,low,low,format,4.5,P2,Chinese→Arabic · SRT
+translate-srt-zh-to-en,translate srt subtitle from Chinese to English,L1,tool,zh,en,srt,,mid,high,format,4.5,P2,Chinese→English · SRT
+translate-srt-zh-to-pt,translate srt subtitle from Chinese to Portuguese,L1,tool,zh,pt,srt,,low,low,format,4.5,P2,Chinese→Portuguese · SRT
+translate-srt-zh-to-ru,translate srt subtitle from Chinese to Russian,L1,tool,zh,ru,srt,,low,low,format,4.5,P2,Chinese→Russian · SRT
+translate-srt-zh-to-th,translate srt subtitle from Chinese to Thai,L1,tool,zh,th,srt,,low,low,format,4.5,P2,Chinese→Thai · SRT
+translate-xlsx-de-to-zh,translate excel from German to Chinese,L1,tool,de,zh,xlsx,,low,low,format,4.5,P2,German→Chinese · Excel
+translate-xlsx-en-to-es,translate excel from English to Spanish,L1,tool,en,es,xlsx,,mid,high,format,4.5,P2,English→Spanish · Excel
+translate-xlsx-en-to-ru,translate excel from English to Russian,L1,tool,en,ru,xlsx,,low,low,format,4.5,P2,English→Russian · Excel
+translate-xlsx-en-to-zh,translate excel from English to Chinese,L1,tool,en,zh,xlsx,,mid,high,format,4.5,P2,English→Chinese · Excel
+translate-xlsx-fr-to-zh,translate excel from French to Chinese,L1,tool,fr,zh,xlsx,,low,low,format,4.5,P2,French→Chinese · Excel
+translate-xlsx-ko-to-en,translate excel from Korean to English,L1,tool,ko,en,xlsx,,low,low,format,4.5,P2,Korean→English · Excel
+translate-xlsx-zh-to-ar,translate excel from Chinese to Arabic,L1,tool,zh,ar,xlsx,,low,low,format,4.5,P2,Chinese→Arabic · Excel
+translate-xlsx-zh-to-en,translate excel from Chinese to English,L1,tool,zh,en,xlsx,,mid,high,format,4.5,P2,Chinese→English · Excel
+translate-xlsx-zh-to-pt,translate excel from Chinese to Portuguese,L1,tool,zh,pt,xlsx,,low,low,format,4.5,P2,Chinese→Portuguese · Excel
+translate-xlsx-zh-to-ru,translate excel from Chinese to Russian,L1,tool,zh,ru,xlsx,,low,low,format,4.5,P2,Chinese→Russian · Excel
+translate-xlsx-zh-to-th,translate excel from Chinese to Thai,L1,tool,zh,th,xlsx,,low,low,format,4.5,P2,Chinese→Thai · Excel
+academic-paper-translation-en-to-ar,academic paper translation English to Arabic,L3,scenario,en,ar,,academic-paper,mid,mid,generic,4.49,P2,English→Arabic · 学术论文
+academic-paper-translation-en-to-de,academic paper translation English to German,L3,scenario,en,de,,academic-paper,mid,mid,generic,4.49,P2,English→German · 学术论文
+academic-paper-translation-en-to-fr,academic paper translation English to French,L3,scenario,en,fr,,academic-paper,mid,mid,generic,4.49,P2,English→French · 学术论文
+academic-paper-translation-en-to-ja,academic paper translation English to Japanese,L3,scenario,en,ja,,academic-paper,mid,mid,generic,4.49,P2,English→Japanese · 学术论文
+academic-paper-translation-en-to-pt,academic paper translation English to Portuguese,L3,scenario,en,pt,,academic-paper,mid,mid,generic,4.49,P2,English→Portuguese · 学术论文
+academic-paper-translation-ja-to-en,academic paper translation Japanese to English,L3,scenario,ja,en,,academic-paper,mid,mid,generic,4.49,P2,Japanese→English · 学术论文
+academic-paper-translation-ja-to-zh,academic paper translation Japanese to Chinese,L3,scenario,ja,zh,,academic-paper,mid,mid,generic,4.49,P2,Japanese→Chinese · 学术论文
+academic-paper-translation-zh-to-de,academic paper translation Chinese to German,L3,scenario,zh,de,,academic-paper,mid,mid,generic,4.49,P2,Chinese→German · 学术论文
+academic-paper-translation-zh-to-es,academic paper translation Chinese to Spanish,L3,scenario,zh,es,,academic-paper,mid,mid,generic,4.49,P2,Chinese→Spanish · 学术论文
+academic-paper-translation-zh-to-fr,academic paper translation Chinese to French,L3,scenario,zh,fr,,academic-paper,mid,mid,generic,4.49,P2,Chinese→French · 学术论文
+academic-paper-translation-zh-to-ja,academic paper translation Chinese to Japanese,L3,scenario,zh,ja,,academic-paper,mid,mid,generic,4.49,P2,Chinese→Japanese · 学术论文
+academic-paper-translation-zh-to-ko,academic paper translation Chinese to Korean,L3,scenario,zh,ko,,academic-paper,mid,mid,generic,4.49,P2,Chinese→Korean · 学术论文
+game-localization-translation-en-to-ar,game localization translation English to Arabic,L3,scenario,en,ar,,game-localization,mid,mid,generic,4.49,P2,English→Arabic · 游戏本地化
+game-localization-translation-en-to-de,game localization translation English to German,L3,scenario,en,de,,game-localization,mid,mid,generic,4.49,P2,English→German · 游戏本地化
+game-localization-translation-en-to-fr,game localization translation English to French,L3,scenario,en,fr,,game-localization,mid,mid,generic,4.49,P2,English→French · 游戏本地化
+game-localization-translation-en-to-ja,game localization translation English to Japanese,L3,scenario,en,ja,,game-localization,mid,mid,generic,4.49,P2,English→Japanese · 游戏本地化
+game-localization-translation-en-to-pt,game localization translation English to Portuguese,L3,scenario,en,pt,,game-localization,mid,mid,generic,4.49,P2,English→Portuguese · 游戏本地化
+game-localization-translation-ja-to-en,game localization translation Japanese to English,L3,scenario,ja,en,,game-localization,mid,mid,generic,4.49,P2,Japanese→English · 游戏本地化
+game-localization-translation-ja-to-zh,game localization translation Japanese to Chinese,L3,scenario,ja,zh,,game-localization,mid,mid,generic,4.49,P2,Japanese→Chinese · 游戏本地化
+game-localization-translation-zh-to-de,game localization translation Chinese to German,L3,scenario,zh,de,,game-localization,mid,mid,generic,4.49,P2,Chinese→German · 游戏本地化
+game-localization-translation-zh-to-es,game localization translation Chinese to Spanish,L3,scenario,zh,es,,game-localization,mid,mid,generic,4.49,P2,Chinese→Spanish · 游戏本地化
+game-localization-translation-zh-to-fr,game localization translation Chinese to French,L3,scenario,zh,fr,,game-localization,mid,mid,generic,4.49,P2,Chinese→French · 游戏本地化
+game-localization-translation-zh-to-ja,game localization translation Chinese to Japanese,L3,scenario,zh,ja,,game-localization,mid,mid,generic,4.49,P2,Chinese→Japanese · 游戏本地化
+game-localization-translation-zh-to-ko,game localization translation Chinese to Korean,L3,scenario,zh,ko,,game-localization,mid,mid,generic,4.49,P2,Chinese→Korean · 游戏本地化
+translate-epub-en-to-ar-preserving-formatting,translate epub from English to Arabic preserving formatting,L2,tool,en,ar,epub,,low,mid,generic,4.286,P2,English→Arabic · EPUB · 保格式（最强战场）
+translate-epub-en-to-de-preserving-formatting,translate epub from English to German preserving formatting,L2,tool,en,de,epub,,low,mid,generic,4.286,P2,English→German · EPUB · 保格式（最强战场）
+translate-epub-en-to-fr-preserving-formatting,translate epub from English to French preserving formatting,L2,tool,en,fr,epub,,low,mid,generic,4.286,P2,English→French · EPUB · 保格式（最强战场）
+translate-epub-en-to-ja-preserving-formatting,translate epub from English to Japanese preserving formatting,L2,tool,en,ja,epub,,low,mid,generic,4.286,P2,English→Japanese · EPUB · 保格式（最强战场）
+translate-epub-en-to-pt-preserving-formatting,translate epub from English to Portuguese preserving formatting,L2,tool,en,pt,epub,,low,mid,generic,4.286,P2,English→Portuguese · EPUB · 保格式（最强战场）
+translate-epub-ja-to-en-preserving-formatting,translate epub from Japanese to English preserving formatting,L2,tool,ja,en,epub,,low,mid,generic,4.286,P2,Japanese→English · EPUB · 保格式（最强战场）
+translate-epub-ja-to-zh-preserving-formatting,translate epub from Japanese to Chinese preserving formatting,L2,tool,ja,zh,epub,,low,mid,generic,4.286,P2,Japanese→Chinese · EPUB · 保格式（最强战场）
+translate-epub-ko-to-zh-preserving-formatting,translate epub from Korean to Chinese preserving formatting,L2,tool,ko,zh,epub,,low,mid,generic,4.286,P2,Korean→Chinese · EPUB · 保格式（最强战场）
+translate-epub-zh-to-de-preserving-formatting,translate epub from Chinese to German preserving formatting,L2,tool,zh,de,epub,,low,mid,generic,4.286,P2,Chinese→German · EPUB · 保格式（最强战场）
+translate-epub-zh-to-es-preserving-formatting,translate epub from Chinese to Spanish preserving formatting,L2,tool,zh,es,epub,,low,mid,generic,4.286,P2,Chinese→Spanish · EPUB · 保格式（最强战场）
+translate-epub-zh-to-fr-preserving-formatting,translate epub from Chinese to French preserving formatting,L2,tool,zh,fr,epub,,low,mid,generic,4.286,P2,Chinese→French · EPUB · 保格式（最强战场）
+translate-epub-zh-to-ja-preserving-formatting,translate epub from Chinese to Japanese preserving formatting,L2,tool,zh,ja,epub,,low,mid,generic,4.286,P2,Chinese→Japanese · EPUB · 保格式（最强战场）
+translate-epub-zh-to-ko-preserving-formatting,translate epub from Chinese to Korean preserving formatting,L2,tool,zh,ko,epub,,low,mid,generic,4.286,P2,Chinese→Korean · EPUB · 保格式（最强战场）
+translate-md-en-to-ar-preserving-formatting,translate markdown from English to Arabic preserving formatting,L2,tool,en,ar,md,,low,mid,generic,4.286,P2,English→Arabic · Markdown · 保格式（最强战场）
+translate-md-en-to-de-preserving-formatting,translate markdown from English to German preserving formatting,L2,tool,en,de,md,,low,mid,generic,4.286,P2,English→German · Markdown · 保格式（最强战场）
+translate-md-en-to-fr-preserving-formatting,translate markdown from English to French preserving formatting,L2,tool,en,fr,md,,low,mid,generic,4.286,P2,English→French · Markdown · 保格式（最强战场）
+translate-md-en-to-ja-preserving-formatting,translate markdown from English to Japanese preserving formatting,L2,tool,en,ja,md,,low,mid,generic,4.286,P2,English→Japanese · Markdown · 保格式（最强战场）
+translate-md-en-to-pt-preserving-formatting,translate markdown from English to Portuguese preserving formatting,L2,tool,en,pt,md,,low,mid,generic,4.286,P2,English→Portuguese · Markdown · 保格式（最强战场）
+translate-md-ja-to-en-preserving-formatting,translate markdown from Japanese to English preserving formatting,L2,tool,ja,en,md,,low,mid,generic,4.286,P2,Japanese→English · Markdown · 保格式（最强战场）
+translate-md-ja-to-zh-preserving-formatting,translate markdown from Japanese to Chinese preserving formatting,L2,tool,ja,zh,md,,low,mid,generic,4.286,P2,Japanese→Chinese · Markdown · 保格式（最强战场）
+translate-md-ko-to-zh-preserving-formatting,translate markdown from Korean to Chinese preserving formatting,L2,tool,ko,zh,md,,low,mid,generic,4.286,P2,Korean→Chinese · Markdown · 保格式（最强战场）
+translate-md-zh-to-de-preserving-formatting,translate markdown from Chinese to German preserving formatting,L2,tool,zh,de,md,,low,mid,generic,4.286,P2,Chinese→German · Markdown · 保格式（最强战场）
+translate-md-zh-to-es-preserving-formatting,translate markdown from Chinese to Spanish preserving formatting,L2,tool,zh,es,md,,low,mid,generic,4.286,P2,Chinese→Spanish · Markdown · 保格式（最强战场）
+translate-md-zh-to-fr-preserving-formatting,translate markdown from Chinese to French preserving formatting,L2,tool,zh,fr,md,,low,mid,generic,4.286,P2,Chinese→French · Markdown · 保格式（最强战场）
+translate-md-zh-to-ja-preserving-formatting,translate markdown from Chinese to Japanese preserving formatting,L2,tool,zh,ja,md,,low,mid,generic,4.286,P2,Chinese→Japanese · Markdown · 保格式（最强战场）
+translate-md-zh-to-ko-preserving-formatting,translate markdown from Chinese to Korean preserving formatting,L2,tool,zh,ko,md,,low,mid,generic,4.286,P2,Chinese→Korean · Markdown · 保格式（最强战场）
+contract-translation-de-to-zh,contract translation German to Chinese,L3,scenario,de,zh,,contract,low,low,terminology,4.086,P2,German→Chinese · 合同/协议
+contract-translation-en-to-ru,contract translation English to Russian,L3,scenario,en,ru,,contract,low,low,terminology,4.086,P2,English→Russian · 合同/协议
+contract-translation-fr-to-zh,contract translation French to Chinese,L3,scenario,fr,zh,,contract,low,low,terminology,4.086,P2,French→Chinese · 合同/协议
+contract-translation-ko-to-en,contract translation Korean to English,L3,scenario,ko,en,,contract,low,low,terminology,4.086,P2,Korean→English · 合同/协议
+contract-translation-zh-to-ar,contract translation Chinese to Arabic,L3,scenario,zh,ar,,contract,low,low,terminology,4.086,P2,Chinese→Arabic · 合同/协议
+contract-translation-zh-to-pt,contract translation Chinese to Portuguese,L3,scenario,zh,pt,,contract,low,low,terminology,4.086,P2,Chinese→Portuguese · 合同/协议
+contract-translation-zh-to-ru,contract translation Chinese to Russian,L3,scenario,zh,ru,,contract,low,low,terminology,4.086,P2,Chinese→Russian · 合同/协议
+contract-translation-zh-to-th,contract translation Chinese to Thai,L3,scenario,zh,th,,contract,low,low,terminology,4.086,P2,Chinese→Thai · 合同/协议
+financial-translation-de-to-zh,financial report translation German to Chinese,L3,scenario,de,zh,,financial,low,low,terminology,4.086,P2,German→Chinese · 财报/财务文件
+financial-translation-en-to-ru,financial report translation English to Russian,L3,scenario,en,ru,,financial,low,low,terminology,4.086,P2,English→Russian · 财报/财务文件
+financial-translation-fr-to-zh,financial report translation French to Chinese,L3,scenario,fr,zh,,financial,low,low,terminology,4.086,P2,French→Chinese · 财报/财务文件
+financial-translation-ko-to-en,financial report translation Korean to English,L3,scenario,ko,en,,financial,low,low,terminology,4.086,P2,Korean→English · 财报/财务文件
+financial-translation-zh-to-ar,financial report translation Chinese to Arabic,L3,scenario,zh,ar,,financial,low,low,terminology,4.086,P2,Chinese→Arabic · 财报/财务文件
+financial-translation-zh-to-pt,financial report translation Chinese to Portuguese,L3,scenario,zh,pt,,financial,low,low,terminology,4.086,P2,Chinese→Portuguese · 财报/财务文件
+financial-translation-zh-to-ru,financial report translation Chinese to Russian,L3,scenario,zh,ru,,financial,low,low,terminology,4.086,P2,Chinese→Russian · 财报/财务文件
+financial-translation-zh-to-th,financial report translation Chinese to Thai,L3,scenario,zh,th,,financial,low,low,terminology,4.086,P2,Chinese→Thai · 财报/财务文件
+patent-translation-de-to-zh,patent translation German to Chinese,L3,scenario,de,zh,,patent,low,low,terminology,4.086,P2,German→Chinese · 专利文件
+patent-translation-en-to-es,patent translation English to Spanish,L3,scenario,en,es,,patent,mid,high,terminology,4.086,P2,English→Spanish · 专利文件
+patent-translation-en-to-ru,patent translation English to Russian,L3,scenario,en,ru,,patent,low,low,terminology,4.086,P2,English→Russian · 专利文件
+patent-translation-en-to-zh,patent translation English to Chinese,L3,scenario,en,zh,,patent,mid,high,terminology,4.086,P2,English→Chinese · 专利文件
+patent-translation-fr-to-zh,patent translation French to Chinese,L3,scenario,fr,zh,,patent,low,low,terminology,4.086,P2,French→Chinese · 专利文件
+patent-translation-ko-to-en,patent translation Korean to English,L3,scenario,ko,en,,patent,low,low,terminology,4.086,P2,Korean→English · 专利文件
+patent-translation-zh-to-ar,patent translation Chinese to Arabic,L3,scenario,zh,ar,,patent,low,low,terminology,4.086,P2,Chinese→Arabic · 专利文件
+patent-translation-zh-to-en,patent translation Chinese to English,L3,scenario,zh,en,,patent,mid,high,terminology,4.086,P2,Chinese→English · 专利文件
+patent-translation-zh-to-pt,patent translation Chinese to Portuguese,L3,scenario,zh,pt,,patent,low,low,terminology,4.086,P2,Chinese→Portuguese · 专利文件
+patent-translation-zh-to-ru,patent translation Chinese to Russian,L3,scenario,zh,ru,,patent,low,low,terminology,4.086,P2,Chinese→Russian · 专利文件
+patent-translation-zh-to-th,patent translation Chinese to Thai,L3,scenario,zh,th,,patent,low,low,terminology,4.086,P2,Chinese→Thai · 专利文件
+product-listing-translation-de-to-zh,product listing translation German to Chinese,L3,scenario,de,zh,,product-listing,low,low,terminology,4.086,P2,German→Chinese · 跨境电商商品详情
+product-listing-translation-en-to-ru,product listing translation English to Russian,L3,scenario,en,ru,,product-listing,low,low,terminology,4.086,P2,English→Russian · 跨境电商商品详情
+product-listing-translation-fr-to-zh,product listing translation French to Chinese,L3,scenario,fr,zh,,product-listing,low,low,terminology,4.086,P2,French→Chinese · 跨境电商商品详情
+product-listing-translation-ko-to-en,product listing translation Korean to English,L3,scenario,ko,en,,product-listing,low,low,terminology,4.086,P2,Korean→English · 跨境电商商品详情
+product-listing-translation-zh-to-ar,product listing translation Chinese to Arabic,L3,scenario,zh,ar,,product-listing,low,low,terminology,4.086,P2,Chinese→Arabic · 跨境电商商品详情
+product-listing-translation-zh-to-pt,product listing translation Chinese to Portuguese,L3,scenario,zh,pt,,product-listing,low,low,terminology,4.086,P2,Chinese→Portuguese · 跨境电商商品详情
+product-listing-translation-zh-to-ru,product listing translation Chinese to Russian,L3,scenario,zh,ru,,product-listing,low,low,terminology,4.086,P2,Chinese→Russian · 跨境电商商品详情
+product-listing-translation-zh-to-th,product listing translation Chinese to Thai,L3,scenario,zh,th,,product-listing,low,low,terminology,4.086,P2,Chinese→Thai · 跨境电商商品详情
+manual-translation-ko-to-zh,user manual translation Korean to Chinese,L3,scenario,ko,zh,,manual,low,mid,format,3.367,P2,Korean→Chinese · 产品说明书/手册
+marketing-translation-ko-to-zh,marketing material translation Korean to Chinese,L3,scenario,ko,zh,,marketing,low,mid,format,3.367,P2,Korean→Chinese · 市场物料/宣传册
+resume-translation-en-to-ar,resume translation English to Arabic,L3,scenario,en,ar,,resume,low,mid,format,3.367,P2,English→Arabic · 简历
+resume-translation-en-to-de,resume translation English to German,L3,scenario,en,de,,resume,low,mid,format,3.367,P2,English→German · 简历
+resume-translation-en-to-fr,resume translation English to French,L3,scenario,en,fr,,resume,low,mid,format,3.367,P2,English→French · 简历
+resume-translation-en-to-ja,resume translation English to Japanese,L3,scenario,en,ja,,resume,low,mid,format,3.367,P2,English→Japanese · 简历
+resume-translation-en-to-pt,resume translation English to Portuguese,L3,scenario,en,pt,,resume,low,mid,format,3.367,P2,English→Portuguese · 简历
+resume-translation-ja-to-en,resume translation Japanese to English,L3,scenario,ja,en,,resume,low,mid,format,3.367,P2,Japanese→English · 简历
+resume-translation-ja-to-zh,resume translation Japanese to Chinese,L3,scenario,ja,zh,,resume,low,mid,format,3.367,P2,Japanese→Chinese · 简历
+resume-translation-ko-to-zh,resume translation Korean to Chinese,L3,scenario,ko,zh,,resume,low,mid,format,3.367,P2,Korean→Chinese · 简历
+resume-translation-zh-to-de,resume translation Chinese to German,L3,scenario,zh,de,,resume,low,mid,format,3.367,P2,Chinese→German · 简历
+resume-translation-zh-to-es,resume translation Chinese to Spanish,L3,scenario,zh,es,,resume,low,mid,format,3.367,P2,Chinese→Spanish · 简历
+resume-translation-zh-to-fr,resume translation Chinese to French,L3,scenario,zh,fr,,resume,low,mid,format,3.367,P2,Chinese→French · 简历
+resume-translation-zh-to-ja,resume translation Chinese to Japanese,L3,scenario,zh,ja,,resume,low,mid,format,3.367,P2,Chinese→Japanese · 简历
+resume-translation-zh-to-ko,resume translation Chinese to Korean,L3,scenario,zh,ko,,resume,low,mid,format,3.367,P2,Chinese→Korean · 简历
+subtitle-translation-en-to-ar,subtitle file translation English to Arabic,L3,scenario,en,ar,,subtitle,low,mid,format,3.367,P2,English→Arabic · 字幕文件
+subtitle-translation-en-to-de,subtitle file translation English to German,L3,scenario,en,de,,subtitle,low,mid,format,3.367,P2,English→German · 字幕文件
+subtitle-translation-en-to-fr,subtitle file translation English to French,L3,scenario,en,fr,,subtitle,low,mid,format,3.367,P2,English→French · 字幕文件
+subtitle-translation-en-to-ja,subtitle file translation English to Japanese,L3,scenario,en,ja,,subtitle,low,mid,format,3.367,P2,English→Japanese · 字幕文件
+subtitle-translation-en-to-pt,subtitle file translation English to Portuguese,L3,scenario,en,pt,,subtitle,low,mid,format,3.367,P2,English→Portuguese · 字幕文件
+subtitle-translation-ja-to-en,subtitle file translation Japanese to English,L3,scenario,ja,en,,subtitle,low,mid,format,3.367,P2,Japanese→English · 字幕文件
+subtitle-translation-ja-to-zh,subtitle file translation Japanese to Chinese,L3,scenario,ja,zh,,subtitle,low,mid,format,3.367,P2,Japanese→Chinese · 字幕文件
+subtitle-translation-ko-to-zh,subtitle file translation Korean to Chinese,L3,scenario,ko,zh,,subtitle,low,mid,format,3.367,P2,Korean→Chinese · 字幕文件
+subtitle-translation-zh-to-de,subtitle file translation Chinese to German,L3,scenario,zh,de,,subtitle,low,mid,format,3.367,P2,Chinese→German · 字幕文件
+subtitle-translation-zh-to-es,subtitle file translation Chinese to Spanish,L3,scenario,zh,es,,subtitle,low,mid,format,3.367,P2,Chinese→Spanish · 字幕文件
+subtitle-translation-zh-to-fr,subtitle file translation Chinese to French,L3,scenario,zh,fr,,subtitle,low,mid,format,3.367,P2,Chinese→French · 字幕文件
+subtitle-translation-zh-to-ja,subtitle file translation Chinese to Japanese,L3,scenario,zh,ja,,subtitle,low,mid,format,3.367,P2,Chinese→Japanese · 字幕文件
+subtitle-translation-zh-to-ko,subtitle file translation Chinese to Korean,L3,scenario,zh,ko,,subtitle,low,mid,format,3.367,P2,Chinese→Korean · 字幕文件
+translate-docx-ko-to-zh,translate word docx from Korean to Chinese,L1,tool,ko,zh,docx,,low,mid,format,3.214,P2,Korean→Chinese · Word
+translate-pdf-ko-to-zh,translate pdf from Korean to Chinese,L1,tool,ko,zh,pdf,,low,mid,format,3.214,P2,Korean→Chinese · PDF
+translate-pptx-ko-to-zh,translate powerpoint from Korean to Chinese,L1,tool,ko,zh,pptx,,low,mid,format,3.214,P2,Korean→Chinese · PowerPoint
+translate-srt-ko-to-zh,translate srt subtitle from Korean to Chinese,L1,tool,ko,zh,srt,,low,mid,format,3.214,P2,Korean→Chinese · SRT
+translate-xlsx-ko-to-zh,translate excel from Korean to Chinese,L1,tool,ko,zh,xlsx,,low,mid,format,3.214,P2,Korean→Chinese · Excel
+academic-paper-translation-de-to-zh,academic paper translation German to Chinese,L3,scenario,de,zh,,academic-paper,low,low,generic,3.143,P2,German→Chinese · 学术论文
+academic-paper-translation-en-to-es,academic paper translation English to Spanish,L3,scenario,en,es,,academic-paper,mid,high,generic,3.143,P2,English→Spanish · 学术论文
+academic-paper-translation-en-to-ru,academic paper translation English to Russian,L3,scenario,en,ru,,academic-paper,low,low,generic,3.143,P2,English→Russian · 学术论文
+academic-paper-translation-en-to-zh,academic paper translation English to Chinese,L3,scenario,en,zh,,academic-paper,mid,high,generic,3.143,P2,English→Chinese · 学术论文
+academic-paper-translation-fr-to-zh,academic paper translation French to Chinese,L3,scenario,fr,zh,,academic-paper,low,low,generic,3.143,P2,French→Chinese · 学术论文
+academic-paper-translation-ko-to-en,academic paper translation Korean to English,L3,scenario,ko,en,,academic-paper,low,low,generic,3.143,P2,Korean→English · 学术论文
+academic-paper-translation-zh-to-ar,academic paper translation Chinese to Arabic,L3,scenario,zh,ar,,academic-paper,low,low,generic,3.143,P2,Chinese→Arabic · 学术论文
+academic-paper-translation-zh-to-en,academic paper translation Chinese to English,L3,scenario,zh,en,,academic-paper,mid,high,generic,3.143,P2,Chinese→English · 学术论文
+academic-paper-translation-zh-to-pt,academic paper translation Chinese to Portuguese,L3,scenario,zh,pt,,academic-paper,low,low,generic,3.143,P2,Chinese→Portuguese · 学术论文
+academic-paper-translation-zh-to-ru,academic paper translation Chinese to Russian,L3,scenario,zh,ru,,academic-paper,low,low,generic,3.143,P2,Chinese→Russian · 学术论文
+academic-paper-translation-zh-to-th,academic paper translation Chinese to Thai,L3,scenario,zh,th,,academic-paper,low,low,generic,3.143,P2,Chinese→Thai · 学术论文
+game-localization-translation-de-to-zh,game localization translation German to Chinese,L3,scenario,de,zh,,game-localization,low,low,generic,3.143,P2,German→Chinese · 游戏本地化
+game-localization-translation-en-to-es,game localization translation English to Spanish,L3,scenario,en,es,,game-localization,mid,high,generic,3.143,P2,English→Spanish · 游戏本地化
+game-localization-translation-en-to-ru,game localization translation English to Russian,L3,scenario,en,ru,,game-localization,low,low,generic,3.143,P2,English→Russian · 游戏本地化
+game-localization-translation-en-to-zh,game localization translation English to Chinese,L3,scenario,en,zh,,game-localization,mid,high,generic,3.143,P2,English→Chinese · 游戏本地化
+game-localization-translation-fr-to-zh,game localization translation French to Chinese,L3,scenario,fr,zh,,game-localization,low,low,generic,3.143,P2,French→Chinese · 游戏本地化
+game-localization-translation-ko-to-en,game localization translation Korean to English,L3,scenario,ko,en,,game-localization,low,low,generic,3.143,P2,Korean→English · 游戏本地化
+game-localization-translation-zh-to-ar,game localization translation Chinese to Arabic,L3,scenario,zh,ar,,game-localization,low,low,generic,3.143,P2,Chinese→Arabic · 游戏本地化
+game-localization-translation-zh-to-en,game localization translation Chinese to English,L3,scenario,zh,en,,game-localization,mid,high,generic,3.143,P2,Chinese→English · 游戏本地化
+game-localization-translation-zh-to-pt,game localization translation Chinese to Portuguese,L3,scenario,zh,pt,,game-localization,low,low,generic,3.143,P2,Chinese→Portuguese · 游戏本地化
+game-localization-translation-zh-to-ru,game localization translation Chinese to Russian,L3,scenario,zh,ru,,game-localization,low,low,generic,3.143,P2,Chinese→Russian · 游戏本地化
+game-localization-translation-zh-to-th,game localization translation Chinese to Thai,L3,scenario,zh,th,,game-localization,low,low,generic,3.143,P2,Chinese→Thai · 游戏本地化
+how-to-translate-docx-en-to-ar-without-losing-layout,how to translate word docx from English to Arabic without losing layout,L4,guide,en,ar,docx,,mid,mid,format,3.061,P2,English→Arabic · Word · 教程
+how-to-translate-docx-en-to-de-without-losing-layout,how to translate word docx from English to German without losing layout,L4,guide,en,de,docx,,mid,mid,format,3.061,P2,English→German · Word · 教程
+how-to-translate-docx-en-to-fr-without-losing-layout,how to translate word docx from English to French without losing layout,L4,guide,en,fr,docx,,mid,mid,format,3.061,P2,English→French · Word · 教程
+how-to-translate-docx-en-to-ja-without-losing-layout,how to translate word docx from English to Japanese without losing layout,L4,guide,en,ja,docx,,mid,mid,format,3.061,P2,English→Japanese · Word · 教程
+how-to-translate-docx-en-to-pt-without-losing-layout,how to translate word docx from English to Portuguese without losing layout,L4,guide,en,pt,docx,,mid,mid,format,3.061,P2,English→Portuguese · Word · 教程
+how-to-translate-docx-ja-to-en-without-losing-layout,how to translate word docx from Japanese to English without losing layout,L4,guide,ja,en,docx,,mid,mid,format,3.061,P2,Japanese→English · Word · 教程
+how-to-translate-docx-ja-to-zh-without-losing-layout,how to translate word docx from Japanese to Chinese without losing layout,L4,guide,ja,zh,docx,,mid,mid,format,3.061,P2,Japanese→Chinese · Word · 教程
+how-to-translate-docx-zh-to-de-without-losing-layout,how to translate word docx from Chinese to German without losing layout,L4,guide,zh,de,docx,,mid,mid,format,3.061,P2,Chinese→German · Word · 教程
+how-to-translate-docx-zh-to-es-without-losing-layout,how to translate word docx from Chinese to Spanish without losing layout,L4,guide,zh,es,docx,,mid,mid,format,3.061,P2,Chinese→Spanish · Word · 教程
+how-to-translate-docx-zh-to-fr-without-losing-layout,how to translate word docx from Chinese to French without losing layout,L4,guide,zh,fr,docx,,mid,mid,format,3.061,P2,Chinese→French · Word · 教程
+how-to-translate-docx-zh-to-ja-without-losing-layout,how to translate word docx from Chinese to Japanese without losing layout,L4,guide,zh,ja,docx,,mid,mid,format,3.061,P2,Chinese→Japanese · Word · 教程
+how-to-translate-docx-zh-to-ko-without-losing-layout,how to translate word docx from Chinese to Korean without losing layout,L4,guide,zh,ko,docx,,mid,mid,format,3.061,P2,Chinese→Korean · Word · 教程
+how-to-translate-pdf-en-to-ar-without-losing-layout,how to translate pdf from English to Arabic without losing layout,L4,guide,en,ar,pdf,,mid,mid,format,3.061,P2,English→Arabic · PDF · 教程
+how-to-translate-pdf-en-to-de-without-losing-layout,how to translate pdf from English to German without losing layout,L4,guide,en,de,pdf,,mid,mid,format,3.061,P2,English→German · PDF · 教程
+how-to-translate-pdf-en-to-fr-without-losing-layout,how to translate pdf from English to French without losing layout,L4,guide,en,fr,pdf,,mid,mid,format,3.061,P2,English→French · PDF · 教程
+how-to-translate-pdf-en-to-ja-without-losing-layout,how to translate pdf from English to Japanese without losing layout,L4,guide,en,ja,pdf,,mid,mid,format,3.061,P2,English→Japanese · PDF · 教程
+how-to-translate-pdf-en-to-pt-without-losing-layout,how to translate pdf from English to Portuguese without losing layout,L4,guide,en,pt,pdf,,mid,mid,format,3.061,P2,English→Portuguese · PDF · 教程
+how-to-translate-pdf-ja-to-en-without-losing-layout,how to translate pdf from Japanese to English without losing layout,L4,guide,ja,en,pdf,,mid,mid,format,3.061,P2,Japanese→English · PDF · 教程
+how-to-translate-pdf-ja-to-zh-without-losing-layout,how to translate pdf from Japanese to Chinese without losing layout,L4,guide,ja,zh,pdf,,mid,mid,format,3.061,P2,Japanese→Chinese · PDF · 教程
+how-to-translate-pdf-zh-to-de-without-losing-layout,how to translate pdf from Chinese to German without losing layout,L4,guide,zh,de,pdf,,mid,mid,format,3.061,P2,Chinese→German · PDF · 教程
+how-to-translate-pdf-zh-to-es-without-losing-layout,how to translate pdf from Chinese to Spanish without losing layout,L4,guide,zh,es,pdf,,mid,mid,format,3.061,P2,Chinese→Spanish · PDF · 教程
+how-to-translate-pdf-zh-to-fr-without-losing-layout,how to translate pdf from Chinese to French without losing layout,L4,guide,zh,fr,pdf,,mid,mid,format,3.061,P2,Chinese→French · PDF · 教程
+how-to-translate-pdf-zh-to-ja-without-losing-layout,how to translate pdf from Chinese to Japanese without losing layout,L4,guide,zh,ja,pdf,,mid,mid,format,3.061,P2,Chinese→Japanese · PDF · 教程
+how-to-translate-pdf-zh-to-ko-without-losing-layout,how to translate pdf from Chinese to Korean without losing layout,L4,guide,zh,ko,pdf,,mid,mid,format,3.061,P2,Chinese→Korean · PDF · 教程
+how-to-translate-pptx-en-to-ar-without-losing-layout,how to translate powerpoint from English to Arabic without losing layout,L4,guide,en,ar,pptx,,mid,mid,format,3.061,P2,English→Arabic · PowerPoint · 教程
+how-to-translate-pptx-en-to-de-without-losing-layout,how to translate powerpoint from English to German without losing layout,L4,guide,en,de,pptx,,mid,mid,format,3.061,P2,English→German · PowerPoint · 教程
+how-to-translate-pptx-en-to-fr-without-losing-layout,how to translate powerpoint from English to French without losing layout,L4,guide,en,fr,pptx,,mid,mid,format,3.061,P2,English→French · PowerPoint · 教程
+how-to-translate-pptx-en-to-ja-without-losing-layout,how to translate powerpoint from English to Japanese without losing layout,L4,guide,en,ja,pptx,,mid,mid,format,3.061,P2,English→Japanese · PowerPoint · 教程
+how-to-translate-pptx-en-to-pt-without-losing-layout,how to translate powerpoint from English to Portuguese without losing layout,L4,guide,en,pt,pptx,,mid,mid,format,3.061,P2,English→Portuguese · PowerPoint · 教程
+how-to-translate-pptx-ja-to-en-without-losing-layout,how to translate powerpoint from Japanese to English without losing layout,L4,guide,ja,en,pptx,,mid,mid,format,3.061,P2,Japanese→English · PowerPoint · 教程
+how-to-translate-pptx-ja-to-zh-without-losing-layout,how to translate powerpoint from Japanese to Chinese without losing layout,L4,guide,ja,zh,pptx,,mid,mid,format,3.061,P2,Japanese→Chinese · PowerPoint · 教程
+how-to-translate-pptx-zh-to-de-without-losing-layout,how to translate powerpoint from Chinese to German without losing layout,L4,guide,zh,de,pptx,,mid,mid,format,3.061,P2,Chinese→German · PowerPoint · 教程
+how-to-translate-pptx-zh-to-es-without-losing-layout,how to translate powerpoint from Chinese to Spanish without losing layout,L4,guide,zh,es,pptx,,mid,mid,format,3.061,P2,Chinese→Spanish · PowerPoint · 教程
+how-to-translate-pptx-zh-to-fr-without-losing-layout,how to translate powerpoint from Chinese to French without losing layout,L4,guide,zh,fr,pptx,,mid,mid,format,3.061,P2,Chinese→French · PowerPoint · 教程
+how-to-translate-pptx-zh-to-ja-without-losing-layout,how to translate powerpoint from Chinese to Japanese without losing layout,L4,guide,zh,ja,pptx,,mid,mid,format,3.061,P2,Chinese→Japanese · PowerPoint · 教程
+how-to-translate-pptx-zh-to-ko-without-losing-layout,how to translate powerpoint from Chinese to Korean without losing layout,L4,guide,zh,ko,pptx,,mid,mid,format,3.061,P2,Chinese→Korean · PowerPoint · 教程
+how-to-translate-xlsx-en-to-ar-without-losing-layout,how to translate excel from English to Arabic without losing layout,L4,guide,en,ar,xlsx,,mid,mid,format,3.061,P2,English→Arabic · Excel · 教程
+how-to-translate-xlsx-en-to-de-without-losing-layout,how to translate excel from English to German without losing layout,L4,guide,en,de,xlsx,,mid,mid,format,3.061,P2,English→German · Excel · 教程
+how-to-translate-xlsx-en-to-fr-without-losing-layout,how to translate excel from English to French without losing layout,L4,guide,en,fr,xlsx,,mid,mid,format,3.061,P2,English→French · Excel · 教程
+how-to-translate-xlsx-en-to-ja-without-losing-layout,how to translate excel from English to Japanese without losing layout,L4,guide,en,ja,xlsx,,mid,mid,format,3.061,P2,English→Japanese · Excel · 教程
+how-to-translate-xlsx-en-to-pt-without-losing-layout,how to translate excel from English to Portuguese without losing layout,L4,guide,en,pt,xlsx,,mid,mid,format,3.061,P2,English→Portuguese · Excel · 教程
+how-to-translate-xlsx-ja-to-en-without-losing-layout,how to translate excel from Japanese to English without losing layout,L4,guide,ja,en,xlsx,,mid,mid,format,3.061,P2,Japanese→English · Excel · 教程
+how-to-translate-xlsx-ja-to-zh-without-losing-layout,how to translate excel from Japanese to Chinese without losing layout,L4,guide,ja,zh,xlsx,,mid,mid,format,3.061,P2,Japanese→Chinese · Excel · 教程
+how-to-translate-xlsx-zh-to-de-without-losing-layout,how to translate excel from Chinese to German without losing layout,L4,guide,zh,de,xlsx,,mid,mid,format,3.061,P2,Chinese→German · Excel · 教程
+how-to-translate-xlsx-zh-to-es-without-losing-layout,how to translate excel from Chinese to Spanish without losing layout,L4,guide,zh,es,xlsx,,mid,mid,format,3.061,P2,Chinese→Spanish · Excel · 教程
+how-to-translate-xlsx-zh-to-fr-without-losing-layout,how to translate excel from Chinese to French without losing layout,L4,guide,zh,fr,xlsx,,mid,mid,format,3.061,P2,Chinese→French · Excel · 教程
+how-to-translate-xlsx-zh-to-ja-without-losing-layout,how to translate excel from Chinese to Japanese without losing layout,L4,guide,zh,ja,xlsx,,mid,mid,format,3.061,P2,Chinese→Japanese · Excel · 教程
+how-to-translate-xlsx-zh-to-ko-without-losing-layout,how to translate excel from Chinese to Korean without losing layout,L4,guide,zh,ko,xlsx,,mid,mid,format,3.061,P2,Chinese→Korean · Excel · 教程
+translate-epub-de-to-zh,translate epub from German to Chinese,L1,tool,de,zh,epub,,low,low,generic,3.0,P2,German→Chinese · EPUB
+translate-epub-en-to-es-preserving-formatting,translate epub from English to Spanish preserving formatting,L2,tool,en,es,epub,,low,high,generic,3.0,P2,English→Spanish · EPUB · 保格式（最强战场）
+translate-epub-en-to-ru,translate epub from English to Russian,L1,tool,en,ru,epub,,low,low,generic,3.0,P2,English→Russian · EPUB
+translate-epub-en-to-zh-preserving-formatting,translate epub from English to Chinese preserving formatting,L2,tool,en,zh,epub,,low,high,generic,3.0,P2,English→Chinese · EPUB · 保格式（最强战场）
+translate-epub-fr-to-zh,translate epub from French to Chinese,L1,tool,fr,zh,epub,,low,low,generic,3.0,P2,French→Chinese · EPUB
+translate-epub-ko-to-en,translate epub from Korean to English,L1,tool,ko,en,epub,,low,low,generic,3.0,P2,Korean→English · EPUB
+translate-epub-zh-to-ar,translate epub from Chinese to Arabic,L1,tool,zh,ar,epub,,low,low,generic,3.0,P2,Chinese→Arabic · EPUB
+translate-epub-zh-to-en-preserving-formatting,translate epub from Chinese to English preserving formatting,L2,tool,zh,en,epub,,low,high,generic,3.0,P2,Chinese→English · EPUB · 保格式（最强战场）
+translate-epub-zh-to-pt,translate epub from Chinese to Portuguese,L1,tool,zh,pt,epub,,low,low,generic,3.0,P2,Chinese→Portuguese · EPUB
+translate-epub-zh-to-ru,translate epub from Chinese to Russian,L1,tool,zh,ru,epub,,low,low,generic,3.0,P2,Chinese→Russian · EPUB
+translate-epub-zh-to-th,translate epub from Chinese to Thai,L1,tool,zh,th,epub,,low,low,generic,3.0,P2,Chinese→Thai · EPUB
+translate-md-de-to-zh,translate markdown from German to Chinese,L1,tool,de,zh,md,,low,low,generic,3.0,P2,German→Chinese · Markdown
+translate-md-en-to-es-preserving-formatting,translate markdown from English to Spanish preserving formatting,L2,tool,en,es,md,,low,high,generic,3.0,P2,English→Spanish · Markdown · 保格式（最强战场）
+translate-md-en-to-ru,translate markdown from English to Russian,L1,tool,en,ru,md,,low,low,generic,3.0,P2,English→Russian · Markdown
+translate-md-en-to-zh-preserving-formatting,translate markdown from English to Chinese preserving formatting,L2,tool,en,zh,md,,low,high,generic,3.0,P2,English→Chinese · Markdown · 保格式（最强战场）
+translate-md-fr-to-zh,translate markdown from French to Chinese,L1,tool,fr,zh,md,,low,low,generic,3.0,P2,French→Chinese · Markdown
+translate-md-ko-to-en,translate markdown from Korean to English,L1,tool,ko,en,md,,low,low,generic,3.0,P2,Korean→English · Markdown
+translate-md-zh-to-ar,translate markdown from Chinese to Arabic,L1,tool,zh,ar,md,,low,low,generic,3.0,P2,Chinese→Arabic · Markdown
+translate-md-zh-to-en-preserving-formatting,translate markdown from Chinese to English preserving formatting,L2,tool,zh,en,md,,low,high,generic,3.0,P2,Chinese→English · Markdown · 保格式（最强战场）
+translate-md-zh-to-pt,translate markdown from Chinese to Portuguese,L1,tool,zh,pt,md,,low,low,generic,3.0,P2,Chinese→Portuguese · Markdown
+translate-md-zh-to-ru,translate markdown from Chinese to Russian,L1,tool,zh,ru,md,,low,low,generic,3.0,P2,Chinese→Russian · Markdown
+translate-md-zh-to-th,translate markdown from Chinese to Thai,L1,tool,zh,th,md,,low,low,generic,3.0,P2,Chinese→Thai · Markdown
+contract-translation-ko-to-zh,contract translation Korean to Chinese,L3,scenario,ko,zh,,contract,low,mid,terminology,2.918,P2,Korean→Chinese · 合同/协议
+financial-translation-en-to-ar,financial report translation English to Arabic,L3,scenario,en,ar,,financial,low,mid,terminology,2.918,P2,English→Arabic · 财报/财务文件
+financial-translation-en-to-de,financial report translation English to German,L3,scenario,en,de,,financial,low,mid,terminology,2.918,P2,English→German · 财报/财务文件
+financial-translation-en-to-fr,financial report translation English to French,L3,scenario,en,fr,,financial,low,mid,terminology,2.918,P2,English→French · 财报/财务文件
+financial-translation-en-to-ja,financial report translation English to Japanese,L3,scenario,en,ja,,financial,low,mid,terminology,2.918,P2,English→Japanese · 财报/财务文件
+financial-translation-en-to-pt,financial report translation English to Portuguese,L3,scenario,en,pt,,financial,low,mid,terminology,2.918,P2,English→Portuguese · 财报/财务文件
+financial-translation-ja-to-en,financial report translation Japanese to English,L3,scenario,ja,en,,financial,low,mid,terminology,2.918,P2,Japanese→English · 财报/财务文件
+financial-translation-ja-to-zh,financial report translation Japanese to Chinese,L3,scenario,ja,zh,,financial,low,mid,terminology,2.918,P2,Japanese→Chinese · 财报/财务文件
+financial-translation-ko-to-zh,financial report translation Korean to Chinese,L3,scenario,ko,zh,,financial,low,mid,terminology,2.918,P2,Korean→Chinese · 财报/财务文件
+financial-translation-zh-to-de,financial report translation Chinese to German,L3,scenario,zh,de,,financial,low,mid,terminology,2.918,P2,Chinese→German · 财报/财务文件
+financial-translation-zh-to-es,financial report translation Chinese to Spanish,L3,scenario,zh,es,,financial,low,mid,terminology,2.918,P2,Chinese→Spanish · 财报/财务文件
+financial-translation-zh-to-fr,financial report translation Chinese to French,L3,scenario,zh,fr,,financial,low,mid,terminology,2.918,P2,Chinese→French · 财报/财务文件
+financial-translation-zh-to-ja,financial report translation Chinese to Japanese,L3,scenario,zh,ja,,financial,low,mid,terminology,2.918,P2,Chinese→Japanese · 财报/财务文件
+financial-translation-zh-to-ko,financial report translation Chinese to Korean,L3,scenario,zh,ko,,financial,low,mid,terminology,2.918,P2,Chinese→Korean · 财报/财务文件
+patent-translation-ko-to-zh,patent translation Korean to Chinese,L3,scenario,ko,zh,,patent,low,mid,terminology,2.918,P2,Korean→Chinese · 专利文件
+product-listing-translation-ko-to-zh,product listing translation Korean to Chinese,L3,scenario,ko,zh,,product-listing,low,mid,terminology,2.918,P2,Korean→Chinese · 跨境电商商品详情
+resume-translation-en-to-es,resume translation English to Spanish,L3,scenario,en,es,,resume,low,high,format,2.357,P2,English→Spanish · 简历
+resume-translation-en-to-zh,resume translation English to Chinese,L3,scenario,en,zh,,resume,low,high,format,2.357,P2,English→Chinese · 简历
+resume-translation-zh-to-en,resume translation Chinese to English,L3,scenario,zh,en,,resume,low,high,format,2.357,P2,Chinese→English · 简历
+subtitle-translation-en-to-es,subtitle file translation English to Spanish,L3,scenario,en,es,,subtitle,low,high,format,2.357,P2,English→Spanish · 字幕文件
+subtitle-translation-en-to-zh,subtitle file translation English to Chinese,L3,scenario,en,zh,,subtitle,low,high,format,2.357,P2,English→Chinese · 字幕文件
+subtitle-translation-zh-to-en,subtitle file translation Chinese to English,L3,scenario,zh,en,,subtitle,low,high,format,2.357,P2,Chinese→English · 字幕文件
+academic-paper-translation-ko-to-zh,academic paper translation Korean to Chinese,L3,scenario,ko,zh,,academic-paper,low,mid,generic,2.245,P2,Korean→Chinese · 学术论文
+game-localization-translation-ko-to-zh,game localization translation Korean to Chinese,L3,scenario,ko,zh,,game-localization,low,mid,generic,2.245,P2,Korean→Chinese · 游戏本地化
+how-to-translate-docx-de-to-zh-without-losing-layout,how to translate word docx from German to Chinese without losing layout,L4,guide,de,zh,docx,,low,low,format,2.143,P2,German→Chinese · Word · 教程
+how-to-translate-docx-en-to-ru-without-losing-layout,how to translate word docx from English to Russian without losing layout,L4,guide,en,ru,docx,,low,low,format,2.143,P2,English→Russian · Word · 教程
+how-to-translate-docx-fr-to-zh-without-losing-layout,how to translate word docx from French to Chinese without losing layout,L4,guide,fr,zh,docx,,low,low,format,2.143,P2,French→Chinese · Word · 教程
+how-to-translate-docx-ko-to-en-without-losing-layout,how to translate word docx from Korean to English without losing layout,L4,guide,ko,en,docx,,low,low,format,2.143,P2,Korean→English · Word · 教程
+how-to-translate-docx-zh-to-ar-without-losing-layout,how to translate word docx from Chinese to Arabic without losing layout,L4,guide,zh,ar,docx,,low,low,format,2.143,P2,Chinese→Arabic · Word · 教程
+how-to-translate-docx-zh-to-pt-without-losing-layout,how to translate word docx from Chinese to Portuguese without losing layout,L4,guide,zh,pt,docx,,low,low,format,2.143,P2,Chinese→Portuguese · Word · 教程
+how-to-translate-docx-zh-to-ru-without-losing-layout,how to translate word docx from Chinese to Russian without losing layout,L4,guide,zh,ru,docx,,low,low,format,2.143,P2,Chinese→Russian · Word · 教程
+how-to-translate-docx-zh-to-th-without-losing-layout,how to translate word docx from Chinese to Thai without losing layout,L4,guide,zh,th,docx,,low,low,format,2.143,P2,Chinese→Thai · Word · 教程
+how-to-translate-pdf-de-to-zh-without-losing-layout,how to translate pdf from German to Chinese without losing layout,L4,guide,de,zh,pdf,,low,low,format,2.143,P2,German→Chinese · PDF · 教程
+how-to-translate-pdf-en-to-ru-without-losing-layout,how to translate pdf from English to Russian without losing layout,L4,guide,en,ru,pdf,,low,low,format,2.143,P2,English→Russian · PDF · 教程
+how-to-translate-pdf-fr-to-zh-without-losing-layout,how to translate pdf from French to Chinese without losing layout,L4,guide,fr,zh,pdf,,low,low,format,2.143,P2,French→Chinese · PDF · 教程
+how-to-translate-pdf-ko-to-en-without-losing-layout,how to translate pdf from Korean to English without losing layout,L4,guide,ko,en,pdf,,low,low,format,2.143,P2,Korean→English · PDF · 教程
+how-to-translate-pdf-zh-to-ar-without-losing-layout,how to translate pdf from Chinese to Arabic without losing layout,L4,guide,zh,ar,pdf,,low,low,format,2.143,P2,Chinese→Arabic · PDF · 教程
+how-to-translate-pdf-zh-to-pt-without-losing-layout,how to translate pdf from Chinese to Portuguese without losing layout,L4,guide,zh,pt,pdf,,low,low,format,2.143,P2,Chinese→Portuguese · PDF · 教程
+how-to-translate-pdf-zh-to-ru-without-losing-layout,how to translate pdf from Chinese to Russian without losing layout,L4,guide,zh,ru,pdf,,low,low,format,2.143,P2,Chinese→Russian · PDF · 教程
+how-to-translate-pdf-zh-to-th-without-losing-layout,how to translate pdf from Chinese to Thai without losing layout,L4,guide,zh,th,pdf,,low,low,format,2.143,P2,Chinese→Thai · PDF · 教程
+how-to-translate-pptx-de-to-zh-without-losing-layout,how to translate powerpoint from German to Chinese without losing layout,L4,guide,de,zh,pptx,,low,low,format,2.143,P2,German→Chinese · PowerPoint · 教程
+how-to-translate-pptx-en-to-es-without-losing-layout,how to translate powerpoint from English to Spanish without losing layout,L4,guide,en,es,pptx,,mid,high,format,2.143,P2,English→Spanish · PowerPoint · 教程
+how-to-translate-pptx-en-to-ru-without-losing-layout,how to translate powerpoint from English to Russian without losing layout,L4,guide,en,ru,pptx,,low,low,format,2.143,P2,English→Russian · PowerPoint · 教程
+how-to-translate-pptx-en-to-zh-without-losing-layout,how to translate powerpoint from English to Chinese without losing layout,L4,guide,en,zh,pptx,,mid,high,format,2.143,P2,English→Chinese · PowerPoint · 教程
+how-to-translate-pptx-fr-to-zh-without-losing-layout,how to translate powerpoint from French to Chinese without losing layout,L4,guide,fr,zh,pptx,,low,low,format,2.143,P2,French→Chinese · PowerPoint · 教程
+how-to-translate-pptx-ko-to-en-without-losing-layout,how to translate powerpoint from Korean to English without losing layout,L4,guide,ko,en,pptx,,low,low,format,2.143,P2,Korean→English · PowerPoint · 教程
+how-to-translate-pptx-zh-to-ar-without-losing-layout,how to translate powerpoint from Chinese to Arabic without losing layout,L4,guide,zh,ar,pptx,,low,low,format,2.143,P2,Chinese→Arabic · PowerPoint · 教程
+how-to-translate-pptx-zh-to-en-without-losing-layout,how to translate powerpoint from Chinese to English without losing layout,L4,guide,zh,en,pptx,,mid,high,format,2.143,P2,Chinese→English · PowerPoint · 教程
+how-to-translate-pptx-zh-to-pt-without-losing-layout,how to translate powerpoint from Chinese to Portuguese without losing layout,L4,guide,zh,pt,pptx,,low,low,format,2.143,P2,Chinese→Portuguese · PowerPoint · 教程
+how-to-translate-pptx-zh-to-ru-without-losing-layout,how to translate powerpoint from Chinese to Russian without losing layout,L4,guide,zh,ru,pptx,,low,low,format,2.143,P2,Chinese→Russian · PowerPoint · 教程
+how-to-translate-pptx-zh-to-th-without-losing-layout,how to translate powerpoint from Chinese to Thai without losing layout,L4,guide,zh,th,pptx,,low,low,format,2.143,P2,Chinese→Thai · PowerPoint · 教程
+how-to-translate-xlsx-de-to-zh-without-losing-layout,how to translate excel from German to Chinese without losing layout,L4,guide,de,zh,xlsx,,low,low,format,2.143,P2,German→Chinese · Excel · 教程
+how-to-translate-xlsx-en-to-es-without-losing-layout,how to translate excel from English to Spanish without losing layout,L4,guide,en,es,xlsx,,mid,high,format,2.143,P2,English→Spanish · Excel · 教程
+how-to-translate-xlsx-en-to-ru-without-losing-layout,how to translate excel from English to Russian without losing layout,L4,guide,en,ru,xlsx,,low,low,format,2.143,P2,English→Russian · Excel · 教程
+how-to-translate-xlsx-en-to-zh-without-losing-layout,how to translate excel from English to Chinese without losing layout,L4,guide,en,zh,xlsx,,mid,high,format,2.143,P2,English→Chinese · Excel · 教程
+how-to-translate-xlsx-fr-to-zh-without-losing-layout,how to translate excel from French to Chinese without losing layout,L4,guide,fr,zh,xlsx,,low,low,format,2.143,P2,French→Chinese · Excel · 教程
+how-to-translate-xlsx-ko-to-en-without-losing-layout,how to translate excel from Korean to English without losing layout,L4,guide,ko,en,xlsx,,low,low,format,2.143,P2,Korean→English · Excel · 教程
+how-to-translate-xlsx-zh-to-ar-without-losing-layout,how to translate excel from Chinese to Arabic without losing layout,L4,guide,zh,ar,xlsx,,low,low,format,2.143,P2,Chinese→Arabic · Excel · 教程
+how-to-translate-xlsx-zh-to-en-without-losing-layout,how to translate excel from Chinese to English without losing layout,L4,guide,zh,en,xlsx,,mid,high,format,2.143,P2,Chinese→English · Excel · 教程
+how-to-translate-xlsx-zh-to-pt-without-losing-layout,how to translate excel from Chinese to Portuguese without losing layout,L4,guide,zh,pt,xlsx,,low,low,format,2.143,P2,Chinese→Portuguese · Excel · 教程
+how-to-translate-xlsx-zh-to-ru-without-losing-layout,how to translate excel from Chinese to Russian without losing layout,L4,guide,zh,ru,xlsx,,low,low,format,2.143,P2,Chinese→Russian · Excel · 教程
+how-to-translate-xlsx-zh-to-th-without-losing-layout,how to translate excel from Chinese to Thai without losing layout,L4,guide,zh,th,xlsx,,low,low,format,2.143,P2,Chinese→Thai · Excel · 教程
+translate-epub-en-to-ar,translate epub from English to Arabic,L1,tool,en,ar,epub,,low,mid,generic,2.143,P2,English→Arabic · EPUB
+translate-epub-en-to-de,translate epub from English to German,L1,tool,en,de,epub,,low,mid,generic,2.143,P2,English→German · EPUB
+translate-epub-en-to-fr,translate epub from English to French,L1,tool,en,fr,epub,,low,mid,generic,2.143,P2,English→French · EPUB
+translate-epub-en-to-ja,translate epub from English to Japanese,L1,tool,en,ja,epub,,low,mid,generic,2.143,P2,English→Japanese · EPUB
+translate-epub-en-to-pt,translate epub from English to Portuguese,L1,tool,en,pt,epub,,low,mid,generic,2.143,P2,English→Portuguese · EPUB
+translate-epub-ja-to-en,translate epub from Japanese to English,L1,tool,ja,en,epub,,low,mid,generic,2.143,P2,Japanese→English · EPUB
+translate-epub-ja-to-zh,translate epub from Japanese to Chinese,L1,tool,ja,zh,epub,,low,mid,generic,2.143,P2,Japanese→Chinese · EPUB
+translate-epub-ko-to-zh,translate epub from Korean to Chinese,L1,tool,ko,zh,epub,,low,mid,generic,2.143,P2,Korean→Chinese · EPUB
+translate-epub-zh-to-de,translate epub from Chinese to German,L1,tool,zh,de,epub,,low,mid,generic,2.143,P2,Chinese→German · EPUB
+translate-epub-zh-to-es,translate epub from Chinese to Spanish,L1,tool,zh,es,epub,,low,mid,generic,2.143,P2,Chinese→Spanish · EPUB
+translate-epub-zh-to-fr,translate epub from Chinese to French,L1,tool,zh,fr,epub,,low,mid,generic,2.143,P2,Chinese→French · EPUB
+translate-epub-zh-to-ja,translate epub from Chinese to Japanese,L1,tool,zh,ja,epub,,low,mid,generic,2.143,P2,Chinese→Japanese · EPUB
+translate-epub-zh-to-ko,translate epub from Chinese to Korean,L1,tool,zh,ko,epub,,low,mid,generic,2.143,P2,Chinese→Korean · EPUB
+translate-md-en-to-ar,translate markdown from English to Arabic,L1,tool,en,ar,md,,low,mid,generic,2.143,P2,English→Arabic · Markdown
+translate-md-en-to-de,translate markdown from English to German,L1,tool,en,de,md,,low,mid,generic,2.143,P2,English→German · Markdown
+translate-md-en-to-fr,translate markdown from English to French,L1,tool,en,fr,md,,low,mid,generic,2.143,P2,English→French · Markdown
+translate-md-en-to-ja,translate markdown from English to Japanese,L1,tool,en,ja,md,,low,mid,generic,2.143,P2,English→Japanese · Markdown
+translate-md-en-to-pt,translate markdown from English to Portuguese,L1,tool,en,pt,md,,low,mid,generic,2.143,P2,English→Portuguese · Markdown
+translate-md-ja-to-en,translate markdown from Japanese to English,L1,tool,ja,en,md,,low,mid,generic,2.143,P2,Japanese→English · Markdown
+translate-md-ja-to-zh,translate markdown from Japanese to Chinese,L1,tool,ja,zh,md,,low,mid,generic,2.143,P2,Japanese→Chinese · Markdown
+translate-md-ko-to-zh,translate markdown from Korean to Chinese,L1,tool,ko,zh,md,,low,mid,generic,2.143,P2,Korean→Chinese · Markdown
+translate-md-zh-to-de,translate markdown from Chinese to German,L1,tool,zh,de,md,,low,mid,generic,2.143,P2,Chinese→German · Markdown
+translate-md-zh-to-es,translate markdown from Chinese to Spanish,L1,tool,zh,es,md,,low,mid,generic,2.143,P2,Chinese→Spanish · Markdown
+translate-md-zh-to-fr,translate markdown from Chinese to French,L1,tool,zh,fr,md,,low,mid,generic,2.143,P2,Chinese→French · Markdown
+translate-md-zh-to-ja,translate markdown from Chinese to Japanese,L1,tool,zh,ja,md,,low,mid,generic,2.143,P2,Chinese→Japanese · Markdown
+translate-md-zh-to-ko,translate markdown from Chinese to Korean,L1,tool,zh,ko,md,,low,mid,generic,2.143,P2,Chinese→Korean · Markdown
+financial-translation-en-to-es,financial report translation English to Spanish,L3,scenario,en,es,,financial,low,high,terminology,2.043,P2,English→Spanish · 财报/财务文件
+financial-translation-en-to-zh,financial report translation English to Chinese,L3,scenario,en,zh,,financial,low,high,terminology,2.043,P2,English→Chinese · 财报/财务文件
+financial-translation-zh-to-en,financial report translation Chinese to English,L3,scenario,zh,en,,financial,low,high,terminology,2.043,P2,Chinese→English · 财报/财务文件
+how-to-translate-docx-ko-to-zh-without-losing-layout,how to translate word docx from Korean to Chinese without losing layout,L4,guide,ko,zh,docx,,low,mid,format,1.531,P2,Korean→Chinese · Word · 教程
+how-to-translate-pdf-ko-to-zh-without-losing-layout,how to translate pdf from Korean to Chinese without losing layout,L4,guide,ko,zh,pdf,,low,mid,format,1.531,P2,Korean→Chinese · PDF · 教程
+how-to-translate-pptx-ko-to-zh-without-losing-layout,how to translate powerpoint from Korean to Chinese without losing layout,L4,guide,ko,zh,pptx,,low,mid,format,1.531,P2,Korean→Chinese · PowerPoint · 教程
+how-to-translate-xlsx-ko-to-zh-without-losing-layout,how to translate excel from Korean to Chinese without losing layout,L4,guide,ko,zh,xlsx,,low,mid,format,1.531,P2,Korean→Chinese · Excel · 教程
+translate-epub-en-to-es,translate epub from English to Spanish,L1,tool,en,es,epub,,low,high,generic,1.5,P2,English→Spanish · EPUB
+translate-epub-en-to-zh,translate epub from English to Chinese,L1,tool,en,zh,epub,,low,high,generic,1.5,P2,English→Chinese · EPUB
+translate-epub-zh-to-en,translate epub from Chinese to English,L1,tool,zh,en,epub,,low,high,generic,1.5,P2,Chinese→English · EPUB
+translate-md-en-to-es,translate markdown from English to Spanish,L1,tool,en,es,md,,low,high,generic,1.5,P2,English→Spanish · Markdown
+translate-md-en-to-zh,translate markdown from English to Chinese,L1,tool,en,zh,md,,low,high,generic,1.5,P2,English→Chinese · Markdown
+translate-md-zh-to-en,translate markdown from Chinese to English,L1,tool,zh,en,md,,low,high,generic,1.5,P2,Chinese→English · Markdown

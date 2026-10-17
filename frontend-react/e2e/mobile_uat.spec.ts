@@ -247,10 +247,13 @@ test('移动端全站页面无横向溢出巡检', async ({ page }) => {
 // 未登录门面移动壳（PublicShell）：★ 2026-10-17 用户令「未登录的移动端也做一下适配，
 //   参考现在的登录态移动端设计」——四支未登录门面（首页/定价/比价/登录注册）统一套上登录态
 //   前台外壳那套「顶栏(汉堡+品牌簇) ＋ 汉堡抽屉」形态；移动档由 publicshell.css 收起各页自带营销头部。
-//   判据五腿：① 顶栏在位且高=令牌档(52)＋品牌簇非空；② 点汉堡出抽屉＋遮罩、抽屉内跨页入口逐条可见、
-//   点遮罩收起；③ 各页自带头部**仍在 DOM**（页面真渲染）但移动档 `:visible` 清零——两条一起才证明是
-//   「壳把页头收起」而不是「页头压根没渲染」（只判 :visible=0 会被"页面没起来"假绿）；
-//   ④ 无横向溢出；⑤ 桌面负向：1440 档不得出未登录移动顶栏（证明整个壳是移动档门禁的），页面自带头部须在。
+//   判据六腿：① 顶栏在位且高=令牌档(52)＋品牌簇非空；② ★ 2026-10-17 用户令「小屏幕把 language 选择器
+//   和登录按钮拿出来放右上角」——顶栏右簇(.pub-topbar-actions)必须可见，语言钮可见文字逐字 = 'Lang'
+//   （用 toHaveText 而非子串：'Lang' 是 'Language' 的子串，子串判据对旧长词恒真＝空转），登录链
+//   (.pub-topbar-login → /login)在位，且**抽屉里不能再有第二份**（搬过去≠两处并存）；
+//   ③ 点汉堡出抽屉＋遮罩、抽屉内跨页入口逐条可见、点遮罩收起；④ 各页自带头部**仍在 DOM**（页面真渲染）
+//   但移动档 `:visible` 清零——两条一起才证明是「壳把页头收起」而不是「页头压根没渲染」；
+//   ⑤ 无横向溢出；⑥ 桌面负向：1440 档不得出未登录移动顶栏（证明整个壳是移动档门禁的），页面自带头部须在。
 test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋无溢出', async ({ page }) => {
   test.setTimeout(90000);
   // [路由, 该页自带的营销头部类名]——三支公开门面（登录页在末段单独判）
@@ -263,6 +266,14 @@ test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋�
     expect(await topbar.evaluate((el) => el.getBoundingClientRect().height), `${r} 顶栏高 ≠ --lc-mob-topbar-h(52)`).toBeCloseTo(52, 0);
     expect((await page.locator('.pub-mob-brand').innerText()).trim().length, `${r} 顶栏品牌簇为空`).toBeGreaterThan(0);
 
+    // ② 顶栏右簇：语言钮（固定词 Lang，不随界面语言变）＋ 登录链必须在右上角，抽屉里不许再有第二份
+    await expect(page.locator('.pub-mob-topbar .pub-topbar-actions'), `${r} 顶栏右簇不在（语言/登录入口没搬到右上角）`).toBeVisible();
+    await expect(page.locator('.pub-mob-topbar .pub-topbar-actions .lang-sel-cur'), `${r} 顶栏语言钮可见文字不是逐字 'Lang'`).toHaveText('Lang');
+    const loginBtn = page.locator('.pub-topbar-login');
+    await expect(loginBtn, `${r} 顶栏缺登录入口`).toBeVisible();
+    expect(await loginBtn.getAttribute('href'), `${r} 顶栏登录入口不指向 /login`).toBe('/login');
+    expect(await page.locator('.pub-drawer .lang-sel-btn').count(), `${r} 抽屉里还留着语言钮（应只在顶栏）`).toBe(0);
+
     // ③ 各页自带头部：必须仍在 DOM（页面真渲染了），但移动档不可见（壳把它收起）
     const head = page.locator(headCls);
     await expect
@@ -270,7 +281,7 @@ test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋�
       .toBeGreaterThan(0);
     expect(await page.locator(`${headCls}:visible`).count(), `${r} 移动档页头未收起（壳顶栏＋页头两条栏）`).toBe(0);
 
-    // ② 汉堡 → 抽屉滑入＋遮罩；抽屉内跨页入口逐条可见；点遮罩收起
+    // ③ 汉堡 → 抽屉滑入＋遮罩；抽屉内跨页入口逐条可见；点遮罩收起
     const drawer = page.locator('.pub-drawer');
     expect(await drawer.evaluate((el) => el.getBoundingClientRect().x), `${r} 抽屉默认必须移出屏外`).toBeLessThan(0);
     await page.locator('.pub-mob-topbar .lc-mob-topbar__icon').click();
@@ -285,7 +296,7 @@ test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋�
     await page.waitForTimeout(400);
     expect(await drawer.evaluate((el) => el.getBoundingClientRect().x), `${r} 点遮罩后抽屉未收起`).toBeLessThan(0);
 
-    // ④ 无横向溢出
+    // ⑤ 无横向溢出
     await expect
       .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
         { message: `${r} 未登录门面移动档横向溢出`, timeout: 8000 })
@@ -300,7 +311,7 @@ test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋�
   await expect(page.locator('.lc-auth-card'), '/login 未渲染登录卡').toBeVisible({ timeout: 30000 });
   await page.screenshot({ path: 'artifacts/mobile-public-login.png' });
 
-  // ⑤ 桌面负向：1440 档不得出未登录移动顶栏（壳是移动档门禁的），且页面自带头部必须回来
+  // ⑥ 桌面负向：1440 档不得出未登录移动顶栏（壳是移动档门禁的），且页面自带头部必须回来
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${BASE}/pricing`, { waitUntil: 'networkidle' });
   expect(await page.locator('.pub-mob-topbar').count(), '桌面档渲染了未登录移动顶栏（壳没按断点收门）').toBe(0);

@@ -113,12 +113,12 @@ describe('落地页 · 质量数字口径与多语言入口（2026-09-20）', { 
   })
 
   it('⑦ 顶部导航挂 LangSelect（12 语种切换入口对访客可见）', () => {
-    // ★ 判据翻转（用户后令 2026-10-13，非回归）：触发钮**可见文字固定英文 "Language"**，
+    // ★ 判据翻转（用户后令 2026-10-13，非回归；10-17 再令把词收短为 "Lang"）：触发钮**可见文字固定英文词**，
     //   不再随界面语言本地化（拍板⑦的本地化那一半被覆盖）；自称名只在菜单选中项与 title
     render(<Landing />)
     const btn = document.querySelector('header .lang-sel-btn') as HTMLElement
     expect(btn).toBeTruthy()
-    expect(btn.textContent).toContain(LANG_BTN_FIXED_TEXT) // 固定 "Language"
+    expect(btn.textContent).toContain(LANG_BTN_FIXED_TEXT) // 固定 "Lang"
     expect(btn.textContent).not.toContain(t('app.langBtn')) // 中文本地字不许回到可见腿
     expect(btn.textContent).not.toContain('简体中文') // 自称名不许回占触发钮
     // 本地化仍在读屏腿：aria-label 取该语种词典的 app.langBtn（zh 界面念「语言」）

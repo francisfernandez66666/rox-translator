@@ -13,9 +13,13 @@
 //   L2 形态（等值）：publicshell.css 必须在 ≤640 档把三支页头（.lc-mkt-nav/.lc-prc-nav/.lc-cmp-nav）
 //      display:none（否则出现「壳顶栏＋页面自己顶栏」两条栏），且登录固定壳按令牌下移。
 //   L3 单断点：PublicShell.tsx 必须且只能复用 useMobileShell()（不得再写第二份 matchMedia/断点）。
-//   L4 靶子等值：e2e 判据用的类名（.pub-mob-topbar/.pub-drawer/.pub-drawer__cta/.pub-scrim）
+//   L4 靶子等值：e2e 判据用的类名（.pub-mob-topbar/.pub-topbar-actions/.pub-topbar-login/
+//      .pub-drawer/.pub-drawer__cta/.pub-scrim）
 //      必须同时存在于组件与 e2e/mobile_uat.spec.ts——一侧改名即红（同 BrandTagline 那条两处锁）。
-// 反证 R1/R2/R3：分别把三处改坏，必须各自判红（先证明响应，再证明修法正当）。
+//   L5 右簇归属（★ 2026-10-17 用户令「小屏幕把 language 选择器和登录按钮拿出来放右上角」）：
+//      顶栏右簇必须有语言钮与登录入口，**抽屉里两者都不许再有**——「搬过去」不是「多放一份」，
+//      只查一半（顶栏有没有）会让"抽屉里还留着旧的那份"一路绿（两处入口并存＝改一处漏一处的温床）。
+// 反证 R1/R2/R3/R4：分别把四处改坏，必须各自判红（先证明响应，再证明修法正当）。
 //
 // ⚠️ 本锁只问**剥注释之后**的正文：注释里出现类名/说明是记录，不是实现（同 §一·5「注释不许冒充实现」）。
 // 运行：npx vitest run src/components/publicshell/PublicShell.lock.test.ts
@@ -114,8 +118,30 @@ function singleBreakpointFailures(shell: string): string[] {
   return bad
 }
 
+/**
+ * L5 判据：语言钮与登录入口只许待在顶栏右簇，抽屉里一件都不许留。
+ * 切法按函数名锚点分段（顶栏 vs 抽屉），不按"下一个顶层声明"猜——同 doubleConfirmGate 那条教训。
+ */
+function topbarFailures(shell: string): string[] {
+  const code = stripComments(shell)
+  const bad: string[] = []
+  const ti = code.indexOf('function PublicMobileTopBar')
+  const di = code.indexOf('function PublicDrawer')
+  if (ti < 0 || di < 0 || di <= ti) {
+    return ['取不到顶栏/抽屉的函数切面（锚点漂了 ⇒ 本锁没有射程，不是"通过"）']
+  }
+  const topbar = code.slice(ti, di)
+  const drawer = code.slice(di)
+  if (!topbar.includes('<LangSelect')) bad.push('顶栏右簇缺语言钮（用户令：语言选择器放右上角）')
+  if (!/pub-topbar-login/.test(topbar)) bad.push('顶栏右簇缺登录钮（用户令：登录按钮放右上角）')
+  if (/fs-langrow|<LangSelect/.test(drawer)) bad.push('抽屉里仍挂着语言钮（应已搬到顶栏右簇，不许两处并存）')
+  if (/href="\/login"/.test(drawer)) bad.push('抽屉里仍挂着登录入口（应已搬到顶栏右簇，不许两处并存）')
+  return bad
+}
+
 /** L4 判据：e2e 靶子类名必须两侧同时存在。 */
-const TARGETS = ['.pub-mob-topbar', '.pub-drawer', '.pub-drawer__cta', '.pub-scrim']
+const TARGETS = ['.pub-mob-topbar', '.pub-topbar-actions', '.pub-topbar-login',
+  '.pub-drawer', '.pub-drawer__cta', '.pub-scrim']
 function anchorFailures(shell: string, spec: string): string[] {
   const bad: string[] = []
   for (const t of TARGETS) {
@@ -152,6 +178,11 @@ describe('未登录门面移动壳（PublicShell）锁', () => {
     expect(bad, bad.join('\n')).toEqual([])
   })
 
+  it('L5 右簇归属：语言钮与登录钮在顶栏、抽屉里一件不留', () => {
+    const bad = topbarFailures(shellRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
   it('R1 反证：摘掉一支 <PublicShell> 必须被 L1 判红', () => {
     const mutated = appRaw.replace(/(\s*)<PublicShell>(\s*)<RouteBoundary>/, '$1<RouteBoundary>')
     expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(appRaw)
@@ -171,5 +202,14 @@ describe('未登录门面移动壳（PublicShell）锁', () => {
     expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(specRaw)
     expect(anchorFailures(shellRaw, mutated).length, 'R3 失效：e2e 靶子消失却没判红').toBeGreaterThan(0)
     expect(anchorFailures(shellRaw, specRaw)).toEqual([])
+  })
+
+  it('R4 反证：把语言钮挪回抽屉必须被 L5 判红', () => {
+    const mutated = shellRaw
+      .replace('        <LangSelect align="right" />\n', '')
+      .replace('        <nav className="fs-nav">', '        <div className="fs-langrow"><LangSelect align="left" /></div>\n        <nav className="fs-nav">')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(shellRaw)
+    expect(topbarFailures(mutated).length, 'R4 失效：语言钮被挪回抽屉却没判红').toBeGreaterThan(0)
+    expect(topbarFailures(shellRaw)).toEqual([])
   })
 })

@@ -111,11 +111,11 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
 
   it('⑤ 卡右上角语言入口为 12 语种下拉（★ #23 取代旧 zh/en 胶囊），选择即切换', () => {
     // ★ 判据翻转（用户后令 2026-10-13，非回归）：触发钮可见文字**不分界面语言**统一固定英文
-    //   "Language"，本地字只留在读屏 aria-label；自称名在菜单选中项
+    //   固定英文词（现为 "Lang"），本地字只留在读屏 aria-label；自称名在菜单选中项
     renderLogin()
     const btn = card().querySelector('.lc-auth-card__corner .lang-sel-btn') as HTMLButtonElement
     expect(btn).toBeTruthy()
-    // 中文态触发钮显示固定英文，不显示本地字「语言」、也不显示自称名
+    // 中文态触发钮显示固定英文词，不显示本地字「语言」、也不显示自称名
     expect(btn.textContent).toContain(LANG_BTN_FIXED_TEXT)
     expect(btn.textContent).not.toContain('语言')
     expect(btn.getAttribute('aria-label')).toBe('语言') // 读屏腿仍按界面语言念
@@ -125,9 +125,9 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     expect(items.length).toBe(12) // 中/英/俄/法/阿/西/葡/德/日/韩/泰/繁中
     const en = [...items].find((el) => el.textContent?.includes('English')) as HTMLElement
     fireEvent.click(en)
-    // 切到英文后卡片重渲染（品牌标题仍在=渲染未崩），触发钮回显固定词「Language」
+    // 切到英文后卡片重渲染（品牌标题仍在=渲染未崩），触发钮回显同一个固定词
     expect(card().querySelector('.lc-auth-card__title')?.textContent).toBe(DEFAULT_BRAND_NAME)
-    expect(card().querySelector('.lang-sel-btn')?.textContent).toContain('Language')
+    expect(card().querySelector('.lang-sel-btn')?.textContent).toContain(LANG_BTN_FIXED_TEXT)
     // 选中项（is-cur）携带英文自称名（自称名词表一字未动，仍在菜单里）；点选后菜单已收起，重开再验
     fireEvent.click(card().querySelector('.lang-sel-btn') as HTMLElement)
     const cur = card().querySelector('.lang-sel-item.is-cur') as HTMLElement

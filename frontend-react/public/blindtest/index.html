@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Blind translation test — which one reads best? | 能言 LangCross</title>
+<meta name="description" content="A blind A/B/C translation test. Pick the best read, then see which was 能言 LangCross.">
+<meta name="robots" content="index,follow">
+<style>
+:root{--bg:#0A0B0D;--panel:#121417;--line:#2A2F3A;--fg:#E7E9EA;--dim:#8B939F;--accent:#E7E9EA}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:0 20px}
+header{border-bottom:1px solid var(--line);padding:18px 0;margin-bottom:30px}
+header .wrap{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{font-weight:700}
+nav a{color:var(--dim);text-decoration:none;margin-left:16px;font-size:14px}
+h1{font-size:30px;letter-spacing:-.01em}
+.lede{color:var(--dim);font-size:17px}
+.source{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin:18px 0;white-space:pre-wrap}
+.cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin:20px 0}
+@media(max-width:680px){.cards{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;cursor:pointer;transition:border-color .15s}
+.card:hover{border-color:var(--dim)}
+.card.sel{border-color:var(--fg)}
+.card h3{margin:0 0 8px;font-size:15px}
+.card p{margin:0;white-space:pre-wrap;font-size:14px;color:#cfd3d7}
+.btn{background:var(--fg);color:#000;border:0;font-weight:600;padding:14px 22px;border-radius:10px;cursor:pointer;font-size:15px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.reveal{margin:24px 0;padding:18px 20px;border:1px solid var(--line);border-radius:12px;display:none}
+.reveal.show{display:block}
+.disclose{font-size:12.5px;color:var(--dim);border-top:1px solid var(--line);margin-top:40px;padding-top:16px;line-height:1.6}
+footer{border-top:1px solid var(--line);margin-top:40px;padding:24px 0;color:var(--dim);font-size:13px}
+.note{color:var(--dim);font-size:13px;margin-top:8px}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <div class="brand">能言 LangCross</div>
+  <nav><a href="https://langcross.lexicorn.cn/login">Try it</a>
+  <a href="https://langcross.lexicorn.cn/pricing">Pricing</a></nav>
+</div></header>
+<main class="wrap">
+  <h1>Blind translation test — which one reads best?</h1>
+  <p class="lede">Same source. Three anonymous translations (A/B/C). Pick the one that reads best, then we reveal which was 能言 LangCross. Honest disclosure below.</p>
+
+  <div class="source"><strong>Source (Chinese (Simplified)):</strong>
+
+我们的产品已服务超过 120 个国家的客户，支持 12 种界面语言。我们把术语一致性当作交付质量的第一条：同一个品牌名，绝不在三份文件里出现三种译法。</div>
+
+  <div class="cards" id="cards"></div>
+  <button class="btn" id="reveal" disabled>Reveal which was 能言</button>
+  <p class="note" id="hint">Pick the one that reads best first.</p>
+
+  <div class="reveal" id="revealBox"></div>
+
+  <div class="disclose">
+    <strong>Honest disclosure</strong><br>
+    Sample size: n = 1 sample (demo only — not a real benchmark)<br>
+    Source selection: Short product-blurb paragraph; chosen for brand-name + number consistency.<br>
+    Model versions: Versions at time of build; pin them when you run a real round.<br>
+    Criteria: Reads best = natural flow + consistent terminology + correct number rendering.<br>
+    If LangCross loses a real round, publish the loss. Trust &gt; a streak.
+  </div>
+</main>
+
+<footer><div class="wrap">能言 LangCross · This is a demonstration page, not a certified benchmark.</div></footer>
+
+<script>
+const DATA = {"source": "我们的产品已服务超过 120 个国家的客户，支持 12 种界面语言。我们把术语一致性当作交付质量的第一条：同一个品牌名，绝不在三份文件里出现三种译法。", "sourceLang": "Chinese (Simplified)", "cards": [{"tag": "A", "text": "Our product serves customers in over 120 countries and supports 12 interface languages. We treat terminology consistency as the first rule of delivery quality: the same brand name never appears with three different translations across three documents.", "model": "LangCross (this product)"}, {"tag": "B", "text": "Our product has served customers in more than 120 countries, supporting 12 kinds of interface languages. We take terminology consistency as the number one quality of delivery: one brand name will not show up as three different translations in three files.", "model": "General-purpose LLM (cloud)"}, {"tag": "C", "text": "Our products have served customers in over 120 nations, support 12 interface language. We put terms consistency as first rule of delivering quality: same brand name not appear three translation in three documents.", "model": "Machine translation (generic)"}], "langcrossTag": "A", "isDemo": true, "disclosure": {"sample_size": "n = 1 sample (demo only — not a real benchmark)", "source_selection": "Short product-blurb paragraph; chosen for brand-name + number consistency.", "model_versions": "Versions at time of build; pin them when you run a real round.", "criteria": "Reads best = natural flow + consistent terminology + correct number rendering.", "honesty": "If LangCross loses a real round, publish the loss. Trust > a streak."}};
+const KEY = 'blindtest_vote';
+let sel = null;
+
+const cardsEl = document.getElementById('cards');
+const order = DATA.cards.slice();
+// 洗牌，让 A/B/C 顺序每次不同（同一访客用 localStorage 固定，避免投票中途变）
+let saved = null;
+try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch(e) {}
+if (saved && saved.order) {
+  order.sort((a,b)=> saved.order.indexOf(a.tag)-saved.order.indexOf(b.tag));
+} else {
+  for (let i=order.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [order[i],order[j]]=[order[j],order[i]]; }
+  try { localStorage.setItem(KEY, JSON.stringify({order: order.map(c=>c.tag)})); } catch(e){}
+}
+
+order.forEach(c=>{
+  const d = document.createElement('div');
+  d.className='card'; d.dataset.tag=c.tag;
+  d.innerHTML = `<h3>Translation ${c.tag}</h3><p>${c.text}</p>`;
+  d.onclick=()=>{
+    document.querySelectorAll('.card').forEach(x=>x.classList.remove('sel'));
+    d.classList.add('sel'); sel=c.tag;
+    document.getElementById('reveal').disabled=false;
+    document.getElementById('hint').textContent='Now reveal which was 能言 LangCross.';
+  };
+  cardsEl.appendChild(d);
+});
+
+document.getElementById('reveal').onclick=()=>{
+  const box=document.getElementById('revealBox');
+  const won = sel === DATA.langcrossTag;
+  let html = `<h2>${sel} was 能言 LangCross — ${won ? 'you picked ours ✓' : 'you picked a competitor'}</h2>`;
+  html += `<p class="note">Your pick: ${sel}. The 能言 LangCross version was ${DATA.langcrossTag}.</p>`;
+  if (DATA.isDemo) html += `<p class="note">This is a demo sample (n=1), not a real benchmark.</p>`;
+  box.innerHTML=html; box.classList.add('show');
+};
+</script>
+</body>
+</html>

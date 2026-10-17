@@ -18,9 +18,9 @@ test.describe('落地页多语言（反馈④）', () => {
     await page.goto('/');
     const btn = page.locator('header .lang-sel-btn');
     await expect(btn).toBeVisible();
-    // ★ 判据翻转（用户后令 2026-10-13）：触发钮可见文字**不分界面语言**统一英文 "Language"，
-    //   所以中文态也是 "Language"；自称名只在菜单选中项，本地字只留在读屏 aria-label
-    await expect(btn).toContainText('Language');
+    // ★ 判据翻转（用户后令 2026-10-13；10-17 再令把词收短为 "Lang"）：触发钮可见文字**不分界面语言**
+    //   都是同一个固定英文词，所以中文态也是 "Lang"；自称名只在菜单选中项，本地字只留在读屏 aria-label
+    await expect(btn).toContainText('Lang');
     await btn.click();
     const curZh = page.locator('[role="option"][aria-selected="true"]');
     await expect(curZh).toContainText('简体中文');
@@ -29,7 +29,8 @@ test.describe('落地页多语言（反馈④）', () => {
     await expect(page.getByText('免费试用')).toHaveCount(0);
     // 刷新后仍英文（app_lang 持久化，不会退回浏览器/默认语种）；触发钮仍是固定词
     await page.reload();
-    await expect(page.locator('header .lang-sel-btn')).toContainText('Language');
+    // ★ 判据用**逐字等值**（不用 toContainText：'Lang' 是 'Language' 的子串，子串判据对旧长词恒真＝空转）
+    await expect(page.locator('header .lang-sel-cur')).toHaveText('Lang');
     // 展开菜单，选中项携带英文自称名（自称名词表一字未动）
     await page.locator('header .lang-sel-btn').click();
     await expect(page.locator('[role="option"][aria-selected="true"]')).toContainText('English');
@@ -41,9 +42,9 @@ test.describe('首次访问浏览器语言自动检测', () => {
   test.use({ locale: 'fr-FR' });
   test('fr-FR → Français + 落地页全量法语（★ 2026-09-20 全站十语种后不再走英文回退）', async ({ page }) => {
     await page.goto('/');
-    // ★ 判据翻转（用户后令 2026-10-13）：触发钮可见文字**不分界面语言**统一英文 "Language"，
-    //   所以 fr 访客也看到 "Language"（本地化仍在读屏 aria-label 与菜单选中项两条腿里），自称名在菜单选中项
-    await expect(page.locator('header .lang-sel-btn')).toContainText('Language');
+    // ★ 判据翻转（用户后令 2026-10-13；10-17 再令把固定词收短为 "Lang"）：触发钮可见文字**不分界面语言**
+    //   都是同一个固定词，所以 fr 访客也看到 "Lang"（本地化仍在读屏 aria-label 与菜单选中项两条腿里）
+    await expect(page.locator('header .lang-sel-cur')).toHaveText('Lang');
     await page.locator('header .lang-sel-btn').click();
     await expect(page.locator('[role="option"][aria-selected="true"]')).toContainText('Français');
     // land.* 长尾键已在 locales/fr.ts 全量覆盖（2532 键口径）：法语访客直接看到法语 CTA
