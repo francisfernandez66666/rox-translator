@@ -341,7 +341,8 @@ ${DEMO_DOMAIN} {
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# ★ 2026-10-17：与生产主站同口径放开 microphone=(self)（演示站此前 () 全禁，录音必失败）。
+		Permissions-Policy "camera=(), microphone=(self), geolocation=()"
 		-Server
 	}
 

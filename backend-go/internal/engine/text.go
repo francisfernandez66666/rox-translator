@@ -97,13 +97,14 @@ func ModeFromOptions(options map[string]interface{}) string {
 // ModeBadgeLabel 模式徽标后缀（拼在结果「📊 模式：…」与 OpenAPI mode 出参尾部，一处定死）。
 // 参数 fast: true=快速模式，false=专业校对模式。返回: 以 " | " 开头的后缀串。
 // ★ F-50②（〇-U 批 I-4，2026-09-26 UAT）：旧写法在同一行里就地拼字面量，且描述自相矛盾——
-// 快速模式写着「AI初翻+校对」（＝和 pro 一样含校对，区别无从解释），而 text.go:343 的注释
-// 与 orchestrator/flow.go:282 的开关逻辑说的是第三套（fast＝初翻+校对+质检，关掉知识库直配、
-// 质量评估、文化闸、自迭代）。现在文案按**流水线真实差异**写，并收敛成唯一常量：
+// 快速模式写着「AI初翻+校对」（＝和 pro 一样含校对，区别无从解释），而 text.go 的注释
+// 与 orchestrator/flow.go 的开关逻辑说的是第三套。现在文案按**流水线真实差异**写，并收敛成唯一常量：
 // 要改口径只有一个地方可改，也不会再出现「三处说法」。
+// ★ 2026-10-17 用户令改口径：快速模式＝知识库直配+初翻+质检，**去掉校对腿**（原来恰恰相反：
+// 它跳过知识库、却保留校对，于是命中知识库的文本在快速档反而更慢）。
 func ModeBadgeLabel(fast bool) string {
 	if fast {
-		return " | ⚡快速模式（初翻+校对+质检，不走知识库直配与质量评估）"
+		return " | ⚡快速模式（知识库直配+初翻+质检，不做校对）"
 	}
 	return " | 🎓专业校对模式（全流水线：知识库直配+初翻+校对+质量评估+文化闸）"
 }
@@ -260,12 +261,9 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		cleanText = cleaned
 	}
 
-	// ★ 双模式：fast 快速模式跳过知识库匹配——全部目标语言并入纯模型直翻
+	// ★ 2026-10-17 用户令：快速模式不再旁路知识库——fast 与 pro 都走 KB 直配；
+	//   两者的差异只有一条：fast 去掉校对腿（见下方 review 段）。
 	fast := ModeFromOptions(options) == "fast"
-	if fast && len(kbTarget) > 0 {
-		directOther = append(directOther, kbTarget...)
-		kbTarget = nil
-	}
 
 	// ★ 翻译前品牌保护（2026-09-11）：与文件路径对齐，在翻译前把源文品牌名替换为规定译法，
 	//   避免 LLM 音译（如 极石→جيشي），仅对 KB 语言（有品牌术语的语言）生效。
@@ -365,8 +363,11 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		allSrc[lc] = "model"
 	}
 
-	// ★ 校对 Agent：初翻结果逐语言审校修正（fast/pro 均含校对环节；3 路并发限流）
-	if len(allTr) > 0 {
+	// ★ 校对 Agent：初翻结果逐语言审校修正（3 路并发限流）。
+	// ★ 2026-10-17 用户令：**只有 pro 跑校对腿**——fast 的「快」就快在这一步（原形态
+	//   fast 反而更慢：它绕过 KB 直配、把每条腿都逼进模型初翻+校对，命中知识库的文本
+	//   在专业档是 0 次模型调用）。
+	if !fast && len(allTr) > 0 {
 		prog("AI 校对中...", 3, 4)
 		sem := make(chan struct{}, 3)
 		var mu sync.Mutex

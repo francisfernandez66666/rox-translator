@@ -218,18 +218,34 @@ func TestEstimateScalesWithLangsAndSegments(t *testing.T) {
 	}
 }
 
-// TestEstimateFastVsPro fast 与 pro 的差别只许出现在上限（重译余量），下限同值。
+// TestEstimateFastVsPro ★ 2026-10-17 用户令：fast **不做校对腿** ⇒ 它的上限＝下限（区间收成一点）；
+// pro 下限同值、上限是初翻+校对两腿再乘一档重译余量。
+//
+// 判据按 costmodel.go 顶部写明的公式**逐项现推**（不写死比例）：初翻腿 leg1、校对腿 leg2、
+// pro 上限＝(leg1+leg2)×1.5。公式一变这条锁当场红，所以它是等值锁而不是「看着差不多」的单向锁。
 func TestEstimateFastVsPro(t *testing.T) {
 	mf, xf := EstimateChatTokens(screenshotText, []string{"zh"}, "fast", "", "zh")
 	mp, xp := EstimateChatTokens(screenshotText, []string{"zh"}, "pro", "", "zh")
-	if mf != mp {
+
+	src := ScriptTokens(screenshotText)
+	initial, review := ChatLegFixedTokens("", "zh", "zh")
+	leg1 := initial + src + src
+	leg2 := review + src + src + src
+	wantFast := leg1
+	wantPro := (leg1 + leg2) + (leg1+leg2)/2
+
+	if mf != wantFast || xf != wantFast {
+		t.Fatalf("fast 上限＝下限＝初翻腿一条: want=%d got min=%d max=%d（fast 不许出现校对腿）", wantFast, mf, xf)
+	}
+	if mp != wantFast {
 		t.Fatalf("下限不该随模式变（两档都要至少跑一腿初翻）: fast=%d pro=%d", mf, mp)
 	}
-	if xp <= xf {
-		t.Fatalf("pro 上限必须高于 fast（质检重译那一腿）: %d vs %d", xp, xf)
+	if xp != wantPro {
+		t.Fatalf("pro 上限应＝(初翻+校对)×1.5: want=%d got=%d", wantPro, xp)
 	}
-	if xp > 3*xf {
-		t.Fatalf("pro 上限抬到 fast 的 %d/%d 倍，超出「重译不是每次都跑」的口径（旧公式的 2.5× 就在这里）", xp, xf)
+	// 量级哨兵：pro 必须真比 fast 贵（多一整条腿＋重译余量）——若两者接近，说明校对腿没进公式。
+	if xp <= mf {
+		t.Fatalf("pro 上限未高于 fast 下限（校对腿没进成本）: pro=%d fast=%d", xp, mf)
 	}
 }
 

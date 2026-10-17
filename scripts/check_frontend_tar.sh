@@ -55,6 +55,24 @@ BR=0; GZ=0; DIRTY=0; LOCALE=0; ENTRY=""; ENTRY_SIZE=0; WORK=""
 cleanup() { [ -n "$WORK" ] && rm -rf "$WORK"; }
 trap cleanup EXIT
 
+# resolve_tar_root 从已解开的树里认定**站点根**（＝首页与 assets/ 同根的那一层）。
+# ★ 2026-10-17 修（本批真踩）：旧写法 `find -maxdepth 3 | head -1` 取到的**可能不是站点入口**——
+#   本仓 `public/blindtest/index.html`（A/B 盲测页）也会被 build 拷进 dist、与站点首页同深度，
+#   find 的返回顺序不保证；它一旦先返回，根就落到 dist/blindtest ⇒ br/gz 各计 1、入口"取不到"、
+#   T3/T4/T5/T8 全 BAD，读起来像"包坏了"，实则是**尺子认错了根**（假红会让人把闸门摘掉）。
+#   判据问的是"包里的站点入口"，故优先认《部署指南》§五 的标准形态 `dist/index.html`；
+#   退路只认**同级带 assets/ 的那个 index.html**（入口脚本与首页必须同根）。
+#   语句外置成函数是为了让 T0 自证能喂假树调它（判据与自证共用同一份，同 T5/T5b 的理由）。
+resolve_tar_root() { # ${1}＝解包后的顶层目录；stdout＝认定的站点根
+  local work="$1" f
+  [ -f "$work/index.html" ] && { printf '%s\n' "$work"; return; }
+  [ -f "$work/dist/index.html" ] && { printf '%s\n' "$work/dist"; return; }
+  while IFS= read -r f; do
+    [ -d "$(dirname "$f")/assets" ] && { printf '%s\n' "$(dirname "$f")"; return; }
+  done <<< "$(find "$work" -maxdepth 3 -name index.html -type f 2>/dev/null)"
+  printf '%s\n' "$work"
+}
+
 if [ "$MODE" = "tar" ]; then
   [ -f "$TAR_PATH" ] || { echo "ABORT=2 找不到交付包：${TAR_PATH}（先 npx vite build && node scripts/precompress_dist.mjs 再打包）"; exit 2; }
   WORK="$(mktemp -d)"
@@ -65,11 +83,7 @@ if [ "$MODE" = "tar" ]; then
   # 手工打包时也可能直接 `tar czf x.tar -C dist .`（无前缀）。两种形态都认：
   # **按 index.html 真在哪一层来定 ROOT**，而不是写死前缀——写死会让"换了打包命令"表现为 ABORT，
   # 而 ABORT 会被读成"包没问题、只是工具没配好"，正是本文件要防的那一族假绿。
-  ROOT="$WORK"
-  if [ ! -f "$ROOT/index.html" ]; then
-    found=$(find "$WORK" -maxdepth 3 -name index.html -type f 2>/dev/null | head -1)
-    [ -n "$found" ] && ROOT="$(dirname "$found")"
-  fi
+  ROOT="$(resolve_tar_root "$WORK")"
   list() { find "$ROOT" -type f 2>/dev/null; }
   echo "=== 前端交付包自检（tar 模式：${TAR_PATH}）==="
 else
@@ -120,6 +134,26 @@ entry_shape_ok() { # ${1}＝从 index.html 认出来的入口相对路径；返�
     *) return 1 ;;
   esac
 }
+
+# T0 射程自证：站点根认定（★ 2026-10-17 本批真踩，见 resolve_tar_root 头注）。
+#   喂两棵假树：① 顶层无 index.html、站点首页在子目录且与陪跑的 blindtest/index.html 同深度
+#   ⇒ 必须认到**带 assets/ 的同级目录**；② 顶层直接有 index.html ⇒ 必须认顶层。
+#   没有这一腿，ROOT 认定一旦退化成"取 find 第一条"，干净包会被读成 BAD（假红），
+#   而假红的归宿是有人把闸门摘掉——同 T5b/T6b/T7b/T8b 的存在理由。
+T0_SELF="$(mktemp -d)"
+mkdir -p "$T0_SELF/root/assets" "$T0_SELF/root/blindtest"
+: > "$T0_SELF/root/index.html"
+: > "$T0_SELF/root/blindtest/index.html"
+T0_GOT="$(resolve_tar_root "$T0_SELF")"
+T0_FLAT="$(mktemp -d)"
+: > "$T0_FLAT/index.html"
+T0_GOT2="$(resolve_tar_root "$T0_FLAT")"
+rm -rf "$T0_SELF" "$T0_FLAT"
+if [ "$T0_GOT" = "$T0_SELF/root" ] && [ "$T0_GOT2" = "$T0_FLAT" ]; then
+  echo "  OK   T0 站点根认定自证（陪跑 blindtest 不夺根／顶层首页直接认顶层）"
+else
+  echo "  BAD  T0 站点根认定自证没过（子目录形态认到 ${T0_GOT}／顶层形态认到 ${T0_GOT2}）⇒ T1–T8 的根不可信"; RC=1
+fi
 
 # T1 侧车：入口那一份必须**两档都在**（br→gzip→identity 是一条回落链，少一档就是半条链）
 if [ "$BR" -ge 1 ] && [ "$GZ" -ge 1 ] && [ -n "$ENTRY" ] \

@@ -327,9 +327,11 @@ export default function Login({ mode, onLogin }: Props) {
     if (!forgot.code.trim() || forgot.newPassword.length < 6) { setForgotMsg(t('auth.resetNeed')); return }
     setLoading(true); setForgotMsg('')
     try {
-      const resp = await resetPassword({ username: forgot.username.trim(), code: forgot.code.trim(), new_password: forgot.newPassword })
+      // ★ 定位腿与发码腿同口径：用户名或绑定邮箱二者其一即可（只用邮箱找回的用户 username 为空，
+      //   不把 email 一起带上，后端就无从定位账号 → 回「请求格式错误」）。
+      const resp = await resetPassword({ username: forgot.username.trim() || undefined, email: forgot.email.trim() || undefined, code: forgot.code.trim(), new_password: forgot.newPassword })
       if (!resp.success) { setForgotMsg(resp.message || t('auth.resetFail')); return }
-      setUsername(forgot.username.trim())
+      if (forgot.username.trim()) setUsername(forgot.username.trim()) // 登录只认用户名，邮箱档不回填（避免把邮箱灌进用户名字段误导下一次登录）
       setPassword(forgot.newPassword)
       closeForgot()
       setError(t('auth.successReset'))

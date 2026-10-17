@@ -29,17 +29,18 @@ func enabledKeys(fd *FlowDef) map[string]bool {
 	return out
 }
 
-// TestModeOverrideFast fast 工单：关闭 KB/双评估/硬闸/文化闸/自迭代，强制保留 初翻+校对+QA。
+// TestModeOverrideFast fast 工单（★ 2026-10-17 用户令改口径）：**重连知识库、去掉校对腿**，
+// 另关双评估/硬闸/文化闸/自迭代；保留 初翻+质检。
 func TestModeOverrideFast(t *testing.T) {
 	fd := newTestFlow()
 	applyModeOverride(fd, &store.Ticket{Mode: "fast", CreatedBy: 7})
 	got := enabledKeys(fd)
-	for _, k := range []string{"kb_match", "evals_initial", "evals_review", "gate", "culture_gate", "feedback"} {
+	for _, k := range []string{"review", "evals_initial", "evals_review", "gate", "culture_gate", "feedback"} {
 		if got[k] {
 			t.Fatalf("fast 模式应关闭 %s", k)
 		}
 	}
-	for _, k := range []string{"ai_initial", "review", "qa"} {
+	for _, k := range []string{"kb_match", "ai_initial", "qa"} {
 		if !got[k] {
 			t.Fatalf("fast 模式应保留 %s", k)
 		}
@@ -73,12 +74,12 @@ func TestModeOverrideFastAPITask(t *testing.T) {
 	fd := newTestFlow()
 	applyModeOverride(fd, &store.Ticket{Mode: "fast", CreatedBy: 0})
 	got := enabledKeys(fd)
-	for _, k := range []string{"kb_match", "gate", "approval", "feedback", "evals_review"} {
+	for _, k := range []string{"review", "gate", "approval", "feedback", "evals_review"} {
 		if got[k] {
 			t.Fatalf("fast+API 应关闭 %s", k)
 		}
 	}
-	for _, k := range []string{"ai_initial", "review", "qa"} {
+	for _, k := range []string{"kb_match", "ai_initial", "qa"} {
 		if !got[k] {
 			t.Fatalf("fast+API 应保留 %s", k)
 		}

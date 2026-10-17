@@ -550,6 +550,9 @@ func TestReviewLegJudgesRawContentNotPostProcessed(t *testing.T) {
 //
 // 这一条才是 ㊶ 的"客户视角"判据：单测只测 ReviewTranslation 回 ""，
 // 而 text.go 的校对环节把 "" 当"这一轮没改"——两边都要钉住才算闭环。
+// ★ 2026-10-17 用户令：校对腿现在**只有 pro 档才跑**（fast 去掉校对），故本用例改喂 pro
+//
+//	才有意义——喂 fast 会让"管道编排变了"这条自检（假上游没被审校腿拨到）当场判红。
 func TestHandleTextKeepsInitialWhenReviewLegMixed(t *testing.T) {
 	logs := capturePurityLogs(t)
 	const initial = "弊社はスマートハードウェアの研究開発に専念します。"
@@ -565,10 +568,10 @@ func TestHandleTextKeepsInitialWhenReviewLegMixed(t *testing.T) {
 
 	options := map[string]interface{}{
 		"target_langs": toInterfaceLangs([]string{"ja"}),
-		"mode":         "fast",
+		"mode":         "pro",
 		"lang":         "zh",
 	}
-	res := e.HandleText(tenant.WithMode(context.Background(), "fast"), "本公司专注于智能硬件的研发", options, nil)
+	res := e.HandleText(tenant.WithMode(context.Background(), "pro"), "本公司专注于智能硬件的研发", options, nil)
 	if res == nil || res.Error != "" {
 		t.Fatalf("主链不应整体失败（Error=%q）——② 丢弃审校不是整单失败", func() string {
 			if res == nil {

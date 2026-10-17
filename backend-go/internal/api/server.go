@@ -260,6 +260,8 @@ func (s *Server) routesTranslate() {
 	// ★ P3 语音两件套（录音识别 / 译文朗读）：两个端点都不做翻译，只做 A↔T 转换，见 chat_audio.go 头注。
 	s.mux.HandleFunc("/api/chat/asr", s.handleChatASR)
 	s.mux.HandleFunc("/api/chat/tts", s.handleChatTTS)
+	// ★ 2026-10-17 用户令：即时翻译支持图片上传翻译（OCR→翻译→回传译后图＋译文），见 chat_image.go 头注。
+	s.mux.HandleFunc("/api/chat/image", s.handleChatImage)
 	s.mux.HandleFunc("/api/translate", s.handleTranslateFile)
 	s.mux.HandleFunc("/api/download/", s.handleDownload)
 	s.mux.HandleFunc("/api/translation/langs", s.handleTranslationLangs)

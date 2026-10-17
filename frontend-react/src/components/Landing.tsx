@@ -855,8 +855,10 @@ export default function Landing() {
   const DEMO_TERMS = demoTerms(demoSrcLang(lang)) // 术语大卡对照行复用演示术语（与 HeroDemo 同源，英语 UI 取中文 cn）
   const branding = useBranding()
   const brand = branding.brandName || t('land.brand') // 品牌租户化了就用租户名，否则回落产品名
-  // deps 传 []：只在挂载时扫一次 .lc-reveal。首页 DOM 结构是静态的，没必要随文案变化重建观察器
-  const revealRef = useReveal<HTMLDivElement>([])
+  // dep 传 [lang]：切换语言会让**译文驱动的节点**重建（React 按 key 重挂），重建出的新节点
+  // 没被旧的 IntersectionObserver 观察过 ⇒ 会永远停在 opacity:0。切语言时重扫一次 .lc-reveal，
+  // 让新节点要么被观察、要么在视口内立即点亮（配合 FAQ 改用下标 key，双保险）。
+  const revealRef = useReveal<HTMLDivElement>([lang])
 
   // ★ 〇-Z（2026-09-28）免登录试用：hero 右侧演示卡就地切成试用面板的开关。
   //   口径来自用户原话「hero页的动效不用动，点击动效以后再切换成翻译体验」——
@@ -1347,7 +1349,7 @@ export default function Landing() {
           </div>
           <div className="lc-faq-list">
             {faqs.map((f, i) => (
-              <div key={f.q} className="lc-faq-item lc-reveal" data-reveal-delay={String(i * 60)}> {/* key 用问题文本：条目静态不重排，省掉一份 id 表 */}
+              <div key={i} className="lc-faq-item lc-reveal" data-reveal-delay={String(i * 60)}> {/* key 用下标而非问题文本（f.q）：文本随语言切换而变，用文本当 key 会让切语言后整列问答被 React 重建，新节点丢掉 useReveal 加的 .is-in ⇒ 右侧内容停在 opacity:0 不显示 */}
                 <h3 className="lc-faq-q">{f.q}</h3> {/* 分隔线用每条自己的 border-top，不放 <hr>：条距天然等宽且末条不会多出一条尾线 */}
                 <p className="lc-faq-a">{f.a}</p>
               </div>

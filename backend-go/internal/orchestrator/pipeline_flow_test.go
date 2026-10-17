@@ -495,12 +495,13 @@ func TestExecuteModeOverrideIsAudited(t *testing.T) {
 		t.Errorf("mode_override 轨迹应记 bypass=fast，实得 %q (err=%v)", row.Payload, err)
 	}
 	// fast 保留的三步必须真被执行，关掉的闸门必须记 skipped
-	for _, k := range []string{"ai_initial", "review", "qa"} {
+	// ★ 2026-10-17 用户令：fast 保留 kb_match（重连知识库），关掉 review（去掉校对腿）。
+	for _, k := range []string{"kb_match", "ai_initial", "qa"} {
 		if n := spy.times(k); n != 1 {
 			t.Errorf("fast 应保留步骤 %s，实得 %d 次", k, n)
 		}
 	}
-	for _, k := range []string{"kb_match", "gate", "culture_gate", "feedback"} {
+	for _, k := range []string{"review", "gate", "culture_gate", "feedback"} {
 		if n := spy.times(k); n != 0 {
 			t.Errorf("fast 应跳过步骤 %s，实得 %d 次", k, n)
 		}

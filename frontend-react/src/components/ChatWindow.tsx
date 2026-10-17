@@ -29,7 +29,7 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import {
   Button, Input, useToast,
-  SearchIcon, DownloadIcon, TrashIcon, CloseIcon,
+  SearchIcon, DownloadIcon, TrashIcon, CloseIcon, UploadIcon,
 } from '@/ui/langcross/src'
 import MessageBubble from './MessageBubble'
 import { FeedbackModalFromMessage } from './modals'
@@ -52,6 +52,10 @@ import { micSupported } from '@/api/chatVoice'
 //   识别接口恒回 capability_missing）。与「浏览器不支持就不渲染」同一口径，这里再加一道**服务端能力门**。
 import { useVoiceCapability } from '@/api/voiceCapability'
 import { getAsrEngine, ServerAsrEngine, type AsrSession } from '@/api/asrEngines'
+// ★ 2026-10-17 用户令（推翻 #36「即时翻译只做文本」旧决策）：即时翻译支持图片上传——
+//   上传图片 → OCR 提取文字 → 走同一套翻译 → 回传**译后图（原位回填）＋ 各目标语译文文本**。
+//   客户端见 api/chatImage.ts，端点 POST /api/chat/image（后端 api/chat_image.go）。
+import { chatImageTranslate, ImageError, type ChatImageResult } from '@/api/chatImage'
 // ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
 import { slowVerdict } from '../lib/slowEstimate'
 
@@ -462,6 +466,42 @@ export default function ChatWindow() {
     }
   }
 
+  // ★ 2026-10-17 用户令：即时翻译的图片上传（推翻 #36「只做文本」旧决策）。
+  //   能力门与麦克风同口径（浮层只在该能力可用时渲染）：cap.ocr===false（服务端没装 OCR）时整颗不渲染；
+  //   cap.ocr===null（探不到）走 fail-open 照常渲染，真点了仍有本地化失败提示兜底。
+  //   结果是**临时卡片**而不是写进 chat.messages：译后图是 base64 data URL（可能数 MB），
+  //   而消息流会落 localStorage（配额约 5MB），把图片写进历史会把整站存储顶爆——卡片不持久化是刻意的。
+  const canImage = cap.ocr !== false
+  const imgInputRef = useRef<HTMLInputElement>(null)
+  const [imgBusy, setImgBusy] = useState(false)
+  const [imgResult, setImgResult] = useState<ChatImageResult | null>(null)
+
+  // onPickImage 选中图片后的整条链路：校验 → 上传翻译 → 出卡片；失败按 reason 档位取词典文案。
+  async function onPickImage(f: File | null | undefined) {
+    if (!f || imgBusy) return
+    // 只收图片：accept 在系统选择框里生效，拖拽/旧缓存包能绕过来，故这里再按类型与扩展名各判一次。
+    const okType = /^image\//i.test(f.type) || /\.(png|jpe?g|bmp|tiff?|webp|gif|heic)$/i.test(f.name)
+    if (!okType) { toast({ title: t2('chat.imageFailed'), tone: 'warn' }); return }
+    setImgBusy(true)
+    setImgResult(null)
+    try {
+      const langs = chat.selectedLangs.length ? chat.selectedLangs : ['en']
+      const res = await chatImageTranslate(f, langs, mode, lang)
+      setImgResult(res)
+    } catch (e) {
+      // ★ 12 语种词典说话：后端 reason 档位 → 词典键（capability_missing/no_text/其余）。
+      const reason = e instanceof ImageError ? e.reason : 'failed'
+      const title = reason === 'capability_missing' ? t2('chat.imageCapability')
+        : reason === 'no_text' ? t2('chat.imageNoText')
+          : t2('chat.imageFailed')
+      toast({ title, tone: 'warn' })
+    } finally {
+      setImgBusy(false)
+      // 清空 value：同一张图连选两次也要能再次触发 change。
+      if (imgInputRef.current) imgInputRef.current.value = ''
+    }
+  }
+
   const canSend = input.trim().length > 0
   // ★ 决策⑪①：发起前三档预检（宁误拦：排队深度未知走保守兜底，见 lib/slowEstimate 文件头）。
   //   ok=放行；slow=琥珀横幅提示可转工单（不拦发送）；reject=拦发送＋工单入口。
@@ -588,6 +628,40 @@ export default function ChatWindow() {
         {/* 滚动区：会话消息流（★ 〇-LK：输入框不再放这里——AI 对话的输入永远在底部，
             气泡在其上方往上长；把 textarea 摆在最上面是「表单」不是「对话」） */}
         <div className="cw-dialog-body" ref={scrollRef}>
+          {/* ★ 2026-10-17 图片翻译结果卡（临时、不落存储）：译后图（原位回填）＋各目标语译文文本。
+              译后图是**择优产出**——后端回填失败时 image 为空串，此时只出译文文本并留一行降级说明。 */}
+          {imgResult && (
+            <div className="cw-img-result" data-testid="chat-image-result">
+              <div className="cw-img-result-head">
+                <span>{t2('chat.imageResultTitle')}</span>
+                <button type="button" className="cw-icon-btn" aria-label={t2('chat.imageClose')}
+                        title={t2('chat.imageClose')} onClick={() => setImgResult(null)}>
+                  <CloseIcon size={14} />
+                </button>
+              </div>
+              {imgResult.image ? (
+                <a className="cw-img-wrap" href={imgResult.image}
+                   download={`translated-${imgResult.image_lang || 'out'}.png`}
+                   title={t2('chat.imageDownload')}>
+                  <img className="cw-img-out" src={imgResult.image} alt={t2('chat.imageResultTitle')} />
+                  <span className="cw-img-dl">
+                    <DownloadIcon size={14} /> {t2('chat.imageDownload')}
+                  </span>
+                </a>
+              ) : (
+                <div className="cw-img-degraded">{t2('chat.imageDegraded')}</div>
+              )}
+              {/* 译文文本：逐语种一行（语种码大写当标题，正文走 dir="auto" 吃 RTL） */}
+              <div className="cw-img-text" dir="auto">
+                {Object.entries(imgResult.translations).map(([lg, tx]) => (
+                  <div className="cw-img-line" key={lg}>
+                    <span className="cw-img-lang">{lg.toUpperCase()}</span>
+                    <span>{tx}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {/* 空状态：欢迎语（首轮翻译前的引导，文案不再提文件） */}
           {!chat.messages.length && !chat.isLoading && (
             <div className="cw-welcome">
@@ -664,6 +738,19 @@ export default function ChatWindow() {
               </label>
               {/* 弹性占位：把主按钮推到行尾；窄屏 flex-wrap 换行时它自然收拢，不会把按钮挤没 */}
               <div style={{ flex: 1 }} />
+              {/* ★ 2026-10-17 图片上传：canImage=false（服务端无 OCR）时整颗不渲染——同麦克风口径。
+                  隐藏 file input 常驻，按钮只负责 click 它（accept 只在系统框生效，绕过由 onPickImage 兜）。 */}
+              <input ref={imgInputRef} type="file" accept="image/*" data-testid="chat-image-input"
+                     style={{ display: 'none' }} onChange={(e) => void onPickImage(e.target.files?.[0])} />
+              {canImage && (
+                <button type="button" className="cw-icon-btn" data-testid="chat-image-btn"
+                  title={imgBusy ? t2('chat.imageWorking') : t2('chat.image')}
+                  aria-label={imgBusy ? t2('chat.imageWorking') : t2('chat.image')}
+                  disabled={imgBusy || chat.isLoading}
+                  onClick={() => imgInputRef.current?.click()}>
+                  <UploadIcon size={16} />
+                </button>
+              )}
               {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送），见上方 startMic 注释。
                   不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。 */}
               {canMic && (
@@ -740,6 +827,19 @@ const CW_CSS = `
 .cw-dialog-head{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--lc-border-faint);flex-wrap:wrap}
 .cw-dialog-body{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:14px;display:flex;flex-direction:column;gap:12px;scroll-behavior:smooth}
 .cw-dialog-body .bubble-row{max-width:100%}
+/* ★ 2026-10-17 图片翻译结果卡：与消息气泡同列（同 gap），面色走 L2 panel 档、描边走 1.2px 灰阶
+   （〇-P 交付档：全边框 1.2px、面色台阶 --lc-panel）。译后图宽不超容器，点图即下载（外层 <a download> 包住）。 */
+.cw-img-result{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-ctl);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.cw-img-result-head{display:flex;align-items:center;justify-content:space-between;font-size:15px;color:var(--lc-text-1);font-weight:600}
+.cw-img-wrap{position:relative;display:block;line-height:0;border-radius:8px;overflow:hidden;border:1.2px solid var(--lc-border-faint)}
+.cw-img-out{display:block;max-width:100%;height:auto}
+/* 悬浮下载提示条：默认半透明贴底，hover 提亮（纯提示，不参与计费/判定） */
+.cw-img-dl{position:absolute;inset-inline-end:8px;bottom:8px;display:inline-flex;align-items:center;gap:4px;
+  background:rgba(0,0,0,.6);color:var(--lc-text-1);font-size:13px;line-height:1;padding:5px 8px;border-radius:6px}
+.cw-img-degraded{font-size:13px;color:var(--lc-text-3)}
+.cw-img-text{display:flex;flex-direction:column;gap:6px;font-size:15px;color:var(--lc-text-1)}
+.cw-img-line{display:flex;gap:8px;align-items:baseline}
+.cw-img-lang{flex:0 0 auto;font-size:13px;color:var(--lc-text-3);font-weight:600}
 .cw-dialog-foot{border-top:1px solid var(--lc-border-faint);padding:8px 12px 10px;display:flex;flex-direction:column;gap:6px}
 /* 底部 composer（★ 〇-M 元宝式单卡）：输入行 + 一行工具条同处一张「凹」进卡面的输入卡里，
    整块贴底、不随消息流滚动。底色走 --lc-inset（输入框底真值档），描边走 --lc-border-input。 */

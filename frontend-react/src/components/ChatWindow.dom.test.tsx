@@ -128,9 +128,19 @@ describe('即时翻译工作台（#36 合并对话框）', () => {
     expect(!!(body.compareDocumentPosition(foot) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true)
   })
 
-  it('② 不再渲染任何文件上传入口，页面文案不提「上传/文件翻译」', () => {
+  it('② 不再渲染「文档」文件上传入口，页面文案不提「上传/文件翻译」', () => {
     const { container } = renderWindow()
-    expect(container.querySelector('input[type="file"]')).toBeNull()
+    // ★ 2026-10-17 用户令翻转本条期望：**文档**文件翻译入口照旧不在（仍统一走工单页），
+    //   但即时翻译**新开了图片上传**（用户明确推翻 #36「只做文本」旧决策）。
+    //   故旧判据 `input[type=file] 必须为 null` 已不成立——改为按**形态**分派：
+    //   文末必须无任何文档文件 input（accept 含文档扩展名/走 TRANSLATE_FILE_ACCEPT），
+    //   而唯一允许的那只 file input 只收图片（accept="image/*"，见 ChatWindow.image.dom.test.tsx）。
+    const fileInputs = Array.from(container.querySelectorAll('input[type="file"]'))
+    for (const el of fileInputs) {
+      const accept = (el.getAttribute('accept') || '').toLowerCase()
+      expect(accept, '只允许图片上传入口，不得出现文档文件 input').toBe('image/*')
+      expect(accept).not.toMatch(/docx|pdf|xlsx|pptx/)
+    }
     expect(container.innerHTML).not.toMatch(/TRANSLATE_FILE_ACCEPT|validateTranslateFile/)
     const text = container.textContent || ''
     expect(text).not.toMatch(/上传/)

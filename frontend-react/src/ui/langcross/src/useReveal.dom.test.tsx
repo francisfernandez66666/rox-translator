@@ -77,4 +77,35 @@ describe('useReveal · 观察区死区兜底', () => {
     await nextFrame()
     expect(getByTestId('plain')).toBeTruthy()
   })
+
+  // ★ 回归锁（2026-10-17 现网：切换语言后右侧 FAQ 整列不显示）：
+  //   根因是 FAQ 用**译文文本**当 key，切语言时整列节点被 React 重建；而 useReveal 旧形态
+  //   deps=[] 只在挂载时扫一次 .lc-reveal，重建出的新节点从没被观察过 ⇒ 永远停在 opacity:0。
+  //   这里用「key=lang（复现文本当 key）+ deps=[lang]（修后形态）」把两半一起钉住：
+  //   观察器桩一 observe 就投递 isIntersecting，所以只要新节点**被重新观察**就会点亮；
+  //   摘掉 [lang]（退回 []）时新节点拿不到 is-in，本用例当场红。
+  it('依赖变化后重建的 .lc-reveal 必须被重新观察并点亮（切语言后内容不消失）', async () => {
+    class RevealingIO {
+      private cb: IntersectionObserverCallback
+      constructor(cb: IntersectionObserverCallback) { this.cb = cb }
+      observe(el: Element) {
+        this.cb([{ target: el, isIntersecting: true } as unknown as IntersectionObserverEntry], this as unknown as IntersectionObserver)
+      }
+      unobserve() { /* noop */ }
+      disconnect() { /* noop */ }
+      takeRecords() { return [] as IntersectionObserverEntry[] }
+    }
+    vi.stubGlobal('IntersectionObserver', RevealingIO)
+    function KeyedDemo({ lang }: { lang: string }) {
+      const ref = useReveal<HTMLDivElement>([lang])
+      // key=lang 刻意复现「文本当 key」：切语言即整体重建该节点
+      return <div ref={ref}><div key={lang} className="lc-reveal" data-testid="faq"/></div>
+    }
+    const { getByTestId, rerender } = render(<KeyedDemo lang="zh" />)
+    await nextFrame()
+    expect(getByTestId('faq').classList.contains('is-in')).toBe(true)
+    rerender(<KeyedDemo lang="en" />) // 切语言：节点被重建，旧观察器已 unobserve 掉旧节点
+    await nextFrame()
+    expect(getByTestId('faq').classList.contains('is-in')).toBe(true)
+  })
 })

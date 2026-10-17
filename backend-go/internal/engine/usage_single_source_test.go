@@ -94,15 +94,18 @@ func TestUsageBilledAndDisplayTokens(t *testing.T) {
 func TestModeBadgeLabelContract(t *testing.T) {
 	fast, pro := ModeBadgeLabel(true), ModeBadgeLabel(false)
 	// 等值锁（不是「包含」单向锁）：口径要改就改这一处常量，界面与 OpenAPI 出参同步跟随
-	if want := " | ⚡快速模式（初翻+校对+质检，不走知识库直配与质量评估）"; fast != want {
+	if want := " | ⚡快速模式（知识库直配+初翻+质检，不做校对）"; fast != want {
 		t.Fatalf("快速模式标注漂移\nwant=%q\ngot =%q", want, fast)
 	}
 	if want := " | 🎓专业校对模式（全流水线：知识库直配+初翻+校对+质量评估+文化闸）"; pro != want {
 		t.Fatalf("专业模式标注漂移\nwant=%q\ngot =%q", want, pro)
 	}
 	// 两型必须能讲清差别：旧文案「快速模式（AI初翻+校对）」与注释「fast/pro 均含校对」
-	// 自相矛盾（客户读不出两者区别），故 fast 侧必须显式写出它**关掉**了什么
-	if !strings.Contains(fast, "不走") {
+	// 自相矛盾（客户读不出两者区别），故 fast 侧必须显式写出它**不做**什么。
+	// ★ 2026-10-17 用户令改口径后，fast 与 pro 的真实差异从「有没有知识库直配」翻成
+	//   「有没有校对腿」，判据词随之翻成「不做」（保留「不走」也在射程：两种写法都说明差异）。
+	//   ⚠️ 别只删旧词：留着旧期望会让下一位按旧口径把校对腿装回快速档。
+	if !strings.Contains(fast, "不做") && !strings.Contains(fast, "不走") {
 		t.Fatalf("快速模式标注必须说明与专业模式的实际差异，实际 %q", fast)
 	}
 	// 对外载荷零 token 裸值（AGENTS §一·5）：这两串会进 res.Data.Mode 随 OpenAPI 出参外发

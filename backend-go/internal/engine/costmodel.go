@@ -25,6 +25,7 @@
 //	校对腿 = 固定指令开销(reviewPromptFmt) ＋ 源文 token ＋ 上一版译文 ＋ 本版译文
 //	下限 = 每语种只走初翻那一腿（校对腿不采纳是真实路径：reviewOutputRejectReason 判不纯即退初翻）
 //	上限 = 两腿都走；pro 再乘一档质检重译的期望余量
+//	★ 2026-10-17：fast 档**不跑校对腿** ⇒ 其上限＝下限（区间收成一点），与 text.go 的实际链路一致。
 //
 // ⚠️ 这一份是**预估**口径，不是计费口径：真正扣多少仍然只由 llm.Client 回传的真实 usage
 //
@@ -104,6 +105,8 @@ func ChatLegFixedTokens(sourceLang, targetLang, uiLang string) (initial, review 
 // 区间两端的语义（对外文案要能一句话解释，否则用户又会问「为什么是个区间」）：
 //   - min = 每个语种只走初翻那一腿：校对腿产物被判不纯/失败而退回初翻，是现网真实路径；
 //   - max = 初翻＋校对两腿都走，pro 档再乘一档质检重译的期望余量（applyOutputGates 打回重译）。
+//
+// ★ 2026-10-17 用户令：fast **去掉校对腿** ⇒ 快速档没有 leg2，min/max 同一条腿（区间收成一点）。
 func EstimateChatTokens(sourceText string, targetLangs []string, mode, sourceLang, uiLang string) (int64, int64) {
 	src := ScriptTokens(sourceText)
 	if src < 1 {
@@ -112,18 +115,23 @@ func EstimateChatTokens(sourceText string, targetLangs []string, mode, sourceLan
 	// 译文长度按源文 1:1 折中：英→中变短、中→英变长，两侧互相抵；
 	// 残余不确定性由 min~max 区间吸收，不靠把系数调高来「保险」（那正是旧公式吹到 75 的路径）。
 	out := src
+	fast := isFastMode(mode)
 	var minTok, maxTok int64
 	for _, lc := range normalizeLangList(targetLangs) {
 		initial, review := ChatLegFixedTokens(sourceLang, lc, uiLang)
 		leg1 := initial + src + out
-		leg2 := review + src + out + out // 校对腿输入＝原文＋上一版译文，输出＝本版译文
 		minTok += leg1
+		if fast {
+			maxTok += leg1 // 快速档不做校对 ⇒ 上限就是初翻那一腿
+			continue
+		}
+		leg2 := review + src + out + out // 校对腿输入＝原文＋上一版译文，输出＝本版译文
 		maxTok += leg1 + leg2
 	}
 	if maxTok < minTok {
 		maxTok = minTok
 	}
-	if mode != "fast" {
+	if !fast {
 		// 专业档的质检重译（applyOutputGates 在 pro 下才开）是**可能多跑一腿**的，
 		// 取 1.5 而不是 2：重译只在闸门打回时才发生，按现网打回率它不是每次都跑。
 		maxTok = maxTok + maxTok/2
@@ -148,21 +156,32 @@ func EstimateSegmentTokens(segmentCount int64, targetLangs []string, mode, sourc
 	}
 	langs := normalizeLangList(targetLangs)
 	src := estSegmentSourceTokens
+	fast := isFastMode(mode)
 	var minTok, maxTok int64
 	for i := int64(0); i < segmentCount; i++ {
 		for _, lc := range langs {
 			initial, review := ChatLegFixedTokens(sourceLang, lc, uiLang)
 			minTok += initial + src + src
+			if fast {
+				maxTok += initial + src + src // 快速档不做校对 ⇒ 上限＝初翻那一腿
+				continue
+			}
 			maxTok += initial + src + src + review + src + src + src
 		}
 	}
-	if mode != "fast" {
+	if !fast {
 		maxTok = maxTok + maxTok/2
 	}
 	if minTok < 1 {
 		minTok = 1
 	}
 	return minTok, maxTok
+}
+
+// isFastMode 归一模式串后再判快速档（调用方可能传 "FAST"/" fast "，与 ModeFromOptions 同一口径）。
+// 参数 mode: 原始模式串；返回: 是否快速档。
+func isFastMode(mode string) bool {
+	return strings.ToLower(strings.TrimSpace(mode)) == "fast"
 }
 
 // estSegmentSourceTokens 段数兜底档里「一段源文」的平均 token 读数。

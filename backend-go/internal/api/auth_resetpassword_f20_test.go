@@ -154,6 +154,57 @@ func TestUATBatchG_ResetPasswordFailFamily400(t *testing.T) {
 	}
 }
 
+// f20CallResetEmail 只按「用户名或绑定邮箱二者其一」里的邮箱腿发报文（username 留空）。
+func f20CallResetEmail(t *testing.T, s *Server, email, code, newPwd string) *httptest.ResponseRecorder {
+	t.Helper()
+	raw, _ := json.Marshal(map[string]string{"username": "", "email": email, "code": code, "new_password": newPwd})
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleResetPassword(w, r)
+	return w
+}
+
+// TestResetPasswordByEmailLocatesAccount 只用绑定邮箱找回的用户必须能重置。
+// 复现的缺陷：handleResetPassword 旧形态只认 username，邮箱档报文 username 为空
+// ⇒ 直接落「请求格式错误」分支，用户刚收到验证码却重置不了（现网报障原始报文）。
+// 本测同时反向钉住「username 与 email 都空才判格式错误」，防止把必填校验一起放宽。
+func TestResetPasswordByEmailLocatesAccount(t *testing.T) {
+	s := f20ResetServer(t)
+	u, err := s.Store.CreateUser(1, "f20_email_user", auth.PasswordHash("pw123456"), "邮箱找回账号", store.RoleUser, 0, 0)
+	if err != nil {
+		t.Fatalf("预置用户失败: %v", err)
+	}
+	const mail = "f20-reset@example.com"
+	if err := s.Store.SetUserEmail(u.ID, u.TenantID, mail); err != nil {
+		t.Fatalf("绑定邮箱失败: %v", err)
+	}
+
+	// 反向对照：两条定位腿都空 ⇒ 仍必须是格式错误
+	raw, _ := json.Marshal(map[string]string{"username": "", "email": "", "code": "123456", "new_password": "newpass123"})
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(raw))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleResetPassword(w, r)
+	if w.Code != 400 {
+		t.Fatalf("空定位腿应回 400 格式错误，实际 %d（body=%s）", w.Code, w.Body.String())
+	}
+
+	// 正向：只用邮箱定位 + 正确码 ⇒ 200 + success:true，且码被消费
+	f20SeedCode(t, u.ID, resetCode{Code: "778899", ExpiresAt: time.Now().Add(10 * time.Minute)})
+	w2 := f20CallResetEmail(t, s, mail, "778899", "newpass456")
+	if w2.Code != 200 {
+		t.Fatalf("邮箱定位重置应回 200，实际 %d（body=%s）", w2.Code, w2.Body.String())
+	}
+	var out map[string]interface{}
+	if err := json.Unmarshal(w2.Body.Bytes(), &out); err != nil || out["success"] != true {
+		t.Fatalf("邮箱定位重置应 success:true，body=%s err=%v", w2.Body.String(), err)
+	}
+	if _, ok := vcodeGet(vcodeResetKey(u.ID)); ok {
+		t.Fatalf("重置成功后验证码应被消费，实际仍在场")
+	}
+}
+
 // TestUATBatchG_ForgotAntiEnumeration 正向防枚举恒真锁（批G处方第②条）：
 // 不存在的账号走 forgot（发码）链路必须仍回 HTTP 200 + success:true + 恒真文案——
 // reset 侧收口 400 不得反向把「账号是否存在」的探测面从 forgot 漏出去。

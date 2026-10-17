@@ -15,6 +15,17 @@ export const zh: Record<string, string> = {
   'chat.micUnsupported': '当前浏览器不支持录音',
   'chat.speak': '朗读',
   'chat.speakStop': '停止朗读',
+  // ★ 2026-10-17 图片翻译（用户令）：按钮/进行中/失败/结果卡四组文案，失败三档与后端 reason 对齐
+  //   （capability_missing=服务端无 OCR；no_text=图里没识别出文字；其余=通用失败）。
+  'chat.image': '图片翻译',
+  'chat.imageWorking': '正在识别并翻译图片…',
+  'chat.imageFailed': '图片翻译失败，请重试或改用文档翻译',
+  'chat.imageNoText': '没有从图片里识别出文字',
+  'chat.imageCapability': '服务器暂不支持图片翻译，译文文本不受影响',
+  'chat.imageResultTitle': '图片翻译结果',
+  'chat.imageDownload': '下载译后图',
+  'chat.imageClose': '关闭',
+  'chat.imageDegraded': '版式回填未成功，下方为译文文本',
   // ★ 语音失败三档文案（改造方案 §六 第 9 条）：与后端 reason 档位一一对应
   //   unsupported_lang / too_long / 其余（capability_missing·empty·failed）。
   //   三句都必须写明「文字译文不受影响」——译文第一，语音只是择优产出。
@@ -217,6 +228,16 @@ export const en: Record<string, string> = {
   'chat.micUnsupported': 'This browser does not support recording',
   'chat.speak': 'Listen',
   'chat.speakStop': 'Stop audio',
+  // ★ 图片翻译（与上方 zh 逐键对等，键名写进 panels parity 锁）
+  'chat.image': 'Image translation',
+  'chat.imageWorking': 'Recognizing and translating image…',
+  'chat.imageFailed': 'Image translation failed — please retry or use document translation',
+  'chat.imageNoText': 'No text was recognized in the image',
+  'chat.imageCapability': 'Image translation is unavailable on this server; text translation is unaffected',
+  'chat.imageResultTitle': 'Image translation result',
+  'chat.imageDownload': 'Download translated image',
+  'chat.imageClose': 'Close',
+  'chat.imageDegraded': 'Layout write-back failed; the translated text is shown below',
   // ★ 语音失败三档文案（与上方 zh 逐键对等）：档位名见 lib/voiceFail.ts
   'chat.voiceLangUnavailable': 'No voice audio for this language — your translation is unaffected',
   'chat.voiceTooLong': 'This translation is too long to read at once — try reading it in parts',

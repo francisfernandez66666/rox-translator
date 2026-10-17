@@ -278,10 +278,10 @@ func applyModeOverride(flow *FlowDef, ticket *store.Ticket) string {
 		labels = append(labels, "fast")
 		for _, st := range flow.Steps {
 			switch st.Key {
-			case "kb_match", "evals_initial", "evals_review", "gate", "culture_gate", "feedback":
-				st.Enabled = false // 快速模式：无知识库/无评估/无硬闸/无文化闸/不自迭代
-			case "ai_initial", "review", "qa":
-				st.Enabled = true // 快速模式语义保证：初翻+校对+质检 必开
+			case "review", "evals_initial", "evals_review", "gate", "culture_gate", "feedback":
+				st.Enabled = false // 快速模式：**去掉校对腿**，另无评估/无硬闸/无文化闸/不自迭代
+			case "kb_match", "ai_initial", "qa":
+				st.Enabled = true // 快速模式语义保证：知识库直配+初翻+质检 必开
 			}
 		}
 	}

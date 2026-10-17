@@ -446,18 +446,30 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username    string `json:"username"`     // 用户名（用于定位验证码归属）
+		Username    string `json:"username"`     // 用户名（用于定位验证码归属；与 email 二者其一）
+		Email       string `json:"email"`        // 绑定邮箱（只用邮箱找回时用它定位同一个账号）
 		Code        string `json:"code"`         // 6 位验证码
 		NewPassword string `json:"new_password"` // 新密码
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Username == "" || req.Code == "" || req.NewPassword == "" {
+	// ★ 定位腿与发码腿（handleForgotPassword）同口径：username 或 email 二者其一即可。
+	//   旧形态只认 username，只用邮箱找回的用户到这里是空串 → 直接回「请求格式错误」，
+	//   明明刚收到验证码却重置不了（现网缺陷）。
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Username == "" && req.Email == "") || req.Code == "" || req.NewPassword == "" {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
 	// 定位用户
 	var u *store.User
-	if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
-		u = matches[0]
+	if req.Username != "" {
+		if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
+			u = matches[0]
+		}
+	}
+	// username 未命中（空或多租户重名）时回落邮箱定位——与发码腿完全相同的两条腿
+	if u == nil && req.Email != "" {
+		if found, err := s.Store.GetUserByEmail(req.Email); err == nil {
+			u = found
+		}
 	}
 	// ★ 观察2②（批G）失败族①「用户不存在」：与「验证码错误」回同一文案（防枚举语义不变），
 	//   仅把出口从内联 writeJSON(200, success:false) 收口为 writeError → HTTP 400 + VALIDATION_ERROR。

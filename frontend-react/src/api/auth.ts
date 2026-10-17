@@ -115,8 +115,17 @@ export async function forgotPassword(data: { username?: string; email?: string }
 
 /** 重置密码：校验验证码并设置新密码 */
 /** 忘记密码：验证码核验 */
-export async function resetPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
-  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) }))
+// ★ 找回密码支持「用户名」或「绑定邮箱」两条定位腿（与 forgotPassword 同口径）。
+//   只用邮箱找回的用户 username 为空，后端必须能按 email 定位到同一账号，否则回「请求格式错误」。
+//   email 仅在非空时才进报文（保持既有用户名档载荷逐字段不变）。
+export async function resetPassword(data: { username?: string; email?: string; code: string; new_password: string }): Promise<AdminResp> {
+  const payload: { username?: string; email?: string; code: string; new_password: string } = {
+    username: data.username || undefined,
+    email: data.email || undefined,
+    code: data.code,
+    new_password: data.new_password,
+  }
+  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(payload) }))
 }
 
 /** 获取注册行业列表（无需登录，来自超管维护的行业包） */
@@ -136,7 +145,7 @@ export async function sendPwdCode(data: { username?: string; email?: string }): 
 
 /** submitNewPassword 校验验证码并设置新密码。 */
 /** 忘记密码尾步：验证码通过后设置新密码 */
-export async function submitNewPassword(data: { username: string; code: string; new_password: string }): Promise<AdminResp> {
+export async function submitNewPassword(data: { username?: string; email?: string; code: string; new_password: string }): Promise<AdminResp> {
   return resetPassword(data)
 }
 
