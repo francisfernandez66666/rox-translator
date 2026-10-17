@@ -35,3 +35,15 @@ if (typeof (globalThis as Record<string, unknown>).window === "undefined") {
     innerWidth: 1280,
   }
 }
+
+// ★ 2026-10-17 批 A（后台面板词条改懒加载）：大批组件用例直接渲染后台面板并断言中文文案，
+//   而面板词条现在要 `ensureAppPanels()` 才到手 —— 这里统一当作"已到位"，
+//   免得上百条断言各自补一次 await（在测试里逐条补，等于把"懒加载"这件事测成"永不发生"）。
+//   懒加载本身的口径由 src/i18n/appPanelSplit.test.ts 守，那一份用 `vi.resetModules()` 取**新实例**
+//   做判据，刻意绕过这里的合并 —— 所以这里不是"把闸门关掉"，而是把两种用例的前提分开。
+//   ⚠️ 必须**动态** import：静态 import 会被 ESM 提升到文件最前，于是 i18n 模块在上面那句
+//   `store.set('app_lang','zh')` **之前**就评估完了 —— 它读不到存值、走浏览器检测拿到 en，
+//   全站断言中文文案的用例会集体翻红（本批首跑真踩：127 条红，读数全是英文回退值）。
+//   ⚠️ 被测代码里那扇门仍然在：App 外壳（src/App.tsx 的 Root）对已登录访客照旧等它。
+const { ensureAppPanels } = await import('./src/i18n/index')
+await ensureAppPanels()

@@ -15,13 +15,13 @@
 //   品牌 14、Tab 13 胶囊；#67 放大的内联字阶（汉堡 24/品牌 23/租户徽标 15 等）全部还原。
 // ============================================================================
 
-import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { myPackage, meContext } from '@/api'
 import { AuthProvider, useAuth, isPlatformBillingContext } from '@/stores/auth'
 import { AdminProvider, useAdminStore } from '@/stores/admin'
 import { ChatProvider, useChat, PkgRefreshCtx, createPkgRefreshHub, type PkgRefreshHub } from '@/hooks/useChat'
-import { useT, t as gt, tpl as gtpl } from '@/i18n'
+import { useT, t as gt, tpl as gtpl, ensureAppPanels, appPanelsLoaded } from '@/i18n'
 import { setAuthToken, setActiveTenantId, API_BASE } from '@/api'
 import { applyTheme } from '@/lib/theme'
 // 主题在「模块求值期」就落到 <html> 上，而不是等 FrontShell 挂载后再 effect 里做：
@@ -31,6 +31,9 @@ applyTheme()
 // useBranding 已随左栏/移动顶栏迁进 components/frontshell（品牌位是那两件在读）
 import { BrandingProvider } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
+// ★ 2026-10-17 批 B：把 react-router 的 location/navigate 灌进 NavCtx（公开面走 PublicRoot 不挂 router，
+//   那些共用组件改读 NavCtx，见 lib/nav.ts）。本文件是**唯一**允许引 navRouter 的地方。
+import { RouterNavBridge } from './lib/navRouter'
 import { roleLevelSafe } from '@/lib/ui'
 // ★ 〇-Z：站点门面标记（演示站访客打开 `/` 直接进登录注册页，判据由后端首页注入）
 import { landingEnabledForGuest } from '@/lib/siteFlags'
@@ -144,19 +147,9 @@ function PageLoading({ label = gt('app.loading'), onBeat, loop = true }: { label
 }
 
 // ---- 前台工作台外壳 ----
-// ---- 页面级错误边界（懒加载崩了只崩一屏）----
-// ★ 2026-10-13 链路批④（#29）：懒加载页面**取不到分片**时只让这一块出话。
-// 现网症状：发版换源后浏览器里那一页还留着上一代的哈希 chunk 名，切工单＝第一次去拉那个
-// 已经不存在的文件，spa.go 对不存在路径回退成 index.html（200 但内容是 HTML），
-// 于是评估模块当场抛 "Importing a module script failed."。
-// 不包这一层的话异常会一路撞到 App 最外层的全局边界，**整壳连头带尾**被崩溃卡替换
-// （顶栏、导航、页脚都没了，用户只剩「返回首页」一条路）；包了之后外壳照常可用，
-// 崩的只是当前这一屏。
-// resetKey 吃 pathname：用户切到别的页面即自动复位，异常态不许跟着历史栈粘住。
-function RouteBoundary({ children }: { children: ReactNode }) {
-  const location = useLocation()
-  return <ErrorBoundary resetKey={location.pathname}>{children}</ErrorBoundary>
-}
+// ---- 页面级错误边界（★ 2026-10-17 批 B：搬到 components/RouteBoundary.tsx，与公开面 PublicRoot 共用
+//   同一份实现，并改读 lib/nav 的最小接口——公开面没有 react-router，在 App 里定义会把它拉回来）----
+import RouteBoundary from './components/RouteBoundary'
 
 // ---- 前台工作台外壳 ----
 function FrontShell() {
@@ -470,10 +463,22 @@ function Root() {
   // ★ 2026-10-13 用户令：补拍下限由 3 改 1（强制演示一次即止，authMe 早回来就立刻放行）。
   // 无 token 时 restoring 恒 false，不补拍。
   const restoreGate = useWordSwapGate(restoring)
+  // ★ 2026-10-17 批 A：后台/长尾面板词条是**懒加载**的（源 ≈197 KB，见 i18n/appPanels.ts）——
+  //   只看官网首页的未登录访客不该背它们。所以「要不要等」按登录态分派：
+  //   · 未登录 ⇒ 下面三支门面（/pricing、/compare、/、否则登录页）只用门面档四份面板，**不等**；
+  //   · 已登录 ⇒ 进工作台/后台，词条必须先到手，否则首屏会短暂露出键名或回退文案。
+  //   与 restoreGate 同一套占位（WordSwap 换词动效），两闸门互不重叠：restoring 期间 user 已定。
+  const needPanels = !!user && !appPanelsLoaded()
+  useEffect(() => { if (needPanels) void ensureAppPanels() }, [needPanels])
+  const panelsGate = useWordSwapGate(needPanels)
   if (restoreGate.busy) {
     // 闸门期间必须在所有分支判定之前直接 return：这帧 user 还没回来，
     // 往下走会被当成未登录渲染出登录页，会话恢复成功后再翻回工作台（闪一次登录页）
     return <PageLoading onBeat={restoreGate.onBeat} loop={restoreGate.busy} />
+  }
+  if (panelsGate.busy) {
+    // 词条没到手就渲染后台，会先出一屏键名/英文回退再被 emit 刷掉（跨境链路上肉眼可见地闪）
+    return <PageLoading onBeat={panelsGate.onBeat} loop={panelsGate.busy} />
   }
   // 未登录分诊：营销门面（/pricing、/）直出内容页，其余路径一律落到登录页
   if (!user) {
@@ -566,6 +571,14 @@ function Root() {
   )
 }
 
+// ★ 2026-10-17 批 A：一进 App 模块就把懒加载的后台面板词条拨出去（`Root` 只在已登录时等它）。
+//   写在模块层而不是 main.tsx，是因为**这个 chunk 只在进后台/工作台时才会被下载**
+//   （批 B：main.tsx 按「无 token + 公开路径」分诊，门面走 PublicRoot、根本不加载本文件）——
+//   于是官网访客不会因为这一行而下那 ≈197 KB；写在模块层又比写在 effect 里早一整个渲染周期，
+//   与 App 自己的 chunk 解析并行，跨境链路上省的就是这一整段时间。
+//   幂等（ensureAppPanels 内部有 ready/inflight 两档），重复 import 不会重复下载。
+void ensureAppPanels()
+
 // ---- 应用根组件 ----
 // Provider 从外到内的顺序即依赖方向（内层可以取外层，反向取不到）：
 //   ErrorBoundary 最外——它不碰任何上下文，却要能兜住下面任意一层的挂载异常；
@@ -590,17 +603,22 @@ export default function App() {
   return (
     <ErrorBoundary>
       <BrowserRouter>
-        <AuthProvider>
-          <PkgRefreshCtx.Provider value={pkgHubRef.current}>
-            <ChatProvider>
-              <AdminProvider>
-                <BrandingProvider>
-                  <Root />
-                </BrandingProvider>
-              </AdminProvider>
-            </ChatProvider>
-          </PkgRefreshCtx.Provider>
-        </AuthProvider>
+        {/* ★ 2026-10-17 批 B：NavCtx 灌在 BrowserRouter 之内、业务 Provider 之外——
+            位置对它不重要（只提供 location/navigate），贴着 router 放可保证「取到的 location
+            与 App 自己 useLocation 读到的是同一份」。 */}
+        <RouterNavBridge>
+          <AuthProvider>
+            <PkgRefreshCtx.Provider value={pkgHubRef.current}>
+              <ChatProvider>
+                <AdminProvider>
+                  <BrandingProvider>
+                    <Root />
+                  </BrandingProvider>
+                </AdminProvider>
+              </ChatProvider>
+            </PkgRefreshCtx.Provider>
+          </AuthProvider>
+        </RouterNavBridge>
       </BrowserRouter>
     </ErrorBoundary>
   )

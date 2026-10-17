@@ -32,7 +32,9 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { ALL_KEYS } from './index'
+// ★ 2026-10-17 批 A：ALL_KEYS 搬去 ./allKeys（全量含懒加载面板，测试专用件）——
+//   从 './index' 取已不再导出；这张表管「取词键是否都在合法键宇宙内」，口径不变。
+import { ALL_KEYS } from './allKeys'
 
 /** SRC 根：本文件位于 src/i18n 下，上一层即 src */
 const SRC = fileURLToPath(new URL('..', import.meta.url))

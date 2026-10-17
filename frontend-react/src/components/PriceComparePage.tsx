@@ -13,7 +13,7 @@
 // ============================================================================
 import { useState } from 'react'
 import { Button, Icon, IdeaIcon } from '@/ui/langcross/src'
-import { useNavigate } from 'react-router-dom'
+import { useNav } from '@/lib/nav'
 import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
@@ -49,7 +49,8 @@ export default function PriceComparePage() {
   const [, t, tpl] = useT()
   const branding = useBranding()
   const { user } = useAuth()
-  const navigate = useNavigate()
+  // ★ 2026-10-17 批 B：公开面无 router，跳页走 NavCtx 最小接口（见 lib/nav.ts）
+  const { navigate } = useNav()
   const meta = usePricingMeta()
 
   const [charsText, setCharsText] = useState(String(EXAMPLE_CHARS))

@@ -281,7 +281,7 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     expect(blocked, '反证失效：变异没落地').not.toBe(code)
     expect(slowPathFailures(blocked).length, '慢链路改回全屏面板没被判红').toBeGreaterThan(0)
 
-    const noDismiss = code.replace('clearInterval(timer); dismissBootNotice(); return',
+    const noDismiss = code.replace('clearInterval(timer); dismissBootNotice(); dismissBootSkeleton(); return',
       'clearInterval(timer); return')
     expect(noDismiss, '反证失效：变异没落地').not.toBe(code)
     expect(slowPathFailures(noDismiss).length, '挂载后不撤销没被判红').toBeGreaterThan(0)
@@ -306,21 +306,105 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
   })
 })
 
+// D) 首屏骨架（★ 2026-10-17 轻量化批 C）：跨境入口 br 163 KB 在 6~20 KB/s 的链路上要 10~33 s
+//    才到，此前这段时间屏幕只有一个空 #root＝纯黑（哨兵横幅 8 s 后才出）。骨架是**纯 HTML+CSS**，
+//    四条口径（兄弟节点／无文案／无资源／两条路径都要撤）逐条钉在这里；五枚反向腿保证不是空转。
+describe('启动链锁 D：首屏骨架在位且会撤（轻量化批 C）', () => {
+  const html = readFileSync(ROOT + 'index.html', 'utf-8')
+  const code = html.replace(/<!--[\s\S]*?-->/g, '')
+  // 结构摘取：骨架节点块与 <style> 块（判据都在这两块**之内**问，避免被别的段落喂饱）
+  const nodeOf = (src: string) => (src.match(/<div id="__boot_skeleton"[\s\S]{0,200}?<\/div>/) || [''])[0]
+  const styleOf = (src: string) => (src.match(/<style>[\s\S]*?<\/style>/) || [''])[0]
+  function skeletonFailures(src: string): string[] {
+    const bad: string[] = []
+    const node = nodeOf(src)
+    const css = styleOf(src)
+    if (!node) bad.push('读不到骨架节点（判据射程失效）')
+    if (!css || !/#__boot_skeleton/.test(css)) bad.push('读不到骨架样式（判据射程失效）')
+    // ① 兄弟节点：必须落在 <div id="root"> 之前，且结构上不是它的子节点（自带闭合 </div>）
+    const rootAt = src.indexOf('<div id="root">')
+    const nodeAt = src.indexOf('<div id="__boot_skeleton"')
+    if (rootAt < 0 || nodeAt < 0 || nodeAt > rootAt) bad.push('骨架不是 #root 的兄弟节点（塞进去会让哨兵以为界面已挂载）')
+    // ② 无文案：节点里不许有多字节文案；样式里不许用 content: 变相写字
+    if (/[\u3000-\u9fff\uff00-\uffef]/.test(node)) bad.push('骨架节点里带了文案（换语种/租户会闪错话）')
+    if (/(^|[\s;{])content\s*:/.test(css)) bad.push('样式里用 content: 写字（同样是写死的文案）')
+    // ③ 无资源引用：不放 logo/svg/图片（logo 在本仓有唯一事实源，第三份拷贝＝漂移温床）
+    if (/url\(|src=|\.svg|\.png|\.jpg|\.gif/.test(node + css)) bad.push('骨架引用了外部资源（logo 只许有一个出处）')
+    // ④ 两条路径都要撤
+    if (!/function dismissBootSkeleton\(\)/.test(src)) bad.push('缺撤销函数')
+    if (!/clearInterval\(timer\);\s*dismissBootNotice\(\);\s*dismissBootSkeleton\(\)/.test(src)) {
+      bad.push('界面挂载时没有撤骨架')
+    }
+    if (!/data-kind', 'panel'\)[\s\S]{0,240}dismissBootSkeleton\(\)/.test(src)) bad.push('确定失效转全屏面板时没有撤骨架')
+    const slowAt = src.indexOf("kind === 'slow'")
+    const slowEnd = src.indexOf('return', slowAt)
+    if (slowAt < 0 || slowEnd < slowAt) bad.push('慢链路分支读不到（判据射程失效）')
+    else if (/dismissBootSkeleton\(/.test(src.slice(slowAt, slowEnd))) bad.push('慢链路横幅那一档不该撤骨架（那一档本就是"还在加载"）')
+    // reduced-motion：转圈动画必须能被系统设置关掉
+    if (!/@media \(prefers-reduced-motion: reduce\)[\s\S]{0,120}animation: none/.test(css)) bad.push('缺 prefers-reduced-motion 腿')
+    return bad
+  }
+
+  it('射程自检＋四条口径全在位', () => {
+    const bad = skeletonFailures(code)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('反证 10：摘掉骨架／摘掉挂载撤销／把骨架塞进 #root —— 三处各自改坏都要判红', () => {
+    const noNode = code.replace(nodeOf(code), '')
+    expect(noNode, '反证失效：变异没落地').not.toBe(code)
+    expect(skeletonFailures(noNode).length, '摘掉骨架没被判红').toBeGreaterThan(0)
+
+    const noDismiss = code.replace(/clearInterval\(timer\); dismissBootNotice\(\); dismissBootSkeleton\(\); return/,
+      'clearInterval(timer); return')
+    expect(noDismiss, '反证失效：变异没落地').not.toBe(code)
+    expect(skeletonFailures(noDismiss).length, '挂载不撤骨架没被判红').toBeGreaterThan(0)
+
+    const inside = code.replace(nodeOf(code), '').replace('<div id="root"></div>', '<div id="root">' + nodeOf(code) + '</div>')
+    expect(inside, '反证失效：变异没落地').not.toBe(code)
+    expect(skeletonFailures(inside).length, '骨架塞进 #root 没被判红').toBeGreaterThan(0)
+
+    // 第四条：用 CSS content 写字（文案换个地方写回来）——判据必须仍然抓得到
+    // ⚠️ 锚点随批 B 变了：骨架容器那条规则现在是 `#__boot_skeleton,\n.lc-boot-cover {`（两个选择器共用一份声明），
+    //   写死 `'#__boot_skeleton {'` 会命中不到 ⇒ 变异变 no-op、反证自己判红（本批真踩）
+    const cssText = code.replace('#__boot_skeleton,', '#__boot_skeleton::after { content: "加载中" } #__boot_skeleton,')
+    expect(cssText, '反证失效：变异没落地').not.toBe(code)
+    expect(skeletonFailures(cssText).length, 'CSS 写字没被判红').toBeGreaterThan(0)
+  })
+})
+
 // C) 挂载**之后**的崩溃：哨兵只治「#root 一直空着」，挂载成功后再抛异常时 React 会卸载整棵树，
 //    那时哨兵已经收摊 ⇒ 仍然是黑屏。所以 main.tsx 必须自己有一层 ErrorBoundary 出话。
 describe('启动链锁 C：main.tsx 的渲染期兜底在位', () => {
   const main = readFileSync(ROOT + 'src/main.tsx', 'utf-8')
+  // ★ 2026-10-17 批 B 起判据换成「boundary 之内是**分诊出来的入口**」：App/PublicRoot 都是
+  //   `React.lazy`（见 lib/navShim.test.ts），渲染处不再是字面量 `<App />` 而是 `pickEntry()`。
+  //   boundary 的射程没变：它仍包住整棵树（含入口分片的 Suspense），渲染期异常照样出话。
+  const wrapped = /<BootErrorBoundary>[\s\S]{0,600}pickEntry\(\)[\s\S]{0,200}<\/BootErrorBoundary>/
 
-  it('App 被 BootErrorBoundary 包着（渲染期异常出话，不出黑屏）', () => {
+  it('分诊出来的入口被 BootErrorBoundary 包着（渲染期异常出话，不出黑屏）', () => {
     expect(main).toMatch(/class BootErrorBoundary extends React\.Component/)
     expect(main).toMatch(/static getDerivedStateFromError/)
-    expect(main).toMatch(/<BootErrorBoundary>[\s\S]{0,200}<App\s*\/>[\s\S]{0,200}<\/BootErrorBoundary>/)
+    expect(main).toMatch(wrapped)
+  })
+
+  // ★ 入口分片的 Suspense fallback **必须非空**（且与首屏骨架同貌）：哨兵判「界面起没起来」的
+  //   依据是 `#root` 有没有子节点，fallback 给 null 时懒加载分片下载期间 `#root` 恒空
+  //   ⇒ 哨兵在截止时刻会把"正在正常下载"误判成「页面没能加载起来」盖全屏（见 BootLoading.tsx 文件头）。
+  it('入口 Suspense 的 fallback 是 BootLoading（不能是 null）', () => {
+    expect(main).toMatch(/<React\.Suspense fallback=\{<BootLoading \/>\}>/)
+    expect(main).not.toMatch(/<React\.Suspense fallback=\{null\}>/)
   })
 
   // 反证 6：把包裹层摘掉（回到旧形态）判据必须失效
-  it('反证 6：拆掉包裹层后「<App/> 在 boundary 内」这条判不到', () => {
+  it('反证 6：拆掉包裹层后「入口在 boundary 内」这条判不到', () => {
     const naked = main.replace('<BootErrorBoundary>', '').replace('</BootErrorBoundary>', '')
-    expect(naked).not.toMatch(/<BootErrorBoundary>[\s\S]{0,200}<App\s*\/>[\s\S]{0,200}<\/BootErrorBoundary>/)
+    expect(naked).not.toMatch(wrapped)
+    // 第二条腿的反证：把 fallback 换成 null（"省一个组件"式改动）必须当场判红
+    const nullFallback = main.replace('<React.Suspense fallback={<BootLoading />}>', '<React.Suspense fallback={null}>')
+    expect(nullFallback).not.toBe(main)
+    expect(nullFallback).not.toMatch(/<React\.Suspense fallback=\{<BootLoading \/>\}>/)
+    expect(nullFallback).toMatch(/<React\.Suspense fallback=\{null\}>/)
   })
 
   it('兜底文案是人话且不含堆栈／内部路径（只把详情留在控制台）', () => {

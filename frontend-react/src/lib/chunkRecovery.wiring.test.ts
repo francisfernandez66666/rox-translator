@@ -10,8 +10,9 @@
 // 锁的仍是那条老教训（AGENTS §三「判据级断言代替不了守卫级」）：
 //   恢复腿的判据函数（isChunkLoadError / reloadForChunkFailure）全绿，
 //   不代表**有人调用它**——把 main.tsx 那一行 install 摘掉，A~D 四条照样一条不红。
-//   所以这里钉三处接线：main.tsx 在挂载之前装、App.tsx 每处页面级懒加载都在路由级边界里、
-//   边界把 resetKey 交给 pathname。判据写成可喂变异文本的函数，各配反证。
+//   所以这里钉三处接线：main.tsx 在挂载之前装、App.tsx/PublicRoot.tsx 每处页面级懒加载都在路由级边界里、
+//   边界（components/RouteBoundary.tsx，★ 批 B 从 App.tsx 搬出并改走 lib/nav）把 resetKey 交给当前路径。
+//   判据写成可喂变异文本的函数，各配反证。
 //
 // 运行：npx vitest run src/lib/chunkRecovery.wiring.test.ts
 // ============================================================================
@@ -44,21 +45,35 @@ function mainWiringViolations(src: string): string[] {
   return out
 }
 
-/** App.tsx 接线判据：页面级懒加载必须包在 RouteBoundary 里，且它把 resetKey 交给 pathname */
-function appWiringViolations(src: string): string[] {
+/** 路由级边界文件的判据（★ 2026-10-17 批 B：定义从 App.tsx 搬到 components/RouteBoundary.tsx）。
+ *  批 B 把公开面拆成不带 react-router 的 PublicRoot，而公开面页面同样是懒加载的、也要这层边界，
+ *  所以边界改读 `lib/nav` 的最小接口（带 router 时是真 location、不带时是 window.location）。
+ *  ⚠️ 这里**额外**钉住"它不许引 react-router"：一引就等于把 router 拉回公开面（批 B 的全部收益）。 */
+function boundaryViolations(src: string): string[] {
   const out: string[] = []
   const code = stripComments(src)
-  if (!/function RouteBoundary\(\{ children \}: \{ children: ReactNode \}\)/.test(code)) {
-    out.push('App.tsx 缺 RouteBoundary 定义（或签名被改动，请同步本锁）')
+  if (!/export default function RouteBoundary\(\{ children \}: \{ children: ReactNode \}\)/.test(code)) {
+    out.push('components/RouteBoundary.tsx 缺 RouteBoundary 定义（或签名被改动，请同步本锁）')
   }
-  if (!/resetKey=\{location\.pathname\}/.test(code)) out.push('RouteBoundary 没把 resetKey 交给 pathname')
+  if (!/resetKey=\{pathname\}/.test(code)) out.push('RouteBoundary 没把 resetKey 交给当前路径')
+  if (!/\buseNav\(\)/.test(code)) out.push('RouteBoundary 没走 lib/nav 的最小接口（公开面没有 router）')
+  if (/react-router/.test(code)) out.push('RouteBoundary 引了 react-router（会把 367 KB 拉回公开面）')
+  return out
+}
+
+/** 入口文件接线判据：页面级懒加载必须包在 RouteBoundary 里（App.tsx 与 PublicRoot.tsx 各判一次）
+ *  ⚠️ fallback 组件两种形态都在射程内：App 用 `<PageLoading />`，公开面用 `<BootLoading />`
+ *  （后者与首屏骨架同貌，且**必须非空**——见 BootLoading.tsx 文件头）。 */
+function appWiringViolations(src: string, name: string): string[] {
+  const out: string[] = []
+  const code = stripComments(src)
   // 派生式判据：逐个页面级 Suspense 都要被 RouteBoundary 包着（不写死「有几处」）
-  const wrapped = code.match(/<RouteBoundary>\s*<Suspense fallback=\{<PageLoading \/>\}>/g) || []
-  const nakedAll = code.match(/<Suspense fallback=\{<PageLoading \/>\}>/g) || []
-  if (nakedAll.length === 0) out.push('页面级 Suspense 锚点数 0，本锁已失明')
-  if (wrapped.length === 0) out.push('没有任何页面级 Suspense 被 RouteBoundary 包住')
+  const wrapped = code.match(/<RouteBoundary>\s*<Suspense fallback=\{<[A-Za-z]+ \/>\}>/g) || []
+  const nakedAll = code.match(/<Suspense fallback=\{<[A-Za-z]+ \/>\}>/g) || []
+  if (nakedAll.length === 0) out.push(`${name} 页面级 Suspense 锚点数 0，本锁已失明`)
+  if (wrapped.length === 0) out.push(`${name} 没有任何页面级 Suspense 被 RouteBoundary 包住`)
   if (wrapped.length < nakedAll.length) {
-    out.push(`页面级 Suspense ${nakedAll.length} 处，只有 ${wrapped.length} 处被包住`)
+    out.push(`${name} 页面级 Suspense ${nakedAll.length} 处，只有 ${wrapped.length} 处被包住`)
   }
   return out
 }
@@ -66,17 +81,28 @@ function appWiringViolations(src: string): string[] {
 describe('E 接线在位（守卫级）', () => {
   const main = readFileSync(PKG + 'src/main.tsx', 'utf-8')
   const app = readFileSync(PKG + 'src/App.tsx', 'utf-8')
+  const pub = readFileSync(PKG + 'src/PublicRoot.tsx', 'utf-8')
+  const boundary = readFileSync(PKG + 'src/components/RouteBoundary.tsx', 'utf-8')
 
   it('main.tsx：挂载之前装恢复腿', () => {
     expect(mainWiringViolations(main), 'main.tsx 接线：\n').toEqual([])
   })
   it('App.tsx：每一处页面级懒加载都在路由级边界内', () => {
-    expect(appWiringViolations(app), 'App.tsx 接线：\n').toEqual([])
+    expect(appWiringViolations(app, 'App.tsx'), 'App.tsx 接线：\n').toEqual([])
   })
-  it('反证：摘掉调用／摘掉包裹 ⇒ 同一判据必红', () => {
+  it('PublicRoot.tsx（★ 批 B 新入口）：每一处页面级懒加载都在路由级边界内', () => {
+    expect(appWiringViolations(pub, 'PublicRoot.tsx'), 'PublicRoot.tsx 接线：\n').toEqual([])
+  })
+  it('RouteBoundary：定义在位、走 nav 最小接口、不引 react-router', () => {
+    expect(boundaryViolations(boundary), 'RouteBoundary 接线：\n').toEqual([])
+  })
+  it('反证：摘掉调用／摘掉包裹／边界改用 router —— 各自必须判红', () => {
     expect(mainWiringViolations(main.replace('installChunkRecovery()', '')).length, '摘掉调用必须报违规').toBeGreaterThan(0)
-    expect(appWiringViolations(app.replace(/<RouteBoundary>/g, '')).length, '摘掉包裹必须报违规').toBeGreaterThan(0)
-    expect(appWiringViolations(app.replace('resetKey={location.pathname}', '')).length, '摘掉 resetKey 必须报违规').toBeGreaterThan(0)
+    expect(appWiringViolations(app.replace(/<RouteBoundary>/g, ''), 'App.tsx').length, '摘掉包裹必须报违规').toBeGreaterThan(0)
+    expect(appWiringViolations(pub.replace(/<RouteBoundary>/g, ''), 'PublicRoot.tsx').length, '公开面摘掉包裹必须报违规').toBeGreaterThan(0)
+    expect(boundaryViolations(boundary.replace('resetKey={pathname}', '')).length, '摘掉 resetKey 必须报违规').toBeGreaterThan(0)
+    expect(boundaryViolations(boundary + "\nimport { useLocation } from 'react-router-dom'\n").length,
+      '边界引 react-router 必须报违规').toBeGreaterThan(0)
     // 顺序反了也要红（顺序锁两侧各一枚：正证在上面的用例，反证这里把调用挪到挂载之后）
     const moved = main.replace('\ninstallChunkRecovery()', '') + '\ninstallChunkRecovery()\n'
     expect(moved).not.toContain('installChunkRecovery()\n\nReactDOM.createRoot')

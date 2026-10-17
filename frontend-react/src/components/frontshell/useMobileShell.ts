@@ -15,7 +15,7 @@
 // ============================================================================
 
 import { useCallback, useEffect, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useNav } from '@/lib/nav'
 
 /** 移动档断点（唯一口径；改这里＝改全壳档位，别在组件里再写第二份） */
 export const MOBILE_SHELL_QUERY = '(max-width: 640px)'
@@ -41,7 +41,8 @@ export interface MobileShell {
  *   {shell.isMobile && <FrontMobileTopBar onMenu={shell.open} drawerOpen={shell.drawerOpen} />}
  */
 export function useMobileShell(): MobileShell {
-  const location = useLocation()
+  // ★ 2026-10-17 批 B：导航走 NavCtx 最小接口（公开面无 router 时回落 window，见 lib/nav.ts）
+  const { pathname } = useNav()
   // 惰性初始化读一次当前值，随后交给 matchMedia 的 change 事件跟随
   const [isMobile, setIsMobile] = useState(() => window.matchMedia(MOBILE_SHELL_QUERY).matches)
   useEffect(() => {
@@ -53,7 +54,7 @@ export function useMobileShell(): MobileShell {
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   // 路由变化即收起抽屉（含浏览器前进/后退）
-  useEffect(() => { setDrawerOpen(false) }, [location.pathname])
+  useEffect(() => { setDrawerOpen(false) }, [pathname])
   // 抽屉打开时禁掉底层滚动（移动端穿透滚动会把会话区带着跑）；卸载/关闭时逐字还原
   useEffect(() => {
     if (!isMobile || !drawerOpen) return

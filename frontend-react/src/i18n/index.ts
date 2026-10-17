@@ -9,52 +9,28 @@
 //   此后随批次增长，★ 2026-10-06 实测 3033 键——**键数没有固定基准**，逐键覆盖由 locales.core.test.ts
 //   以 ALL_KEYS 动态长度为判据，红/绿只看键集差集，不许把任何数字写进判据）。
 //   历史 CORE_KEYS 核心集口径已并入全量（CORE_KEYS 仅作键集前缀工具保留）。
+//   ★ 2026-10-17 轻量化批 A：ALL_KEYS／CORE_KEYS **搬去 `./allKeys`**（测试专用件）——
+//   它们要含 30 份后台面板的键，而本文件刻意不再静态 import 那些面板（见下面 import 区注释），
+//   在本文件里算就等于把面板又拉回入口包。三个消费者（locales.core／missingKeyGate／usdtPromise）已改指。
 //   取词回退链 lang→en→zh 仍在，但正常情况下不再触发——仅词典缺键或全新面板键未同步时兜底。
 // =============================================
 
 import { useSyncExternalStore } from 'react'
 // ---- 面板词典模块 ----
-// 每个后台/前台面板自带 { zh, en } 两份同键词典，此处逐个 import 后在下方 spread 合并；
-// 新增面板必须同步登记到 i18n/parity.test.ts 的 PANELS 表，否则中英对等性不受守护。
-import * as pOverview from './panels/overview'
-import * as pTenants from './panels/tenants'
-import * as pOrg from './panels/org'
-import * as pUsers from './panels/users'
-import * as pKb from './panels/kb'
-import * as pModels from './panels/models'
-import * as pWorkflow from './panels/workflow'
-import * as pApiKeys from './panels/apikeys'
-import * as pWebhooks from './panels/webhooks'
-import * as pSdk from './panels/sdk'
-import * as pHub from './panels/hub'
-import * as pTickets from './panels/tickets'
-import * as pBilling from './panels/billing'
-import * as pUsage from './panels/usage'
-import * as pAlerts from './panels/alerts'
-import * as pInvites from './panels/invites'
+// ★ 2026-10-17 首屏轻量化批 A：面板词典**分成两档**——
+//   ① **门面档**（下面这四份：chat／landing／cost／auth）：公开面（官网 `/`、`/pricing`、`/compare`、
+//      登录注册）与挂件 AiAssist 都要用的词条，静态留在本文件（入口包里、立即可用）；
+//   ② **后台/长尾档**（其余 30 份，源 ≈197 KB）：挪进 `./appPanels`，由 `ensureAppPanels()` 按需 import。
+//   此前 34 份全部静态 import ⇒ 只看首页的未登录访客也要背下整个后台的词条。
+//   两档的边界不是靠人记：`src/i18n/appPanelSplit.test.ts` P2 腿拿公开面文件**现算**用到的键，
+//   断言它们在 ensureAppPanels() 之前就能取到——把某个公开面要用的面板挪进 appPanels 会当场红。
+//   新增面板默认进 ②（appPanels.ts），并在 parity.test.ts 的 PANELS 表登记（那张表管 zh/en 对等）。
 import * as pChat from './panels/chat'
-import * as pPackages from './panels/packages'
-import * as pFeedback from './panels/feedback'
-import * as pReferral from './panels/referral'
-import * as pTasks from './panels/tasks'
-import * as pOps from './panels/ops'
-import * as pIndustries from './panels/industries'
-import * as pPersonas from './panels/personas'
-import * as pBrandterms from './panels/brandterms'
-import * as pChatwin from './panels/chatwin'
-import * as pDs from './panels/datasources'
-import * as pMybill from './panels/mybilling'
 import * as pLanding from './panels/landing'
-import * as pReconcile from './panels/reconcile'
-// ★ 〇-X #55（2026-09-28）：官网公开「比价与算价」页 /compare 词条（公式公示 + 人工对照价出处）
 import * as pCost from './panels/cost'
 // 2026-09-17 新增：认证域（登录/注册/找回密码/AI 接管注册引导）文案，
 // 从 dicts 基础字典与组件硬编码里独立出来，供 Login / AiRegisterFlow 取词。
 import * as pAuth from './panels/auth'
-// ★ 2026-09-21 #41：优惠券（超管券管理 + 收银台试算）
-import * as pCoupons from './panels/coupons'
-// ★ 2026-09-21 #34：AI 助手管理面板（原生 React 重做，取代 iframe 内嵌管理台）
-import * as pAssist from './panels/assist'
 import { baseZh } from './dicts.zh'
 import { baseEn } from './dicts.en'
 // ★ #23：新语种部分词典（locales/<code>.ts）——★ 2026-10-11 性能批改为**按语种懒加载**，
@@ -92,35 +68,22 @@ export const CORE_PREFIXES: ReadonlyArray<string> = ['app.', 'common.', 'menu.',
 // Dict 字典类型：key 为文案标识，value 为对应语言的展示文本
 type Dict = Record<string, string>
 
-// zh 中文词典：base 基础字典 + 各面板模块中文文案合并
-// 合并语义：后面的 spread 覆盖前面的同名键，故新增面板一律追加在末尾（base 最低优先级）。
-const zh: Dict = {
-  ...baseZh,
-  ...pOverview.zh, ...pTenants.zh, ...pOrg.zh, ...pUsers.zh, ...pKb.zh,
-  ...pModels.zh, ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh,
-  ...pTickets.zh, ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh,
-  ...pInvites.zh, ...pChat.zh, ...pPackages.zh, ...pFeedback.zh,
-  ...pReferral.zh, ...pTasks.zh, ...pSdk.zh, ...pHub.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh, ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pLanding.zh, ...pAuth.zh, ...pCoupons.zh, ...pAssist.zh, ...pCost.zh,
-}
+// zh 中文词典（**门面档**）：base 基础字典 + 四份门面面板。
+// 合并语义：后面的 spread 覆盖前面的同名键（base 最低优先级——实测全仓跨面板重复键 17 对，
+// 全部是 base ↔ 某个面板，面板那份为准；面板之间零重复，见 appPanels.ts 文件头口径②）。
+// 后台那 30 份由 ensureAppPanels() 到位后 Object.assign 追加（顺序对结果无影响：面板之间零重复）。
+const zh: Dict = { ...baseZh, ...pChat.zh, ...pLanding.zh, ...pCost.zh, ...pAuth.zh }
 
-// en 英文词典：base 基础字典 + 各面板模块英文文案合并
-// 顺序与上方 zh 严格一致：任何一侧漏登记，parity.test.ts 的逐面板对等性即失效。
-const en: Dict = {
-  ...baseEn,
-  ...pOverview.en, ...pTenants.en, ...pOrg.en, ...pUsers.en, ...pKb.en,
-  ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
-  ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
-  ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en, ...pCost.en,
-}
+// en 英文词典（**门面档**）：base 基础字典 + 同四份面板，顺序与上方 zh 严格一致
+// （任一侧漏登记，parity.test.ts 的逐面板对等性即失效）。
+const en: Dict = { ...baseEn, ...pChat.en, ...pLanding.en, ...pCost.en, ...pAuth.en }
 
-// 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与
-// 翻译生产都以这一份为准。★ 2026-09-20 全站十语种后升级为 ALL_KEYS 全量口径，
-// 本清单保留给历史批次对照（多语言批次记忆/文档引用的是 453 这个数）。
-export const CORE_KEYS: ReadonlyArray<string> = Object.keys(en).filter((k) => CORE_PREFIXES.some((p) => k.startsWith(p))).sort()
-// 全量键清单（★ 全站十语种）：十份 locales/*.ts 必须逐键覆盖这份表，
-// locales.core.test.ts 的全量闸门以此为基准——新增面板键而某语种没跟上即红灯
-export const ALL_KEYS: ReadonlyArray<string> = Object.keys(en).sort()
+// ★ 2026-10-17 批 A：`ALL_KEYS`／`CORE_KEYS`（全量键清单）**已搬去 `./allKeys`**——
+//   它们必须包含"连懒加载面板一起"的全部键，而本文件刻意不再静态 import 那些面板
+//   （在本文件里算就等于把 30 份面板又拉回入口包）。唯一的消费者是测试
+//   （locales.core.test.ts／missingKeyGate.test.ts／usdtPromise.test.ts），三处 import 已改指 allKeys。
+//   ⚠️ **不许**为了"少改一处 import"在这里 re-export allKeys：那会让任何 import 本模块的地方
+//   顺着 re-export 把 30 份面板拉进入口包（正是这次改造要消灭的东西），且体积回归只在产物里看得见。
 
 // ---- 新语种词典：按当前语种懒加载（★ 2026-10-11 跨境链路瓶颈批）----
 // 为什么改：十份 locales/*.ts 是 **ALL_KEYS 全量词典**（源 2.1 MB、打进 dist 后 gzip 约 440 KB），
@@ -297,6 +260,43 @@ let snapKey = `${currentLang}#${dictRev}`
 
 // bumpSnapKey 重算快照键——**唯一**的写点，且必须在 emit() 之前调用（emit 的回调里组件就要读它）。
 function bumpSnapKey() { snapKey = `${currentLang}#${dictRev}` }
+
+// ---- 后台/长尾面板词条：按需加载（★ 2026-10-17 首屏轻量化批 A）----
+// 谁调：App 外壳（`src/App.tsx` 的 Root）在渲染后台界面前 await 一次；官网/登录页**不调**
+// （它们只用门面档四份，永远不必下这 ≈197 KB）。前置口径与四份门面面板的取舍见文件头 import 区注释。
+// 三条与 ensureLocale 同口径：**幂等**、**并发复用同一个 promise**、**失败不写状态**（下次重拨）。
+let appPanelsReady = false
+let appPanelsInflight: Promise<void> | null = null
+
+/** appPanelsLoaded 后台面板词条是否已到手（App 外壳据此决定"先渲染还是先等"） */
+export function appPanelsLoaded(): boolean {
+  return appPanelsReady
+}
+
+/**
+ * ensureAppPanels 确保后台/长尾面板词条到位（合并进 zh／en 并触发重渲染）。
+ * 幂等、并发合流、失败不写状态 —— 与 ensureLocale 完全同口径；
+ * 到位后与 ensureLocale 一样要抬 dictRev／快照键并 emit（否则「词典内容变了」对 React 不可见，
+ * 后台页面会停在键名/回退文案上不动，正是 lazyLocale 那条老坑的同一形态）。
+ */
+export function ensureAppPanels(): Promise<void> {
+  if (appPanelsReady) return Promise.resolve()
+  if (appPanelsInflight) return appPanelsInflight
+  const p = import('./appPanels')
+    .then((m) => {
+      // 先改可观测状态（词典本体＋代数＋快照键），后 emit（同 ensureLocale 里的顺序注释）。
+      Object.assign(zh, m.zh)
+      Object.assign(en, m.en)
+      appPanelsReady = true
+      dictRev++
+      bumpSnapKey()
+      emit()
+    })
+    .catch(() => { /* 静默：门面文案照常，最坏是后台页面短暂露键名；下一次调用重拨 */ })
+    .finally(() => { appPanelsInflight = null })
+  appPanelsInflight = p
+  return p
+}
 
 // getSnapshotKey 给 React 的订阅快照：语种＋词典代数。
 // 两条腿缺一不可：只报语种测不到「chunk 到手」（本次缺陷本体），

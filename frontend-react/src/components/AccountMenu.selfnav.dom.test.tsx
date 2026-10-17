@@ -91,6 +91,22 @@ describe('AccountMenu · 通知中心与我的账号（★ 2026-10-15 用户令�
     expect(screen.getByText('暂无通知')).toBeTruthy()
   })
 
+  // ★ 2026-10-17 用户报「打开通知中心会强制左边菜单栏拖动」：旧形态把浮层 position:absolute +
+  //   写死 300px 静态留在左栏内，而左栏（237/295px 宽、overflow-y:auto）因此被撑出横向滚动条。
+  //   形态腿（真几何由 e2e/pixel_uat.spec.ts P8 在真浏览器里量）：浮层必须 portal 到 body，
+  //   即不再参与任何应用内滚动容器的排版流。
+  it('通知浮层 portal 到 body：不再留在左栏滚动容器内', () => {
+    openMenu({ showNotify: true })
+    fireEvent.click(screen.getByText('通知中心'))
+    const notice = document.querySelector('.am-notice') as HTMLElement
+    const wrap = document.querySelector('.am-wrap') as HTMLElement
+    expect(notice).toBeTruthy()
+    expect(notice.parentElement, '浮层应直接挂在 body 上').toBe(document.body)
+    expect(wrap.contains(notice), '浮层不得留在 .am-wrap（左栏内）').toBe(false)
+    // 落点由 placeNotice() 现算（jsdom 无布局，矩形全 0）：夹边后仍是有限值，不是写死的 300px
+    expect(Number.isFinite(Number(notice.style.width.replace('px', '')))).toBe(true)
+  })
+
   it('onGotoMy（selfNav 缺省）：露出「我的账号」，点击走回调', () => {
     const my = vi.fn()
     openMenu({ onGotoMy: my })

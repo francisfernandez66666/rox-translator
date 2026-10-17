@@ -14,6 +14,7 @@
 
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { RouterNavBridge } from '@/lib/navRouter' // ★ 2026-10-17 批 B：挂件读 NavCtx，测试用生产同一份桥接
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiAssist from './AiAssist'
@@ -97,7 +98,11 @@ afterEach(async () => {
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <AiAssist />
+      {/* ★ 2026-10-17 批 B：AiAssist 已改读 NavCtx（公开面不挂 router），
+          测试用**生产同一份**桥接把 MemoryRouter 的 location 灌进去（不再直接依赖 router hook） */}
+      <RouterNavBridge>
+        <AiAssist />
+      </RouterNavBridge>
     </MemoryRouter>,
   )
 }

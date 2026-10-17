@@ -10,7 +10,9 @@
 // ============================================================================
 // @vitest-environment node
 import { describe, expect, it, beforeAll, afterEach } from 'vitest'
-import { ALL_KEYS, setLang, t, ensureLocale, type Lang } from '@/i18n'
+// ★ 2026-10-17 批 A：ALL_KEYS 搬去 @/i18n/allKeys（测试专用件，全量含 30 份懒加载面板）。
+import { ALL_KEYS } from '@/i18n/allKeys'
+import { setLang, t, ensureLocale, type Lang } from '@/i18n'
 import { usdtCheckoutKey, usdtPromiseIsLive } from './usdtPromise'
 
 const LIVE_KEY = 'billing.usdtCheckoutHint'

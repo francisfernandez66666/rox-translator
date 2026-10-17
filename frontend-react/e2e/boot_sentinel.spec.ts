@@ -12,6 +12,8 @@
 //   A) 把入口脚本拖到 10s 才回 ⇒ 哨兵只许出底部横幅（不许出全屏面板），且挂载后必须撤销；
 //   B) 反向对照：入口脚本请求被中止（真失败）⇒ 必须是全屏面板且点明脚本没加载
 //      （证明 A 的宽松不是"把判据关掉了"）。
+// 另补首屏骨架（★ 同批轻量化批 C）两条腿：A 里「等入口的那段时间屏幕不是纯黑」＝骨架必须可见、
+//   挂载后必须撤；B 里「确定失效时骨架必须先撤」＝不许在错误面板背后留一个转圈空转。
 // 两条都不依赖后端：路由拦截只动入口 JS，页面起不起来由本用例自己判。
 import { test, expect } from '@playwright/test'
 
@@ -26,6 +28,9 @@ test('慢链路入口：哨兵只出底部横幅（不挡界面），界面挂�
     await route.continue()
   })
   await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  // 首屏骨架：入口还在下载的这段时间，屏幕不该只有一个空 #root（纯黑）
+  await expect(page.locator('#__boot_skeleton'),
+    '入口没到之前只有一块纯黑：首屏骨架没渲染（用户看到的就是"点了没反应"）。').toBeVisible()
   // 默认档截止 8s：此时入口还在下载 ⇒ 应有横幅
   await expect(page.locator('#__boot_fail'), '慢链路连一句提示都没有（哨兵读到不到"还在下载"）').toBeVisible({ timeout: 25000 })
   expect(await page.locator('#__boot_fail[data-kind="panel"]').count(),
@@ -34,6 +39,9 @@ test('慢链路入口：哨兵只出底部横幅（不挡界面），界面挂�
   await expect(page.locator('#root > *').first(), '入口脚本最终仍没挂载（本腿没有射程，先查预览/联调服务）').toBeVisible({ timeout: 40000 })
   await expect.poll(() => page.locator('#__boot_fail').count(),
     { message: '界面已经挂载，哨兵产物却还盖在脸上（旧缺陷②：show() 之后 #root 才填上的那一档没人管）', timeout: 10000 })
+    .toBe(0)
+  await expect.poll(() => page.locator('#__boot_skeleton').count(),
+    { message: '界面已经挂载，首屏骨架却还盖在上面（固定层压住了真界面）', timeout: 10000 })
     .toBe(0)
 })
 
@@ -44,4 +52,8 @@ test('反向对照：入口脚本真失败 ⇒ 出全屏面板并点明脚本没
   const panel = page.locator('#__boot_fail[data-kind="panel"]')
   await expect(panel, '脚本都失败了却没出面板（哨兵失效，A 的宽松就没有反证）').toBeVisible({ timeout: 25000 })
   await expect(panel, '面板没点明是脚本没加载（文案退化成"没抓到具体报错"）').toContainText('没能加载')
+  // 确定失效这一档：骨架必须先撤——否则错误文案背后一直有个转圈，像"其实还在加载"
+  await expect.poll(() => page.locator('#__boot_skeleton').count(),
+    { message: '确定失效时骨架没撤：错误面板背后还在转圈（用户会以为再等等就好）', timeout: 10000 })
+    .toBe(0)
 })

@@ -8,7 +8,8 @@
 // ============================================================================
 // @vitest-environment node
 import { describe, expect, it, beforeAll, afterEach, vi } from 'vitest'
-import { ALL_KEYS, setLang, getLang, t, ensureLocale, type Lang } from './index'
+import { ALL_KEYS } from './allKeys'
+import { setLang, getLang, t, ensureLocale, type Lang } from './index'
 import { dict as ru } from './locales/ru'
 import { dict as fr } from './locales/fr'
 import { dict as ar } from './locales/ar'

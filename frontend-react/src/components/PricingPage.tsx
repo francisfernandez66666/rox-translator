@@ -6,7 +6,7 @@
 // 视觉规则：纯黑底、面板台阶 #0E1014、框线纯白 2px、主按钮白底黑字、无蓝无绿。
 // ============================================================================
 import { Button, IdeaIcon, Icon } from '@/ui/langcross/src'
-import { useNavigate } from 'react-router-dom'
+import { useNav } from '@/lib/nav'
 import { useT } from '@/i18n'
 import { useBranding } from '@/branding'
 import { useAuth } from '@/stores/auth'
@@ -34,7 +34,8 @@ export default function PricingPage() {
   const { plans, trial } = usePlans()
   const brand = branding.brandName || t('land.brand')
   // SPA 路由跳转：/pricing 与 /admin 都在路由表内，整页跳转会白付一次全量重载（2026-09-19 修）
-  const navigate = useNavigate()
+  // ★ 2026-10-17 批 B：公开面无 router，跳页走 NavCtx 最小接口（见 lib/nav.ts）
+  const { navigate } = useNav()
 
   // 套餐类型 → 卡面文案（后端 ptype：free / increment / paid）
   const typeLabel = (ptype: string) =>

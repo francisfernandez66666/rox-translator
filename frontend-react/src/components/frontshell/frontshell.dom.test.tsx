@@ -22,7 +22,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
-import { MemoryRouter, useNavigate } from 'react-router-dom'
+import { MemoryRouter } from 'react-router-dom'
+import { RouterNavBridge } from '@/lib/navRouter'
+import { useNav } from '@/lib/nav'
 import { useEffect } from 'react'
 import { useBrandingStore } from '@/branding'
 import { t } from '@/i18n'
@@ -210,7 +212,7 @@ describe('useMobileShell · 档位与抽屉状态机', () => {
   it('≤640 判档走 matchMedia，且跟随 change 事件翻档（拖窗/横竖屏）', () => {
     const mm = stubMatchMedia(false)
     const seen: ReturnType<typeof useMobileShell>[] = []
-    render(<MemoryRouter><Probe onState={(s) => seen.push(s)} /></MemoryRouter>)
+    render(<MemoryRouter><RouterNavBridge><Probe onState={(s) => seen.push(s)} /></RouterNavBridge></MemoryRouter>)
     expect(screen.getByTestId('mobile').textContent).toBe('false')
     mm.set(true)
     expect(screen.getByTestId('mobile').textContent).toBe('true')
@@ -222,7 +224,8 @@ describe('useMobileShell · 档位与抽屉状态机', () => {
     const seen: ReturnType<typeof useMobileShell>[] = []
     function Probe() {
       const s = useMobileShell()
-      const nav = useNavigate()
+      // ★ 2026-10-17 批 B：外壳改读 NavCtx（公开面不挂 router），测试走生产同一份桥接
+      const nav = useNav().navigate
       useEffect(() => { seen.push(s) })
       return (
         <>
@@ -231,7 +234,7 @@ describe('useMobileShell · 档位与抽屉状态机', () => {
         </>
       )
     }
-    render(<MemoryRouter initialEntries={['/']}><Probe /></MemoryRouter>)
+    render(<MemoryRouter initialEntries={['/']}><RouterNavBridge><Probe /></RouterNavBridge></MemoryRouter>)
     act(() => { seen[seen.length - 1].open() })
     expect(screen.getByTestId('mobile').textContent).toBe('true')
     // 切路由（等价于点导航项 / 浏览器后退）：抽屉必须自己收起来

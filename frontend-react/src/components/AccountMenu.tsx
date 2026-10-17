@@ -5,7 +5,8 @@
 // 呈现层替换：TDesign Dropdown→langcross ContextMenu、Button(variant=text)→自定义触发按钮、
 //             MessagePlugin→useToast。
 // ============================================================================
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Icon, CaretDownIcon, ContextMenu, useToast } from '@/ui/langcross/src'
 import type { MenuItem } from '@/ui/langcross/src'
 import { useAuth } from '@/stores/auth'
@@ -62,6 +63,11 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
   const triggerRef = useRef<HTMLButtonElement>(null)
   // 通知浮层的外点关闭基准：触发器 + 浮层都在这一层里
   const wrapRef = useRef<HTMLDivElement>(null)
+  // ★ 2026-10-17 用户报「打开通知中心会强制左边菜单栏拖动」：浮层改成 portal 到 body 的固定定位，
+  //   它的 DOM 已不在 wrapRef 里，故外点判定另留一个浮层节点基准。
+  const noticeRef = useRef<HTMLDivElement>(null)
+  // 浮层落点（开在触发器上沿、四边夹进视口）；现算而非写死，见 placeNotice()
+  const [notifyPos, setNotifyPos] = useState<{ left: number; bottom: number; width: number; maxH: number } | null>(null)
 
   // 读取当前邮箱，供改密验证码与换绑弹窗使用
   useEffect(() => {
@@ -81,7 +87,11 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
   useEffect(() => {
     if (!notifyOpen) return
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setNotifyOpen(false)
+      const t = e.target as Node
+      if (wrapRef.current?.contains(t)) return
+      // 浮层已 portal 到 body（见下方 render）：它不再是 wrapRef 的后代，必须单独放行内部点击
+      if (noticeRef.current?.contains(t)) return
+      setNotifyOpen(false)
     }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNotifyOpen(false) }
     document.addEventListener('mousedown', onDown)
@@ -89,6 +99,19 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
+    }
+  }, [notifyOpen])
+
+  // 浮层打开期间：视口尺寸变化、或左栏自身滚动（capture 抓祖先滚动）都要重锚，
+  // 否则固定定位的浮层会停在旧坐标、与触发器脱锚。
+  useLayoutEffect(() => {
+    if (!notifyOpen) { setNotifyPos(null); return }
+    const onMove = () => placeNotice()
+    window.addEventListener('resize', onMove)
+    window.addEventListener('scroll', onMove, true)
+    return () => {
+      window.removeEventListener('resize', onMove)
+      window.removeEventListener('scroll', onMove, true)
     }
   }, [notifyOpen])
 
@@ -116,7 +139,7 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
         </span>
       ),
       value: 'notify',
-      onClick: () => { setNotifyOpen(true); notify.setOpen(true); void notify.loadList() },
+      onClick: () => { placeNotice(); setNotifyOpen(true); notify.setOpen(true); void notify.loadList() },
     }] : []),
     // ★ 2026-10-15 用户令：我的账号（侧栏那一项已删）——落 /my（账号设置 + 职业角色）。
     //   selfNav 已含 nav-my（移动档无侧栏），两者同时传会撞出两个同名项，故只在没走 selfNav 时补。
@@ -145,6 +168,23 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     setMenuOpen(true)
   }
 
+  // 通知浮层落点（★ 2026-10-17 用户报「通知中心不自适应、会强制左边菜单栏拖动」）：
+  // 锚点＝触发器矩形，向上展开（账号菜单贴着左栏底缘，向下开必溢出视口），左右与高度都夹进视口。
+  // 为什么必须现算、且必须 portal + position:fixed：左栏（.lc-sidebar）宽仅 237（桌面）／295（移动抽屉）
+  // 且自带 overflow-y:auto——按 CSS 的 overflow 归一规则，另一轴因此也算 auto，
+  // 于是旧形态里那个写死 300px、静态留在栏内的浮层会把左栏撑出横向滚动条（实测溢出 73/15px，
+  // 正是用户看到的「强制左边菜单栏拖动」，而页面级 document 溢出是 0，所以 P7 那类整页判据看不见它）。
+  function placeNotice() {
+    const el = triggerRef.current
+    if (!el) return
+    const r = el.getBoundingClientRect()
+    const width = Math.min(300, window.innerWidth - 24) // 窄屏下不许顶破视口
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8))
+    const bottom = Math.max(8, window.innerHeight - r.top + 6) // 触发器上沿之上 6px
+    const maxH = Math.max(160, Math.min(420, r.top - 16)) // 不越过视口上缘
+    setNotifyPos({ left, bottom, width, maxH })
+  }
+
   // 退出项标 danger：ContextMenu 对末项 danger 会自动绘制上方分隔线，无需额外分隔配置
   const menuItems: MenuItem[] = options.map((o) => ({
     key: o.value,
@@ -171,11 +211,19 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
           <Icon n="user" style={MI} />{user?.username || user?.display_name || ''}
           <CaretDownIcon size={12} style={{ verticalAlign: '-2px', marginInlineStart: 4 }} />
         </button>
-        {/* ★ 2026-10-15：通知浮层开在触发器**上方**（账号菜单贴着左栏底缘，向下开会溢出视口） */}
-        {notifyOpen && (
-          <div className="am-notice">
+        {/* ★ 2026-10-15：通知浮层开在触发器**上方**（账号菜单贴着左栏底缘，向下开会溢出视口）
+            ★ 2026-10-17 用户报「打开通知中心会强制左边菜单栏拖动」：改为 **portal 到 body + 固定定位**。
+            旧形态（position:absolute + 写死 300px 留在栏内）会把只有 237/295px 宽、且 overflow-y:auto
+            的左栏撑出横向滚动条；portal 出去后浮层不参与左栏滚动容器的排版流，宽度/高度改为现算夹边。 */}
+        {notifyOpen && notifyPos && createPortal(
+          <div
+            className="am-notice"
+            ref={noticeRef}
+            style={{ left: notifyPos.left, bottom: notifyPos.bottom, width: notifyPos.width, maxHeight: notifyPos.maxH }}
+          >
             <NotifyPanel ctl={notify} />
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
       <ContextMenu open={menuOpen} x={menuPos.x} y={menuPos.y} items={menuItems} onClose={() => setMenuOpen(false)} />
@@ -197,9 +245,12 @@ const AM_CSS = `
   font-size:15px;cursor:pointer;font-family:var(--lc-font);padding:6px 8px;border-radius:var(--lc-r-bar)}
 .am-trigger:hover{color:var(--lc-text);background:var(--lc-raised)}
 .am-trigger:focus-visible{outline: 2px solid var(--lc-border-input);outline-offset:2px}
-/* 消息浮层：贴着触发器上沿往右展开（账号菜单在左栏底部，向下开必溢出视口） */
-.am-notice{position:absolute;bottom:calc(100% + 6px);inset-inline-start:0;z-index:70}
-.am-notice .bell-panel{position:static;width:300px;max-height:min(420px,60vh)}
+/* 消息浮层：portal 到 body 的固定定位（落点由 placeNotice() 现算；账号菜单在左栏底部，
+   向下开必溢出视口，故开在触发器上沿）。⚠ 宽度不许写死：左栏只有 237/295px 宽且 overflow-y:auto
+   ⇒ 写死 300px 的栏内浮层会把左栏撑出横向滚动条（2026-10-17 用户报障的根因）。 */
+.am-notice{position:fixed;z-index:70}
+/* box-sizing:border-box 必写：面板自带 8px 内垫 + 1.2px 描边，content-box 下 width:100% 会再溢出约 18px */
+.am-notice .bell-panel{position:static;width:100%;box-sizing:border-box;max-height:inherit}
 .am-count{margin-inline-start:auto;padding:0 6px;border-radius:99px;background:var(--lc-invert-bg);
   color:var(--lc-invert-fg);font-size:12px;font-weight:600;line-height:18px}
 `

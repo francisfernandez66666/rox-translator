@@ -26,6 +26,57 @@
         "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY", "description": "注册赠送体验积分，订阅 ¥99/月起" }
       }
     </script>
+    <!-- ★★ 2026-10-17 首屏静态骨架（轻量化批 C）——慢链路上的「秒开」那一半。
+         背景：跨境实测入口 br 163 KB 在 6~20 KB/s 的链路上要 10~33 s 才到，此前这段
+         时间屏幕只有一个 `#root` 空容器＝**纯黑**（哨兵那份「还在加载」横幅要 8 s 之后才出）。
+         本骨架是**纯 HTML+CSS**（无 JS、无外链、无文案）：入口包一到、React 一挂载就撤。
+         四条硬口径（判据见 src/bootStorageGate.test.ts 启动链锁 D）：
+           ① **必须是 #root 的兄弟节点**，不许放进 #root——哨兵的「界面起来了吗」判据正是
+              `#root.childElementCount`，塞进去会让哨兵以为界面已挂载而提前收摊；
+           ② **不含任何文案**（多字节字符一律不许有）：文案要跟 12 语种、租户品牌走，
+              写死就会在换语种/换租户时闪一句错的；骨架只给一枚转圈，语义由哨兵横幅承担；
+           ③ **不含任何资源引用**（不放 logo、不放 svg 文件）：logo 在本仓有唯一事实源，
+              第三份拷贝就是漂移温床（logoConsistency.test.ts 那条口径）；
+           ④ **必须在两条路径上撤**：界面挂载即撤（与哨兵收摊同一分支）、确定失效转全屏面板时也撤
+              （不能留一个转圈在错误面板背后空转）；慢链路横幅那一档**保留**骨架（那一档本就是"还在加载"）。
+         ⚠️ 描边用 1.2px（〇-P 交付档）而不是 2px：环形是**图形笔画**，但源码级闸门按字面扫
+            `border` 宽度，写 2px 会被判成「擅自抬档」——照交付档写就没有这一层争议。
+         ⑤ ★ 2026-10-17 批 B：容器与转圈两份声明**同时服务 React 侧占位**（`components/BootLoading.tsx`，
+            它在 `#root` 里渲染 `.lc-boot-cover` + `.lc-boot-spin`）——懒加载分片没到时也让 `#root` 非空，
+            否则哨兵会在截止时刻把"正在正常下载"误判成「页面没能加载起来」而盖全屏错误面板。
+            所以选择器写成 `#__boot_skeleton, .lc-boot-cover`（**一份声明两个消费者**，
+            值只许在这里改；React 侧不许内联第二份几何）。 -->
+    <style>
+      #__boot_skeleton,
+      .lc-boot-cover {
+        position: fixed;
+        inset: 0;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #000;
+        pointer-events: none;
+      }
+      .lc-boot-spin {
+        width: 28px;
+        height: 28px;
+        border: 1.2px solid rgba(231, 233, 234, 0.18);
+        border-top-color: #e7e9ea;
+        border-radius: 999px;
+        animation: lc-boot-spin 1s linear infinite;
+      }
+      @keyframes lc-boot-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .lc-boot-spin {
+          animation: none;
+        }
+      }
+    </style>
     <!-- ★★ 2026-10-12 启动哨兵（现网「标签标题正常、页面整片黑」的机械防线）
          背景：首页只有 <div id="root"> 一个空容器，界面全靠入口 JS 挂载。只要那条腿没跑完
          （脚本没下载到／模块评估中途抛异常／浏览器拒绝站点数据），用户拿到的就是**纯黑屏零提示**，
@@ -162,6 +213,12 @@
           var box = document.getElementById('__boot_fail')
           if (box && box.parentNode) box.parentNode.removeChild(box)
         }
+        // ★ 撤首屏骨架（见 head 里那段说明的四条口径）：界面挂载即撤、确定失效转全屏面板时也撤；
+        //   慢链路横幅那一档**不撤**（那一档本就是「还在加载」，留着转圈才对）。
+        function dismissBootSkeleton() {
+          var s = document.getElementById('__boot_skeleton')
+          if (s && s.parentNode) s.parentNode.removeChild(s)
+        }
         function waitedLine() {
           var s = Math.round((Date.now() - startAt) / 1000)
           return '已等待约 ' + s + ' 秒' + (connType ? '（网络档 ' + connType + '）' : '')
@@ -205,6 +262,8 @@
           box.id = '__boot_fail'
           box.setAttribute('data-kind', 'panel')
           box.setAttribute('role', 'alert')
+          // 确定失效：骨架撤掉再去盖面板（否则错误文案背后一直有个转圈在空转，像还在加载）
+          dismissBootSkeleton()
           box.style.cssText =
             'position:fixed;inset:0;background:#0B0C0E;color:#E7E9EA;padding:32px;' +
             'font:15px/1.7 system-ui,-apple-system,"Segoe UI",sans-serif;z-index:99999;overflow:auto'
@@ -233,7 +292,7 @@
           ;(document.body || document.documentElement).appendChild(box)
         }
         var timer = setInterval(function () {
-          if (!rootEmpty()) { clearInterval(timer); dismissBootNotice(); return }
+          if (!rootEmpty()) { clearInterval(timer); dismissBootNotice(); dismissBootSkeleton(); return }
           if (Date.now() - startAt < DEADLINE_MS) return
           // 到期了：先问「这一跳还在动吗」——还有脚本在下载时，**只要链路还在动就再等一拍**
           // （慢链路上 Resource Timing 条目数会陆续增加）；直到 CEILING_MS 上限。
@@ -266,6 +325,7 @@
         本站需要浏览器启用 JavaScript 才能显示。请在 Edge/Chrome 的设置里允许本站点运行脚本后重新加载。
       </div>
     </noscript>
+    <div id="__boot_skeleton" class="lc-boot-cover" aria-hidden="true"><span class="lc-boot-spin"></span></div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

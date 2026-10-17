@@ -14,7 +14,6 @@
 // ============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import {
   assistChat, assistGreet, assistHistory,
   getAssistSid, setAssistSid, setAssistTok,
@@ -22,6 +21,7 @@ import {
   type AssistAction, type AssistChatResp, type AssistMsg,
 } from '@/api/assist'
 import { Icon, ArrowRightIcon } from '@/ui/langcross/src'
+import { useNav } from '@/lib/nav'
 import { useT } from '@/i18n'
 
 /** 站内路由集合：route 类型按钮据此 SPA 跳转（其余按外链新开窗口）
@@ -50,9 +50,10 @@ export default function AiAssist() {
   // ★ 082x 起 lang 也要用：界面语言变了必须重取一次开场白（开场白/chips 由服务端按语种翻译直出，
   //   不走对话模型，见 backend-go/internal/assist/engine/localize.go）
   const [lang, t] = useT()
-  const location = useLocation()
-  const navigate = useNavigate()
-  const open = !isHiddenPath(location.pathname)
+  // ★ 2026-10-17 批 B：公开面（官网/定价/比价/登录）不再挂 react-router，导航走 NavCtx
+  //   的最小接口（带 router 时是 SPA 跳转，不带 router 时 window 直跳，见 lib/nav.ts）。
+  const { pathname, search, navigate } = useNav()
+  const open = !isHiddenPath(pathname)
   const [expanded, setExpanded] = useState(false)
   const [closing, setClosing] = useState(false)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
@@ -94,7 +95,7 @@ export default function AiAssist() {
   useEffect(() => () => { if (outTimerRef.current !== null) window.clearTimeout(outTimerRef.current) }, [])
 
   // 初始化：展开时拉引导/恢复历史（一次）
-  // ★ initedRef 而非 effect 依赖做「一次性」：本 effect 依赖 location.pathname/search，
+  // ★ initedRef 而非 effect 依赖做「一次性」：本 effect 依赖 pathname/search，
   //   用户在站内跳转时它会重跑；没有这个 ref 每次跳页都会把历史冲掉、重新 greet 一个新会话。
   //   注意它只「拉一次」，不锁面板状态——收起再展开仍复用已加载的会话。
   // ★ 恢复顺序（2026-09-22 用户反馈「刷新一次页面就没了」）：本地缓存 → 服务端 history → 新会话 greet。
@@ -132,7 +133,7 @@ export default function AiAssist() {
         // 本地有缓存就到此为止——不发 greet 覆盖已见内容，等用户下次发送时由 send 的 401 自愈换新会话
         if (cache.msgs.length) { setOffline(!sid); return }
         // 新会话：拉欢迎词 + chips（★ P0-1：落存服务端下发的能力令牌 tok，后续 history/chat 随带）
-        const g = await assistGreet(location.pathname + location.search)
+        const g = await assistGreet(pathname + search)
         sidRef.current = g.session
         setAssistSid(g.session)
         setAssistTok(g.tok || '')
@@ -147,7 +148,7 @@ export default function AiAssist() {
         setOffline(true)
       }
     })()
-  }, [expanded, location.pathname, location.search, scrollBottom, t])
+  }, [expanded, pathname, search, scrollBottom, t])
 
   // ★ 082x（2026-09-29，用户指令「不能根据用户的前台语言和使用语言来回复，一律用中文」）：
   // 访客在站内把界面语言从中文切到英文（或反过来）时，开场白与快捷提问必须跟着换。
@@ -162,7 +163,7 @@ export default function AiAssist() {
     if (!initedRef.current) return // 还没初始化：首次 greet 自然按新语言出，不必补一次
     ;(async () => {
       try {
-        const g = await assistGreet(location.pathname + location.search)
+        const g = await assistGreet(pathname + search)
         setChips(g.chips || [])
         if (g.session) {
           sidRef.current = g.session
@@ -181,7 +182,7 @@ export default function AiAssist() {
         // 不该因为一句欢迎词把面板打成离线态（离线态只由 send/init 两条路判）
       }
     })()
-  }, [lang, location.pathname, location.search])
+  }, [lang, pathname, search])
 
   // 缓存回写：气泡列表一变就落盘（空数组不写——恢复完成前的瞬间不该把上次内容清掉）。
   // 走 effect 而不是在每个 setBubbles 调用点补写，是为了不让「发送/回复/恢复」三条路径各写一遍、
@@ -204,7 +205,7 @@ export default function AiAssist() {
     try {
       let sid = sidRef.current || getAssistSid()
       if (!sid) {
-        const g = await assistGreet(location.pathname)
+        const g = await assistGreet(pathname)
         sid = g.session
         sidRef.current = sid
         setAssistSid(sid)
@@ -213,16 +214,16 @@ export default function AiAssist() {
       }
       let rep: AssistChatResp
       try {
-        rep = await assistChat(sid, msg, location.pathname + location.search)
+        rep = await assistChat(sid, msg, pathname + search)
       } catch (e) {
         // ★ P0-1 自愈：令牌失效（401）→ 重新 greet 拿新 sid+tok 后重发一次
         if (!String((e as Error)?.message || '').includes('401')) throw e
-        const g = await assistGreet(location.pathname)
+        const g = await assistGreet(pathname)
         sid = g.session
         sidRef.current = sid
         setAssistSid(sid)
         setAssistTok(g.tok || '')
-        rep = await assistChat(sid, msg, location.pathname + location.search)
+        rep = await assistChat(sid, msg, pathname + search)
       }
       setBubbles((b) => [...b, { role: 'assistant', content: rep.reply, actions: rep.actions }])
       setOffline(false)
@@ -233,7 +234,7 @@ export default function AiAssist() {
       setBusy(false)
       scrollBottom()
     }
-  }, [busy, location.pathname, location.search, scrollBottom, t])
+  }, [busy, pathname, search, scrollBottom, t])
 
   // 动作按钮点击：route 类型走 SPA 跳转并收起面板，link 新窗口
   const doAction = useCallback((a: AssistAction) => {

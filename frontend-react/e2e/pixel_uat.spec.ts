@@ -827,4 +827,53 @@ test.describe('像素级 UAT', () => {
       expect(overflow, `${path} 横向溢出`).toBeFalsy();
     }
   });
+
+  // ★ 2026-10-17 用户报障：登录后打开通知中心不自适应，**强制左边菜单栏拖动**。
+  // 根因＝左栏 .lc-sidebar 宽仅 237px 且自带 overflow-y:auto（按 overflow 归一规则另一轴也算 auto），
+  //   而通知浮层旧形态是 position:absolute + 写死 300px 静态留在栏内 ⇒ 左栏当场被撑出横向滚动条。
+  // ⚠ P7 看不见这一层：它问的是 document.documentElement（实测这一形态下页面级溢出恒为 0），
+  //   真正的滚动容器是左栏自己 —— 所以本条的判据必须遍历**浮层的滚动祖先**，而不是整页。
+  //   浮层已 portal 到 body（不再有应用内滚动祖先），故祖先链只剩 body/html 两跳，
+  //   左栏若再被拖进来就是缺陷复发（用「浮层不得在 .lc-sidebar 之内」显式钉住这一形态）。
+  test('P8 通知中心浮层自适应（不撑开左栏滚动容器 + 夹进视口）', async ({ page }) => {
+    await login(page);
+    await page.goto('/');
+    // 打开左栏底部账号菜单 → 「通知中心」（前台唯一入口，★ 2026-10-15 用户令）
+    await page.locator('.am-trigger').first().click({ timeout: 20_000 });
+    await page.getByText('通知中心').first().click();
+    const panel = page.locator('.bell-panel').first();
+    await expect(panel, '通知浮层没打开').toBeVisible({ timeout: 15_000 });
+
+    const m = await page.evaluate(() => {
+      const el = document.querySelector('.bell-panel') as HTMLElement | null;
+      if (!el) return null;
+      // 滚动祖先：谁把内容撑宽了，就在谁身上量（容器级判据，不是整页）
+      const overflowing: string[] = [];
+      for (let n = el.parentElement; n; n = n.parentElement) {
+        if (n.scrollWidth > n.clientWidth + 2) {
+          overflowing.push(`${n.tagName.toLowerCase()}.${(n.className || '').toString().split(/\s+/)[0]}(${n.scrollWidth}>${n.clientWidth})`);
+        }
+      }
+      const r = el.getBoundingClientRect();
+      const side = document.querySelector('.lc-sidebar');
+      return {
+        overflowing,
+        inSidebar: !!side && side.contains(el),
+        panel: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height },
+        vw: window.innerWidth, vh: window.innerHeight,
+      };
+    });
+    expect(m, '页面里找不到通知浮层').not.toBeNull();
+    // ① 任何滚动祖先都不许被撑宽（旧形态读数是 310 > 237，差 73px）
+    expect(m!.overflowing, '通知浮层把某个滚动容器撑宽了').toEqual([]);
+    // ② 浮层必须已经 portal 出左栏（形态腿：留在栏内就必然重新引入横向滚动条）
+    expect(m!.inSidebar, '浮层仍在左栏之内（应 portal 到 body）').toBeFalsy();
+    // ③ 四边夹进视口（实测口径：left≥8、right≤vw-8、top≥0、bottom≤vh）
+    expect(m!.panel.width, '浮层宽度为 0').toBeGreaterThan(0);
+    expect(m!.panel.left, '浮层左缘越出视口').toBeGreaterThanOrEqual(8);
+    expect(m!.panel.right, '浮层右缘顶破视口').toBeLessThanOrEqual(m!.vw - 8);
+    expect(m!.panel.top, '浮层上缘越出视口').toBeGreaterThanOrEqual(0);
+    expect(m!.panel.bottom, '浮层下缘越出视口').toBeLessThanOrEqual(m!.vh);
+    await shot(page, 'P8_notify_panel');
+  });
 });

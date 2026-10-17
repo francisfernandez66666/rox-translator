@@ -265,6 +265,39 @@ else
   echo "  BAD  T7b 大模型资产判据自证没过 ⇒ T7 这一档的射程不可信"; RC=1
 fi
 
+# T8 拆分层哨兵：入口 raw ≤ 420,000 B（★ 2026-10-17 首屏轻量化批 C+A+B 立档）。
+#   与 T3 的分工要说清：两条腿量的是同一个数、抓的是**两种不同的退化**，不是两把尺子——
+#     T3 的 1,200,000 治「整目录词典被静态打回入口」（一犯就 2.6 MB 量级）；
+#     T8 的 420,000 治「本批刚拆出去的那两块又回到入口」：公开面（react-router 367 KB）＋后台面板。
+#     那一档只到 ~470 KB，**T3 对它完全无感**（照样 ≤1.2 MB 判绿）——所以 T8 不是重复判据。
+#   现读数演进：入口 617,170 raw → A（i18n 面板懒化）470,280 → B（公开面拆入口）**339,296 B**（br 93,016）。
+#   420,000 给正常增量留 ~24% 余量，而"router／后台面板又回来"必然越过它。
+ENTRY_SIZE_MAX_SPLIT="${FRONTEND_ENTRY_SIZE_MAX_SPLIT:-420000}"
+# 判据单独成函数：真包判据与 T8b 自证**共用同一个函数**（同 T5/T5b 的理由，两份副本迟早打架）。
+entry_size_split_ok() { # ${1}＝入口 raw 字节数；返回 0＝在拆分层上限之内
+  case "${1:-}" in '' | *[!0-9]*) return 1 ;; esac
+  [ "$1" -le "$ENTRY_SIZE_MAX_SPLIT" ]
+}
+if [ -z "$ENTRY_SIZE" ]; then
+  echo "  BAD  T8 入口体积取不到（同 T3：从 index.html 认不出入口 asset）"; RC=1
+elif entry_size_split_ok "$ENTRY_SIZE"; then
+  echo "  OK   T8 入口 raw=${ENTRY_SIZE} B ≤ ${ENTRY_SIZE_MAX_SPLIT} B（公开面与后台面板确实在入口之外）"
+else
+  echo "  BAD  T8 入口 raw=${ENTRY_SIZE} B 越过 ${ENTRY_SIZE_MAX_SPLIT} B ⇒ 像把 react-router／后台面板合回了入口"; RC=1
+  echo "       ⇒ 核 src/main.tsx 的 pickEntry 分诊与 src/lib/nav.ts（公开面一律不许走 react-router）"
+fi
+
+# T8b 射程自证：同一个函数喂四档——**上限本身**必须放行、上限＋1 必须判死（证明边界是真的）、
+#   静态词典量级判死、空值判死。上限取现读变量而不是写死读数，这样有人调上限时自证不会变成假红。
+if entry_size_split_ok "$ENTRY_SIZE_MAX_SPLIT" \
+   && ! entry_size_split_ok "$((ENTRY_SIZE_MAX_SPLIT + 1))" \
+   && ! entry_size_split_ok 2633000 \
+   && ! entry_size_split_ok ""; then
+  echo "  OK   T8b 入口体积判据自证（=${ENTRY_SIZE_MAX_SPLIT} 放行／=$((ENTRY_SIZE_MAX_SPLIT + 1)) 判死／2,633,000 判死／空值判死）"
+else
+  echo "  BAD  T8b 入口体积判据自证没过 ⇒ T8 这一档的射程不可信"; RC=1
+fi
+
 echo
 if [ "$RC" = "0" ]; then echo "FRONTEND_TAR_ALL_OK=1"; else echo "FRONTEND_TAR_FAIL=1（上面有 BAD 行 ⇒ 不许换源）"; fi
 echo CHECK_FRONTEND_TAR_EXIT=$RC
