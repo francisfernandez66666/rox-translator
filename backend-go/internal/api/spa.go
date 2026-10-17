@@ -9,6 +9,7 @@ package api
 //   - 前端 dist 目录未构建时（index.html 缺失），首页返回安装引导页，其余路径返回 404
 //   - 提供前端构建产物（HTML/JS/CSS/图片等）的静态文件服务
 //   - SPA 路由回退：请求路径不存在时回退到 index.html（配合前端 history 路由）
+//   - 目录 URL（`/blindtest/`）：先解析该目录的 index.html，缺失才回退 SPA 入口
 //   - 缓存策略：带 hash 的 /assets/ 资源长缓存（immutable），其余资源每次重新校验
 // 安全约束：对请求路径做 filepath.Clean 归一化并校验前缀，防止目录穿越（path traversal）。
 
@@ -67,6 +68,19 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	// 目标文件不存在或是目录：SPA 路由回退到 index.html（每次重新校验，避免缓存旧 bundle）
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
+		// ★ 目录 URL 先解析该目录自己的 index.html（2026-10-17 补：`/blindtest/` 这类可分享静态页的
+		//   自然形态此前一律回退 SPA ⇒ 干净 URL 返回首页、只有带 `index.html` 才拿得到那张页，
+		//   而 sitemap/分享链接不会写文件名）。命中即走 serveIndexHTML，使 `/x/` 与 `/x/index.html`
+		//   两种写法**逐字节一致**（品牌注入、门面注入、no-cache 头都同一条链）。
+		//   缺失（如 `/assets/`）才回退 SPA 入口，行为与改动前完全相同。
+		if err == nil && info.IsDir() {
+			if idx := filepath.Join(full, "index.html"); idx != "" {
+				if idxInfo, idxErr := os.Stat(idx); idxErr == nil && !idxInfo.IsDir() {
+					s.serveIndexHTML(w, r, idx)
+					return
+				}
+			}
+		}
 		// SPA 路由回退到 index.html（注入当前域名品牌，消除首屏「先通用后品牌」闪烁）
 		s.serveIndexHTML(w, r, filepath.Join(dist, "index.html"))
 		return
