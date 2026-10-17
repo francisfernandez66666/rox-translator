@@ -535,6 +535,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 各语言直接预填占位交付；其余段照常翻译。
 	blockedSeg := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
 
+	// ★ 2026-10-17 第二批：**无需翻译**段（数字/货币/日期/时间/符号）预填原文交付。
+	// 与 blockedSeg 同属「已预填、不进上游、不进补漏」，但交付值是原文本身而不是占位符
+	// （判据与预填同源，见 translation_guard.go 的 NeedsIdentityDelivery／identitySegments）。
+	// 工单 T20261017234421W7H 实测：这些段送翻只会换回整排 "and"，而回落原文才是正确交付。
+	identitySeg := identitySegments(texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
+
+	// preFilled＝「已交付、不再送上游」的段集合（敏感拦截 ∪ 无需翻译）。
+	// ★ 模型派发的三处（KB 检索 / KB 补漏 / 其它语言批量）一律只看它——禁止各自再拼一遍，
+	//   否则漏掉一路就会把「无需翻译」的段重新送去换 "and"（下一批同样的报障）。
+	preFilled := mergeSegSets(blockedSeg, identitySeg)
+
 	// ★B3（A2）：逐段事件发射器（emit=nil 时 nil-safe 全空转，工单/非流式路径零开销）。
 	// 挂载点=方案 A2 第 2 条：KB 直译即中即推 / 批回调按块推初翻 / 语言收尾 diff+封印。
 	se := newSegEmitter(emit, texts, blockedSeg)
@@ -575,7 +586,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				semKB := make(chan struct{}, 8)
 				var wgKB sync.WaitGroup
 				for i, t := range texts {
-					if blockedSeg[t] { // ★ S8：拦截段不进模型链路
+					if preFilled[t] { // ★ S8 拦截段 + 无需翻译段都不进模型链路
 						continue
 					}
 					wgKB.Add(1)
@@ -608,7 +619,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				wgKB.Wait()
 				// ★ 命中/补漏分派收口到纯函数 collectKBPass（内部再走一次 IsTranslationUsable，
 				//   写入点判定优先于上游并行判定，杜绝「只判非空」的旧口径复活）。
-				kbAccepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, blockedSeg)
+				kbAccepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, preFilled)
 				for _, i := range kbAccepted {
 					addTrans(lc, texts[i], kbVal[i])
 					addKBHit()
@@ -658,7 +669,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// ★ S8：仅送审未拦截段（命中段不出现于任何上游调用）。
 			sendIdx := make([]int, 0, len(texts))
 			for i, t := range texts {
-				if !blockedSeg[t] {
+				if !preFilled[t] {
 					sendIdx = append(sendIdx, i)
 				}
 			}

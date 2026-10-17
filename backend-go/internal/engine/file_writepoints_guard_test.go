@@ -50,6 +50,11 @@ const fwpExpectedWritePoints = 5
 // 过判定反而会被「同文/空串」规则拦掉），因此 sensitive.go 的裸写入是设计内的。
 const fwpSensitiveFile = "sensitive.go"
 
+// fwpIdentityFile 第二个豁免文件：无需翻译段（数字/货币/日期/符号）的**原文预填**。
+// 交付值就是源文本身（identityDelivery），「同文」判据对它天然不适用——那条判据针对的是
+// **模型回显**，而这里是我们主动选择的交付形态（见 translation_guard.go 的 identitySegments）。
+const fwpIdentityFile = "translation_guard.go"
+
 type fwpSite struct {
 	file    string
 	line    int
@@ -103,6 +108,12 @@ func fwpGuardOf(stack []ast.Node) string {
 	if call, ok := last.(*ast.CallExpr); ok {
 		if id, ok := call.Args[2].(*ast.Ident); ok && id.Name == "SensitivePlaceholderText" {
 			return "S8 占位预填"
+		}
+		// 豁免 4：无需翻译段的原文预填（identityDelivery(t) 这个调用形态即"设计内"的标记）
+		if inner, ok := call.Args[2].(*ast.CallExpr); ok {
+			if id, ok := inner.Fun.(*ast.Ident); ok && id.Name == "identityDelivery" {
+				return "identity 原文预填"
+			}
 		}
 	}
 	for i := len(stack) - 1; i >= 0; i-- {
@@ -181,13 +192,20 @@ func fwpCallNamed(ce *ast.CallExpr, fn string) bool {
 // IsTranslationUsable（例如照抄老写法 `if out != ""`），脏行/回显就会重新流进成品文件，
 // 且该段被硬闸永久跳过——本用例会直接列出未守护的 file:line。
 func TestFileTranslationWritePointsAllGuarded(t *testing.T) {
-	sites := fwpScanWritePoints(t, []string{"file.go", fwpSensitiveFile})
+	sites := fwpScanWritePoints(t, []string{"file.go", fwpSensitiveFile, fwpIdentityFile})
 	inFile := 0
 	byKind := map[string]int{}
 	for _, s := range sites {
-		if s.file == fwpSensitiveFile {
+		switch s.file {
+		case fwpSensitiveFile:
 			if s.guarded != "S8 占位预填" {
 				t.Errorf("%s:%d 的裸写入必须写 SensitivePlaceholderText 占位（唯一豁免形态），got %q", s.file, s.line, s.guarded)
+			}
+			continue
+		case fwpIdentityFile:
+			// 无需翻译段的预填：交付值必须是原文（identityDelivery），且只能出现在那一个点上。
+			if s.guarded != "identity 原文预填" {
+				t.Errorf("%s:%d 的裸写入必须是 identityDelivery(源文) 形态（原文预填豁免），got %q", s.file, s.line, s.guarded)
 			}
 			continue
 		}
@@ -207,6 +225,17 @@ func TestFileTranslationWritePointsAllGuarded(t *testing.T) {
 	if byKind["IsTranslationUsable"] != fwpExpectedWritePoints-1 || byKind["collectKBPass"] != 1 {
 		t.Fatalf("写入点守护形态分布与既有装配不符：%v（期望 IsTranslationUsable %d 处 + collectKBPass 1 处）",
 			byKind, fwpExpectedWritePoints-1)
+	}
+	// 反向自证 2：预填豁免文件里必须**真的有**那一处裸写入——若哪天把它搬回 file.go 或删掉，
+	// 本用例会因为「豁免文件里 0 处写入」而失去射程（同 AGENTS「判据级代替不了守卫级」）。
+	identitySites := 0
+	for _, s := range sites {
+		if s.file == fwpIdentityFile && s.guarded == "identity 原文预填" {
+			identitySites++
+		}
+	}
+	if identitySites != 1 {
+		t.Fatalf("%s 的原文预填写入点应恰为 1 处（identitySegments 内），实际 %d 处", fwpIdentityFile, identitySites)
 	}
 }
 
@@ -233,6 +262,7 @@ func handle() {
 		addTrans("en", srcC, outC) // 合规：写入前判定
 	}
 	addTrans("en", t, SensitivePlaceholderText) // 合规：S8 占位预填豁免
+	addTrans("en", t, identityDelivery(t))      // 合规：无需翻译段的原文预填豁免
 }
 `
 	path := filepath.Join(t.TempDir(), "sample.go")
@@ -240,14 +270,79 @@ func handle() {
 		t.Fatalf("写样本: %v", err)
 	}
 	sites := fwpScanWritePoints(t, []string{path})
-	if len(sites) != 6 {
-		t.Fatalf("样本应有 6 个 addTrans 调用，实际 %d", len(sites))
+	if len(sites) != 7 {
+		t.Fatalf("样本应有 7 个 addTrans 调用，实际 %d", len(sites))
 	}
-	want := []string{"", "", "", "collectKBPass", "IsTranslationUsable", "S8 占位预填"}
+	want := []string{"", "", "", "collectKBPass", "IsTranslationUsable", "S8 占位预填", "identity 原文预填"}
 	for i, s := range sites {
 		if s.guarded != want[i] {
 			t.Errorf("第 %d 处（%s:%d）守护形态判定为 %q，期望 %q", i+1, s.file, s.line, s.guarded, want[i])
 		}
+	}
+}
+
+// TestFilePipelinePrefillsIdentitySegmentsAndSkipsUpstream 钉住「无需翻译段」的**装配**：
+//   - 预填集合与敏感拦截集合的并集（preFilled）只算一次，供所有上游派发点共用；
+//   - 三个派发点（KB 检索、KB 补漏判定、其它语言批量）都必须查它；
+//   - blockedSeg 只允许留在「敏感拦截」自己的位置上（预填、事件标记、拦截段预推），
+//     不得再出现在任何模型派发判断里（否则数字/日期段会被重新送去换 "and"）。
+//
+// 为什么是装配级断言而不是判据级：判据函数全绿也可能因为「某一处派发忘了跳过」而复发
+// （本批实测的 24 段噪声正是这么出去的）——单测喂的是函数，漏接线不上任何函数的门口。
+func TestFilePipelinePrefillsIdentitySegmentsAndSkipsUpstream(t *testing.T) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "file.go", nil, 0)
+	if err != nil {
+		t.Fatalf("解析 file.go 失败: %v", err)
+	}
+	counts := map[string]int{}
+	identityCalls := 0
+	collectArg := ""
+	preFilledFromMerge := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			counts[id.Name]++
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if fn, ok := call.Fun.(*ast.Ident); ok {
+			switch fn.Name {
+			case "identitySegments":
+				identityCalls++
+			case "collectKBPass":
+				if len(call.Args) == 4 {
+					if a, ok := call.Args[3].(*ast.Ident); ok {
+						collectArg = a.Name
+					}
+				}
+			case "mergeSegSets":
+				for _, a := range call.Args {
+					if x, ok := a.(*ast.Ident); ok && x.Name == "identitySeg" {
+						preFilledFromMerge = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	if identityCalls != 1 {
+		t.Fatalf("file.go 里 identitySegments 应恰被调用 1 次（预填入口），实际 %d 次", identityCalls)
+	}
+	if !preFilledFromMerge {
+		t.Fatal("file.go 必须把 identitySeg 并入 preFilled（mergeSegSets(blockedSeg, identitySeg)）：漏了它，无需翻译段会重新进上游")
+	}
+	if collectArg != "preFilled" {
+		t.Fatalf("collectKBPass 的第 4 个实参必须是 preFilled（当前 %q）：写回 blockedSeg 会让数字段重新进补漏队列", collectArg)
+	}
+	// 出现次数：preFilled = 定义 1 + KB 检索跳过 1 + collectKBPass 实参 1 + 批量派发过滤 1。
+	if counts["preFilled"] != 4 {
+		t.Errorf("preFilled 的引用点应为 4 处（定义/KB检索/补漏判定/批量派发），实际 %d —— 新增派发点时必须一并接上", counts["preFilled"])
+	}
+	// blockedSeg = 定义 1 + 并入 preFilled 1 + 事件发射器（拦截行标记）1 + 拦截段预推循环 1。
+	if counts["blockedSeg"] != 4 {
+		t.Errorf("blockedSeg 的引用点应为 4 处（定义/并入 preFilled/事件标记/拦截段预推），实际 %d —— 出现在第 5 处通常是「某个派发点又直接查了它」（数字段会重新进上游）", counts["blockedSeg"])
 	}
 }
 

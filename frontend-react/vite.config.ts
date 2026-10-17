@@ -1,10 +1,24 @@
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { minifyIndexHtml } from './src/lib/htmlArtifactMinify'
+
+// ★ 2026-10-18 慢链路批（#1「国内加载慢」）：交付产物 index.html 精简插件。
+//   顺序必须是 `order: 'post'`——Vite 自己插入的入口 script/link 标签要先装配完，
+//   精简器只做"删注释 / 压内联块 / 折叠标签间空白"三件事，语义标记与资源引用一字不动。
+//   实现与判据见 src/lib/htmlArtifactMinify.ts 与 src/htmlArtifactMinify.test.ts；
+//   **源码 index.html 里的说明注释照旧保留**（那是给读源码的人看的，不进产物）。
+const artifactHtmlMinify = {
+  name: 'artifact-html-minify',
+  transformIndexHtml: {
+    order: 'post' as const,
+    handler: (html: string) => minifyIndexHtml(html),
+  },
+}
 
 // 与 Vue 版 vite 配置完全对齐（仅插件与端口不同：5174 避免与旧前端并存冲突）
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), artifactHtmlMinify],
   base: '/',
   resolve: {
     alias: {

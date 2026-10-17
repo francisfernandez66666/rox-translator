@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -126,7 +127,46 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path str
 	html = injectSiteFlagsScript(s.siteFlagsPayload(r), html)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	// ★ 2026-10-18 慢链路批（#1「国内加载慢」）：关键资源提前声明（RFC 8288 Link）。
+	//   入口 script 与首页样式表都在文档**末尾**才出现，浏览器要等整篇 HTML 解析到那里
+	//   才发起请求；这一条把它变成"收 HTML 的同时就起请求"，CDN 侧（Cloudflare Early Hints）
+	//   还能据此在正文之前先把这两个 URL 推给客户端。名字**现读现算**（构建一变哈希就变），
+	//   硬编码＝指向 404 的反向优化（见 spa_preload_links_test.go 的 R1）。
+	if links := criticalAssetLinks(html); links != "" {
+		w.Header().Set("Link", links)
+	}
 	w.Write([]byte(html))
+}
+
+// preloadScriptRe / preloadStyleReA / preloadStyleReB 从入口 HTML 里现读关键资源 URL。
+// 样式表两条正则是因为属性顺序不固定（Vite 出的是 `rel` 在前，手写页可能 `href` 在前）。
+var (
+	preloadScriptRe = regexp.MustCompile(`(?is)<script[^>]*\bsrc="([^"]+)"`)
+	preloadStyleReA = regexp.MustCompile(`(?is)<link[^>]*\brel="stylesheet"[^>]*\bhref="([^"]+)"`)
+	preloadStyleReB = regexp.MustCompile(`(?is)<link[^>]*\bhref="([^"]+)"[^>]*\brel="stylesheet"`)
+)
+
+// criticalAssetLinks 现读入口 HTML，拼出首屏关键资源的 Link 头值（没有关键资源就回空串）。
+//
+// 只认 `/assets/` 前缀：那是构建产物（带内容哈希）所在，也正是 Caddy/后端的长缓存面；
+// 其它形态（外链 CDN、dataURI）不猜、不预加载——预加载一个不存在的 URL 的代价比不预加载大。
+func criticalAssetLinks(html string) string {
+	var links []string
+	if m := preloadScriptRe.FindStringSubmatch(html); m != nil {
+		if u := m[1]; strings.HasPrefix(u, "/assets/") {
+			links = append(links, "<"+u+">; rel=preload; as=script; crossorigin")
+		}
+	}
+	href := ""
+	if m := preloadStyleReA.FindStringSubmatch(html); m != nil {
+		href = m[1]
+	} else if m := preloadStyleReB.FindStringSubmatch(html); m != nil {
+		href = m[1]
+	}
+	if strings.HasPrefix(href, "/assets/") {
+		links = append(links, "<"+href+">; rel=preload; as=style")
+	}
+	return strings.Join(links, ", ")
 }
 
 // injectBrandingScript 将品牌定制 JSON 注入 HTML 的 </head> 之前（缺省则前置）。
