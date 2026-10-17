@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（437 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（442 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -188,6 +188,8 @@ var exactEN = map[string]string{
 	"回调签名校验未通过":                   "Callback signature verification failed",
 	"回调验签失败: ":                    "Callback signature check failed: ",
 	"图片不存在":                       "Image not found",
+	"图片数据格式无法解析（或超出上限）":           "Could not decode the image (or it exceeds the size limit)",
+	"图片暂存失败":                      "Failed to stage the image on the server",
 	"均摊系数不能小于 1.0":                "Sharing factor must not be less than 1.0",
 	"处理超时，长文本请改用翻译工单":             "Processing timed out; for long texts, please create a translation ticket instead",
 	"套餐不存在或已下架":                   "Plan not found or delisted",
@@ -337,9 +339,11 @@ var exactEN = map[string]string{
 	"缺少任务 id":                  "Task id missing",
 	"缺少分片内容":                   "Chunk content missing",
 	"缺少券 ID":                   "Coupon ID missing",
+	"缺少图片文件":                   "No image file was provided",
 	"缺少工单 id":                  "Ticket id missing",
 	"缺少录音文件":                   "No recording file was provided",
 	"缺少文件":                     "File missing",
+	"缺少目标语种":                   "Missing target language",
 	"翻译技能未加载":                  "Translation skill not loaded",
 	"翻译技能未加载（未传入 -kb）":         "Translation skill not loaded (-kb not passed)",
 	"自动开通失败: ":                 "Auto-provisioning failed: ",
@@ -391,6 +395,7 @@ var exactEN = map[string]string{
 	"该邮箱未开通账号，请联系管理员":                                  "This email has no account; contact your administrator",
 	"语音产物暂存失败":                                         "Failed to stage the audio result on the server",
 	"语音产物读取失败":                                         "Failed to read the audio result",
+	"请以 multipart/form-data 提交图片":                      "Please submit the image as multipart/form-data",
 	"请以 multipart/form-data 提交录音":                      "Please submit the recording as multipart/form-data",
 	"请先切换到目标租户":                                        "Switch to the target tenant first",
 	"请先登录":                                             "Please log in first",

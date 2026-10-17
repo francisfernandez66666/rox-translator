@@ -150,10 +150,15 @@ func parseOcrJSON(out string, e *Extractor, srcPath string) error {
 	if len(res.Boxes) == len(lines) {
 		boxes := make([]OcrBox, 0, len(lines))
 		for i, ln := range lines {
-			if strings.TrimSpace(ln) == "" {
+			key := strings.TrimSpace(ln)
+			if key == "" {
 				continue
 			}
-			boxes = append(boxes, OcrBox{Text: ln, Box: res.Boxes[i]})
+			// ★ 键必须与**提取器**给出的行文本同形（Extractor.add 会 trim）：
+			//   回填阶段 Go 侧用「译文表 b.Text」取译文，而那张表的键来自提取器（已 trim）。
+			//   这里存未 trim 的原文 ⇒ 首尾带空格的行取不到译文、被当成"未译出"保留原文
+			//   （不报错、只是那几行没换掉，属最难发现的一类静默残留）。
+			boxes = append(boxes, OcrBox{Text: key, Box: res.Boxes[i]})
 		}
 		RememberImageBoxes(srcPath, boxes)
 	}
@@ -183,6 +188,19 @@ func friendlyOcrError(stderr string) string {
 		return "不支持的图片格式，请使用 png/jpg/jpeg/bmp/tif/tiff/webp/heic"
 	case "Empty":
 		return "OCR 未识别出文字（图片可能无文字内容、或为手写/艺术字）"
+	case "NothingPainted":
+		return "图片原位回填未产出（没有一行拿到可用文本框坐标），已退回仅译文文档"
+	// ★ 2026-10-17：原位回填脚本（ocr_translate_image.py）的五个档位也收进来。
+	//   之前它们落到 default ⇒ 返回 ""，调用方只能把脚本 stderr 原文（含内部路径）抛给日志；
+	//   补上后 RenderTranslatedImage 的错误就是给运维看的人话。
+	case "Font":
+		return "图片原位回填失败：服务器上没有可用字体（随包 assets/fonts 缺失且系统字体候选也取不到）"
+	case "Lines":
+		return "图片原位回填失败：行数据读取失败"
+	case "Draw":
+		return "图片原位回填失败：绘制阶段出错"
+	case "Out":
+		return "图片原位回填失败：产物写入失败"
 	case "Import":
 		return "图片文字识别（OCR）依赖未就绪：服务器未安装 onnxruntime/numpy/Pillow"
 	default:

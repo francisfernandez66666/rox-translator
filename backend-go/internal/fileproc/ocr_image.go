@@ -69,8 +69,15 @@ func imageRenderTimeout() time.Duration {
 
 // OcrBox OCR 一行的文本框与原文（用于原位回填，坐标单位＝**原图像素**）。
 type OcrBox struct {
-	Text string    `json:"text"` // 原文行文本
-	Box  []float64 `json:"box"`  // 四点坐标 [x1,y1,x2,y2,x3,y3,x4,y4]（顺时针）
+	Text string `json:"text"` // 原文行文本
+	// Box 文本框坐标。**现役 ocr_recognize.py 给的是四值矩形 [x0,y0,x1,y1]**
+	// （`boxes_out.append([x0, y0, x1, y1])`，检测腿 _det_boxes 的产出形态）；
+	// 八值四点（多边形，顺时针）也在渲染脚本的收款范围内，两种形态都可用。
+	//
+	// ★ 2026-10-17 校正：本字段注释原写「四点坐标 [x1,y1,…,y4]（顺时针）」，而渲染脚本
+	// 当时按那句写死 `len(box) < 8` 判坏行 ⇒ 四值框**每行都被跳过** ⇒ 译后图＝重编码的原图
+	// （工单与即时翻译两条链同时坏，用户报障）。判据已改为「≥4 且坐标数成对」，注释与实现对齐。
+	Box []float64 `json:"box"`
 }
 
 // ===== 提取期坐标缓存（形制与语义照 asr.go 的 asrCueCache，不再重复论证） =====

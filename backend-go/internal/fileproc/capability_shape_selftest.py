@@ -21,7 +21,7 @@
 任一失败打 `LEG <id> FAIL <原因>` 并退 1。Go 侧同时核「腿的**全集**都在位」——
 有人删掉一条腿（或让它恒过）时，那一行 LEG 消失即红，这是本锁的射程自证。
 
-射程（13 条腿，逐条点名）：
+射程（18 条腿，逐条点名）：
   L01 词典装载：blank 恒占类 0（文件自带空首行时不重复前插）
   L02 词典补齐：类别数比表长时逐位补空格
   L03 CTC 解码：跳类 0＋连续重复去重＋就地补齐到类别数（表长于类别数不许截断）
@@ -35,12 +35,19 @@
   L11 ASR 读 wav：8-bit（无符号、零点 128）＋多声道取第一声道
   L12 ASR 读 wav：不认识的形态如实报错（24-bit⇒Unsupported／非 wav⇒AudioCorrupt）
   L13 ASR 读 wav：将来若 sherpa_onnx 又导出 read_wave 仍优先用它，并把 int16 量级归一
+  L14 图片回填：四值矩形框 [x0,y0,x1,y1] 必须被采纳并绘制（2026-10-17 真缺陷：旧判据按八值跳过全部行）
+  L15 图片回填：八值四点框（历史/多边形检测器形态）同样被采纳
+  L16 图片回填：坏行（坐标不成对/缺失）跳过且如实报 NothingPainted，不产出"与原文无异"的图
+  L17 图片回填：逐字挑字体——拉丁字落到有拉丁字形的字体上（本批"英文画成豆腐块"的根治腿）
+  L18 图片回填：绘制真的走逐字挑选（挑字函数写对但没被调用＝白修）
 
 环境变量（**只给 Go 侧反证用**，把被测对象换成一份变异副本，证明这些腿真的会红）：
   CAPSHAPE_OCR_MODULE=<path>  指定被测的 ocr_recognize.py 副本
   CAPSHAPE_ASR_MODULE=<path>  指定被测的 asr_transcribe.py 副本
+  CAPSHAPE_IMG_MODULE=<path>  指定被测的 ocr_translate_image.py 副本
 """
 import importlib.util
+import json
 import os
 import struct
 import sys
@@ -411,6 +418,136 @@ def leg_l13_prefers_sherpa_reader_when_present():
 
         s2, _ = ASR._read_wave(str(p), AlreadyFloat)
         assert abs(float(s2[0]) - 0.25) < 1e-6, "浮点量级被二次缩放：%r" % (s2,)
+
+
+# ------------------------------------------------------------------ 图片原位回填腿（⭐ 本批）
+
+IMG = _load_module("img_under_test", "CAPSHAPE_IMG_MODULE", HERE / "ocr_translate_image.py")
+
+
+def _blank_png(path, w=320, h=120):
+    """造一张**纯白**原图：空白重编码后仍是 0 个墨点，于是"有墨"＝真有绘制发生。"""
+    from PIL import Image
+    Image.new("RGB", (w, h), "white").save(str(path))
+
+
+def _ink_count(path):
+    """数非白像素（判「有没有真画上去」最干净的一把尺子：重编码的原图恒为 0）。"""
+    import numpy as np
+    from PIL import Image
+    arr = np.asarray(Image.open(str(path)).convert("RGB"))
+    return int((arr < 250).any(axis=2).sum())
+
+
+def _render(src, out, lines):
+    """跑一次 render 子命令（行数据落临时 json，与 Go 侧同一调用形态）。"""
+    lp = Path(str(out) + ".json")
+    lp.write_text(json.dumps(lines, ensure_ascii=False), encoding="utf-8")
+    return IMG.cmd_render(str(src), str(out), str(lp))
+
+
+class _FakeFont:
+    """假字体：只回答「这个码位有没有字形」（真字体的覆盖情况随机器而异，判据必须确定）。
+
+    位图刻意用两个**不同**的数组表示「有/无」：`_has_glyph` 靠与 `.notdef` 哨兵逐字节比，
+    这里 absent 恒为全零（＝哨兵），present 恒为全 255。
+    """
+
+    def __init__(self, glyphs, size=20):
+        self.glyphs = set(glyphs)
+        self.size = size
+
+    def getmask(self, ch):
+        import numpy as np
+        if ch in self.glyphs:
+            return np.full((4, 4), 255, dtype=np.uint8)
+        return np.zeros((4, 4), dtype=np.uint8)
+
+    def getlength(self, ch):
+        return 10.0
+
+
+@leg("L14")
+def leg_l14_four_value_box_is_painted():
+    """★ 2026-10-17 真缺陷：`ocr_recognize.py` 吐的是**四值矩形** `[x0,y0,x1,y1]`，
+    而旧 guard 写的是 `len(box) < 8`（想当然按「四点八坐标」）⇒ 每一行都被 `continue` 跳过
+    ⇒ 译文图＝重编码的原图（尺寸变了、内容还是原文，看着像「翻过了」）。
+    判据用空白图：只要有墨，就证明这一行被采纳并绘制了（纯白重编码恒 0 墨点）。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        _blank_png(src)
+        rc = _render(src, out, [{"text": "原文", "box": [10, 10, 300, 100], "tran": "译文测试"}])
+        assert rc == 0, "render 退出码 %d（四值框被当坏行跳过了）" % rc
+        assert _ink_count(out) > 0, "四值矩形框没被采纳 ⇒ 译文图与重编码的原图无异（本批缺陷形态）"
+
+
+@leg("L15")
+def leg_l15_eight_value_quad_box_still_painted():
+    """八值四点框（历史/未来多边形检测器的形态）必须同样被采纳——两种形态都收，不许二选一。"""
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        _blank_png(src)
+        quad = [40, 20, 300, 20, 300, 100, 40, 100]
+        rc = _render(src, out, [{"text": "原文", "box": quad, "tran": "译文测试"}])
+        assert rc == 0, "render 退出码 %d（八值四点框被当坏行跳过了）" % rc
+        assert _ink_count(out) > 0, "八值四点框没被采纳"
+
+
+@leg("L16")
+def leg_l16_malformed_box_is_skipped_not_painted():
+    """坏行（坐标不成对）必须**跳过**并如实报 NothingPainted——
+    直接拿 [1,2,3] 去算矩形会画出一个歪框；画出来还不如不画（客户看到的是一张「像翻过了」的坏图）。"""
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        _blank_png(src)
+        rc = _render(src, out, [{"text": "原文", "box": [1, 2, 3], "tran": "译文"}])
+        assert rc != 0, "坏行必须让整张图判失败（否则上游会把它当成功产物交给客户）"
+        assert not out.exists(), "NothingPainted 档不许落盘产物"
+
+
+@leg("L17")
+def leg_l17_per_char_font_fallback():
+    """逐字挑字体：拉丁字必须落到**有拉丁字形**的那一档上。
+
+    随包 `DroidSansFallbackFull.ttf` 只覆盖中日韩（实测 `'A'/'1'/'?'` 全落到 `.notdef`），
+    只拿它画英文 ⇒ 译文图整片豆腐块——这是本批另一条真缺陷，根治腿就是这条逐字回落。
+    """
+    cjk, latin = _FakeFont("中文，"), _FakeFont("ABC1?")
+    assert IMG._has_glyph(latin, "A") and not IMG._has_glyph(cjk, "A"), \
+        "哨兵比对法失效（分不出「有字形」与「不存在时的兜底方块」）"
+    chain = [cjk, latin]
+    assert IMG._pick_font(chain, "A") is latin, "拉丁字没被挑到有拉丁字形的字体上（英文会画成豆腐块）"
+    assert IMG._pick_font(chain, "中") is cjk, "汉字应落到链首的 CJK 字体"
+    assert IMG._pick_font(chain, " ") is cjk, "空白字符走链首（只为占位宽度）"
+    assert IMG._pick_font(chain, "ش") is cjk, "谁都没这个字形时回落链首，不许抛"
+
+
+@leg("L18")
+def leg_l18_draw_uses_per_char_picker():
+    """挑字函数写对但**没被绘制调用**＝白修（L17 会一路绿）。
+
+    隔离手法：把量宽那条路径（`_measure`）换成桩，于是绘制期间唯一会碰 `_pick_font`
+    的就是 `_draw_text` 本身——它必须逐字调用，而不是「整行一个字体」。
+    """
+    seen = []
+    orig_pick, orig_measure = IMG._pick_font, IMG._measure
+    IMG._measure = lambda chain, text: 10.0 * len(text)
+
+    def spy(chain, ch):
+        seen.append(ch)
+        return orig_pick(chain, ch)
+
+    IMG._pick_font = spy
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            src, out = Path(d) / "s.png", Path(d) / "o.png"
+            _blank_png(src)
+            rc = _render(src, out, [{"text": "原文", "box": [10, 10, 300, 100], "tran": "A中"}])
+            assert rc == 0, "render 退出码 %d" % rc
+    finally:
+        IMG._pick_font, IMG._measure = orig_pick, orig_measure
+    assert "A" in seen and "中" in seen, "绘制没走逐字挑字体（只见到 %r）⇒ 挑字腿形同虚设" % (seen,)
 
 
 def main() -> int:

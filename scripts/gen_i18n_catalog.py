@@ -555,6 +555,19 @@ T.update({
 "语音产物读取失败": "Failed to read the audio result",
 })
 
+# ★ 2026-10-17 第二批（bug8 即时翻译「图片」入口）——与上面那一节同源同风格：
+#   图片与录音是同一族（multipart 上传 + 服务端暂存 + 格式不可解析三档），
+#   文案刻意为「图片」而非通用「文件」，让访客知道该换的是哪一件。
+#   漏补的后果是 lang_middleware_test 的 TestAPICnMessageLiteralsCovered 当场红
+#   （它按 internal/api 的 apierrors.New 字面量全集扫，写死中文不在表里即判错）。
+T.update({
+"请以 multipart/form-data 提交图片": "Please submit the image as multipart/form-data",
+"缺少图片文件": "No image file was provided",
+"图片数据格式无法解析（或超出上限）": "Could not decode the image (or it exceeds the size limit)",
+"图片暂存失败": "Failed to stage the image on the server",
+"缺少目标语种": "Missing target language",
+})
+
 import re, sys
 sys.path.insert(0, '/tmp')
 

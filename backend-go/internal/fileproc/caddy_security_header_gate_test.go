@@ -12,7 +12,15 @@
 //	③ CSP 缺 `media-src` ⇒ 回落 `default-src 'self'` ⇒ 译文朗读的 blob: 音频 URL 被拒
 //	  ⇒ 点朗读无声、也不报错（三态回 idle）。修法＝`media-src 'self' blob:`。
 //
-// 三条修法在**三份配置**里各写一遍（主站 conf / 租户品牌域 conf / 演示站生成脚本），
+//	★ 2026-10-17 第二批（同批用户报障：登录前页面 CSP 报错）再加三条——都是 Cloudflare 挑战平台/Turnstile
+//	对**受保护页面**的硬要求（官方口径见 developers.cloudflare.com/turnstile/reference/content-security-policy
+//	与 cloudflare-docs#17786；缺 'unsafe-eval' 时托管挑战可能整页白屏、把登录整条拦住）：
+//	④ CSP `script-src` 增 `'unsafe-eval'`：挑战平台托管脚本用字符串求值（与 ② 的 'wasm-unsafe-eval' 分工不同：
+//	  那条只服务自家 WASM 编译，这条为第三方挑战放行 JS eval）；
+//	⑤ CSP 增 `worker-src 'self' blob:`：挑战平台起 worker；
+//	⑥ CSP `connect-src` 增 `data:`：挑战平台 attestation 走 fetch('data:…')。
+//
+// 这六条修法在**三份配置**里各写一遍（主站 conf / 租户品牌域 conf / 演示站生成脚本），
 // 少改一份就是「主站能录音、品牌域不能」或「下次 bootstrap 写回旧形态」，所以射程按
 // 「哪些文件里有 Permissions-Policy / Content-Security-Policy」**派生**，不写死名单。
 //
@@ -34,13 +42,16 @@ import (
 
 // 被断言的靶子字面量——与配置里写的**逐字符同源**，改名/改值式破坏必须当场红。
 const (
-	secPPOK       = "microphone=(self)"       // 期望形态：仅本域可用
-	secPPBad      = "microphone=()"           // 事故形态：全禁
-	secCSPWasm    = "'wasm-unsafe-eval'"      // 允许 WASM 编译的专用关键字
-	secCSPMedia   = "media-src 'self' blob:"  // 译文朗读的 blob 音频
-	secCSPHeader  = "Content-Security-Policy" //
-	secPPHeader   = "Permissions-Policy"      //
-	secAssistPath = "/assist-api/*"           // 豁免：挂件 CSP 不需要这三项能力
+	secPPOK       = "microphone=(self)"              // 期望形态：仅本域可用
+	secPPBad      = "microphone=()"                  // 事故形态：全禁
+	secCSPWasm    = "'wasm-unsafe-eval'"             // 允许 WASM 编译的专用关键字
+	secCSPMedia   = "media-src 'self' blob:"         // 译文朗读的 blob 音频
+	secCSPEval    = "'unsafe-eval'"                  // ★ 2026-10-17 二批：CF 挑战平台/Turnstile 的字符串求值
+	secCSPWorker  = "worker-src 'self' blob:"        // ★ 同批：挑战平台的 worker
+	secCSPConnDat = "connect-src 'self' blob: data:" // ★ 同批：挑战平台 attestation 的 data: 通道
+	secCSPHeader  = "Content-Security-Policy"        //
+	secPPHeader   = "Permissions-Policy"             //
+	secAssistPath = "/assist-api/*"                  // 豁免：挂件 CSP 不需要这几项能力
 )
 
 // caddySecurityScopedFiles 按「文件里有没有 Permissions-Policy 或 Content-Security-Policy」
@@ -84,7 +95,10 @@ func caddySecurityScopedFiles(t *testing.T) map[string]string {
 //	L1 任何 Permissions-Policy 行出现 `microphone=()` ⇒ 麦克风被全禁（本次事故形态）；
 //	L2 任何 Permissions-Policy 行缺 `microphone=(self)` ⇒ 放行腿不在（漏改/被回改）；
 //	L3 任何**非挂件** CSP 行的 script-src 缺 'wasm-unsafe-eval' ⇒ WASM 编译被 CSP 拦；
-//	L4 任何**非挂件** CSP 行缺 `media-src 'self' blob:` ⇒ 朗读 blob 音频被拒。
+//	L4 任何**非挂件** CSP 行缺 `media-src 'self' blob:` ⇒ 朗读 blob 音频被拒；
+//	L5 任何**非挂件** CSP 行的 script-src 缺 'unsafe-eval' ⇒ CF 挑战/Turnstile 的字符串求值被拦；
+//	L6 任何**非挂件** CSP 行缺 `worker-src 'self' blob:` ⇒ 挑战平台的 worker 被兜住；
+//	L7 任何**非挂件** CSP 行的 connect-src 缺 `data:` ⇒ 挑战平台 attestation 被拦。
 //
 // 挂件豁免＝行内含 /assist-api/*；但整份配置里若一条非挂件 CSP 都没有（L3/L4 靶子为空）
 // 也判问题——射程归零时绿灯没有意义（同 AGENTS「判据射程不足要报『锚点漂了』」）。
@@ -110,6 +124,20 @@ func caddySecurityWiring(rel, content string) []string {
 			}
 			if !strings.Contains(l, secCSPMedia) {
 				problems = append(problems, rel+": CSP 缺「"+secCSPMedia+"」（L4）⇒ 译文朗读的 blob 音频被拒")
+			}
+			// ★ L5/L6/L7（2026-10-17 二批，用户报障「登录前页面 CSP 报错」）：
+			//   CF 挑战平台/Turnstile 的托管脚本用字符串求值、起 worker、并以 fetch('data:…') 做 attestation；
+			//   受保护页面缺任一条都会在控制台报被拦（托管挑战还可能整页白屏，cloudflare-docs#17786）。
+			//   ⚠️ 判 'unsafe-eval' 用**带引号的整词**：'wasm-unsafe-eval' 里没有 "'unsafe-eval'" 这个子串
+			//   （引号前是 '-'），所以两者互不冒充——别把它写成裸词 unsafe-eval（那样 L5 会被 L3 那条喂饱）。
+			if !strings.Contains(l, secCSPEval) {
+				problems = append(problems, rel+": CSP script-src 缺 "+secCSPEval+"（L5）⇒ CF 挑战/Turnstile 的 eval 被拦")
+			}
+			if !strings.Contains(l, secCSPWorker) {
+				problems = append(problems, rel+": CSP 缺「"+secCSPWorker+"」（L6）⇒ 挑战平台的 worker 被 default-src 兜住")
+			}
+			if !strings.Contains(l, secCSPConnDat) {
+				problems = append(problems, rel+": CSP connect-src 缺 data:（L7）⇒ 挑战平台 attestation 被 connect-src 拦")
 			}
 		}
 	}
@@ -160,7 +188,10 @@ func replaceInCodeLine(s, old, nw string) string {
 //
 //	M1 把 microphone=(self) 改回 microphone=() ⇒ L1/L2 必须出声；
 //	M2 摘掉 CSP 里的 'wasm-unsafe-eval' ⇒ L3 必须出声；
-//	M3 摘掉 CSP 里的 media-src 'self' blob: ⇒ L4 必须出声。
+//	M3 摘掉 CSP 里的 media-src 'self' blob: ⇒ L4 必须出声；
+//	M4 摘掉 CSP 里的 'unsafe-eval' ⇒ L5 必须出声；
+//	M5 摘掉 CSP 里的 worker-src 'self' blob: ⇒ L6 必须出声；
+//	M6 把 connect-src 的 data: 摘掉 ⇒ L7 必须出声。
 //
 // 每一枚都必须让**同一个判据函数**出声，且原件先证明全清（否则变异体的红说明不了任何事）。
 func TestCaddySecurityHeadersCounterproof(t *testing.T) {
@@ -188,6 +219,27 @@ func TestCaddySecurityHeadersCounterproof(t *testing.T) {
 			target: secCSPMedia,
 			mut:    func(s string) string { return replaceInCodeLine(s, secCSPMedia+"; ", "") },
 			want:   "L4",
+		},
+		{
+			name:   "M4 摘掉 CSP 的 'unsafe-eval'（CF 挑战的字符串求值）",
+			target: secCSPEval,
+			mut:    func(s string) string { return replaceInCodeLine(s, secCSPEval+" ", "") },
+			want:   "L5",
+		},
+		{
+			name:   "M5 摘掉 CSP 的 worker-src",
+			target: secCSPWorker,
+			mut:    func(s string) string { return replaceInCodeLine(s, secCSPWorker+"; ", "") },
+			want:   "L6",
+		},
+		{
+			name:   "M6 把 connect-src 的 data: 摘掉",
+			target: secCSPConnDat,
+			mut: func(s string) string {
+				return replaceInCodeLine(s, "connect-src 'self' blob: data: https://challenges.cloudflare.com",
+					"connect-src 'self' blob: https://challenges.cloudflare.com")
+			},
+			want: "L7",
 		},
 	}
 	for rel, content := range scoped {

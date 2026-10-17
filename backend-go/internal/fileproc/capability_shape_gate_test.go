@@ -21,7 +21,7 @@
 //	   零模型权重、零网络、零 GPU，因此 CI 与本机都能跑）；本文件是它的**接线与射程**。
 //	② 射程自证＝**逐腿变异**：每条腿各配一枚把真实实现改坏的副本（喂给同一个自证入口），
 //	   要求「那一号腿必须红」。AGENTS §三「判据级断言代替不了守卫级」在这里的形态是：
-//	   光看 13 行 `LEG Lxx OK` 不能证明这些腿有射程——摘掉一条腿的实现而全绿，才是本锁要抓的事。
+//	   光看这些行 `LEG Lxx OK` 不能证明这些腿有射程——摘掉一条腿的实现而全绿，才是本锁要抓的事。
 //	③ 全集锁：Go 侧腿清单与自证脚本里的 `@leg("Lxx")` 注册**双向等值**，
 //	   删腿（那行 LEG 消失）与加腿不登记（清单不等值）都当场红。
 //
@@ -49,12 +49,14 @@ const (
 	capShapeSelftestFile = "capability_shape_selftest.py"
 	capShapeOcrFile      = "ocr_recognize.py"
 	capShapeAsrFile      = "asr_transcribe.py"
+	capShapeImgFile      = "ocr_translate_image.py" // ★ 2026-10-17 批：图片原位回填的绘制壳
 )
 
 // capShapeLegs 是腿的**全集**清单，与自证脚本里的 @leg("Lxx") 注册双向等值（Test ③）。
 var capShapeLegs = []string{
 	"L01", "L02", "L03", "L04", "L05", "L06", "L07",
 	"L08", "L09", "L10", "L11", "L12", "L13",
+	"L14", "L15", "L16", "L17", "L18",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -66,7 +68,8 @@ type capShapeMutation struct {
 	why      string // 这一枚对应本批哪一条真缺陷（失败信息里要能读出病因）
 }
 
-// capShapeMutations 逐腿一枚，共 13 枚——**每条腿都有且只有自己的实现被改坏时会红**。
+// capShapeMutations 逐腿一枚（L01~L13 各一枚；L14~L18 见下方 ★ 2026-10-17 批）——
+// **每条腿都有且只有自己的实现被改坏时会红**。
 // 锚点全部取自仓库真文本（改名式破坏必须当场红，见 Test ② 的 src.count==1 判据）。
 var capShapeMutations = []capShapeMutation{
 	{"L01", capShapeOcrFile, `words = [""] + lines`, `words = lines + [""]`,
@@ -98,6 +101,21 @@ var capShapeMutations = []capShapeMutation{
 		"24-bit 被当 16-bit 硬解（下游静默吃半截样本，比报错更坏）"},
 	{"L13", capShapeAsrFile, `reader = getattr(sherpa_module, "read_wave", None)`, `reader = None`,
 		"read_wave 优先腿被摘（将来版本又导出它时不再走模型侧同款解析）"},
+	// ===== ★ 2026-10-17 批：图片原位回填（L14~L18）。两条真缺陷（框判据按八值、字体缺拉丁字形）
+	// 都是「运行期形状错」——健康面全绿、日志零红，只有把译文图打开才看得出。
+	{"L14", capShapeImgFile, `if not _valid_box(box):`, `if len(box) < 8:`,
+		"退回旧判据：四值矩形被当坏行跳过 ⇒ 译文图＝重编码的原图（本批用户报障形态）"},
+	{"L15", capShapeImgFile, `return isinstance(box, (list, tuple)) and len(box) >= 4 and len(box) % 2 == 0`,
+		`return isinstance(box, (list, tuple)) and len(box) == 4`,
+		"只收四值框、把八值四点当坏行（换回多边形检测器时整张图不画）"},
+	{"L16", capShapeImgFile, `return isinstance(box, (list, tuple)) and len(box) >= 4 and len(box) % 2 == 0`,
+		`return True`,
+		"坏行校验被摘（坐标不成对也去算矩形，画出歪框还当成功产物交出去）"},
+	{"L17", capShapeImgFile, "        if _has_glyph(f, ch):", "        if True:",
+		"逐字挑字体退化成「永远用链首」（随包 CJK 字体画英文字母＝整片豆腐块）"},
+	{"L18", capShapeImgFile, "        f = _pick_font(chain, ch)\n        draw.text((x, y), ch, font=f, fill=fill)",
+		"        f = chain[0]\n        draw.text((x, y), ch, font=f, fill=fill)",
+		"绘制不再逐字挑字体（挑字函数写对却没人调用＝白修）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
@@ -161,7 +179,7 @@ func capShapeReadings(stdout string) (pass, fail []string, detail map[string]str
 	return
 }
 
-// TestCapabilityShapeSelftestGreen ① 真件必须 13 条腿全绿，且**读数形状本身合规**：
+// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 18 条）全绿，且**读数形状本身合规**：
 // 每腿恰好一行、没有 FAIL、末行 CAPSHAPE_ALL_OK=1。
 // 「少一行」也算红——那是腿被删掉的形态，不是「剩下的都过了」。
 func TestCapabilityShapeSelftestGreen(t *testing.T) {
@@ -227,8 +245,24 @@ func TestCapabilityShapeLegListsAgree(t *testing.T) {
 	}
 }
 
+// linkCapShapeAssets 把仓库的 assets/ 目录链接进变异夹具目录。
+// ★ 为什么需要：`ocr_translate_image.py` 用「脚本自身所在目录 / assets/fonts」定位随包字体，
+// 而变异夹具是把脚本**拷到临时目录**跑的——不链接就会以「缺字体」判红，
+// 那红来自夹具形态、不来自变异（正向对照会当场把它抓出来，本批首跑正是这样）。
+// 链接而不是整棵拷贝：fonts 那棵树数 MB，几十枚变异各拷一份纯属浪费。
+func linkCapShapeAssets(t *testing.T, dir string) {
+	t.Helper()
+	abs, err := filepath.Abs("assets")
+	if err != nil {
+		t.Fatalf("取 assets 绝对路径失败：%v", err)
+	}
+	if err := os.Symlink(abs, filepath.Join(dir, "assets")); err != nil && !os.IsExist(err) {
+		t.Fatalf("链接 assets 到夹具目录失败：%v", err)
+	}
+}
+
 // TestCapabilityShapeMutationsBreakTheirLegs ② 射程自证：逐腿把真实实现改坏，
-// 要求**那一号腿判红**且退出码非零。这是本文件的核心——没有它，13 行绿灯
+// 要求**那一号腿判红**且退出码非零。这是本文件的核心——没有它，那一串绿灯
 // 只能证明「脚本跑通了」，证明不了「这些断言真的在守着形状」。
 //
 // 变异副本落在临时目录、经环境变量指向（同 §三 那条「不许就地改源」：
@@ -239,7 +273,7 @@ func TestCapabilityShapeMutationsBreakTheirLegs(t *testing.T) {
 	// 正向对照：把两份脚本**原样**拷进临时目录并指向副本，必须仍全绿。
 	// 它证明「红来自变异」而不是「红来自拷贝这件事本身」（路径／assets 定位／编码都可能自己把腿打断）。
 	control := t.TempDir()
-	for _, rel := range []string{capShapeOcrFile, capShapeAsrFile} {
+	for _, rel := range []string{capShapeOcrFile, capShapeAsrFile, capShapeImgFile} {
 		raw, err := os.ReadFile(rel)
 		if err != nil {
 			t.Fatalf("读 %s 失败：%v", rel, err)
@@ -248,9 +282,11 @@ func TestCapabilityShapeMutationsBreakTheirLegs(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	linkCapShapeAssets(t, control)
 	stdout, code := runCapShape(t, py, map[string]string{
 		"CAPSHAPE_OCR_MODULE": filepath.Join(control, capShapeOcrFile),
 		"CAPSHAPE_ASR_MODULE": filepath.Join(control, capShapeAsrFile),
+		"CAPSHAPE_IMG_MODULE": filepath.Join(control, capShapeImgFile),
 	})
 	if code != 0 || !strings.Contains(stdout, "CAPSHAPE_ALL_OK=1") {
 		t.Fatalf("变异夹具的正向对照不绿（exit=%d）⇒ 拷贝机制自己就在打断腿，反证读数全部不可信：\n%s", code, stdout)
@@ -274,14 +310,21 @@ func TestCapabilityShapeMutationsBreakTheirLegs(t *testing.T) {
 			if err := os.WriteFile(dst, []byte(strings.Replace(text, m.old, m.newValue, 1)), 0o644); err != nil {
 				t.Fatal(err)
 			}
+			linkCapShapeAssets(t, dir)
 			env := map[string]string{}
 			switch m.file {
 			case capShapeOcrFile:
 				env["CAPSHAPE_OCR_MODULE"] = dst
 				env["CAPSHAPE_ASR_MODULE"] = filepath.Join(control, capShapeAsrFile)
+				env["CAPSHAPE_IMG_MODULE"] = filepath.Join(control, capShapeImgFile)
 			case capShapeAsrFile:
 				env["CAPSHAPE_ASR_MODULE"] = dst
 				env["CAPSHAPE_OCR_MODULE"] = filepath.Join(control, capShapeOcrFile)
+				env["CAPSHAPE_IMG_MODULE"] = filepath.Join(control, capShapeImgFile)
+			case capShapeImgFile:
+				env["CAPSHAPE_IMG_MODULE"] = dst
+				env["CAPSHAPE_OCR_MODULE"] = filepath.Join(control, capShapeOcrFile)
+				env["CAPSHAPE_ASR_MODULE"] = filepath.Join(control, capShapeAsrFile)
 			default:
 				t.Fatalf("未知被测脚本 %q", m.file)
 			}

@@ -7,6 +7,10 @@
 //	② **数量严格相等才敢配对**：脚本侧 boxes 与 lines 数量对不上时宁可不缓存。
 //	③ **择优产出**：RenderTranslatedImage 在缺依赖/缺坐标/缺脚本时必须返回**错误**而不是
 //	   产出半张图——调用方（engine）据此退回"仅译文 .md"，译文资产不丢。
+//	④ **框形态由脚本决定、缓存键与提取器同形**（★ 2026-10-17 本批补）：
+//	   现役 ocr_recognize.py 给四值矩形 [x0,y0,x1,y1]，八值四点也在收款范围内；
+//	   Go 侧只做原样转交（多写一层"必须八值"就是本批缺陷的来源），
+//	   而缓存键必须先 trim，否则首尾带空格的行取不到译文、被静默保留原文。
 //
 // =============================================
 package fileproc
@@ -14,6 +18,7 @@ package fileproc
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -189,6 +194,62 @@ func TestRenderTranslatedImageGuards(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.png")
 	if err := RenderTranslatedImage(nil, "/tmp/whatever.png", out, nil); err == nil {
 		t.Fatal("OCR 不可用时应返回错误，让调用方退回仅译文 .md")
+	}
+}
+
+// TestRenderErrorVariantsAreFriendly ★ 2026-10-17：把原位回填脚本的失败档位收进 friendlyOcrError。
+//
+// 为什么值得一条锁：这些档位**全部**只在"渲染不出图"时出现，而渲染是择优产出
+// （engine 只记一行 WARN 就退回仅译文 .md）——档位不翻人话，日志里就只剩脚本 stderr 原文，
+// 下一位排查的人看不出是"缺字体"还是"坐标没缓存住"，只能去读 python 源码。
+// 本锁不含任何外部依赖（纯映射函数），所以它在 CI 与本机都真跑。
+func TestRenderErrorVariantsAreFriendly(t *testing.T) {
+	cases := map[string]string{
+		"NothingPainted": "图片原位回填未产出",
+		"Font":           "没有可用字体",
+		"Lines":          "行数据读取失败",
+		"Draw":           "绘制阶段出错",
+		"Out":            "产物写入失败",
+	}
+	for variant, want := range cases {
+		got := friendlyOcrError("ERR:" + variant + ":细节文案（不该出现在话术里）")
+		if !strings.Contains(got, want) {
+			t.Errorf("档位 %s 没翻成人话：got=%q，want 含 %q ⇒ 运维只能去读 python 源码", variant, got, want)
+		}
+		if strings.Contains(got, "细节文案") {
+			t.Errorf("档位 %s 把脚本原始细节抛给了用户话术：%q", variant, got)
+		}
+	}
+}
+
+// TestOcrBoxAcceptsFourValueRect ③ 框形态：**现役 ocr_recognize.py 给的是四值矩形**
+//
+//	[x0,y0,x1,y1]（见其 boxes_out.append），八值四点也在收款范围内。
+//	本锁把"配对后缓存下来的就是那两个坐标数"钉住——渲染脚本侧若又按"必须八值"判坏行，
+//	python 那条腿（capability_shape_selftest.py 的 L14/L15）会红，这里守的是 Go 侧不擅自改写形态。
+func TestOcrBoxAcceptsFourValueRect(t *testing.T) {
+	resetImageBoxCache(t)
+	path := "/tmp/rect-form.png"
+	_ = os.Remove(path)
+	e := &Extractor{}
+	// 四值矩形（现役形态）；行文本首尾带空格，用来钉"缓存键必须与提取器同形（trim 过）"。
+	out := `{"text":"  第一行  \n第二行","boxes":[[1,2,30,12],[1,20,30,30]],"confidence":0.9}`
+	if err := parseOcrJSON(out, e, path); err != nil {
+		t.Fatalf("parseOcrJSON 失败: %v", err)
+	}
+	boxes := ImageBoxes(path)
+	if len(boxes) != 2 {
+		t.Fatalf("应缓存 2 条配对，实际 %+v", boxes)
+	}
+	if len(boxes[0].Box) != 4 {
+		// 数量交给渲染脚本判断，Go 侧只负责原样转交（多写一层"必须八值"就是本批缺陷的来源）。
+		t.Errorf("Go 侧不该改写框形态：实读 %d 个坐标 %v", len(boxes[0].Box), boxes[0].Box)
+	}
+	if boxes[0].Text != "第一行" || boxes[1].Text != "第二行" {
+		t.Errorf("缓存键必须与提取器同形（trim 后）：实读 %q / %q ⇒ 首尾带空格的行会取不到译文", boxes[0].Text, boxes[1].Text)
+	}
+	if e.Texts == nil || len(e.Texts) != 2 {
+		t.Fatalf("提取器文本数不符：%+v", e.Texts)
 	}
 }
 

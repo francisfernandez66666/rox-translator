@@ -41,7 +41,7 @@ ID="$MODE"
 case "$ID" in ''|*[!0-9]*) echo "ID 必须是数字"; exit 2 ;; esac
 
 FAIL=0
-echo "===== D1 目标行存在性（id=$ID）====="
+echo "===== D1 目标行存在性（id=${ID}）====="
 n=$(Q "select count(*) from api_keys where id=$ID;")
 echo "  count(id=$ID)=$n"
 if [ "$n" = "0" ]; then echo "  OK 该行已不在库里（删除确实落库了）"; else echo "  READOUT 该行仍在库里（删前跑＝正常基线；删后跑＝没删掉）"; fi

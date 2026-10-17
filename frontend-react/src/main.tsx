@@ -38,6 +38,8 @@ import ReactDOM from 'react-dom/client'
 //   机械锁＝src/lib/navShim.test.ts（A 分诊闭包 + B 公开面全量闭包里 router 导入者为 0）
 //   ＋换源前 scripts/check_frontend_tar.sh 的 T8（入口 raw ≤420,000 B；现读数 339,296 B）。
 const PublicRoot = React.lazy(() => import('./PublicRoot'))
+// 登录态与后台走的那一片（含 react-router、工作台、管理台面板）；
+// 带 token 或非公开路径一律走它，见下方 pickEntry 的分诊口径。
 const App = React.lazy(() => import('./App'))
 // 启动/页面加载占位：与 index.html 首屏骨架同貌（同一份 CSS），让三段视觉连续；
 // **不能给 null**——哨兵按 `#root` 有没有子节点判"界面起没起来"，空着会被误判成没加载起来
@@ -152,6 +154,8 @@ installChunkRecovery()
 //   `getAuthToken()` 读的是 api/core 的内存态（非现场读存储），见上方 import 处的注释。
 // ============================================================================
 const PUBLIC_PATHS = new Set(['/', '/pricing', '/compare', '/login', '/register'])
+/** 入口分诊：没有 token 且落在公开路径才走 PublicRoot，其余（含有 token 的任何路径、/admin）走 App。
+ *  纯内存判定（getAuthToken 不读现场存储），所以它在首帧前就能算出唯一答案。 */
 function pickEntry(): typeof App {
   return !getAuthToken() && PUBLIC_PATHS.has(window.location.pathname) ? PublicRoot : App
 }

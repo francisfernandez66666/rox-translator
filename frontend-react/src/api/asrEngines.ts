@@ -113,6 +113,30 @@ export class ServerAsrEngine implements AsrEngine {
 // ---------------------------------------------------------------------------
 const WASM_BASE = '/wasm/sherpa-onnx'
 
+// 端侧资产体积下限（判「回的是真件还是 SPA 兜底页」的第二把尺子）：
+//   .wasm 真件 ≈13MB（压缩后也有数 MB），.data 真件 ≈199MB；缺件时 SPA 兜底回的是
+//   **整页 index.html**（几十 KB 且 content-type=text/html）。两把尺子（非 HTML ＋ 体积）
+//   一起用，单靠 status 会被 200 的兜底页骗过去。
+const WASM_MIN_BYTES = 1_000_000
+const WASM_DATA_MIN_BYTES = 10_000_000
+
+// assetReady 判「这个 URL 回的是真资产，不是 SPA 兜底页」。
+// ★ 为什么不能只判 `res.ok`：spa.go 对**不存在的路径**会回整页 index.html 且状态码仍是 200
+//   （AGENTS §一·6 那族「文件在仓库里 ≠ 线上点得开」），于是「缺 .data」在旧判据下
+//   看起来是「资产就绪」⇒ 选中端侧 WASM ⇒ worker 拿 HTML 当模型包、识别器建不起来
+//   ⇒ 点录音既不弹麦克风授权也不出声（用户报障「语音按钮无法录入」的真身）。
+//   判据＝2xx ＋ content-type 不是 text/html ＋ content-length 达下限。
+//   ⚠️ 这是**可用性探测**、不是下载校验：真件的字节魔数由部署侧
+//   check_frontend_tar.sh / fetch_sherpa_assets.sh 的 sha256 负责，这里只回答「能不能选它」。
+async function assetReady(url: string, minBytes: number): Promise<boolean> {
+  const res = await fetch(url, { method: 'HEAD' })
+  if (!res.ok) return false
+  const ct = (res.headers.get('content-type') || '').toLowerCase()
+  if (ct.includes('text/html')) return false // SPA 兜底页：缺件时的 200 假绿形态
+  const len = Number(res.headers.get('content-length') || '0')
+  return len >= minBytes
+}
+
 // 端侧 WASM 引擎：资产（manifest/wasm/.data）三件齐了才可选，否则 isAvailable=false。
 export class WasmAsrEngine implements AsrEngine {
   readonly kind = 'wasm' as const
@@ -120,21 +144,17 @@ export class WasmAsrEngine implements AsrEngine {
   async isAvailable(): Promise<boolean> {
     if (!micSupported()) return false
     try {
-      // 1) manifest 必须存在（且能解析）
+      // 1) manifest 必须存在（且能解析）。兜底页是 HTML ⇒ .json() 必抛 ⇒ 这里已天然判死。
       const mres = await fetch(`${WASM_BASE}/manifest.json`)
       if (!mres.ok) return false
       const m = await mres.json().catch(() => null)
       if (!m || !m.defaultModel || !m.models) return false
       // 2) 真实 wasm 运行时必须落盘（否则 worker new 出来也跑不起推理）
-      const wasmOk = await fetch(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.wasm`, {
-        method: 'HEAD',
-      })
-      if (!wasmOk.ok) return false
+      if (!(await assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.wasm`, WASM_MIN_BYTES))) {
+        return false
+      }
       // 3) 官方预载模型包 .data 必须落盘（模型烘焙其中，缺它识别器无法建立）
-      const dataOk = await fetch(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.data`, {
-        method: 'HEAD',
-      })
-      return dataOk.ok
+      return assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.data`, WASM_DATA_MIN_BYTES)
     } catch {
       return false
     }

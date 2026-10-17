@@ -371,7 +371,7 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   if pd_complete && [ -z "$ENC" ] && [ "$CODE" = "200" ]; then
     echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ 原文 ${SIZE} B（完整收完；字节等值看源站段 F-2b）——不判发版"
   elif pd_complete; then
-    echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ enc=${ENC:-<无>} size=$SIZE code=$CODE（完整收完但档位/体积异常，看 F-2b）——不判发版"
+    echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ enc=${ENC:-<无>} size=$SIZE code=${CODE}（完整收完但档位/体积异常，看 F-2b）——不判发版"
   else
     echo "  读数 $u/$ENTRY 无 Accept-Encoding ⇒ size=$SIZE/$L_SIZE curl_rc=${CURL_RC:-?}（这一跳没走完，最后一里抖动）——不判发版"
   fi

@@ -48,6 +48,7 @@ import * as pAssist from './panels/assist'
 import { baseEn } from './dicts.en'
 import { CORE_PREFIXES } from './index'
 
+/** 词条形状：扁平 key → 译文；ALL_KEYS 由这份 en 全量词典现算派生 */
 type Dict = Record<string, string>
 
 // 合并顺序：base 最低、面板之后（与 index.ts 的老口径一致）。

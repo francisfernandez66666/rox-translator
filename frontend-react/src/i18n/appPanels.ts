@@ -51,6 +51,7 @@ import * as pReconcile from './panels/reconcile'
 import * as pCoupons from './panels/coupons'
 import * as pAssist from './panels/assist'
 
+/** 面板词条的统一形状：扁平 key → 译文（懒加载词典与入口词典共用同一形状） */
 type Dict = Record<string, string>
 
 /** 懒加载面板的中文词条（顺序见文件头口径②：面板之间零重复，base 由调用方先铺） */

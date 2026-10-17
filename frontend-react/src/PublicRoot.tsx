@@ -35,10 +35,15 @@ import BootLoading from './components/BootLoading'
 import { useNav } from '@/lib/nav'
 
 // 与 App.tsx 同为 lazy：这五份都是"按路径才需要"的页面（首页访客不必下定价/比价页）
+// 登录/注册页（未登录分诊白名单里就有 /login，走 PublicRoot 时也不再下 router）
 const Login = lazy(() => import('./components/Login'))
+// 官网首页（未登录门面主力页）
 const Landing = lazy(() => import('./components/Landing'))
+// 定价页（未登录可达，与首页共用同一套营销壳）
 const PricingPage = lazy(() => import('./components/PricingPage'))
+// 比价页（未登录可达；三页与首页是同一批按路径才需要的分片）
 const PriceComparePage = lazy(() => import('./components/PriceComparePage'))
+// AI 顾问（官网入口点进来的独立页，同样按路径懒加载）
 const AiAssist = lazy(() => import('./components/AiAssist'))
 
 /** 营销门面外壳：未登录可达的三页共用（价格/比价/官网）——不带 auth 档顶栏，页内即完整营销页 */
