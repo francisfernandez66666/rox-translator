@@ -113,6 +113,9 @@ import WordSwap, { useWordSwapGate } from './components/WordSwap'
 // ★ 2026-10-15 前台外壳布局方案：左栏 / 移动档顶栏 / 移动档状态机
 //   （唯一实现，结构见 components/frontshell/index.ts，样式见 styles/frontshell.css）
 import { FrontSideNav, FrontMobileTopBar, FrontPage, useMobileShell } from './components/frontshell'
+// ★ 2026-10-17 未登录门面移动壳（官网首页/定价/比价/登录注册 在 ≤640 复用登录态那套
+//   汉堡＋抽屉＋品牌顶栏；结构见 components/publicshell/，样式见 styles/publicshell.css）
+import { PublicShell } from './components/publicshell'
 // ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看）
 const ChatHistory = lazy(() => import('./components/ChatHistory'))
 // LangCross 纯黑组件库：前台外壳只剩 Button 一件（Badge/Icon/LangSelect 已随
@@ -479,25 +482,29 @@ function Root() {
     // 与 FrontShell 内的 /pricing 路由分别覆盖「访客」与「已登录」两种入口。
     if (path === '/pricing') {
       return (
-        <RouteBoundary>
-          <Suspense fallback={<PageLoading />}>
-            <PricingPage />
-            {/* ★ autosales：定价页常驻 AI 接待挂件 */}
-            <AiAssist />
-          </Suspense>
-        </RouteBoundary>
+        <PublicShell>
+          <RouteBoundary>
+            <Suspense fallback={<PageLoading />}>
+              <PricingPage />
+              {/* ★ autosales：定价页常驻 AI 接待挂件 */}
+              <AiAssist />
+            </Suspense>
+          </RouteBoundary>
+        </PublicShell>
       )
     }
     // ★ 〇-X #55：比价与算价页与 /pricing 同级营销门面，访客可直达（否则会被兜底送去登录页，
     //   而"注册前能不能看到价"正是这个页存在的全部意义）
     if (path === '/compare') {
       return (
-        <RouteBoundary>
-          <Suspense fallback={<PageLoading />}>
-            <PriceComparePage />
-            <AiAssist />
-          </Suspense>
-        </RouteBoundary>
+        <PublicShell>
+          <RouteBoundary>
+            <Suspense fallback={<PageLoading />}>
+              <PriceComparePage />
+              <AiAssist />
+            </Suspense>
+          </RouteBoundary>
+        </PublicShell>
       )
     }
     // ★ S5 门面：未登录访问 `/` 出官网落地页；登录/注册走 /login、/register
@@ -509,25 +516,29 @@ function Root() {
       //   已登录用户根本不进这个分支（上面 `!user` 已分流），所以这一档只影响未登录访客。
       if (!landingEnabledForGuest()) return <Navigate to="/login" replace />
       return (
-        <RouteBoundary>
-          <Suspense fallback={<PageLoading />}>
-            <Landing />
-            {/* ★ autosales：落地页常驻 AI 接待挂件 */}
-            <AiAssist />
-          </Suspense>
-        </RouteBoundary>
+        <PublicShell>
+          <RouteBoundary>
+            <Suspense fallback={<PageLoading />}>
+              <Landing />
+              {/* ★ autosales：落地页常驻 AI 接待挂件 */}
+              <AiAssist />
+            </Suspense>
+          </RouteBoundary>
+        </PublicShell>
       )
     }
     // 未登录兜底：非营销路径一律出登录页。/admin 前缀以 admin 态出——Login 内部会拦掉
     // 非租管账号，并关掉注册等前台专属流程；onLogin 再补一次角色校验，不够格立即弹回工作台
     return (
-      <RouteBoundary>
-        <Suspense fallback={<PageLoading />}>
-          <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
-          {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
-          <AiAssist />
-        </Suspense>
-      </RouteBoundary>
+      <PublicShell auth>
+        <RouteBoundary>
+          <Suspense fallback={<PageLoading />}>
+            <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
+            {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
+            <AiAssist />
+          </Suspense>
+        </RouteBoundary>
+      </PublicShell>
     )
   }
   // 后台路由守卫：/admin 只对租管及以上（roleLevelSafe>=2）开放，AdminDashboard 自身不再判权；

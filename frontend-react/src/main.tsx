@@ -58,6 +58,9 @@ import './styles/mobile.css'
 // 必须晚于 components.css：.lc-mob-topbar.fs-mob-topbar 这类同权重覆写靠源序决胜
 // （本文件的选择器已加双类名兜底，此处顺序是第二道保险）。
 import './styles/frontshell.css'
+// ★ 2026-10-17 未登录门面移动壳样式（PublicShell：汉堡＋抽屉＋品牌顶栏）。
+// 必须晚于 components.css：移动档收起各页自带头部、让位登录固定壳，靠源序决胜。
+import './styles/publicshell.css'
 
 // 挂载应用到 DOM 节点，并开启严格模式
 // ToastProvider：@langcross/ui 全局提示容器，等价替换 TDesign 的 MessagePlugin

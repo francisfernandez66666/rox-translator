@@ -619,17 +619,26 @@ test.describe('像素级 UAT', () => {
     // 射程自证：1440 档必须是横排（否则上面那条"容器窄就竖排"会退化成恒真）
     expect(rows.find((r) => r.w === 1440)!.dir, '1440 档舞台不是横排 ⇒ 竖排判据恒真、本锁空转').toBe('row');
     expect(rows.find((r) => r.w === 320)!.dir, '320 档舞台没竖排 ⇒ 窄档判据没量到东西').toBe('column');
-    // ★ 2026-10-17 用户裁定续修：锚点组 981~1423 装不下（自然宽 709、budget 从 1423 起才够）——
-    //   旧形态 ≤980 才隐藏，中间段整组被压窄（锚点文字折两行、登录折两行，en 在 1024 档还把文档撑宽 153px）。
-    //   修法＝隐藏阈值抬到 1439。这里钉两档：1280（挤压最重的宽度）锚点必须已隐藏、1440（唯一完整放得下的宽度）必须可见。
+    // ★ 2026-10-17 用户裁定（方案A 被否后反转）：锚点组 981~1423 自然宽 709px 装不下（budget 从 1423 起才够）。
+    //   第一版把锚点整段藏到 ≤1439，用户当场否掉（"页眉原来的按钮怎么都删了"）⇒ 反转成：锚点必须还在、且不被压扁。
+    //   修法＝1181~1439 收间距/字号把锚点压进一行；≤1180 才隐藏。这里钉三档：
+    //   1280/1366 笔电档必须「可见 + 单行不压扁」、1440 交付档可见、1024 才隐藏（且隐藏档导航仍单行）。
     await page.setViewportSize({ width: 1280, height: 900 });
-    const links1280 = await page.locator('.lc-nav-links').count();
+    const linksVisible1280 = await page.locator('.lc-nav-links').isVisible();
     const navH1280 = await page.locator('.lc-mkt-nav').evaluate((el) => Math.round(el.getBoundingClientRect().height));
-    expect(links1280, '1280 档锚点没被隐藏 ⇒ 981~1423 段又回到被 flex 压窄的旧形态（锚点折两行、登录折两行）').toBe(0);
-    expect(navH1280, '1280 档导航高度不是单行 76（锚点隐藏后只剩 brand＋右簇）').toBeLessThanOrEqual(80);
+    const anchorRects1280 = await page.locator('.lc-nav-links a:visible').evaluateAll((els) => els.map((e) => Math.round((e as HTMLElement).getBoundingClientRect().height)));
+    const navScroll1280 = await page.locator('.lc-mkt-nav').evaluate((el) => { const h = el as HTMLElement; return { sw: h.scrollWidth, cw: h.clientWidth }; });
+    expect(linksVisible1280, '1280 档锚点不可见 ⇒ 用户否掉的"页眉按钮没了"又回来了（锚点必须回到笔电宽度）').toBe(true);
+    expect(navH1280, '1280 档导航不是单行 76（锚点可见但不许把它挤成两行）').toBeLessThanOrEqual(80);
+    expect(navScroll1280.sw - navScroll1280.cw, `1280 档导航横向溢出 ${navScroll1280.sw - navScroll1280.cw}px（锚点没压进一行）`).toBeLessThanOrEqual(1);
+    expect(anchorRects1280.length, '1280 档可见锚点为 0（可见性判据取不到靶子、恒真）').toBeGreaterThan(0);
+    expect(Math.max(...anchorRects1280), `1280 档锚点被压扁折行（单行高 ≤34px，实测最大 ${Math.max(...anchorRects1280)}px）`).toBeLessThanOrEqual(34);
     await page.setViewportSize({ width: 1440, height: 900 });
-    const links1440 = await page.locator('.lc-nav-links').count();
-    expect(links1440, '1440 档锚点被隐藏了 ⇒ 交付形态（含锚点的单行导航）没了').toBe(1);
+    expect(await page.locator('.lc-nav-links').isVisible(), '1440 档锚点不可见 ⇒ 交付形态（含锚点的单行导航）没了').toBe(true);
+    await page.setViewportSize({ width: 1024, height: 900 });
+    expect(await page.locator('.lc-nav-links').isVisible(), '1024 档锚点没隐藏 ⇒ 压缩档都放不下的宽度会整页溢出（en 曾 153px）').toBe(false);
+    const navH1024 = await page.locator('.lc-mkt-nav').evaluate((el) => Math.round(el.getBoundingClientRect().height));
+    expect(navH1024, '1024 档导航不是单行 76（锚点隐藏后只剩 brand＋右簇）').toBeLessThanOrEqual(80);
     await shot(page, 'p2g_marketing_narrow_no_overflow');
   });
 

@@ -1,0 +1,32 @@
+/* ============================================================================
+   publicshell.css — 未登录「营销门面」移动壳（PublicShell）样式（★ 唯一一份）
+   结构与类名在 src/components/publicshell/PublicShell.tsx，两处一一对应。
+   桌面档不生效：只在 ≤640 档收起各页自带头部、并让登录固定壳让位顶栏；
+   顶栏与抽屉沿用库件 .lc-mob-topbar / .lc-sidebar 与前台外壳的 .fs-sidebar--drawer 形态，
+   不新增裸色值（readability.test.ts 会扫本文件）。
+   ============================================================================ */
+
+/* 移动档隐藏各页营销头部，换成壳顶栏（否则「壳顶栏 ＋ 页面自己的顶栏」两条栏） */
+@media (max-width: 640px) {
+  .pub-shell .lc-mkt-nav,
+  .pub-shell .lc-prc-nav,
+  .pub-shell .lc-cmp-nav { display: none; }
+}
+
+/* 顶栏 sticky：营销页很长，汉堡要一直够得到（登录态顶栏在 flex 列里不滚动，这里必须 sticky）；
+   z-index 40 < 遮罩 50 < 抽屉 60，抽屉展开时遮罩压住顶栏。 */
+.pub-mob-topbar { position: sticky; top: 0; z-index: 40; background: var(--lc-bg); }
+/* 品牌簇做成链接（回首页）：去下划线、吃正文色 */
+.pub-mob-brand { color: var(--lc-text); text-decoration: none; }
+.pub-drawer__brand { color: var(--lc-text); text-decoration: none; }
+.pub-drawer__item { text-decoration: none; }
+/* 抽屉底部主 CTA：实心白填充（--lc-fill-white，与登录态主按钮同档），非文字链 */
+.pub-drawer__cta { display: flex; align-items: center; justify-content: center; height: 40px; margin-top: 8px;
+  border-radius: 999px; background: var(--lc-fill-white); color: #000; font-weight: 600; font-size: 15px;
+  text-decoration: none; }
+
+/* 登录/注册页：固定壳（.lc-auth-bg inset:0）整体下移到顶栏之下，卡片在剩余区居中 */
+@media (max-width: 640px) {
+  .pub-shell--auth .lc-auth-bg { top: var(--lc-mob-topbar-h); }
+  .pub-shell--auth .lc-auth-bg.lc-brand-login { top: var(--lc-mob-topbar-h); }
+}

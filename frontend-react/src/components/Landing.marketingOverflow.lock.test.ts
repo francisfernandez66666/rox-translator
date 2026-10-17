@@ -2,19 +2,25 @@
 // src/components/Landing.marketingOverflow.lock.test.ts — 官网营销骨架「窄档不撑宽文档」口径锁
 // （★ 2026-10-16 用户报障续修：手机档首页整页横向滚动 + 641~760 档文件直出舞台把译文 chip 顶出容器右缘）
 //
-// 两处缺陷同族、根因不同，各钉各的：
+// 三处缺陷同族、根因不同，各钉各的：
 //   ① 导航（.lc-mkt-nav）：一行装不下时 flex 默认**不换行**，于是多出来的宽把**整份文档**撑宽——
 //      zh 的 min-content 是 473~497（brand 189 ＋ LangSelect 107 ＋ 登录 17 ＋ 试用 88/112 ＋间距），
 //      iPhone SE 375/360/320 全在它下面；实测 360 视口 documentElement.scrollWidth=473、320 视口 473。
-//      修法＝只在**锚点已隐藏**的两档（≤980）允许换行（`margin-left:auto` 的右簇整行落到第二行并右对齐），
-//      **>980 的交付单行 76px 形态一字不动**（那两档锚点本来就装不下，是另一族既有问题，不在本锁射程内）。
+//      修法＝只在**锚点已隐藏的窄档**（≤980）允许换行（`margin-left:auto` 的右簇整行落到第二行并右对齐），
+//      **>980 的交付单行 76px 形态一字不动**。
+//   ①b 锚点组 981~1423「装不下」（★ 2026-10-17 用户裁定，方案A 被否后反转）：锚点组自然宽 709px（文本 493
+//      ＋gap36×6），budget＝视口−内垫−brand189−右簇293−gap36×2 ⇒ 1423 起才放得下（1366 缺 57、1280 缺 143、
+//      1024 缺 319）。第一版把锚点整段藏到 ≤1439，用户当场否掉（"页眉原来的按钮怎么都删了"）⇒ 反转成：
+//      **锚点必须还在、且不被压扁**——1181~1439 用「收间距＋收字号」(gap 36→20/12/6、字号 17→16/15/14，
+//      每档按 budget 现算留 ≥14px 余量) 把锚点压进一行；≤1180 连最紧档也放不下才隐藏；≥1440 交付原样。
+//      CTA（语言/登录/试用）任何宽度一个不藏。
 //   ② 文件直出舞台（.lc-fd-visual/.lc-fd-stage）：横排管线的**最小内容宽 680px**（chip 196×2 ＋ 引擎 96
 //      ＋ 链路 min 48×2 ＋ gap 24×4），而舞台拿到的宽度由段落内垫决定（≤1200 档左右各 40）——
 //      与视口不成正比。旧形态把"什么时候竖排"写死成 `@media (max-width:640px)`，于是 641~760 视口里
 //      横排被硬塞：实测 700 视口容器只有 620，译文 chip 右缘 720 ⇒ 越出容器 60px、整页横滚 27px；
 //      641 视口横滚 86px。修法＝容器自己声明 `container-type:inline-size`，竖排判据改吃 `@container`。
 //
-// 本文件钉住的四条（缺一条锁就是空的）：
+// 本文件钉住的（缺一条锁就是空的）：
 //   N1 交付形态：基础规则仍是 `height:76px` 单行、**不带** flex-wrap（宽档不许被顺手改掉）。
 //   N2 窄档换行：存在一条 max ≤ 980 的媒体块，其 `.lc-mkt-nav` 同时有 flex-wrap:wrap ＋ height:auto ＋ min-height。
 //   N3 换行不许全球化：任何 max > 980 的块里都不许出现 `flex-wrap:wrap`（那会把 1024/1280 的导航变成两行）。
@@ -24,7 +30,10 @@
 //      （chip 下限×2 ＋ 引擎 ＋ 链路下限×2 ＋ gap×4）＋ 20px 余量。改其中任一尺寸而不抬门限 ⇒ 当场红。
 //   N7 竖排脚本体：@container 块里必须有 flex-direction:column（＋窄档 chip 宽度覆盖）。
 //   N8 负向（根因）：不许再有"媒体块里把 .lc-fd-stage 改成 column"的写法（退回视口基准是本缺陷的根）。
-//   R1~R3 反证：摘 flex-wrap / 摘 container-type / 把门限压回 640，三条都必须被对应判据抓到。
+//   N9 锚点隐藏档：display:none 落在 maxW∈[1100,1200] 的块里（保笔电宽度 1280/1366 可见），更高的块不许隐藏。
+//   N10 锚点压缩档：≥1 处在 [1200,1440] 的块给 `.lc-nav-links` 收 gap/font（否则锚点被 flex 压扁）；
+//      且字号 ≥13 地板、间距 ≥6 地板、maxW>1439 的块不许压缩（交付宽度原样）。
+//   R1~R5 反证：摘 flex-wrap / 摘 container-type / 门限压回 640 / 摘隐藏兜底 / 摘压缩档，五条各被对应判据抓到。
 //
 // ⚠️ 判据只问 CSS 段本体：说明注释里刻意写着这些字面（AGENTS 要求写理由），所以扫描前先剥注释。
 // 运行：npx vitest run src/components/Landing.marketingOverflow.lock.test.ts
@@ -109,14 +118,17 @@ describe('官网营销骨架：窄档不撑宽文档（导航换行 + 文件直�
   const raw = readFileSync(LANDING, 'utf8')
   const css = cssBlock(raw)
 
-  it('P1 射程自证：LANDING_CSS 段与三处媒体块必须切得到（切不到＝锚点漂了，下面几条会静默空转）', () => {
+  it('P1 射程自证：LANDING_CSS 段与各档媒体块必须切得到（切不到＝锚点漂了，下面几条会静默空转）', () => {
     expect(css.length, 'LANDING_CSS 段过短，判据已失明').toBeGreaterThan(8000)
     expect(css).toContain('.lc-mkt-nav{')
     expect(css).toContain('.lc-fd-visual{')
     const secs = sections(css)
     expect(secs.filter((s) => s.maxW === 980).length, '切不出 ≤980 媒体块（换行档的宿主）').toBe(1)
     expect(secs.filter((s) => s.maxW === 1200).length, '切不出 ≤1200 媒体块（宽度分档的宿主）').toBe(1)
-    expect(secs.filter((s) => s.maxW === 1439).length, '切不出 ≤1439 媒体块（锚点提前隐藏的宿主）').toBe(1)
+    expect(secs.filter((s) => s.maxW === 1439).length, '切不出 ≤1439 媒体块（锚点压缩档①的宿主）').toBe(1)
+    expect(secs.filter((s) => s.maxW === 1360).length, '切不出 ≤1360 媒体块（锚点压缩档②的宿主）').toBe(1)
+    expect(secs.filter((s) => s.maxW === 1260).length, '切不出 ≤1260 媒体块（锚点压缩档③的宿主）').toBe(1)
+    expect(secs.filter((s) => s.maxW === 1180).length, '切不出 ≤1180 媒体块（锚点隐藏档的宿主）').toBe(1)
   })
 
   it('N1 交付形态：基础规则的 .lc-mkt-nav 仍是单行 height:76px 且不带 flex-wrap（>980 档不许被改）', () => {
@@ -184,25 +196,36 @@ describe('官网营销骨架：窄档不撑宽文档（导航换行 + 文件直�
     expect(bad, `竖排又被写回视口媒体块（与视口不成正比 ⇒ 641~760 必然溢出）：${bad.join(', ')}`).toEqual([])
   })
 
-  it('N9 锚点提前隐藏：.lc-nav-links 的 display:none 落在 maxW≤1439 的块里，且 >1439 的块不得隐藏它', () => {
+  it('N9 锚点隐藏档：display:none 落在 maxW∈[1100,1200] 的块里（保 1280/1366 可见），更高宽的块不许隐藏', () => {
     const hide = (sec: Section) => ruleLine(sec.body, '.lc-nav-links').includes('display:none')
     const hiding = sections(css).filter((s) => s.kind === 'media' && hide(s))
-    expect(hiding.length, '锚点隐藏规则不见了（981~1423 会整段被压窄：锚点文字折两行、登录折两行）').toBeGreaterThan(0)
+    expect(hiding.length, '锚点隐藏兜底不见了（≤1180 连压缩档都放不下，必须留一处隐藏，否则整页溢出）').toBeGreaterThan(0)
     const maxHide = Math.max(...hiding.map((s) => s.maxW ?? 0))
-    expect(maxHide, `锚点隐藏阈值 ${maxHide}px 太低——981~1423 段锚点组放不下（自然宽 709、budget 从 1423 起才够），
-      只盖住 ≤980 会让 981~1423 回到被压窄的旧形态`).toBeGreaterThanOrEqual(1400)
-    expect(maxHide, `锚点隐藏阈值 ${maxHide}px 太高——≥1440 是唯一完整放得下的宽度，隐藏掉会连交付形态一起没了`)
-      .toBeLessThanOrEqual(1440)
+    expect(maxHide, `锚点隐藏阈值 ${maxHide}px 太高——锚点必须回到 1280/1366 这些笔电宽度（只允许 ≤1200 隐藏）`)
+      .toBeLessThanOrEqual(1200)
+    expect(maxHide, `锚点隐藏阈值 ${maxHide}px 太低——低于 1100 时压缩档也放不下，缺隐藏兜底会整页溢出`)
+      .toBeGreaterThanOrEqual(1100)
     const over = sections(css).filter((s) => s.kind === 'media' && s.maxW !== null && s.maxW > maxHide && hide(s))
-    expect(over.map((s) => s.cond), `≥${maxHide + 1}px 的块里还藏着锚点隐藏（交付宽度不该隐藏）`).toEqual([])
+    expect(over.map((s) => s.cond), `比 ${maxHide}px 更宽的块里还藏着锚点（交付宽度不该隐藏）`).toEqual([])
   })
 
-  it('N10 锚点隐藏不许靠压缩掩蔽：没有任何媒体块给 .lc-nav-links 改 gap/font（那会把"放不下"藏起来）', () => {
-    const bad = sections(css)
+  it('N10 锚点压缩档：≥1 处在 [1200,1440] 收 gap/font；字号 ≥13、间距 ≥6、maxW>1439 不许压缩', () => {
+    const compacts = sections(css)
       .filter((s) => s.kind === 'media')
-      .map((s) => ruleLine(s.body, '.lc-nav-links'))
-      .filter((l) => /gap:|font-size:/.test(l))
-    expect(bad, `这些块在压缩锚点（gap/font-size）＝用缩字号掩盖放不下：${bad.join(', ')}`).toEqual([])
+      .map((s) => ({ sec: s, line: ruleLine(s.body, '.lc-nav-links') }))
+      .filter(({ line }) => /gap:|font-size:/.test(line))
+    expect(compacts.length, '没有任何压缩档 ⇒ 锚点在 1181~1439 会被 flex 压扁（本缺陷的原始形态：文字折两行）')
+      .toBeGreaterThan(0)
+    expect(compacts.filter(({ sec }) => (sec.maxW ?? 0) >= 1200 && (sec.maxW ?? 0) <= 1440).length,
+      '压缩档不在 [1200,1440] 区间（要么没盖住笔电宽度、要么越界动了交付宽度）').toBeGreaterThan(0)
+    for (const { sec, line } of compacts) {
+      expect(sec.maxW ?? 0, `maxW=${sec.maxW} 的块压缩了锚点 ⇒ ≥1440 交付宽度必须原样 gap36/font17`)
+        .toBeLessThanOrEqual(1439)
+      const fs = px(decl(line, 'font-size'))
+      if (fs) expect(fs, `${sec.cond} 字号 ${fs}px < 13px 地板（锚点会读不清）`).toBeGreaterThanOrEqual(13)
+      const g = px(decl(line, 'gap'))
+      if (g) expect(g, `${sec.cond} 间距 ${g}px < 6px 地板（锚点会贴成一坨）`).toBeGreaterThanOrEqual(6)
+    }
   })
 
   it('R1 反证：摘掉 ≤980 的 flex-wrap:wrap 必须被 N2 抓到', () => {
@@ -231,14 +254,26 @@ describe('官网营销骨架：窄档不撑宽文档（导航换行 + 文件直�
     expect(m.n, `门限压到 ${m.n}px 却没被发现（舞台最小内容宽 ${minW}px）`).toBeLessThan(minW + 20)
   })
 
-  it('R4 反证：把锚点隐藏阈值改回 ≤980 必须被 N9 抓到（本缺陷的原始写法）', () => {
+  it('R4 反证：把锚点隐藏兜底摘掉必须被 N9 抓到（更低档会整页溢出）', () => {
     const hide = (sec: Section) => ruleLine(sec.body, '.lc-nav-links').includes('display:none')
-    const sec = sections(css).find((s) => s.kind === 'media' && s.maxW === 1439)!
-    const line = ruleLine(sec.body, '.lc-nav-links')
-    const mutated = css.replace(line, '')
+    const sec = sections(css).find((s) => s.kind === 'media' && s.maxW === 1180)!
+    const mutated = css.replace(ruleLine(sec.body, '.lc-nav-links'), '')
     expect(mutated, '变异体没落地（R4 是空替换）').not.toBe(css)
     const msec = sections(mutated).filter((s) => s.kind === 'media' && hide(s))
-    const maxHide = msec.length ? Math.max(...msec.map((s) => s.maxW ?? 0)) : 0
-    expect(maxHide, `把隐藏阈值改回 ${maxHide}px 却没被发现（981~1423 又会被压窄）`).toBeLessThan(1400)
+    expect(msec.length, '摘掉隐藏兜底却没被发现（≤1180 会整页溢出）').toBe(0)
+  })
+
+  it('R5 反证：把三段压缩全摘掉（退回被压扁形态）必须被 N10 抓到', () => {
+    let mutated = css
+    for (const w of [1439, 1360, 1260]) {
+      const sec = sections(mutated).find((s) => s.kind === 'media' && s.maxW === w)!
+      mutated = mutated.replace(ruleLine(sec.body, '.lc-nav-links'), '')
+    }
+    expect(mutated, '变异体没落地（R5 是空替换）').not.toBe(css)
+    const compacts = sections(mutated)
+      .filter((s) => s.kind === 'media')
+      .map((s) => ruleLine(s.body, '.lc-nav-links'))
+      .filter((l) => /gap:|font-size:/.test(l))
+    expect(compacts.length, '三段压缩都摘掉了却没被发现（1181~1439 会被压扁）').toBe(0)
   })
 })

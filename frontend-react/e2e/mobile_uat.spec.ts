@@ -243,3 +243,67 @@ test('移动端全站页面无横向溢出巡检', async ({ page }) => {
       { message: '/pricing 不应横向溢出', timeout: 8000 })
     .toBe(false);
 });
+
+// 未登录门面移动壳（PublicShell）：★ 2026-10-17 用户令「未登录的移动端也做一下适配，
+//   参考现在的登录态移动端设计」——四支未登录门面（首页/定价/比价/登录注册）统一套上登录态
+//   前台外壳那套「顶栏(汉堡+品牌簇) ＋ 汉堡抽屉」形态；移动档由 publicshell.css 收起各页自带营销头部。
+//   判据五腿：① 顶栏在位且高=令牌档(52)＋品牌簇非空；② 点汉堡出抽屉＋遮罩、抽屉内跨页入口逐条可见、
+//   点遮罩收起；③ 各页自带头部**仍在 DOM**（页面真渲染）但移动档 `:visible` 清零——两条一起才证明是
+//   「壳把页头收起」而不是「页头压根没渲染」（只判 :visible=0 会被"页面没起来"假绿）；
+//   ④ 无横向溢出；⑤ 桌面负向：1440 档不得出未登录移动顶栏（证明整个壳是移动档门禁的），页面自带头部须在。
+test('未登录门面移动壳：顶栏＋汉堡抽屉＋自带头部收起＋无溢出', async ({ page }) => {
+  test.setTimeout(90000);
+  // [路由, 该页自带的营销头部类名]——三支公开门面（登录页在末段单独判）
+  const surfaces: Array<[string, string]> = [['/', '.lc-mkt-nav'], ['/pricing', '.lc-prc-nav'], ['/compare', '.lc-cmp-nav']];
+  for (const [r, headCls] of surfaces) {
+    await page.goto(`${BASE}${r}`, { waitUntil: 'networkidle' });
+    // ① 顶栏在位＋高度等值＋品牌簇非空
+    const topbar = page.locator('.pub-mob-topbar');
+    await expect(topbar, `${r} 未登录门面缺移动顶栏（PublicShell 未生效）`).toBeVisible({ timeout: 30000 });
+    expect(await topbar.evaluate((el) => el.getBoundingClientRect().height), `${r} 顶栏高 ≠ --lc-mob-topbar-h(52)`).toBeCloseTo(52, 0);
+    expect((await page.locator('.pub-mob-brand').innerText()).trim().length, `${r} 顶栏品牌簇为空`).toBeGreaterThan(0);
+
+    // ③ 各页自带头部：必须仍在 DOM（页面真渲染了），但移动档不可见（壳把它收起）
+    const head = page.locator(headCls);
+    await expect
+      .poll(() => head.count(), { message: `${r} 的页头没渲染（页面本身没起来，本腿没有射程）`, timeout: 20000 })
+      .toBeGreaterThan(0);
+    expect(await page.locator(`${headCls}:visible`).count(), `${r} 移动档页头未收起（壳顶栏＋页头两条栏）`).toBe(0);
+
+    // ② 汉堡 → 抽屉滑入＋遮罩；抽屉内跨页入口逐条可见；点遮罩收起
+    const drawer = page.locator('.pub-drawer');
+    expect(await drawer.evaluate((el) => el.getBoundingClientRect().x), `${r} 抽屉默认必须移出屏外`).toBeLessThan(0);
+    await page.locator('.pub-mob-topbar .lc-mob-topbar__icon').click();
+    await page.waitForTimeout(400);
+    expect(await drawer.evaluate((el) => el.getBoundingClientRect().x), `${r} 点汉堡后抽屉未滑入`).toBeGreaterThanOrEqual(0);
+    await expect(page.locator('.pub-scrim'), `${r} 抽屉打开时必须出现遮罩`).toBeVisible();
+    for (const href of ['/pricing', '/compare']) {
+      await expect(page.locator(`.pub-drawer a[href="${href}"]`), `${r} 抽屉缺跨页入口 ${href}`).toBeVisible();
+    }
+    await expect(page.locator('.pub-drawer__cta'), `${r} 抽屉缺底部免费试用 CTA`).toBeVisible();
+    await page.locator('.pub-scrim').click({ position: { x: 380, y: 400 } });
+    await page.waitForTimeout(400);
+    expect(await drawer.evaluate((el) => el.getBoundingClientRect().x), `${r} 点遮罩后抽屉未收起`).toBeLessThan(0);
+
+    // ④ 无横向溢出
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
+        { message: `${r} 未登录门面移动档横向溢出`, timeout: 8000 })
+      .toBe(false);
+  }
+
+  // 登录页：同壳；固定定位的 .lc-auth-bg 必须下移到顶栏之下（否则卡片被顶栏压住）
+  await page.goto(`${BASE}/login`, { waitUntil: 'networkidle' });
+  await expect(page.locator('.pub-mob-topbar'), '/login 未登录门面缺移动顶栏').toBeVisible({ timeout: 30000 });
+  const bgTop = await page.locator('.lc-auth-bg').first().evaluate((el) => el.getBoundingClientRect().top);
+  expect(bgTop, '/login 固定壳未按顶栏高度让位（登录卡会被顶栏压住）').toBeGreaterThanOrEqual(50);
+  await expect(page.locator('.lc-auth-card'), '/login 未渲染登录卡').toBeVisible({ timeout: 30000 });
+  await page.screenshot({ path: 'artifacts/mobile-public-login.png' });
+
+  // ⑤ 桌面负向：1440 档不得出未登录移动顶栏（壳是移动档门禁的），且页面自带头部必须回来
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${BASE}/pricing`, { waitUntil: 'networkidle' });
+  expect(await page.locator('.pub-mob-topbar').count(), '桌面档渲染了未登录移动顶栏（壳没按断点收门）').toBe(0);
+  await expect(page.locator('.lc-prc-nav'), '桌面档定价页自带头部不见了（被壳误伤）').toBeVisible({ timeout: 20000 });
+  await page.screenshot({ path: 'artifacts/desktop-public-pricing.png' });
+});

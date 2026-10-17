@@ -1,0 +1,175 @@
+// ============================================================================
+// components/publicshell/PublicShell.lock.test.ts — 未登录门面移动壳的**接线与形态锁**
+//
+// 由来（2026-10-17 用户令）：「未登录的移动端也做一下适配，参考现在的登录态移动端设计」。
+// 这一批把四支未登录门面（官网首页 / 定价 / 比价 / 登录注册）统一套上 PublicShell，
+// 复用登录态前台外壳的「顶栏＋汉堡抽屉」形态。用户令是把**四支**当成一件事，所以本锁
+// 按**路由全集**判（同 AGENTS §三「家族级锁要按全集判」，只测单页＝漏一页就整页返祖）。
+//
+// 四条判据（各问一个"改坏了会不会红"）：
+//   L1 接线（守卫级）：App.tsx 的未登录分诊块里，**每一个** `return (` 都必须被 <PublicShell>
+//      包住——数「页面返回数」与「<PublicShell 出现数」的对等，并逐页点名收口跨度
+//      （只测"Shell 组件本身能渲染"是判据级，代替不了"每一条路由都接上了"这一守卫级，AGENTS §三）。
+//   L2 形态（等值）：publicshell.css 必须在 ≤640 档把三支页头（.lc-mkt-nav/.lc-prc-nav/.lc-cmp-nav）
+//      display:none（否则出现「壳顶栏＋页面自己顶栏」两条栏），且登录固定壳按令牌下移。
+//   L3 单断点：PublicShell.tsx 必须且只能复用 useMobileShell()（不得再写第二份 matchMedia/断点）。
+//   L4 靶子等值：e2e 判据用的类名（.pub-mob-topbar/.pub-drawer/.pub-drawer__cta/.pub-scrim）
+//      必须同时存在于组件与 e2e/mobile_uat.spec.ts——一侧改名即红（同 BrandTagline 那条两处锁）。
+// 反证 R1/R2/R3：分别把三处改坏，必须各自判红（先证明响应，再证明修法正当）。
+//
+// ⚠️ 本锁只问**剥注释之后**的正文：注释里出现类名/说明是记录，不是实现（同 §一·5「注释不许冒充实现」）。
+// 运行：npx vitest run src/components/publicshell/PublicShell.lock.test.ts
+// ============================================================================
+// @vitest-environment node
+import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+const APP = path.join(HERE, '..', '..', 'App.tsx')
+const SHELL = path.join(HERE, 'PublicShell.tsx')
+const CSS = path.join(HERE, '..', '..', 'styles', 'publicshell.css')
+const SPEC = path.join(HERE, '..', '..', '..', 'e2e', 'mobile_uat.spec.ts')
+
+/** 剥注释（块注释 → 行注释）。宁可少剥也不许把正文剥掉：剥过头会让负向锁"看起来更干净"＝假绿。 */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+}
+
+/** 取未登录分诊块：`if (!user) {` 到下一个顶层守卫 `if (path.startsWith('/admin'))` 之间。 */
+function unauthBlock(app: string): string {
+  const s = app.indexOf('if (!user) {')
+  const e = app.indexOf("if (path.startsWith('/admin'))")
+  if (s < 0 || e < 0 || e <= s) return ''
+  return stripComments(app.slice(s, e))
+}
+
+/** L1 判据：未登录块里「页面返回数」与「<PublicShell 数」必须相等，且逐页点名收口跨度。 */
+function wiringFailures(app: string): string[] {
+  const block = unauthBlock(app)
+  const bad: string[] = []
+  if (!block) return ['取不到未登录分诊块（App.tsx 的 !user 分支锚点漂了 ⇒ 本锁没有射程，不是"通过"）']
+  const pageReturns = (block.match(/return \(/g) || []).length
+  const shells = (block.match(/<PublicShell/g) || []).length
+  // 射程自证：分诊块本该有 4 支（首页/定价/比价/登录兜底），取到 0 说明切片失败
+  if (pageReturns < 4) bad.push(`未登录分诊块里只数到 ${pageReturns} 个页面 return（预期 ≥4，锚点可能漂了）`)
+  if (shells !== pageReturns) bad.push(`页面返回 ${pageReturns} 支、<PublicShell 只出现 ${shells} 次 ⇒ 有门面漏包外壳`)
+  // 逐页点名：每个页面根之前 600 字符内必须出现过 <PublicShell（这正是四支的收口跨度）
+  for (const p of ['<PricingPage />', '<PriceComparePage />', '<Landing />', '<Login']) {
+    const i = block.indexOf(p)
+    if (i < 0) { bad.push(`未登录分诊块里找不到页面 ${p}`); continue }
+    const before = block.slice(Math.max(0, i - 600), i)
+    if (!before.includes('<PublicShell')) bad.push(`${p} 未被 <PublicShell> 包裹（未登录门面漏了移动壳）`)
+  }
+  return bad
+}
+
+/** 取 `@media` 块的**全部**实例（同一 header 在文件里可以出现多次）。 */
+function atRuleBlocks(css: string, header: string): string[] {
+  const out: string[] = []
+  let i = css.indexOf(header)
+  while (i >= 0) {
+    const open = css.indexOf('{', i)
+    if (open < 0) break
+    let depth = 0
+    let j = open
+    for (; j < css.length; j++) {
+      if (css[j] === '{') depth++
+      else if (css[j] === '}') { depth--; if (depth === 0) break }
+    }
+    out.push(css.slice(open + 1, j))
+    i = css.indexOf(header, j)
+  }
+  return out
+}
+
+/** L2 判据：≤640 档必须收起三支页头（等值），并按令牌给登录固定壳让位。 */
+function cssFailures(css: string): string[] {
+  const bad: string[] = []
+  const blocks = atRuleBlocks(stripComments(css), '@media (max-width: 640px)')
+  if (blocks.length === 0) return ['publicshell.css 里找不到 @media (max-width: 640px) 块（锚点漂了 ⇒ 本锁没有射程）']
+  const hide = blocks.find((b) => b.includes('.lc-mkt-nav'))
+  if (!hide) { bad.push('≤640 档没有收起 .lc-mkt-nav（壳顶栏与页面自带头部会并存成两条栏）') }
+  else {
+    for (const sel of ['.pub-shell .lc-mkt-nav', '.pub-shell .lc-prc-nav', '.pub-shell .lc-cmp-nav']) {
+      if (!hide.includes(sel)) bad.push(`≤640 档未收起的页头：${sel}`)
+    }
+    // 三支必须是 display:none（而不是只改 padding —— 那样页头仍在屏上占位）
+    if (!/\{\s*display:\s*none;\s*\}/.test(hide)) bad.push('页头隐藏规则不是 display:none（可能只改内垫＝仍在屏上占位）')
+  }
+  // 登录固定壳让位顶栏：必须吃令牌，不许写死像素（写死＝与 --lc-mob-topbar-h 漂移）
+  const auth = blocks.find((b) => b.includes('.lc-auth-bg'))
+  if (!auth) bad.push('≤640 档没有给登录固定壳(.lc-auth-bg)让位顶栏的规则')
+  else if (!auth.includes('var(--lc-mob-topbar-h)')) bad.push('登录固定壳让位下限不是 var(--lc-mob-topbar-h)（写死像素会与令牌漂移）')
+  return bad
+}
+
+/** L3 判据：唯一断点来源＝useMobileShell()，组件自身不得再写 matchMedia/断点。 */
+function singleBreakpointFailures(shell: string): string[] {
+  const bad: string[] = []
+  const code = stripComments(shell)
+  if (!/from '@\/components\/frontshell\/useMobileShell'/.test(code)) bad.push('PublicShell.tsx 未复用 useMobileShell（断点应只有一处来源）')
+  if (/matchMedia|innerWidth|max-width/.test(code)) bad.push('PublicShell.tsx 自己又写了一份断点判定（两处各判一次档必然打架）')
+  return bad
+}
+
+/** L4 判据：e2e 靶子类名必须两侧同时存在。 */
+const TARGETS = ['.pub-mob-topbar', '.pub-drawer', '.pub-drawer__cta', '.pub-scrim']
+function anchorFailures(shell: string, spec: string): string[] {
+  const bad: string[] = []
+  for (const t of TARGETS) {
+    const cls = t.slice(1)
+    if (!shell.includes(cls)) bad.push(`组件里找不到靶子类名 ${t}（e2e 判据会读空＝恒绿或恒红）`)
+    if (!spec.includes(cls)) bad.push(`e2e/mobile_uat.spec.ts 未用靶子类名 ${t}（判据没落到这颗件上）`)
+  }
+  return bad
+}
+
+describe('未登录门面移动壳（PublicShell）锁', () => {
+  const appRaw = readFileSync(APP, 'utf8')
+  const shellRaw = readFileSync(SHELL, 'utf8')
+  const cssRaw = readFileSync(CSS, 'utf8')
+  const specRaw = readFileSync(SPEC, 'utf8')
+
+  it('L1 接线：未登录四支门面每一支都被 <PublicShell> 包住', () => {
+    const bad = wiringFailures(appRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('L2 形态：≤640 收起三支页头（display:none）且登录壳按令牌让位', () => {
+    const bad = cssFailures(cssRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('L3 单断点：只复用 useMobileShell()，组件自身零 matchMedia', () => {
+    const bad = singleBreakpointFailures(shellRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('L4 靶子等值：e2e 类名在组件与 spec 两侧同时存在', () => {
+    const bad = anchorFailures(shellRaw, specRaw)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('R1 反证：摘掉一支 <PublicShell> 必须被 L1 判红', () => {
+    const mutated = appRaw.replace(/(\s*)<PublicShell>(\s*)<RouteBoundary>/, '$1<RouteBoundary>')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(appRaw)
+    expect(wiringFailures(mutated).length, 'R1 失效：漏包外壳没被判红').toBeGreaterThan(0)
+    expect(wiringFailures(appRaw)).toEqual([])
+  })
+
+  it('R2 反证：摘掉一条页头隐藏（.lc-cmp-nav）必须被 L2 判红', () => {
+    const mutated = cssRaw.replace(/\.pub-shell \.lc-cmp-nav\s*\{[^}]*\}/, '')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(cssRaw)
+    expect(cssFailures(mutated).length, 'R2 失效：比价页头没被收起却没判红').toBeGreaterThan(0)
+    expect(cssFailures(cssRaw)).toEqual([])
+  })
+
+  it('R3 反证：e2e 侧摘掉抽屉 CTA 靶子必须被 L4 判红', () => {
+    const mutated = specRaw.replace(/pub-drawer__cta/g, 'pub-drawer-cta')
+    expect(mutated, '反证失效：变异没落地（替换没命中＝没反证）').not.toBe(specRaw)
+    expect(anchorFailures(shellRaw, mutated).length, 'R3 失效：e2e 靶子消失却没判红').toBeGreaterThan(0)
+    expect(anchorFailures(shellRaw, specRaw)).toEqual([])
+  })
+})
