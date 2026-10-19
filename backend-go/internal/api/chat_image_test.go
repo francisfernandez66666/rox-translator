@@ -25,6 +25,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -280,5 +281,292 @@ func TestChatImageStagingWired(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "stageChatImage(f, ext)") {
 		t.Fatalf("handleChatImage 未接 stageChatImage 落盘（真件乘车的路径与锁不在同一条线上）")
+	}
+}
+
+// ============ 多行分腿（2026-10-19）============
+// 现网实证：主站 tencent/Hunyuan-MT-7B 对「多行 join 成一段」的输入会丢行——
+// 4 行稳定只回 1 行 "and"、2 行偶发丢首行，行数对不上 ⇒ 过去直接 line_mismatch 不出图。
+// 下面这组锁要做的是：**把"分行还原"这件事本身钉死**（逐行内容、顺序、条数），
+// 而不是只断言"没报错"——只问 error 的断言在模型把译文位置写错时照样绿。
+
+// TestChatImageLegsRestoresLineStructure 模拟现网丢行形态：多行只回 1 行 / 两行丢首行。
+// 分腿后必须逐行还原（内容、顺序、条数三者一起判），且积分按真实调用次数累计。
+func TestChatImageLegsRestoresLineStructure(t *testing.T) {
+	lines := []string{"已同步", "产品说明书", "请在首次使用前完整阅读"}
+	var calls int
+	fake := func(text string) (string, int64, error) {
+		calls++
+		parts := strings.Split(text, "\n")
+		switch {
+		case len(parts) >= 3:
+			return "and", 1, nil // 现网读数：3/3 次只回这一行
+		case len(parts) == 2:
+			return parts[1] + "_en", 1, nil // 两行输入丢首行
+		default:
+			return parts[0] + "_en", 1, nil
+		}
+	}
+	got, points, err := chatImageLegs(lines, fake)
+	if err != nil {
+		t.Fatalf("分腿失败: %v", err)
+	}
+	want := []string{"已同步_en", "产品说明书_en", "请在首次使用前完整阅读_en"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("逐行结果不对（顺序/内容）：\n got=%q\nwant=%q", got, want)
+	}
+	if calls <= 1 {
+		t.Fatalf("分腿没发生（calls=%d）：这条锁退化成了单枪成功路径", calls)
+	}
+	if points != int64(calls) {
+		t.Fatalf("积分累计不对：points=%d calls=%d（每腿 1 分）", points, calls)
+	}
+}
+
+// TestChatImageLegsFastPathSingleCall 模型保持行数时只发一枪（成本闸：正常图片不为兜底付钱）。
+func TestChatImageLegsFastPathSingleCall(t *testing.T) {
+	lines := []string{"甲", "乙", "丙", "丁"}
+	var calls int
+	fake := func(text string) (string, int64, error) {
+		calls++
+		parts := strings.Split(text, "\n")
+		for i := range parts {
+			parts[i] += "_en"
+		}
+		return strings.Join(parts, "\n"), 2, nil
+	}
+	got, points, err := chatImageLegs(lines, fake)
+	if err != nil {
+		t.Fatalf("快路径失败: %v", err)
+	}
+	if calls != 1 || points != 2 {
+		t.Fatalf("行数已对齐时不该二分：calls=%d points=%d", calls, points)
+	}
+	if strings.Join(got, "|") != "甲_en|乙_en|丙_en|丁_en" {
+		t.Fatalf("快路径逐行结果不对: %q", got)
+	}
+}
+
+// TestChatImageLegsBlankLinesKeptAndSkipped 空行不送模型，但输出条数必须与 OCR 行等长（下标一一对应）。
+func TestChatImageLegsBlankLinesKeptAndSkipped(t *testing.T) {
+	lines := []string{"a", "", "b"}
+	var inputs []string
+	fake := func(text string) (string, int64, error) {
+		inputs = append(inputs, text)
+		parts := strings.Split(text, "\n")
+		for i := range parts {
+			parts[i] += "_en"
+		}
+		return strings.Join(parts, "\n"), 1, nil
+	}
+	got, _, err := chatImageLegs(lines, fake)
+	if err != nil {
+		t.Fatalf("空行场景失败: %v", err)
+	}
+	if len(got) != len(lines) || got[1] != "" {
+		t.Fatalf("输出必须与 OCR 行等长（空行占位）：%q", got)
+	}
+	if strings.Join(got, "|") != "a_en||b_en" {
+		t.Fatalf("空行两侧的行错位: %q", got)
+	}
+	if len(inputs) != 1 || inputs[0] != "a\nb" {
+		t.Fatalf("空行不该送模型：inputs=%q", inputs)
+	}
+}
+
+// TestChatImageLegsSplitsOnEmptyCell 行数对得上、但某一行译文为空时**不能采用**
+// （那一行会在图上消失），要继续二分；模型对单行正常时每一行都必须救回来。
+func TestChatImageLegsSplitsOnEmptyCell(t *testing.T) {
+	lines := []string{"A", "B", "C", "D"}
+	fake := func(text string) (string, int64, error) {
+		parts := strings.Split(text, "\n")
+		out := make([]string, len(parts))
+		for i, p := range parts {
+			if p == "B" && len(parts) > 1 {
+				out[i] = "" // 整段时 B 这一行丢内容。
+			} else {
+				out[i] = p + "_en"
+			}
+		}
+		return strings.Join(out, "\n"), 1, nil
+	}
+	got, points, err := chatImageLegs(lines, fake)
+	if err != nil {
+		t.Fatalf("有空行时应继续二分而不是失败: %v", err)
+	}
+	if strings.Join(got, "|") != "A_en|B_en|C_en|D_en" {
+		t.Fatalf("空行没被救回（逐行结果错）: %q", got)
+	}
+	if points != 5 {
+		t.Fatalf("应恰好 5 枪（整段 1 + [A,B] 1 + 单句 2 + [C,D] 1）：points=%d", points)
+	}
+}
+
+// TestChatImageLegsRejectsUnusableSingleLine 单行是二分终点：仍回空/多行 ⇒ 报错（宁可不出图，不画空字）。
+func TestChatImageLegsRejectsUnusableSingleLine(t *testing.T) {
+	cases := []struct {
+		name string
+		out  string
+	}{
+		{"回空", "  "},
+		{"回多行", "x\ny"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, _, err := chatImageLegs([]string{"原文"}, func(string) (string, int64, error) {
+				return c.out, 1, nil
+			})
+			if err == nil {
+				t.Fatalf("单行不可用译文竟被判成功（out=%q）", c.out)
+			}
+		})
+	}
+	_, _, err := chatImageLegs([]string{"原文"}, func(string) (string, int64, error) {
+		return "", 1, errors.New("upstream boom")
+	})
+	if err == nil {
+		t.Fatalf("上游失败必须向上传递（不许当成空译文吞掉）")
+	}
+}
+
+// TestAlignChatImageTranslationsSplitsOnlyBrokenLangs 只重译行数对不上的语种；
+// 已对齐的语种零额外调用、原文不动（多语种请求不许为一条坏腿全场重翻）。
+func TestAlignChatImageTranslationsSplitsOnlyBrokenLangs(t *testing.T) {
+	lines := []string{"一", "二"}
+	got := map[string]string{"en": "and", "ja": "一\n二"}
+	calls := map[string]int{}
+	translate := func(lang, text string) (string, int64, error) {
+		calls[lang]++
+		if lang != "en" {
+			t.Fatalf("已对齐的语种不该被重译：lang=%s text=%q", lang, text)
+		}
+		parts := strings.Split(text, "\n")
+		if len(parts) > 1 {
+			return "and", 3, nil
+		}
+		return parts[0] + "_en", 3, nil
+	}
+	out, split, points, err := alignChatImageTranslations(lines, []string{"en", "ja"}, got, translate)
+	if err != nil {
+		t.Fatalf("对齐失败: %v", err)
+	}
+	if strings.Join(split, ",") != "en" {
+		t.Fatalf("只应重译 en：split=%v", split)
+	}
+	if out["en"] != "一_en\n二_en" {
+		t.Fatalf("en 分腿结果不对: %q", out["en"])
+	}
+	if out["ja"] != "一\n二" {
+		t.Fatalf("ja 原文被改动: %q", out["ja"])
+	}
+	if calls["ja"] != 0 {
+		t.Fatalf("ja 被多打了一枪: calls=%d", calls["ja"])
+	}
+	if points != 9 {
+		t.Fatalf("附加积分应为 3 枪 × 3：points=%d", points)
+	}
+
+	// 快路径：全部对齐 ⇒ 零调用、零积分。
+	calls = map[string]int{}
+	out, split, points, err = alignChatImageTranslations(lines, []string{"en", "ja"},
+		map[string]string{"en": "one\ntwo", "ja": "一\n二"}, translate)
+	if err != nil || len(split) != 0 || points != 0 || len(calls) != 0 {
+		t.Fatalf("全部对齐却重译了：split=%v points=%d calls=%v err=%v", split, points, calls, err)
+	}
+	if out["en"] != "one\ntwo" {
+		t.Fatalf("快路径译文被改写: %q", out["en"])
+	}
+}
+
+// TestChatImageLinePairsByPosition 多行正向配对：行数相等时每一行取**同下标**的译文（不按文本猜）。
+func TestChatImageLinePairsByPosition(t *testing.T) {
+	lines := []string{"已同步", "产品说明书", "已同步"}
+	m, ok := chatImageLinePairs(lines, "  Synced \n Product manual \n Synced  ")
+	if !ok {
+		t.Fatalf("行数相等却判失败")
+	}
+	if len(m) != 2 || m["已同步"] != "Synced" || m["产品说明书"] != "Product manual" {
+		t.Fatalf("配对结果不对: %#v", m)
+	}
+	if _, ok := chatImageLinePairs(lines, "Synced\nProduct manual"); ok {
+		t.Fatalf("行数不等（3 vs 2）竟判成功＝会把译文盖到错误的框上")
+	}
+	if _, ok := chatImageLinePairs(lines, "   "); ok {
+		t.Fatalf("空译文竟判成功")
+	}
+}
+
+// TestChatImageLegsStopsAtCallBudget 模型对任意多行输入都只回 1 行时，分腿必须在上限内停手
+// （不把一次即时翻译拖成几十枪）；错误向上传递 ⇒ 不出图，而不是画出错位的图。
+func TestChatImageLegsStopsAtCallBudget(t *testing.T) {
+	lines := make([]string, 64)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line-%02d", i)
+	}
+	var calls int
+	got, points, err := chatImageLegs(lines, func(string) (string, int64, error) {
+		calls++
+		if calls > chatImageLegMaxCalls {
+			t.Fatalf("越过调用上限仍在打上游：calls=%d", calls)
+		}
+		return "and", 1, nil
+	})
+	if err == nil {
+		t.Fatalf("64 行整段丢行竟判成功")
+	}
+	if calls != chatImageLegMaxCalls {
+		t.Fatalf("应在第 %d 枪停手，实际 %d", chatImageLegMaxCalls, calls)
+	}
+	if points != int64(calls) {
+		t.Fatalf("已发生的真实用量必须照实累计：points=%d calls=%d", points, calls)
+	}
+	if len(got) != len(lines) {
+		t.Fatalf("输出形状必须与 OCR 行等长：got=%d lines=%d", len(got), len(lines))
+	}
+}
+
+// chatImageLegWired 源码级接线判据（剥注释后逐条点名）：
+// ① handler 必须调用分腿对齐；② 对齐结果必须写回 res.Data.Translations 并累加积分；
+// ③ 出图必须吃**对齐后**的译文（回退成一次性结果＝分腿白做）。
+func chatImageLegWired(src string) error {
+	body := stripGoCommentsForGate(src)
+	for _, want := range []string{
+		"aligned, splitLangs, legPoints, legErr := s.chatImageAlignTranslations(ctx, options, lines, targets, res.Data.Translations)",
+		"res.Data.Translations = aligned",
+		"res.PointsUsed += legPoints",
+		"renderChatImage(r, tmpPath, targets[0], lines, res.Data.Translations[targets[0]], &resp)",
+		"tr, ok := chatImageLinePairs(lines, translated)",
+	} {
+		if !strings.Contains(body, want) {
+			return errors.New("缺接线: " + want)
+		}
+	}
+	return nil
+}
+
+// TestChatImageLegSplitWired 分腿必须真接在请求链上（纯函数锁看不见"谁调用它"）。
+// 反证用**变异体**：把对齐结果写回与出图入参摘掉，判据必须当场红（否则说明它只是问文件里有没有这些字）。
+func TestChatImageLegSplitWired(t *testing.T) {
+	b, err := os.ReadFile("chat_image.go")
+	if err != nil {
+		t.Fatalf("读取 chat_image.go 失败: %v", err)
+	}
+	src := string(b)
+	if err := chatImageLegWired(src); err != nil {
+		t.Fatalf("分腿未接线：%v", err)
+	}
+	mutations := []struct{ old, new string }{
+		{"res.Data.Translations = aligned", "res.Data.Translations = res.Data.Translations"},
+		{"renderChatImage(r, tmpPath, targets[0], lines, res.Data.Translations[targets[0]], &resp)",
+			"renderChatImage(r, tmpPath, targets[0], lines, \"\", &resp)"},
+	}
+	for i, m := range mutations {
+		bad := strings.Replace(src, m.old, m.new, 1)
+		if bad == src || !strings.Contains(bad, m.new) {
+			t.Fatalf("反证 %d 的变异体没生效（no-op 会把自己伪装成「锁抓住了破坏」）", i+1)
+		}
+		if chatImageLegWired(bad) == nil {
+			t.Fatalf("反证 %d 失效：破坏接线后判据仍绿", i+1)
+		}
 	}
 }

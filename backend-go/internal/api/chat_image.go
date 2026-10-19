@@ -22,15 +22,25 @@
 // ★ 行↔译文对齐（原位回填的关键）：ocr_translate_image.py 按"框里的原文"取译文（tr[原文行]），
 //
 //	所以这里要给出「原文行 → 该行译文」的映射。做法是先整段翻一次（与 /api/chat 同构、只发一枪），
-//	译文按 \n 拆行；行数与 OCR 行数**严格相等**才配对回填。数量对不上说明模型没保持行结构，
-//	这时宁可不画（保留原文，image_error=line_mismatch）也不把译文盖到错误的框上——
-//	与 ocr.go 的 parseOcrJSON 同一条"数量不等就不配对"纪律。
+//	译文按 \n 拆行；行数与 OCR 行数**严格相等**才配对回填。
+//
+// ★ 多行分腿（2026-10-19 修）：整段一枪是**快路径**，但部分模型（现网 tencent/Hunyuan-MT-7B）
+//
+//	在多行输入上会丢行（实测 4 行稳定只回 1 行 "and"、2 行偶发丢首行）。因此行数对不上的那个
+//	目标语种**分腿重译**：按行二分，每一腿仍要求"返回行数 == 输入行数"，不满足就再拆，
+//	直到单行（单行是终点）。只对坏掉的语种付这份钱——行数已对齐的语种一次额外调用都不发。
+//	分腿后仍对不上（单行也回空/多行）才宁可不画（保留原文，image_error=line_mismatch），
+//	与 ocr.go 的 parseOcrJSON 同一条"数量不等就不配对"纪律；**绝不拿猜的行去盖框**。
+//	分腿产生的真实用量照常计费（每腿都经 Engine.HandleText），并累加进 points_used。
 //
 // =============================================
 package api
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -42,6 +52,7 @@ import (
 	apierrors "translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/llm"
+	"translator/internal/observability"
 	"translator/internal/tenant"
 )
 
@@ -176,6 +187,7 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 整段一次翻（与 /api/chat 同构、只发一枪），避免逐行多次调用把即时翻译拖慢。
 	//   注意这里**保留换行**：joined 里的 \n 是"行↔译文"对齐的唯一线索。
+	//   行数对不上的语种随后由 chatImageAlignTranslations 分腿重译（见文件头注）。
 	joined := strings.Join(lines, "\n")
 	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), uiLang))
 	res := s.Engine.HandleText(ctx, joined, options, nil)
@@ -197,6 +209,22 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.metrics.countTranslate("text", true)
+
+	// ★ 多行分腿：整段结果与 OCR 行数对不上的语种重译到逐行对齐（快路径失败才付这份钱）。
+	//   放在 webhook 之前：外部系统拿到的译文必须与响应/回填图是同一份。
+	aligned, splitLangs, legPoints, legErr := s.chatImageAlignTranslations(ctx, options, lines, targets, res.Data.Translations)
+	if len(splitLangs) > 0 {
+		observability.Info(ctx, "chat_image_leg_split",
+			"langs", strings.Join(splitLangs, ","), "lines", len(lines), "points", legPoints)
+	}
+	if legErr != nil {
+		// 分腿仍对不齐＝该语种这一次出不了图（renderChatImage 会如实回 line_mismatch），
+		// 但**译文文本照常返回**（分腿成功的语种不受影响）。
+		observability.Warn(ctx, "chat_image_leg_split_failed", "err", legErr.Error())
+	}
+	res.Data.Translations = aligned
+	res.PointsUsed += legPoints
+
 	s.grantTranslateTask(r, tid)
 	s.dispatchTranslateWebhook(tid, "text", joined, res)
 
@@ -248,20 +276,15 @@ func stageChatImage(f io.Reader, ext string) (string, func(), error) {
 //
 // ★ 一切失败都只降级译后图这一件，绝不返回错误把整单判死（译文文本已在 resp 里）。
 func renderChatImage(r *http.Request, srcPath, lang string, lines []string, translated string, resp *chatImageResp) {
-	translated = strings.TrimSpace(translated)
-	if translated == "" {
-		resp.ImageError = "no_translation"
+	tr, ok := chatImageLinePairs(lines, translated)
+	if !ok {
+		// 模型没保持行结构（且分腿也没救回来）：宁可不画也不把译文盖到错误的框上（保留原文更安全）。
+		if strings.TrimSpace(translated) == "" {
+			resp.ImageError = "no_translation"
+		} else {
+			resp.ImageError = "line_mismatch"
+		}
 		return
-	}
-	trLines := strings.Split(translated, "\n")
-	if len(trLines) != len(lines) {
-		// 模型没保持行结构：宁可不画也不把译文盖到错误的框上（保留原文更安全）。
-		resp.ImageError = "line_mismatch"
-		return
-	}
-	tr := make(map[string]string, len(lines))
-	for i, ln := range lines {
-		tr[ln] = strings.TrimSpace(trLines[i])
 	}
 	outPath := srcPath + ".translated.png"
 	defer os.Remove(outPath)
@@ -277,6 +300,173 @@ func renderChatImage(r *http.Request, srcPath, lang string, lines []string, tran
 	}
 	resp.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
 	_ = lang // 语种只用于排障日志，当前不再加入出参（ImageLang 已表达）
+}
+
+// chatImageLinesOf 把一段译文按行切开。
+// ★ 行数判据的唯一实现：对齐（chatImageLinePairs）、分腿（chatImageLegs）、快路径判定
+// 都必须吃这一个函数——三处各写一遍切法，迟早出现"这里算 4 行、那里算 3 行"。
+func chatImageLinesOf(s string) []string {
+	return strings.Split(strings.TrimSpace(s), "\n")
+}
+
+// chatImageLinePairs 把「OCR 行 → 译文行」按**位置**配对。
+// ok=false 表示行数对不上或整段译文为空——调用方必须放弃绘图，不能猜（猜＝把译文盖到错误的框上）。
+func chatImageLinePairs(lines []string, translated string) (map[string]string, bool) {
+	translated = strings.TrimSpace(translated)
+	if translated == "" {
+		return nil, false
+	}
+	trLines := chatImageLinesOf(translated)
+	if len(trLines) != len(lines) {
+		return nil, false
+	}
+	tr := make(map[string]string, len(lines))
+	for i, ln := range lines {
+		tr[ln] = strings.TrimSpace(trLines[i])
+	}
+	return tr, true
+}
+
+// chatImageLegMaxCalls **单次请求**分腿的调用上限（成本/延迟闸，多语种共用这一份）。
+// 命中即放弃该语种的出图（如实回 line_mismatch，其余语种的译文照常返回）——绝不把一次
+// "即时翻译"拖成几十枪（主站 LLM_CHAT_CONCURRENT=1，串行）。
+// 24 枪足够修复常见的 ≤12 行整段丢行；再大的图请改用文件翻译入口。
+const chatImageLegMaxCalls = 24
+
+// chatImageLegTranslate 分腿翻译一枪（入参是被 \n 拼成一段的若干 OCR 行）。
+type chatImageLegTranslate func(text string) (string, int64, error)
+
+// chatImageLegs 把一段**行数对不上**的译文重译到逐行对齐。
+//
+// 算法：整段先翻一枪；返回行数 == 输入行数就采用，否则按行二分（前半/后半各自递归），
+// 直到单行。单行是终点（再拆没有意义）——单行仍回空或多行即判失败，由调用方降级（不出图）。
+//
+// 为什么二分而不是逐行：整段一枪是快路径；只有模型丢行的语种才付这份钱。二分让「局部坏」
+// 最多付 O(k log n) 次而不是 N 次（95 行图逐行 = 95 次往返，主站 LLM_CHAT_CONCURRENT=1 下不可接受）。
+// ★ 判据只有一条：**每一腿返回的行数必须等于该腿输入的行数**。不依赖模型自觉——
+// 现网 Hunyuan-MT-7B 在 4 行输入上稳定只回 1 行 "and"，且质检把它标成"长度合理"。
+//
+// 空行不送模型（原文空行不需要翻译），但输出必须与 lines 等长（下标一一对应）。
+func chatImageLegs(lines []string, translate chatImageLegTranslate) ([]string, int64, error) {
+	budget := chatImageLegMaxCalls
+	return chatImageLegsWithin(lines, translate, &budget)
+}
+
+// chatImageLegsWithin 同 chatImageLegs，但调用预算由调用方持有——多语种请求共用一份，
+// 否则 N 个坏语种会各花 N×24 枪（上限按"每张图"成立才算真的封住了延迟）。
+func chatImageLegsWithin(lines []string, translate chatImageLegTranslate, budget *int) ([]string, int64, error) {
+	out := make([]string, len(lines))
+	var points int64
+	idx := make([]int, 0, len(lines))
+	for i, ln := range lines {
+		if strings.TrimSpace(ln) != "" {
+			idx = append(idx, i)
+		}
+	}
+	var solve func([]int) error
+	solve = func(idxs []int) error {
+		if len(idxs) == 0 {
+			return nil
+		}
+		if *budget <= 0 {
+			return fmt.Errorf("分腿重译超过上限（%d 次）", chatImageLegMaxCalls)
+		}
+		*budget--
+		parts := make([]string, len(idxs))
+		for k, i := range idxs {
+			parts[k] = lines[i]
+		}
+		text, p, err := translate(strings.Join(parts, "\n"))
+		points += p
+		if err != nil {
+			return err
+		}
+		tr := chatImageLinesOf(text)
+		usable := len(tr) == len(idxs)
+		if usable {
+			for k := range idxs {
+				if strings.TrimSpace(tr[k]) == "" {
+					usable = false // 非空原文行译成空行＝这一腿有行没给出译文，继续拆
+					break
+				}
+			}
+		}
+		if usable {
+			for k, i := range idxs {
+				out[i] = strings.TrimSpace(tr[k])
+			}
+			return nil
+		}
+		if len(idxs) == 1 {
+			return fmt.Errorf("分腿译文不可用（输入 1 行，返回 %d 行）", len(tr))
+		}
+		mid := len(idxs) / 2
+		if err := solve(idxs[:mid]); err != nil {
+			return err
+		}
+		return solve(idxs[mid:])
+	}
+	if err := solve(idx); err != nil {
+		return out, points, err
+	}
+	return out, points, nil
+}
+
+// alignChatImageTranslations 把每个目标语种的译文对齐到 OCR 行：
+// 已对齐的语种原样保留（零额外调用）；对不上的语种走 chatImageLegs 重译。
+// translate(lang, text) 由调用方注入（生产＝Engine.HandleText，测试＝假函数）。
+// 返回对齐后的新 map、发生重译的语种、附加积分、首个错误（某语种失败不拖累其他语种）。
+func alignChatImageTranslations(lines []string, targets []string, got map[string]string,
+	translate func(lang, text string) (string, int64, error)) (map[string]string, []string, int64, error) {
+	out := make(map[string]string, len(got))
+	for k, v := range got {
+		out[k] = v
+	}
+	budget := chatImageLegMaxCalls
+	var splitLangs []string
+	var points int64
+	var firstErr error
+	for _, lang := range targets {
+		if strings.TrimSpace(out[lang]) != "" && len(chatImageLinesOf(out[lang])) == len(lines) {
+			continue
+		}
+		legs, p, err := chatImageLegsWithin(lines, func(text string) (string, int64, error) {
+			return translate(lang, text)
+		}, &budget)
+		points += p
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("%s: %w", lang, err)
+			}
+			continue
+		}
+		out[lang] = strings.Join(legs, "\n")
+		splitLangs = append(splitLangs, lang)
+	}
+	return out, splitLangs, points, firstErr
+}
+
+// chatImageAlignTranslations 生产接线：把分腿翻译接到引擎。
+// 每一腿只翻**该目标语种**（其余语种已在整段那一枪里出过，不再重复计费/重复调用），
+// mode 与界面语言沿用本次请求；用量由 Engine 内部实时记账，这里只把 points_used 累加回去。
+func (s *Server) chatImageAlignTranslations(ctx context.Context, options map[string]interface{},
+	lines []string, targets []string, got map[string]string) (map[string]string, []string, int64, error) {
+	translate := func(lang, text string) (string, int64, error) {
+		opts := make(map[string]interface{}, len(options)+1)
+		for k, v := range options {
+			opts[k] = v
+		}
+		opts["target_langs"] = []interface{}{lang}
+		res := s.Engine.HandleText(ctx, text, opts, nil)
+		if res == nil {
+			return "", 0, errors.New("引擎未返回结果")
+		}
+		if res.Error != "" {
+			return "", res.PointsUsed, errors.New(res.Error)
+		}
+		return res.Data.Translations[lang], res.PointsUsed, nil
+	}
+	return alignChatImageTranslations(lines, targets, got, translate)
 }
 
 // parseChatImageLangs 解析逗号分隔的目标语种（去空、去重、保序）。
