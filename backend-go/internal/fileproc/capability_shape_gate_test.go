@@ -58,6 +58,7 @@ var capShapeLegs = []string{
 	"L08", "L09", "L10", "L11", "L12", "L13",
 	"L14", "L15", "L16", "L17", "L18",
 	"L19", "L20", "L21", "L22", "L23", "L24",
+	"L26", "L27",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -133,6 +134,13 @@ var capShapeMutations = []capShapeMutation{
 		"扩框被摘（长译文不再争取空白区，只能靠缩字兜底）"},
 	{"L24", capShapeAsrFile, `    if rms < NO_SPEECH_RMS and peak < NO_SPEECH_PEAK:`, `    if True:`,
 		"无语音门退化成「一律判无语音」（小声真人语音被误伤＝客户说话被判没听到）"},
+	// ===== ★ 2026-10-19（下午·现网图片单）批：框内满宽横线剔除（L26）＋ 空框不造字（L27）。
+	// 两处都是「运行期形状错」：健康面全绿、日志零红，只有把译后图打开才看得出
+	// （前者＝字号忽大忽小，后者＝原文里根本不存在的 `0`/`4` 幽灵内容）。
+	{"L26", capShapeImgFile, `        ink[full_rows, :] = False`, `        pass`,
+		"满宽墨色行不剔除（输入框上下边让原行高被读成满框高，短内容被画成整格巨字）"},
+	{"L27", capShapeImgFile, `        if ink_h == 0 and text == (ln.get("text") or "").strip():`, `        if False:`,
+		"空框 + 原文交付不再跳过（OCR 在图标/边框上误切的空框被画成幽灵内容）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。

@@ -25,18 +25,26 @@ import (
 // releaseScriptForMarkers 现读本批发布脚本；读不到即 t.Fatal（判据对象没了要立刻出声，不能跳过）。
 func releaseScriptForMarkers(t *testing.T) string {
 	t.Helper()
+	return releaseScriptNamed(t, "release_20261018.sh")
+}
+
+// releaseScriptNamed 现读指定发布脚本（同一条口径：靶子没了必须立刻出声）。
+// ★ 新增批次脚本时**不要**改上面那个 10-18 的靶子名：改名字＝把老锁的射程悄悄挪走，
+// 每个批次的契约锁各自点自己的脚本（本批＝release_20261019b.sh）。
+func releaseScriptNamed(t *testing.T, name string) string {
+	t.Helper()
 	dir, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("取工作目录失败：%v", err)
 	}
 	for i := 0; i < 6; i++ {
-		p := filepath.Join(dir, "deploy", "release_20261018.sh")
+		p := filepath.Join(dir, "deploy", name)
 		if raw, err := os.ReadFile(p); err == nil {
 			return string(raw)
 		}
 		dir = filepath.Dir(dir)
 	}
-	t.Fatalf("找不到 deploy/release_20261018.sh（本判据的靶子）")
+	t.Fatalf("找不到 deploy/%s（本判据的靶子）", name)
 	return ""
 }
 
@@ -113,6 +121,37 @@ func TestIdentityPrefillMarkerMatchesReleaseScript(t *testing.T) {
 	// M3b：日志被删（常量失去运行期引用点）⇒ C3 必须红
 	srcNoLog := strings.ReplaceAll(src, logLiteral, "已被删掉")
 	if len(prefillMarkerContractProblems(script, identityPrefillMarker, logLiteral, srcNoLog)) == 0 {
+		t.Fatal("M3b 反证失败：日志被删仍全绿 ⇒ C3 无射程（常量会被编掉而无人知）")
+	}
+}
+
+// TestMinimalInstrRescueMarkerMatchesReleaseScript 图片缺陷批（deploy/release_20261019b.sh）
+// 的同款跨语言契约锁＋三枚反证：本批改了 engine 的提示词档（极简指令）与 fileproc 的 *.py
+// （框行墨剔除 / 无墨 identity 跳过），件里必须找得到"极简腿真被走到"的运行期字面量。
+// 反证取向与 10-18 那条一致：改名/摘 grep ⇒ C1 红；常量或日志字面量少了 ⇒ C2/C3 红（恒绿闸门）。
+func TestMinimalInstrRescueMarkerMatchesReleaseScript(t *testing.T) {
+	script := releaseScriptNamed(t, "release_20261019b.sh")
+	src := engineSourceForMarkers(t)
+	const logLiteral = "文件翻译：极简指令兜底腿救回未译段"
+
+	if p := prefillMarkerContractProblems(script, minimalInstrRescueMarker, logLiteral, src); len(p) != 0 {
+		t.Fatalf("发布脚本与本批 engine 常量/文案已经打架：%s", strings.Join(p, "；"))
+	}
+
+	m1 := strings.Replace(script, `"`+minimalInstrRescueMarker+`"`, `"SOMETHING_ELSE_V1"`, 1)
+	if len(prefillMarkerContractProblems(m1, minimalInstrRescueMarker, logLiteral, src)) == 0 {
+		t.Fatal("M1 反证失败：脚本侧特征串改了名，C1 仍然全绿 ⇒ 这条锁没有射程")
+	}
+	m2 := strings.Replace(script, `grep -a -c -F -- "`+minimalInstrRescueMarker+`"`, "", 1)
+	if len(prefillMarkerContractProblems(m2, minimalInstrRescueMarker, logLiteral, src)) == 0 {
+		t.Fatal("M2 反证失败：摘掉 grep 行仍全绿 ⇒ 判据对着空对象判绿")
+	}
+	srcNoConst := strings.ReplaceAll(src, minimalInstrRescueMarker, "X")
+	if len(prefillMarkerContractProblems(script, minimalInstrRescueMarker, logLiteral, srcNoConst)) == 0 {
+		t.Fatal("M3a 反证失败：源码里常量没了仍全绿 ⇒ C2 无射程")
+	}
+	srcNoLog := strings.ReplaceAll(src, logLiteral, "已被删掉")
+	if len(prefillMarkerContractProblems(script, minimalInstrRescueMarker, logLiteral, srcNoLog)) == 0 {
 		t.Fatal("M3b 反证失败：日志被删仍全绿 ⇒ C3 无射程（常量会被编掉而无人知）")
 	}
 }

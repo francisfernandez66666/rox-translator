@@ -169,6 +169,22 @@ func maxLengthFromCtx(ctx context.Context) int {
 	return 0
 }
 
+// minimalInstrKey 极简指令模式 context 键（true=只用指令骨架+输出契约，去掉币种/纯度尾注）。
+type minimalInstrKey struct{}
+
+// WithMinimalInstruction 标记本次翻译使用极简指令（★ 2026-10-19，见 singleLangRaw 里的取用点）。
+// 用途只有一个：**补漏末段兜底**——正常腿（带尾注）产出的译文被判不可用之后，再给模型一次
+// 「不带中文尾注」的机会，避开纯翻译模型把尾注当正文来翻的退化形态。
+func WithMinimalInstruction(ctx context.Context) context.Context {
+	return context.WithValue(ctx, minimalInstrKey{}, true)
+}
+
+// minimalInstructionFromCtx 读取极简指令开关；未设置返回 false（正常档，行为与改造前一致）。
+func minimalInstructionFromCtx(ctx context.Context) bool {
+	v, _ := ctx.Value(minimalInstrKey{}).(bool)
+	return v
+}
+
 // maxLengthOption 从 options map 读取缩翻最长字符限制（兼容 JSON number/string 形态）。
 // 返回：>0=启用缩翻并指定上限；<=0=未启用。
 func maxLengthOption(options map[string]interface{}) int {
@@ -1653,6 +1669,18 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	//   紧邻待译文本——ref 在 user 中「仅用于沿用译法」的表述由 buildExamplesPrompt 自带。
 	ui := uiLangFromCtx(ctx)
 	instrCore := translateInstruction(sourceLang, targetLang, ui) + outputContractNote(ui)
+	if minimalInstructionFromCtx(ctx) {
+		// ★ 2026-10-19 极简指令兜底腿（补漏末段专用，与 file.go 的 translateSegmentLastResort 配对）：
+		//   现网实证（工单 107，64 段里 12 段恒未译出）：Hunyuan-MT 这类**纯翻译模型**把 system 里的
+		//   中文尾注当成了待译内容——源段越短/越不像中文，它越会去翻那两条尾注，产出
+		//   `and`（币种注记的尾巴）或整段英文注记，被 IsTranslationUsable 判成噪声而**每一轮都失败**，
+		//   于是「金额」「当前：全部允许·仓位留空/0 =…」这类真中文标签原样留在成品里（中文泄露）。
+		//   实测对照：同一 12 段，带尾注 ⇒ 11/12 出 `and`；**只留指令骨架+输出契约 ⇒ 12/12 正确**
+		//   （含 `金额→Amount` 与那条长句），故末段兜底换成「不带尾注」这一档。
+		//   取舍：极简档不携带币种/纯度约束，只用于「正常腿已判不可用」的段——那些段现状是要么原样
+		//   留中文、要么留空，换成一条无尾注的正常译文严格更优（不是把好译文换差）。
+		instrCore = translateInstructionCore(sourceLang, targetLang, ui) + outputContractNote(ui)
+	}
 	var dynNotes strings.Builder
 	if phGuardFromCtx(ctx) {
 		// ★ D19：掩码保护令牌逐字保留约束（配合 singleLang 的 mask/unmask 闭环）

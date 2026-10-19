@@ -22,6 +22,12 @@
     缩到 8px 兜底 ⇒ 长译文被缩成蚂蚁字（用户报障「译后图看不清」）。现：量原行**墨迹高度**，
     地板＝原行高的 FONT_FLOOR_RATIO（0.6），先尝试向右扩进均匀空白区、再按语种换行
     （CJK 按字、拉丁按词、超长词按字符硬切），实在放不下才降到地板并在 stderr 出声。
+    ★ 墨迹高度只认**真笔画**：整列全墨（竖线/表格边）与整行全墨（横线/输入框上下边）都要剔除，
+      否则带边框的控件会被读成满框高、短内容（`0`/`4`）被画成整格巨字——`_line_ink_height` 两轴同尺。
+  · **空框不造字**（★ 2026-10-19）：OCR 在控件边框/图标/下拉箭头上误切出的**无墨框**，
+    若这一行要写的又恰好是原文本身（identity 交付，符号段），直接跳过——画上去就是原文里
+    根本不存在的「幽灵内容」（现网单里那批被画成满格巨字的 `0`/`4` 与乱入的 `の`）。
+    真译文（≠ 原文）即便墨色很淡也照旧绘制，避免把「字号问题」换成「漏译问题」。
   · **抹字底色与文字色按原图自适应**（★ 2026-10-19 G3-b）：底色取框外 12px 环带的**中位色**（取不到
     则不填底、留轻微残影），文字色按底色亮度反差自动选黑/白——旧形态填框内 1×1 均值色 + 恒黑字，
     在深色底/彩色卡片上要么抹出灰块、要么黑字看不见。
@@ -206,6 +212,10 @@ def _line_ink_height(patch) -> int:
 
     ★ 全高墨色列（框线/竖线/表格边框）必须先剔除：它们每一行都有墨，
       不剔除会把「一行 12px 的字」读成「整框 40px 高」，字号地板随之被抬到不该有的高度。
+    ★ 2026-10-19：**满宽墨色行（横线/输入框上下边）同样要剔除**——只剔列的那一版在现网
+      单里把带边框的控件（`全局` 下拉、参数输入格）读成满框高：横边让「每一列都有墨」，
+      `rows[-1]-rows[0]+1` 直接等于框高 ⇒ 字号按框高起算，短内容（`0`/`4`）被画成整格巨字
+      （用户报障「译后图字号忽大忽小」的最大单一来源）。两轴同一条判据、同一把尺子。
     """
     import numpy as np
 
@@ -217,6 +227,9 @@ def _line_ink_height(patch) -> int:
     ink = np.abs(lum - bg) > INK_LUMA_DELTA
     full_cols = ink.all(axis=0)   # 整列都有墨＝框线/竖线，不是文字
     ink[:, full_cols] = False
+    if ink.size:
+        full_rows = ink.all(axis=1)   # 整行都有墨＝横线/上下边，同样不是文字
+        ink[full_rows, :] = False
     rows = np.where(ink.any(axis=1))[0]
     if rows.size == 0:
         return 0
@@ -441,6 +454,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
 
     painted = 0
     overflowed = 0
+    blank_skipped = 0   # 空框（无墨）+ 原文交付 的跳过计数：排障用（见下面的 INFO 行）
     for idx, ln in enumerate(lines):
         if not isinstance(ln, dict):
             continue
@@ -454,6 +468,15 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         # ① 量原行墨迹高度（字号地板的依据；量不到就退用框高），并取框外环带中位色作抹字底色。
         patch = img.crop(r0)
         ink_h = _line_ink_height(patch)
+        # ★ 2026-10-19：框内**一处墨都没有**（OCR 在控件边框/图标/下拉箭头上误切的空框），
+        #   而这一行要写的就是原文本身（identity 交付，`0`/`4`/`<`/`の` 这类符号段）——
+        #   没有任何东西需要替换，画上去只会造出**原文里根本不存在的幽灵内容**，
+        #   还把空框当满框算字号（现网单里被画成满格巨字）。原图没字＝不造字：跳过且不抹底。
+        #   ⚠️ 只跳过「要写的内容 == 原文」这一档：真译文（text ≠ 原文）即便墨色很淡也照旧绘制，
+        #   否则淡灰小字会被整段漏掉（把「字号问题」换成「漏译问题」，方向更坏）。
+        if ink_h == 0 and text == (ln.get("text") or "").strip():
+            blank_skipped += 1
+            continue
         bg = _pick_bg(img, r0)
         if bg is not None:
             # 抹掉原文：填**原有底色**（环带中位色），比一律填白/填灰更耐看
@@ -491,7 +514,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         img.save(out)
     except Exception as exc:
         return _err("Out", "产物写入失败 %s" % exc)
-    print("INFO:painted=%d/%d overflow=%d" % (painted, len(lines), overflowed), file=sys.stderr)
+    print("INFO:painted=%d/%d overflow=%d blank_skipped=%d" % (painted, len(lines), overflowed, blank_skipped), file=sys.stderr)
     return 0
 
 

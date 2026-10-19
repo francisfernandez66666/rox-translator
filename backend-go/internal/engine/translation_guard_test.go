@@ -2,6 +2,8 @@
 // 译文可用性单一判定的回归断言（P0 整改 RC-2 + F-38 批 D）：
 //   - IsTranslationUsable：空/失败占位/同文（含空白折叠）/指令回显残留/短格长度爆炸五类必判不可用；
 //     源文与译文**都**含 '<' 的合法数学式必须判可用（防把 "A<B" 误杀）；
+//     ★ 同文的例外档（判据 3′，2026-10-19 工单 107 收口）：源段无任何非 ASCII 字母时回吐判可用；
+//     见 TestIsTranslationUsableIdentityEchoWithoutSourceLetters（含"有中文仍须判不可用"的反向对照）。
 //   - collectKBPass：KB「源文=译文」脏行与「6 字格×2100 字邮件」爆炸行都不得算命中，
 //     必须进模型补漏队列；
 //   - missingSegments：脏行未写入 langTranslations ⇒ 最终计入未译清单（不再被硬闸永久跳过）。
@@ -410,4 +412,39 @@ func TestT4NewJudgesAreLoadBearing(t *testing.T) {
 			t.Errorf("%s 在见证样本集里一次都没命中 ⇒ 该判据形同不存在", w.name)
 		}
 	}
+}
+
+// TestIsTranslationUsableIdentityEchoWithoutSourceLetters 判据 3′（★ 2026-10-19 工单 107 收口，
+// 用户令「无中文源回吐即视为原文交付」）。
+//
+// 缺陷形态：工单 107 的 12 段"未译出"里有 9 段是**无中文的 OCR 碎片**（股票代码 002584.SZ、
+// 标识符 N_shape/dragon_return/fac_1/manua、单假名 の…）。它们被 segmentNeedsTranslation 的
+// 「≥2 连排 ASCII 字母」判成"要翻"而送上游，模型原样回吐 ⇒ 旧判据 3 判不可用 ⇒ 每一轮都失败，
+// 最终在工单里记一条"未译出"（成品字节其实与回落原文一致，纯属假告警）。
+//
+// 两侧都要钉：**有**非 ASCII 字母回吐仍须判不可用——那正是中文泄露形态，
+// 把这半边放松＝把本函数存在的理由拆掉（本批真中文段 `金额`、`当前：全部允许…` 就在这一档）。
+func TestIsTranslationUsableIdentityEchoWithoutSourceLetters(t *testing.T) {
+	t.Run("无中文源回吐⇒原文交付", func(t *testing.T) {
+		for _, s := range []string{
+			"002584.SZ", "600279.SH", "600000.SH", // 股票代码
+			"N_shape", "dragon_return", "fac_1", "manua", "dragon", // 标识符/拉丁词
+			"#", "1", "•", "¥1003.00", "09-17 09:40:33", // 无上下文短串/数字/时间（注释里点名的同族）
+			"  N_shape  ", // 空白折叠后仍同文
+		} {
+			if !IsTranslationUsable(s, strings.TrimSpace(s)) {
+				t.Errorf("无非 ASCII 字母的源段回吐应判可用（原文交付），got false: src=%q", s)
+			}
+		}
+	})
+	t.Run("有中文源回吐⇒仍判不可用", func(t *testing.T) {
+		for _, s := range []string{
+			"金额", "当前：全部允许·仓位留空/0 =使用全局单票金额",
+			"已实现=加权成本重放；浮动=市值-成本×数量；30s刷新", "の", "产品方案书",
+		} {
+			if IsTranslationUsable(s, s) {
+				t.Errorf("含非 ASCII 字母的源段回吐必须判不可用（中文泄露形态），got true: src=%q", s)
+			}
+		}
+	})
 }

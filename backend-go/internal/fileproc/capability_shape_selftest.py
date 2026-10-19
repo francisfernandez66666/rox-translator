@@ -646,6 +646,39 @@ def leg_l23_expand_rect_into_uniform_margin_only():
     assert blocked == rect, "与相邻框相交时不许扩，实读 %r" % (blocked,)
 
 
+@leg("L26")
+def leg_l26_full_width_ink_rows_dropped():
+    """★ 2026-10-19：满宽墨色行（横线/输入框上下边）必须与满高墨色列**同尺**剔除。
+
+    造一张 20×60 白底样张：第 0 行整行有墨（输入框上边），第 6~12 行第 20~40 列一块文字墨。
+    正确读数＝文字本身的 7 行；只剔列的那一版因为横线让「每一列都有墨」之外还让**行连续有墨**，
+    读数变成 13 ⇒ 字号按框高起算，短内容（`0`/`4`）被画成整格巨字（现网单字号忽大忽小的真身）。
+    """
+    import numpy as np
+    arr = np.full((20, 60, 3), 255, dtype=np.uint8)
+    arr[0, :, :] = 0            # 满宽横线（框的上边）
+    arr[6:13, 20:41, :] = 0     # 文字墨块：行 6..12
+    h = IMG._line_ink_height(_rgb_image(arr))
+    assert h == 7, "满宽墨色行没被剔除（读数 %d，期望文字本身的 7 行）" % h
+
+
+@leg("L27")
+def leg_l27_blank_box_identity_not_painted():
+    """★ 2026-10-19：**无墨框 + 要写的就是原文**（identity 交付）⇒ 跳过绘制，不造「幽灵内容」。
+
+    现网单里 OCR 在控件边框/下拉箭头上误切出无墨框，被画成满格巨字的 `0`/`4` 与乱入的 `の`
+    ——原图没字而我们造了字。两条腿一起判（只判"跳过"会让"整段漏绘"也一路绿）：
+    同一无墨框换成**真译文**（≠ 原文）必须照旧绘制，否则「字号问题」会变成「漏译问题」。
+    """
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        _blank_png(src)
+        rc = _render(src, out, [{"text": "0", "box": [10, 10, 200, 80], "tran": "0"}])
+        assert rc != 0 and not out.exists(), "无墨框 + 原文交付不许造出幽灵内容（rc=%d，产物=%s）" % (rc, out.exists())
+        rc2 = _render(src, out, [{"text": "0", "box": [10, 10, 200, 80], "tran": "Zero"}])
+        assert rc2 == 0 and _ink_count(out) > 0, "真译文（≠ 原文）即便框内无墨也必须照旧绘制（rc=%d）" % rc2
+
+
 # ------------------------------------------------------------------ ASR：无语音门（⭐ 2026-10-19 G11）
 
 @leg("L24")

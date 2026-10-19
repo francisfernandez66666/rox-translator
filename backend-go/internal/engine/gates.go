@@ -108,7 +108,18 @@ func (g gateCtx) check(source, lang, translated string, retry bool, e *Engine, c
 	if !gr.Pass {
 		if retry {
 			msg := "请修正以下质量问题后重新翻译：" + firstGateFail(gr.Checks)
-			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageAIInitial); strings.TrimSpace(fixed) != "" && gate.RunWithTerms(source, lang, fixed, terms).Pass {
+			// ★ 重译结果的采纳门槛＝「过闸」∧「过可用性判定」两条同时成立（2026-10-19 现网图片单）。
+			//   闸门查的是数字/格式/术语/脚本这几项**形态**，它对「一整句英文指令回显」是放行的；
+			//   而重译腿的提示词本身就是一句指令（「请严格按照意见修正重译」），模型偶发把这句
+			//   **译成目标语言回吐** ⇒ 过闸即被采纳，客户屏幕上出现
+			//   `<target language is reasonable. Please strictly follow the revision suggestions and
+			//   retranslate the text.`（现网实证：源段是符号 `<`，闸门打回后重译回吐该句，
+			//   它曾覆盖掉 identity 预填的原文）。
+			//   IsTranslationUsable 里的 nonLinguisticMustStayVerbatim / hasInstructionEcho 正是
+			//   为这一类回显而设，此处漏接＝那道判定对「文件重译腿」完全无感（同 RC-2 的装配级教训：
+			//   判定函数存在且有单测，装配漏一处照样复发）。
+			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageAIInitial); strings.TrimSpace(fixed) != "" &&
+				IsTranslationUsable(source, fixed) && gate.RunWithTerms(source, lang, fixed, terms).Pass {
 				tr = fixed
 			}
 		}

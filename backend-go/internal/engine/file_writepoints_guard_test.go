@@ -543,6 +543,23 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 			t.Fatalf("回显/未过闸的修正不得写回交付物，got %q", lt["en"][fwpSrcBad])
 		}
 	})
+	t.Run("修正是指令回显（过闸也一样）不得采纳", func(t *testing.T) {
+		// ★ 2026-10-19 现网图片单：源段是符号 `<`，闸门打回后模型把重译腿提示词那句指令
+		//   **译成英文回吐**——它没有数字可违规、脚本也纯，闸门放行，于是回声覆盖掉 identity
+		//   预填的原文，客户屏幕上出现一整句英文指令（被画进原图）。
+		//   判据两段：必须真发生过重译（否则本用例是空转锁——闸门若哪天放行 `<`，红在这里而不是静默变空）
+		//   ＋ 回显不得被采纳。
+		echo := "<target language is reasonable. Please strictly follow the revision suggestions and retranslate the text."
+		h := fwpGateEngine(t, echo)
+		lt := map[string]map[string]string{"en": {"<": "<"}}
+		h.eng.applySegmentGates(context.Background(), lt, true)
+		if h.hitCount() == 0 {
+			t.Fatal("本锁要求闸门先打回 `<` 才会走到重译腿（闸门行为变了就换个能过闸的回显样本，别让它空转）")
+		}
+		if got := lt["en"]["<"]; got != "<" {
+			t.Fatalf("指令回显不得覆写交付内容，got %q", got)
+		}
+	})
 }
 
 // TestApplySegmentGatesSkipsSensitivePlaceholder S8 拦截占位段不进质量闸门：

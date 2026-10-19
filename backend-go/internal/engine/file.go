@@ -372,6 +372,33 @@ func extractFailureReason(extractPath string, err error) string {
 	return ""
 }
 
+// minimalInstrRescueMarker —— 「极简指令兜底腿救回一段」这一形态在二进制里的**字面证据**。
+// 为什么要有它（口径同 identityPrefillMarker / listen_systemd.go 的 sdTakeoverMarker，2026-10-18 真踩）：
+// 发布件是 `-ldflags="-s -w"` 编出来的，"函数名留不留在件里"不可依赖（内联即消失），
+// 于是"编的是不是本棵工作树"只能靠一个**被运行期真正引用**的字符串常量：本常量在下面的观测日志里出现，
+// 发布脚本 `deploy/release_20261019b.sh` 的 P0-B 特征串与它**逐字等值**。
+// 等值锁＝release_marker_gate_test.go 的 TestMinimalInstrRescueMarkerMatchesReleaseScript（含三枚反证）。
+const minimalInstrRescueMarker = "MINIMAL_INSTR_SEG_RESCUE_V1"
+
+// translateSegmentMinimal 硬闸「逐段兜底」末段腿：**极简指令**取一份候选译文。
+// 为什么要单独一条腿（★ 2026-10-19，现网工单 107 实证）：
+// 正常腿（批量 / 逐段，system 里带「币种保真」「输出纯度」两条中文尾注）对**短段**会退化——
+// 纯翻译模型（tencent/Hunyuan-MT-7B）把 system 里那两条中文尾注当成待译内容，产出
+// `and`（注记的连词尾巴）或整段注记英译；`IsTranslationUsable` 据实判其不可用 ⇒ 该段每一轮都失败，
+// 最终 `金额`、`当前：全部允许·仓位留空/0 =使用全局单票金额` 这类真中文原样留在成品与译图里。
+// 实测：同一 12 段带尾注 11/12 出 `and`，换成「骨架+契约」这一档 12/12 正确。
+// ★ 本函数**只产候选、不做采纳判定**——采纳仍由调用点的 `IsTranslationUsable` 一把尺子说了算
+//
+//	（与 file.go 其余写入点同形，写入点守护的机械闸门据此仍认得这一处）。
+func (e *Engine) translateSegmentMinimal(ctx context.Context, seg, lc string) (string, bool) {
+	r, err := e.TranslateOne(WithMinimalInstruction(ctx), seg, []string{lc}, false, config.StageAIInitial)
+	if err != nil || r == nil {
+		return "", false
+	}
+	v, ok := r.Translations[lc]
+	return v, ok
+}
+
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
 // ★B3（方案 A2）：新增逐段事件回调 emit（与 prog 同闭包风格，仅 SSE 文件通道注入；
 // 工单 worker / 非流式接口传 nil，事件层整体空转零开销）。事件协议与稳定键见 file_events.go。
@@ -853,13 +880,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if time.Since(loopStart) > budget {
 					break
 				}
-				r, err := e.TranslateOne(ctx, m, []string{lc}, false, config.StageAIInitial)
-				if err != nil {
-					continue
-				}
-				if v, ok := r.Translations[lc]; ok && IsTranslationUsable(m, v) {
+				if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok && IsTranslationUsable(m, v) {
 					addTrans(lc, m, v)
 					se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
+					// 观测腿：这条日志既是"极简腿真被走到"的现场读数，也是 minimalInstrRescueMarker
+					// 的运行期引用点（没有它，常量会被内联/优化掉，发布件特征串两向都不可信）。
+					// 只出语言与标记，**不出段文本**（工单内容属客户资料，日志不留原文）。
+					observability.Info(ctx, "文件翻译：极简指令兜底腿救回未译段", "lang", lc, "mark", minimalInstrRescueMarker)
 				}
 			}
 		}

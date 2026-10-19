@@ -34,6 +34,8 @@ const translationFailureMark = "[翻译失败]"
 //  2. 批量失败占位 [翻译失败] —— 上游明确报错的槽位；
 //  3. 与源文同文（去空白后逐字相等）—— 模型或 KB 原样回显 = 根本没翻（含 "#"/"1"/"•"
 //     这类无上下文短串的回显，与既有模型路径口径一致，宁可走补漏也不静默交付）；
+//     ★ 例外见判据 3′（2026-10-19 工单 107）：源段**没有任何非 ASCII 字母**时，
+//     回吐即原文交付形态，判可用（这类段无中文字面可泄露，告警是假的）。
 //  4. 指令回显残留 —— 见 hasInstructionEcho 的结构指纹；
 //  5. 短格长度爆炸 —— 见 hasLengthExplosion（★ F-38，2026-09-25 批 D：6 字表格单元格被
 //     翻成 2100 字符的整封英文邮件，前四判据全放行、直接进交付物）；
@@ -49,7 +51,17 @@ func IsTranslationUsable(src, out string) bool {
 		return false
 	}
 	if normalizeForCompare(src) == normalizeForCompare(out) {
-		return false
+		// ★ 判据 3′（★ 2026-10-19 工单 107 收口；用户令「无中文源回吐即视为原文交付」）：
+		//   **源段没有任何非 ASCII 字母**时，原样回吐就是它的正确交付形态，不记"未译出"。
+		//   这类段（股票代码 002584.SZ / 标识符 N_shape·dragon_return·fac_1·manua / 纯数字符号）
+		//   在主链本该由 identitySegments 预填、根本不进上游；只因 segmentNeedsTranslation 的
+		//   「≥2 连排 ASCII 字母」把标识符也判成"要翻"，它们才落到写入判定这里。
+		//   ⚠️ 交付字节与「判不可用⇒回落原文」**完全一致**——少掉的只是一条假告警
+		//      （现网工单 107：12 条未译段里 9 条是这种无中文碎片，每份含编号的文档都会背一条）。
+		//   ⚠️ 反之**有**非 ASCII 字母时仍按原样判不可用：那正是「模型把中文原封不动吐回来」
+		//      的泄露形态（本工单 `金额`、`当前：全部允许·仓位留空/0 =使用全局单票金额` 即此档），
+		//      绝不能在此放行——它是本函数存在的理由。
+		return !sourceHasTranslatableLetters(src)
 	}
 	if hasInstructionEcho(src, out) {
 		return false
@@ -75,6 +87,22 @@ func IsTranslationUsable(src, out string) bool {
 // 折叠空白后仍是同文 ⇒ 正确判为未译。
 func normalizeForCompare(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// sourceHasTranslatableLetters 源段里是否存在「某种语言的文字」：任一**非 ASCII 字母**
+// （汉字/假名/谚文/西里尔/阿拉伯/泰文/带重音的拉丁…）即视为有可译内容。
+// 为什么用「非 ASCII 字母」而不是「汉字」：文件管线也吃非中文源（en→de 等），重音拉丁同样是文字；
+// 而纯 ASCII 串（编号、代码、单字母）在任何语言里都是同一串字符。
+// ★ 与 segmentNeedsTranslation 的同一半句**同一把尺子**（`r > unicode.MaxASCII && unicode.IsLetter(r)`），
+//
+//	别在这里另立一套字符分类（两套尺子迟早打架）。
+func sourceHasTranslatableLetters(src string) bool {
+	for _, r := range src {
+		if r > unicode.MaxASCII && unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasInstructionEcho 「内部指令泄漏进交付物」的结构指纹：源文本身不含 '<'，
