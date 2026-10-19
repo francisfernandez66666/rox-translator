@@ -77,6 +77,16 @@ RULE_MAX_COLS = 8
 RULE_COVER = 0.6
 # ★ 2026-10-19 G3-b：抹字用底色的采样环带宽度（框外 BG_RING_PX 宽的中位色）。
 BG_RING_PX = 12
+# ★ 2026-10-19 本批：**框内就是一块纯色徽章**时，底色必须取**那块徽章自己的颜色**，不是框外的环带色。
+#   现网实证（同一件）：`の` 落在绿卡上的白徽章里（框内白色纯度 0.97、环带绿色）⇒ 旧口径把白徽章
+#   填成一块绿斑；`已同步` 是蓝徽章（框内 (180,198,255) 纯度 0.79、环带白）⇒ 旧口径把蓝徽章填成白块。
+#   判据＝框内像素按 BG_INNER_PURE_TOL 量化后**最大同色桶的占比** ≥ BG_INNER_PURE_MIN；
+#   达不到就仍走环带（普通文字行的框内是"底+字"混合，占比自然上不去，故不受影响）。
+BG_INNER_PURE_TOL = 12
+BG_INNER_PURE_MIN = 0.75
+# ★ 2026-10-19 本批：**软换行机会**（断词修复）。token 比框宽时先在分隔符后断（`Yuan/`＋`time`），
+#   不再一律按字符硬切（旧形态把 `Synchronized` 切成 `Synchronize`＋`d`）。
+SOFT_BREAK_AFTER = "/-_·\\|,;：、，；"
 # 扩框（长译文放不下时向右扩进均匀空白区）的步长与上限，以及「均匀」的标准差门槛。
 EXPAND_STEP = 4
 EXPAND_MAX_PX = 24
@@ -311,6 +321,18 @@ def _font_floor(ink_h: int, box_h: int) -> int:
     return max(MIN_FONT_PX, int(ref * FONT_FLOOR_RATIO))
 
 
+def _is_lone_nonascii(src: str) -> bool:
+    """源文是不是**单个非 ASCII 字符**（去掉空白后 len==1 且码位 > 0x7F）。
+
+    这个形状在本链路上就是「OCR 把**控件形状**读成了字」：现网实证＝一枚开着的绿色开关
+    被读成 `の`（开关形状确实像 `の`），回来时旧形态把它整块涂绿再画个白 `の`，圆钮就此消失。
+    它是**渲染侧**的判据，只决定"要不要重画"，不决定"翻不翻"（那是引擎侧的事）；
+    对照：蓝徽章里的 `已同步` 是**真文字**（三个字符），照旧翻译＋回填，不走本判据。
+    """
+    s = "".join(src.split())
+    return len(s) == 1 and ord(s) > 0x7F
+
+
 def _is_cjk(ch: str) -> bool:
     """是否 CJK 字符（按字换行的档）：汉字/假名/谚文/扩展区。"""
     o = ord(ch)
@@ -340,31 +362,54 @@ def _tokenize(text: str):
 
 
 def _break_token(chain, token: str, max_w: float):
-    """单个 token 自身比框还宽（超长英文词/URL）：按字符硬切。"""
-    pieces, cur = [], ""
+    """单个 token 自身比框还宽（超长英文词/URL）：**先在分隔符后断**，实在没有分隔符才按字符硬切。
+
+    ★ 2026-10-19：旧形态一律按字符硬切，`Synchronized` 被切成 `Synchronize`＋`d`、
+      `Yuan/time` 被切成两截，肉眼就是"词被劈开"。分隔符（`/ - _ ·` 等）本来就是可读断点：
+      按它断出来的 `Yuan/`＋`time` 是正常排版，且断完每段都更短、往往不必再降字号。
+      每段仍要能装进 max_w：装不下就对该段再按字符硬切（老口径只在"连分隔符都救不了"时生效）。
+    """
+    chunks, buf = [], ""
     for ch in token:
-        if cur and _measure(chain, cur + ch) > max_w:
+        buf += ch
+        if ch in SOFT_BREAK_AFTER:
+            chunks.append(buf)
+            buf = ""
+    if buf:
+        chunks.append(buf)
+    pieces = []
+    for ck in chunks:
+        if pieces and _measure(chain, pieces[-1] + ck) <= max_w:
+            pieces[-1] += ck     # 贪心合并：能装就装，尽量少断
+            continue
+        if _measure(chain, ck) <= max_w:
+            pieces.append(ck)
+            continue
+        cur = ""
+        for ch in ck:
+            if cur and _measure(chain, cur + ch) > max_w:
+                pieces.append(cur)
+                cur = ch
+            else:
+                cur += ch
+        if cur:
             pieces.append(cur)
-            cur = ch
-        else:
-            cur += ch
-    if cur:
-        pieces.append(cur)
     return pieces or [token]
 
 
-def _wrap_text(chain, text: str, max_w: float):
-    """按语种把 text 折进 max_w 宽度：CJK 按字、拉丁按词、超长词按字符硬切。
+def _wrap_text_dbg(chain, text: str, max_w: float):
+    """`_wrap_text` 的实现体：多返回一位 `hard`＝本轮是否用了**按字符硬切**（词被劈开）。
 
-    返回行列表；单行放得下时就是 [text]（**不主动拆行**——短译文保持一行）。
+    返回 (行列表, hard)。`hard` 只作 `_layout` 的档位选择依据，不影响交付形态。
     """
     if max_w <= 0 or _measure(chain, text) <= max_w:
-        return [text]
-    lines, cur = [], ""
+        return [text], False
+    lines, cur, hard = [], "", False
     for tok in _tokenize(text):
         if not cur:
             if _measure(chain, tok) > max_w:
                 pieces = _break_token(chain, tok, max_w)
+                hard = hard or _hard_split(pieces)
                 lines.extend(pieces[:-1])
                 cur = pieces[-1]
             else:
@@ -376,13 +421,37 @@ def _wrap_text(chain, text: str, max_w: float):
             lines.append(cur)
             if _measure(chain, tok) > max_w:
                 pieces = _break_token(chain, tok, max_w)
+                hard = hard or _hard_split(pieces)
                 lines.extend(pieces[:-1])
                 cur = pieces[-1]
             else:
                 cur = tok
     if cur:
         lines.append(cur)
-    return [l for l in lines if l] or [text]
+    return ([l for l in lines if l] or [text]), hard
+
+
+def _hard_split(pieces) -> bool:
+    """本次 token 拆分里**出现了按字符硬切**吗？判据＝拆出的段数多于"分隔符段数"。
+
+    为什么这么判而不是"看有没有分隔符"：`Yuan/time` 断成 2 段属软断（正常排版），
+    而 `Synchronized` 断成 2 段是硬切——两者段数相同、形态完全不同，只能问
+    "这些段是不是都恰好落在分隔符结束处"（软断的每段都以 SOFT_BREAK_AFTER 结尾，末段除外）。
+    """
+    if len(pieces) <= 1:
+        return False
+    for p in pieces[:-1]:
+        if not p or p[-1] not in SOFT_BREAK_AFTER:
+            return True
+    return False
+
+
+def _wrap_text(chain, text: str, max_w: float):
+    """按语种把 text 折进 max_w 宽度：CJK 按字、拉丁按词、超长词先按分隔符断再按字符硬切。
+
+    返回行列表；单行放得下时就是 [text]（**不主动拆行**——短译文保持一行）。
+    """
+    return _wrap_text_dbg(chain, text, max_w)[0]
 
 
 def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
@@ -392,30 +461,51 @@ def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
 
     ★ 2026-10-19（缺陷②）：块高判据＝**真实墨迹高度**（`_block_ink_h`），不是名义块高
       `px*LINE_SPACING*(n-1)+px`——后者漏算下伸部与字体留白，会把文本摆得低到越框。
+    ★ 2026-10-19 本批：**能装下但把词按字符劈开了**（`_wrap_text_dbg` 的 hard）时继续降字号，
+      1px 一档（成档下探会一下掉 10%，把"断词"换成"字号明显小一截"）；降到能不劈词就停。
+      降到地板仍劈词 ⇒ 接受（长词在窄框里除劈开没有别的出路），**不谎报越框**。
+      注意与"装不下"那一档分工：装不下仍走既有 0.9 成档下探（那一条的行为一字未动）。
     """
     ref = ink_h if ink_h > 0 else int(h * 0.86)
     px = max(floor, int(ref * 0.92))
     px = min(px, max(floor, int(h * 0.98)))
     while True:
         chain = _chain(px)
-        lines = _wrap_text(chain, text, w)
+        lines, hard = _wrap_text_dbg(chain, text, w)
         block_h = _block_ink_h(chain, lines, px, int(px * LINE_SPACING))
-        if block_h <= h or px <= floor:
-            return px, lines, block_h > h
-        px = max(floor, int(px * 0.9))
+        fits = block_h <= h
+        if fits and (not hard or px <= floor):
+            return px, lines, False
+        if px <= floor:
+            return px, lines, True
+        px = max(floor, px - 1) if fits else max(floor, int(px * 0.9))
 
 
 def _pick_bg(img, rect):
-    """取「抹字用底色」：框外环带（BG_RING_PX 宽）的中位色；环带取不到就退用框内中位色。
+    """取「抹字用底色」：先认**框内纯色徽章**，再退框外环带（BG_RING_PX 宽）中位色，最后退框内中位色。
 
     都取不到（框贴图片边缘、面积过小）返回 None —— 宁可不抹底（留轻微残影）也不填一块灰。
     中位色而非均值：环带里混进邻行文字/噪点时，均值会被拉偏、中位色不会。
+
+    ★ 2026-10-19：**环带优先是错的**——它假设「框内底色 == 框外底色」，而徽章/胶囊/色块上的字
+      不满足这条。本批两处现网实证（白徽章填成绿斑、蓝徽章填成白块）都是这个假设的直接后果。
+      故第一判据改为「框内是不是一块同色底」（占比见 BG_INNER_PURE_MIN）；普通文字行框内
+      底色与字混在一起、占比上不去，仍照旧走环带 ⇒ 既有 82 行的取色一个字节都不动。
     """
     import numpy as np
 
     arr = np.asarray(img.convert("RGB"), dtype=np.float32)
     H, W = arr.shape[:2]
     x0, y0, x1, y1 = rect
+    inside = arr[y0:y1, x0:x1].reshape(-1, 3)
+    if inside.shape[0] >= 8:
+        # 量化到 BG_INNER_PURE_TOL 的桶里数占比：比"逐像素比中位色"稳（抗 JPEG 噪声与 AA 过渡色）。
+        q = np.rint(inside / BG_INNER_PURE_TOL).astype(np.int32)
+        keys, counts = np.unique(q, axis=0, return_counts=True)
+        k = int(np.argmax(counts))
+        if counts[k] / float(inside.shape[0]) >= BG_INNER_PURE_MIN:
+            members = (q == keys[k]).all(axis=1)
+            return tuple(int(round(v)) for v in np.median(inside[members], axis=0))
     bx0, by0 = max(0, x0 - BG_RING_PX), max(0, y0 - BG_RING_PX)
     bx1, by1 = min(W, x1 + BG_RING_PX), min(H, y1 + BG_RING_PX)
     strips = []
@@ -430,7 +520,6 @@ def _pick_bg(img, rect):
     ring = np.concatenate([s.reshape(-1, 3) for s in strips], axis=0) if strips else np.empty((0, 3), dtype=np.float32)
     if ring.shape[0] >= 8:
         return tuple(int(round(v)) for v in np.median(ring, axis=0))
-    inside = arr[y0:y1, x0:x1].reshape(-1, 3)
     if inside.shape[0] >= 8:
         return tuple(int(round(v)) for v in np.median(inside, axis=0))
     return None
@@ -547,13 +636,20 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         # ① 量原行墨迹高度（字号地板的依据；量不到就退用框高），并取框外环带中位色作抹字底色。
         patch = ref_img.crop(r0)
         ink_h = _line_ink_height(patch)
-        # ★ 2026-10-19：框内**一处墨都没有**（OCR 在控件边框/图标/下拉箭头上误切的空框），
-        #   而这一行要写的就是原文本身（identity 交付，`0`/`4`/`<`/`の` 这类符号段）——
-        #   没有任何东西需要替换，画上去只会造出**原文里根本不存在的幽灵内容**，
-        #   还把空框当满框算字号（现网单里被画成满格巨字）。原图没字＝不造字：跳过且不抹底。
-        #   ⚠️ 只跳过「要写的内容 == 原文」这一档：真译文（text ≠ 原文）即便墨色很淡也照旧绘制，
-        #   否则淡灰小字会被整段漏掉（把「字号问题」换成「漏译问题」，方向更坏）。
-        if ink_h == 0 and text == (ln.get("text") or "").strip():
+        # ★ 2026-10-19：两类「本轮要写的就是原文、且原文根本不是文字」的行**不重画**（两个判据分开写，
+        #   便于各自被独立的反证钉住——合成一个 if 会让「空框不造字」与「单字噪声不重画」互相掩护）。
+        #   ① 框内**一处墨都没有**（OCR 在控件边框/图标/下拉箭头上误切的空框）——旧形态，画上去只会造出
+        #      原文里根本不存在的幽灵内容，还把空框当满框算字号（现网单里被画成满格巨字）；
+        #   ② 源文是**单个非 ASCII 字符**：OCR 把**控件形状**误识成文字的典型形态。现网实证＝一枚开着的
+        #      绿色开关被读成 `の`（开关形状确实像），旧形态把它整块涂绿再画一个白 `の`，开关的白色圆钮
+        #      就此消失——客户看到的是「原文根本没有的一个大字盖住了开关」，属③幽灵内容族。
+        #      判据与 assist 侧同源（`functionWordNoise` 注释：单假名段在 OCR 里几乎只来自图标/开关误识）。
+        #   ⚠️ 两类的放行条件都必须是「要写的内容 == 原文」：真译文（text ≠ 原文）即便墨色很淡、
+        #      或源文就是单假名，也照旧绘制——否则淡灰小字会被漏译（把「字号问题」换成更坏的
+        #      「漏译问题」），或真收到了 `の` 的译文却不画。
+        no_ink_identity = ink_h == 0 and text == (ln.get("text") or "").strip()
+        noise_identity = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()
+        if no_ink_identity or noise_identity:
             blank_skipped += 1
             continue
         bg = _pick_bg(ref_img, r0)
@@ -595,9 +691,12 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         painted += 1
 
     if painted == 0:
-        # 一行都没画（框全坏/译文全空）：产物与原文无异，如实报错让上游退回"仅译文 .md"，
-        # 免得交给客户一张"看着像翻过了、其实一个字没换"的图（本批缺陷的形态）。
-        return _err("NothingPainted", "没有任何一行被回填（%d 行里 0 行有可用坐标）" % len(lines))
+        # 一行都没画（框全坏/译文全空/整图都是被跳过的噪声行）：产物与原文无异，如实报错让上游退回
+        # "仅译文 .md"，免得交给客户一张"看着像翻过了、其实一个字没换"的图（本批缺陷的形态）。
+        # 文案带上 blank_skipped：否则"0 行有可用坐标"会把「坐标全坏」与「整图全是噪声行」
+        # 两种成因混成一句（前者要查 OCR，后者是设计内的跳过）——排障读到的成因必须是真成因。
+        return _err("NothingPainted", "没有任何一行被回填（%d 行里 %d 行被跳过为「原文交付/噪声行」，其余无可用坐标）"
+                    % (len(lines), blank_skipped))
 
     try:
         img.save(out)

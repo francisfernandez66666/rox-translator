@@ -52,7 +52,11 @@
   L29 图片回填：**反证腿**——宽墨块/粗笔画不许被当色条剔掉（CJK 左弧 13 列覆盖率 ≥0.6）
   L30 图片回填：块高按**真实墨迹**算，凡报 overflow=0 就不许真实越框（越框那半行会被邻行抹掉）
   L31 图片回填：量墨迹/取底色/试扩框一律看**绘制前的原图**，不被上一行画下的字污染（缺陷②真因）
-  L32 图片回填：越框墨迹一律丢弃（掩膜按框裁剪），不落进邻行地盘被邻行底色抹成半截字
+   L32 图片回填：越框墨迹一律丢弃（掩膜按框裁剪），不落进邻行地盘被邻行底色抹成半截字
+   L33 图片回填：抹字底色**先认框内纯色块**（徽章/胶囊），杂色时仍退环带（★ 2026-10-19 缺陷②尾项）
+   L34 图片回填：超长 token **先在分隔符后断**（`Yuan/`+`time`），无分隔符才按字符硬切、不丢字符（同批）
+   L35 图片回填：有"不劈词也放得下"的字号就先降字号（1px 档），不把词劈开当第一选择（同批）
+   L36 图片回填：单字噪声（开关被读成 `の`）且交付原文时不重画，原件像素逐字节保住（同批）
 
 环境变量（**只给 Go 侧反证用**，把被测对象换成一份变异副本，证明这些腿真的会红）：
   CAPSHAPE_OCR_MODULE=<path>  指定被测的 ocr_recognize.py 副本
@@ -626,13 +630,19 @@ def leg_l22_bg_from_ring_median_keeps_color():
     """★ 2026-10-19 G3-b：抹字底色取**框外环带的中位色**，彩色底不被抹成灰/白。
 
     造一张纯色底图，框四周环带就是该底色 ⇒ `_pick_bg` 必须回该色（不是灰 128）。
+    ⚠️ 框内**刻意是"字色混杂"形态**（墨块占约四成面积，普通文字行就是这样）——框内一旦是纯色块，
+    第一判据（`BG_INNER_PURE_MIN`，L33 守它）会先命中并返回框内底色，这条路就走不到环带了：
+    2026-10-19 尾项加框内判据时，这枚反证正因夹具"框内也是一整块纯色"而**失去射程**
+    （L22 的变异体不再让 L22 红），故夹具按"真文字行的框内形态"改成混杂。
     """
     import numpy as np
     arr = np.full((120, 200, 3), (30, 90, 200), dtype=np.uint8)   # 一块蓝色底
+    arr[56:64, 86:114, :] = 0                                     # 框内字色墨块（约四成面积）
     bg = IMG._pick_bg(_rgb_image(arr), (80, 50, 120, 70))
     assert bg == (30, 90, 200), "彩色底的抹字底色被改成了别的东西（实读 %r）" % (bg,)
     # 白底文档：环带中位色＝白
     white = np.full((120, 200, 3), 255, dtype=np.uint8)
+    white[56:64, 86:114, :] = 0
     assert IMG._pick_bg(_rgb_image(white), (80, 50, 120, 70)) == (255, 255, 255), "白底取样不为白"
 
 
@@ -819,6 +829,126 @@ def leg_l32_drawn_ink_never_leaves_its_box():
         below = arr[51:120, :, :]     # 上框 (20,20,200,50) 加 1px 边距后的下沿＝行 51
         leaked = int((below < 250).any(axis=2).sum())
         assert leaked == 0, "墨迹越过了自己的框（框下还有 %d 个墨点）——会被邻行底色抹成半截字" % leaked
+
+
+# ---------------------------------------------- 图片：缺陷②尾项（2026-10-19 现网图片单·外观）
+
+@leg("L33")
+def leg_l33_bg_prefers_pure_inner_block_over_ring():
+    """★ 2026-10-19 尾项：抹字底色**先认框内纯色块**（徽章/胶囊），环带只在框内不是纯色块时才用。
+
+    现网实证两处：蓝徽章的框内底色 `(180,198,255)`、环带却是白（蓝底被填成白块）；绿开关同理。
+    根因＝「框内底色 == 框外底色」这条假设对**徽章族**不成立（见 `_pick_bg` 文档）。
+    反证腿（同一条腿内的第二半）：框内是**杂色**（不是纯色块）时必须退回环带——否则会把随机一个
+    框内像素当成底色，普通文字行会被抹出一块字色。
+    """
+    import numpy as np
+    # ① 蓝徽章：框内一整块浅蓝（含两成字色像素），框外一圈深蓝"控件边框"、再外是白底。
+    arr = np.full((140, 220, 3), 255, dtype=np.uint8)
+    arr[28:92, 48:152, :] = (30, 90, 200)          # 控件边框（恰好落在 BG_RING_PX 环带里）
+    arr[40:80, 60:140, :] = (180, 198, 255)        # 框内浅蓝底
+    arr[52:68, 84:116, :] = (40, 40, 40)           # 框内字色像素（16% 面积 ⇒ 纯色占比 0.84）
+    bg = IMG._pick_bg(_rgb_image(arr), (60, 40, 140, 80))
+    assert bg == (180, 198, 255), "徽章的框内浅蓝底没被认出（实读 %r）⇒ 蓝徽章会被填成环带的白/深蓝" % (bg,)
+    # ② 框内杂色：不是纯色块 ⇒ 必须退回环带中位色（这里是深蓝边框），不许拿框内某个像素当底色。
+    arr2 = np.full((140, 220, 3), 255, dtype=np.uint8)
+    arr2[28:92, 48:152, :] = (30, 90, 200)
+    noise = np.random.default_rng(7).integers(0, 256, size=(40, 80, 3), dtype=np.uint8)
+    arr2[40:80, 60:140, :] = noise
+    bg2 = IMG._pick_bg(_rgb_image(arr2), (60, 40, 140, 80))
+    assert bg2 == (30, 90, 200), "框内杂色时没退回环带（实读 %r）⇒ 会把随机字色当底色抹开" % (bg2,)
+
+
+@leg("L34")
+def leg_l34_break_token_prefers_separator_break():
+    """★ 2026-10-19 尾项：超长 token 断行**先在分隔符后断**，实在没有分隔符才按字符硬切。
+
+    现网实证：`Yuan/time` 被切成 `Yuan/t`+`ime`、`Synchronized` 被切成 `Synchronize`+`d`——
+    词被劈开（用户报的"词断得莫名其妙"）。分隔符 `/ - _ ·` 本来就是可读断点。
+    两半一起判：软断（hard=False）与硬切（hard=True）必须分得开，否则 `_layout` 的
+    「能不劈词就不劈」（L35 守它）无从判断。软断/硬切都不许丢字符。
+    """
+    chain = IMG._chain(19)
+    max_w = IMG._measure(chain, "Yuan/time") - 4
+    assert IMG._measure(chain, "Yuan/") <= max_w < IMG._measure(chain, "Yuan/time"), \
+        "夹具自证不过：这个宽度要么装得下整个 token、要么连 `Yuan/` 都装不下"
+    lines, hard = IMG._wrap_text_dbg(chain, "Yuan/time", max_w)
+    assert lines == ["Yuan/", "time"], "没在分隔符后断（实读 %r）——词又被劈开了" % (lines,)
+    assert hard is False, "分隔符软断被报成硬切（`_layout` 会据此白降字号）"
+    assert "".join(lines) == "Yuan/time", "软断把字符弄丢了（%r）" % (lines,)
+    assert IMG._wrap_text(chain, "Yuan/time", max_w) == ["Yuan/", "time"], \
+        "`_wrap_text` 的旧签名/返回值变样了（既有调用点会跟着坏）"
+    # 没有分隔符的超长词：只能按字符硬切，同样不许丢字符。
+    w2 = IMG._measure(chain, "Synchroniz")
+    lines2, hard2 = IMG._wrap_text_dbg(chain, "Synchronized", w2)
+    assert hard2 is True, "无分隔符超长词没被认出是硬切（实读 hard=%r）" % (hard2,)
+    assert len(lines2) >= 2 and "".join(lines2) == "Synchronized", "硬切把字符丢了（%r）" % (lines2,)
+
+
+@leg("L35")
+def leg_l35_layout_shrinks_before_splitting_word():
+    """★ 2026-10-19 尾项：只要"不劈词也放得下"的字号存在，`_layout` 就先降字号（1px 一档），不劈词。
+
+    现网实证：`Synchronized` 在徽章里被切成两行（`Synchronize`+`d`），而同排同级文字本该 20px——
+    真因是布局把"硬切"当成了首选。本腿两半：
+      ① 存在装得下单行的字号 ⇒ 必须返回 hard=False 且**真降到了那个字号**（不是原地裁切）；
+      ② 字号到了地板仍装不下单行（窄框）⇒ 允许 hard=True，但**不许谎报越框**（盒够高时报 overflow=False）。
+    """
+    chain19 = IMG._chain(19)
+    target_px = 14
+    max_w = IMG._measure(IMG._chain(target_px), "Synchronized") + 4
+    assert IMG._measure(chain19, "Synchronized") > max_w, \
+        "夹具自证不过：19px 档就装得下 ⇒ 这条腿测不到「降字号 vs 硬切」"
+    px, lines, overflow = IMG._layout("Synchronized", int(max_w), 60, 8, 24)
+    assert px <= target_px, "没降字号就断词（实读 px=%d，期望 ≤%d）" % (px, target_px)
+    chain = IMG._chain(px)
+    assert all(IMG._measure(chain, l) <= max_w + 1 for l in lines), \
+        "报「放得下」但行宽仍超框（%r）" % (lines,)
+    lines_big, hard_big = IMG._wrap_text_dbg(chain, "Synchronized", max_w)
+    assert hard_big is False, "降字号之后仍在劈词（%r）⇒ 白降" % (lines_big,)
+    # ② 窄框（任何字号都装不下单行）：允许硬切，盒够高时不谎报缘框。
+    px2, lines2, ovf2 = IMG._layout("Synchronized", 6, 220, 8, 24)
+    assert px2 >= 8 and ovf2 is False, "窄框长词被谎报越框（px=%d overflow=%r）" % (px2, ovf2)
+
+
+@leg("L36")
+def leg_l36_lone_nonascii_line_not_repainted():
+    """★ 2026-10-19 尾项：源文是**单个非 ASCII 字符**（OCR 把控件形状读成字）且本轮交付原文 ⇒ 不重画。
+
+    现网实证＝一枚开着的绿色开关被 OCR 读成 `の`：旧形态把它整块涂绿再画一个白 `の`，
+    白色圆钮就此消失（客户看到的"原文里根本没有的一个大字盖住控件"）。
+    三条腿一起判（只判"不画"会让"整段漏绘"一路绿）：
+      ① 交付原文 ⇒ 那个框的像素**逐字节不动**（开关得保住）；
+      ② 同一框换成**真译文** ⇒ 必须照旧绘制（否则"不造字"变成"漏译"）；
+      ③ 判据射程＝只认单个非 ASCII 字符：ASCII 短源文（`D`）与多字源文不许被误跳过。
+    """
+    import numpy as np
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        src, out, out2 = Path(d) / "s.png", Path(d) / "o.png", Path(d) / "o2.png"
+        arr = np.full((140, 260, 3), 255, dtype=np.uint8)
+        arr[30:70, 40:140, :] = (3, 167, 111)      # "开关"：绿色实心块（原图本来就有墨）
+        _rgb_image(arr).save(src)
+        box, box_b = [40, 30, 140, 70], [40, 90, 200, 130]
+        rc = _render(src, out, [
+            {"text": "の", "box": box, "tran": "の"},
+            {"text": "Hello", "box": box_b, "tran": "你好"},
+        ])
+        assert rc == 0 and out.exists(), "整图渲染失败（rc=%d）" % rc
+        got = np.asarray(Image.open(str(out)).convert("RGB"))
+        before = arr[30:70, 40:140]
+        assert np.array_equal(before, got[30:70, 40:140]), "单字噪声行的框被重画了（开关被涂改）"
+        # ② 真译文必须照旧绘制
+        rc2 = _render(src, out2, [{"text": "の", "box": box, "tran": "of"}])
+        assert rc2 == 0, "真译文渲染失败（rc=%d）" % rc2
+        got2 = np.asarray(Image.open(str(out2)).convert("RGB"))
+        assert not np.array_equal(before, got2[30:70, 40:140]), "单字噪声行收到真译文却没画（漏译）"
+        # ③ 判据射程
+        assert IMG._is_lone_nonascii("の") is True
+        assert IMG._is_lone_nonascii(" の ") is True, "空白没被先剥掉"
+        assert IMG._is_lone_nonascii("はの") is False, "两个字符＝可能是真词，不许跳"
+        assert IMG._is_lone_nonascii("D") is False, "ASCII 短源文不许被跳"
+        assert IMG._is_lone_nonascii("") is False
 
 
 # ------------------------------------------------------------------ ASR：无语音门（⭐ 2026-10-19 G11）

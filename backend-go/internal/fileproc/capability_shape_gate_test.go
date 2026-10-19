@@ -60,6 +60,7 @@ var capShapeLegs = []string{
 	"L19", "L20", "L21", "L22", "L23", "L24",
 	"L26", "L27",
 	"L28", "L29", "L30", "L31", "L32",
+	"L33", "L34", "L35", "L36",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -140,7 +141,7 @@ var capShapeMutations = []capShapeMutation{
 	// （前者＝字号忽大忽小，后者＝原文里根本不存在的 `0`/`4` 幽灵内容）。
 	{"L26", capShapeImgFile, `        ink[full_rows, :] = False`, `        pass`,
 		"满宽墨色行不剔除（输入框上下边让原行高被读成满框高，短内容被画成整格巨字）"},
-	{"L27", capShapeImgFile, `        if ink_h == 0 and text == (ln.get("text") or "").strip():`, `        if False:`,
+	{"L27", capShapeImgFile, `        no_ink_identity = ink_h == 0 and text == (ln.get("text") or "").strip()`, `        no_ink_identity = False`,
 		"空框 + 原文交付不再跳过（OCR 在图标/边框上误切的空框被画成幽灵内容）"},
 	// ===== ★ 2026-10-19（缺陷②：字号忽大忽小 / 字被裁半截）批。三条真因各一枚，外加两条形态腿。
 	// 全部是「运行期形状错」：健康面全绿、日志零红，只有把译后图打开（或逐行读 trace）才看得出。
@@ -155,6 +156,18 @@ var capShapeMutations = []capShapeMutation{
 		"量墨迹改回就地画布（上一行画下的字落进下一行框内 ⇒ 字号忽大忽小，现网 fac_1：19px→36px）"},
 	{"L32", capShapeImgFile, `                    img.paste(fill, (left, top), tile)`, `                    img.paste(fill, (left, top), mask)`,
 		"贴回不再按框裁剪（越框墨迹落进邻行地盘，随后被邻行底色抹成半截字）"},
+	// ===== ★ 2026-10-19（缺陷②尾项：外观）批。四条同样是「运行期形状错」：健康面全绿、
+	// 日志零红，只有把译后图打开（或逐行读 trace）才看得出——蓝徽章被填成白块、
+	// `Yuan/time` 被劈成 `Yuan/t`+`ime`、绿色开关被 OCR 的 `の` 涂改。
+	{"L33", capShapeImgFile, `        if counts[k] / float(inside.shape[0]) >= BG_INNER_PURE_MIN:`, `        if False:`,
+		"抹字底色不再先认框内纯色块（蓝徽章/胶囊里那块蓝底被环带的白填掉）"},
+	{"L34", capShapeImgFile, `        if ch in SOFT_BREAK_AFTER:`, `        if False:`,
+		"超长 token 不再在分隔符后断（`Yuan/time` 又被按字符劈成两截）"},
+	{"L35", capShapeImgFile, `        if fits and (not hard or px <= floor):`, `        if fits:`,
+		"布局把硬切当首选（有「不劈词也放得下」的字号也不再降字号 ⇒ `Synchronized` 被劈成两行）"},
+	{"L36", capShapeImgFile, `        noise_identity = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()`,
+		`        noise_identity = False`,
+		"单字噪声行被重画（OCR 把开关读成 `の` ⇒ 旧形态整块涂色再画大白字，圆钮消失）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
@@ -218,7 +231,7 @@ func capShapeReadings(stdout string) (pass, fail []string, detail map[string]str
 	return
 }
 
-// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 24 条）全绿，且**读数形状本身合规**：
+// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 35 条）全绿，且**读数形状本身合规**：
 // 每腿恰好一行、没有 FAIL、末行 CAPSHAPE_ALL_OK=1。
 // 「少一行」也算红——那是腿被删掉的形态，不是「剩下的都过了」。
 func TestCapabilityShapeSelftestGreen(t *testing.T) {
