@@ -67,6 +67,14 @@ FONT_FLOOR_RATIO = 0.6
 LINE_SPACING = 1.18
 # 墨迹判据：与框内背景亮度差超过此值算作笔画（给 JPEG 压缩噪声留余量）。
 INK_LUMA_DELTA = 48.0
+# ★ 2026-10-19 缺陷②：细长竖条（标题左侧色条、表格竖线）与文字共框时不是文字。
+#   现网实证：`因子战法` 框里那条 6px 宽、44px 高的蓝色色条把该行墨迹高度从 25 抬到 44
+#   ⇒ 译文按 44 起算被放大成 32px，而同一行右侧**同级**标题只有 20px——"字号忽大忽小"
+#   的最后一条来源。判据两维缺一不可：连续 ≤RULE_MAX_COLS 列、每列覆盖率 ≥RULE_COVER。
+#   只按"细"或只按"高覆盖率"都会误剔文字：CJK 粗竖笔覆盖率不低（`の` 左弧连续 13 列
+#   都 ≥0.6）却因**宽度超出上限**被放行，正是靠宽度这一维把它们分开。
+RULE_MAX_COLS = 8
+RULE_COVER = 0.6
 # ★ 2026-10-19 G3-b：抹字用底色的采样环带宽度（框外 BG_RING_PX 宽的中位色）。
 BG_RING_PX = 12
 # 扩框（长译文放不下时向右扩进均匀空白区）的步长与上限，以及「均匀」的标准差门槛。
@@ -187,6 +195,35 @@ def _draw_text(draw, chain, x: float, y: float, text: str, fill) -> None:
             x += f.size
 
 
+# 掩膜内的书写原点（掩膜只包住墨迹，留 _MASK_PAD 边距给 AA 与负向 bearing）。
+_MASK_PAD = 3
+
+
+def _mask_extent(chain, lines, px: int, lh: int):
+    """把多行文本先画到一张**紧贴墨迹**的灰度掩膜上，返回 (mask, bbox)。
+
+    ★ 为什么要先过这张掩膜，而不是直接画到原图上：
+      ① **真实墨迹外框**（含 `g/y` 的下伸部与字体自带的上下留白）只有画出来才知道；
+         `px * LINE_SPACING * (n-1) + px` 只是"名义块高"，拿它居中/判溢出会算错；
+      ② 贴回原图时按**框**裁剪，墨迹越框的部分不会落到邻行的地盘上——那里随后会被
+         邻行的底色抹掉，肉眼就是"字被裁成半截"（现网工单实证）。
+    """
+    from PIL import Image, ImageDraw
+
+    widths = [_measure(chain, l) for l in lines] or [0]
+    w = int(max(widths)) + _MASK_PAD * 2 + 2
+    h = lh * (len(lines) - 1) + int(px * 1.8) + _MASK_PAD * 2 + 2
+    mask = Image.new("L", (max(1, w), max(1, h)), 0)
+    _draw_lines(ImageDraw.Draw(mask), chain, _MASK_PAD, _MASK_PAD, lines, lh, 255)
+    return mask, mask.getbbox()
+
+
+def _block_ink_h(chain, lines, px: int, lh: int) -> int:
+    """多行文本的**真实墨迹高度**（含下伸部与 AA）；一行墨都没有时返回 0。"""
+    _, bb = _mask_extent(chain, lines, px, lh)
+    return 0 if bb is None else int(bb[3] - bb[1])
+
+
 def _valid_box(box) -> bool:
     """框形态校验：至少 4 个坐标，且坐标数成对（4 值矩形或 8 值四点都收）。
 
@@ -207,6 +244,35 @@ def _box_rect(box):
     return max(0, min(xs) - pad), max(0, min(ys) - pad), max(xs) + pad, max(ys) + pad
 
 
+def _thin_rule_cols(ink, full_cols):
+    """细长竖条（色条/竖线）的列掩膜：连续 ≤RULE_MAX_COLS 列、每列覆盖率 ≥RULE_COVER。
+
+    只返回**列掩膜**，不动行：调用方按它把那些列从墨迹里剔掉，行跨度随其余文字列重算。
+    连续段在两端（框把色条切掉一角）同样收，故按"段长≤上限"而不是"整框仅此一段"判。
+
+    ★ `full_cols` 这条参数是**刻意**的：满列（贯穿整框的框线）归满列判据，本判据只管
+      "细而不满高"那一族——两条**不重叠**。否则摘掉满列判据这件事在窄框线上照样绿
+      （细条判据顺手把它替掉了），那条腿当场变成空转锁、缺陷形态却照旧存在（本批首跑真踩）。
+    """
+    import numpy as np
+
+    if ink.size == 0:
+        return np.zeros(ink.shape[1], dtype=bool)
+    cover = ink.mean(axis=0)
+    hit = (cover >= RULE_COVER) & (~full_cols)
+    out = np.zeros(ink.shape[1], dtype=bool)
+    start = None
+    for c in range(int(hit.size) + 1):
+        if c < hit.size and hit[c]:
+            if start is None:
+                start = c
+            continue
+        if start is not None and c - start <= RULE_MAX_COLS:
+            out[start:c] = True
+        start = None
+    return out
+
+
 def _line_ink_height(patch) -> int:
     """原行在框内的**墨迹高度**（像素行数）：与框内背景亮度差超阈值的像素行跨度。
 
@@ -216,6 +282,8 @@ def _line_ink_height(patch) -> int:
       单里把带边框的控件（`全局` 下拉、参数输入格）读成满框高：横边让「每一列都有墨」，
       `rows[-1]-rows[0]+1` 直接等于框高 ⇒ 字号按框高起算，短内容（`0`/`4`）被画成整格巨字
       （用户报障「译后图字号忽大忽小」的最大单一来源）。两轴同一条判据、同一把尺子。
+    ★ 2026-10-19 补：**细长竖条**（`_thin_rule_cols`）也要剔——它只占几个列、够不到
+      "整列有墨"，却贯穿整框高；本批现网实证它把同级标题的字号差拉到 32 vs 20（见常量注释）。
     """
     import numpy as np
 
@@ -227,6 +295,7 @@ def _line_ink_height(patch) -> int:
     ink = np.abs(lum - bg) > INK_LUMA_DELTA
     full_cols = ink.all(axis=0)   # 整列都有墨＝框线/竖线，不是文字
     ink[:, full_cols] = False
+    ink[:, _thin_rule_cols(ink, full_cols)] = False   # 细长色条/竖线，同样不是文字
     if ink.size:
         full_rows = ink.all(axis=1)   # 整行都有墨＝横线/上下边，同样不是文字
         ink[full_rows, :] = False
@@ -320,13 +389,17 @@ def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
     """定最终字号与折行：优先按原行高起、尽量单行；放不下就**换行**；换行也放不下才降到地板。
 
     返回 (px, lines, overflow)。overflow=True＝已到地板仍超出框，调用方据此出声（不静默画超框）。
+
+    ★ 2026-10-19（缺陷②）：块高判据＝**真实墨迹高度**（`_block_ink_h`），不是名义块高
+      `px*LINE_SPACING*(n-1)+px`——后者漏算下伸部与字体留白，会把文本摆得低到越框。
     """
     ref = ink_h if ink_h > 0 else int(h * 0.86)
     px = max(floor, int(ref * 0.92))
     px = min(px, max(floor, int(h * 0.98)))
     while True:
-        lines = _wrap_text(_chain(px), text, w)
-        block_h = int(px * LINE_SPACING) * (len(lines) - 1) + px
+        chain = _chain(px)
+        lines = _wrap_text(chain, text, w)
+        block_h = _block_ink_h(chain, lines, px, int(px * LINE_SPACING))
         if block_h <= h or px <= floor:
             return px, lines, block_h > h
         px = max(floor, int(px * 0.9))
@@ -452,6 +525,12 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         rects.append(r)
     blockers_all = [r for r in rects if r]
 
+    # ★ 2026-10-19（缺陷②）：量墨迹/取底色/试扩框的**参照系一律是"绘制前的原图"**。
+    #   逐行绘制是就地改写同一张画布，而 OCR 的框**本身就互相重叠**（现网单里相邻两行的框
+    #   重叠 9px），先前那一行画下的字（含下伸部）会落进下一行的框内——拿画布去量，
+    #   下一行的 ink_h 就被读成「上一行的尾巴 + 自己的字」（实测 fac_1：21→44），
+    #   字号随之从 19px 涨到 36px，肉眼就是用户报的「字号忽大忽小」。
+    ref_img = img.copy()
     painted = 0
     overflowed = 0
     blank_skipped = 0   # 空框（无墨）+ 原文交付 的跳过计数：排障用（见下面的 INFO 行）
@@ -466,7 +545,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         if not text:
             continue
         # ① 量原行墨迹高度（字号地板的依据；量不到就退用框高），并取框外环带中位色作抹字底色。
-        patch = img.crop(r0)
+        patch = ref_img.crop(r0)
         ink_h = _line_ink_height(patch)
         # ★ 2026-10-19：框内**一处墨都没有**（OCR 在控件边框/图标/下拉箭头上误切的空框），
         #   而这一行要写的就是原文本身（identity 交付，`0`/`4`/`<`/`の` 这类符号段）——
@@ -477,7 +556,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         if ink_h == 0 and text == (ln.get("text") or "").strip():
             blank_skipped += 1
             continue
-        bg = _pick_bg(img, r0)
+        bg = _pick_bg(ref_img, r0)
         if bg is not None:
             # 抹掉原文：填**原有底色**（环带中位色），比一律填白/填灰更耐看
             # （线图/深色底/彩色卡片的截图不会被抹出一块突兀的灰或白）。
@@ -485,7 +564,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
             draw.rectangle([r0[0], r0[1], r0[2], r0[3]], fill=bg)
         # ② 长译文先尝试向右扩进均匀空白区（只扩右，不压邻行；扩不动由换行兜底）。
         blockers_wo = [b for b in blockers_all if b != r0]
-        left, top, right, bottom = _expand_rect(img, r0, blockers_wo)
+        left, top, right, bottom = _expand_rect(ref_img, r0, blockers_wo)
         inner_w = max(1, right - left - 2)
         inner_h = max(1, bottom - top - 2)
         floor = _font_floor(ink_h, inner_h)
@@ -497,12 +576,22 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         # ④ 文字色按底色亮度反差自动选：亮底黑字、暗底白字（暗底上用黑字＝看不见）。
         fill = _text_color(bg)
         lh = int(size * LINE_SPACING)
-        block_h = lh * (len(draw_lines) - 1) + size
-        y = top + max(0, ((bottom - top) - block_h) // 2)
-        try:
-            _draw_lines(draw, chain, left + 1, y, draw_lines, lh, fill)
-        except Exception as exc:
-            return _err("Draw", "绘制失败 %s" % exc)
+        # ⑤ 覆盖率掩膜 + **按框裁剪**贴回：墨迹只落在自己的框里（越框部分丢弃），
+        #    垂直位置按**真实墨迹**居中。两件事一起做才治得住「字被邻行底色抹掉半截」——
+        #    只居中不裁剪：框高不够时墨迹仍会伸进邻行、被邻行底色吃掉；
+        #    只裁剪不按墨迹居中：本来放得下的行也会被压到框边。
+        mask, bb = _mask_extent(chain, draw_lines, size, lh)
+        if bb is not None:
+            bw, bh = right - left, bottom - top
+            if bw > 0 and bh > 0:
+                tile = Image.new("L", (bw, bh), 0)
+                # 墨迹横向仍**笔起点**对齐（left+1，与改造前逐字绘制同一位形）；
+                # 纵向按墨迹居中，并夹进框内（bh-2 与 _box_rect 的 1px 边距对齐）。
+                tile.paste(mask, (1 - bb[0], max(0, (bh - 2 - int(bb[3] - bb[1])) // 2) - bb[1]))
+                try:
+                    img.paste(fill, (left, top), tile)
+                except Exception as exc:
+                    return _err("Draw", "绘制失败 %s" % exc)
         painted += 1
 
     if painted == 0:

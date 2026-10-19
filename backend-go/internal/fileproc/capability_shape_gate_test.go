@@ -59,6 +59,7 @@ var capShapeLegs = []string{
 	"L14", "L15", "L16", "L17", "L18",
 	"L19", "L20", "L21", "L22", "L23", "L24",
 	"L26", "L27",
+	"L28", "L29", "L30", "L31", "L32",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -141,6 +142,19 @@ var capShapeMutations = []capShapeMutation{
 		"满宽墨色行不剔除（输入框上下边让原行高被读成满框高，短内容被画成整格巨字）"},
 	{"L27", capShapeImgFile, `        if ink_h == 0 and text == (ln.get("text") or "").strip():`, `        if False:`,
 		"空框 + 原文交付不再跳过（OCR 在图标/边框上误切的空框被画成幽灵内容）"},
+	// ===== ★ 2026-10-19（缺陷②：字号忽大忽小 / 字被裁半截）批。三条真因各一枚，外加两条形态腿。
+	// 全部是「运行期形状错」：健康面全绿、日志零红，只有把译后图打开（或逐行读 trace）才看得出。
+	{"L28", capShapeImgFile, `    ink[:, _thin_rule_cols(ink, full_cols)] = False`, `    pass`,
+		"细长色条不剔除（`因子战法` 框里那条 6px 色条把 ink_h 从 25 抬到 44，同级标题字号 32 vs 20）"},
+	{"L29", capShapeImgFile, `RULE_MAX_COLS = 8`, `RULE_MAX_COLS = 32`,
+		"宽度上限放太宽（`の` 左弧那样的 13 列宽笔画被当色条剔空，字号退到兜底档）"},
+	{"L30", capShapeImgFile, `        block_h = _block_ink_h(chain, lines, px, int(px * LINE_SPACING))`,
+		`        block_h = int(px * LINE_SPACING) * (len(lines) - 1) + px`,
+		"块高退回名义式（漏算下伸部与字体留白 ⇒ 虚报放得下，越框那半行被邻行底色抹掉）"},
+	{"L31", capShapeImgFile, `        patch = ref_img.crop(r0)`, `        patch = img.crop(r0)`,
+		"量墨迹改回就地画布（上一行画下的字落进下一行框内 ⇒ 字号忽大忽小，现网 fac_1：19px→36px）"},
+	{"L32", capShapeImgFile, `                    img.paste(fill, (left, top), tile)`, `                    img.paste(fill, (left, top), mask)`,
+		"贴回不再按框裁剪（越框墨迹落进邻行地盘，随后被邻行底色抹成半截字）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。

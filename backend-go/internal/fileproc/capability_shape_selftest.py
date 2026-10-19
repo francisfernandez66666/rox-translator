@@ -46,6 +46,13 @@
   L22 图片回填：抹字底色取框外环带中位色，彩色底不被抹成灰（同批 G3-b）
   L23 图片回填：长译文优先向右扩进均匀空白区，遇墨/别的框即停（同批 G3-a）
   L24 ASR：无语音门（纯静音判 no_speech，小声真人语音不误伤）（★ 2026-10-19 G11）
+  L26 图片回填：满宽墨色行（输入框上下边）剔除，短内容不被画成整格巨字（★ 同批）
+  L27 图片回填：空框 + 原文交付跳过绘制，不造原文里没有的「幽灵内容」（同批）
+  L28 图片回填：细长竖条（标题色条/表格竖线）剔除，字号不被色条抬高（★ 2026-10-19 缺陷②）
+  L29 图片回填：**反证腿**——宽墨块/粗笔画不许被当色条剔掉（CJK 左弧 13 列覆盖率 ≥0.6）
+  L30 图片回填：块高按**真实墨迹**算，凡报 overflow=0 就不许真实越框（越框那半行会被邻行抹掉）
+  L31 图片回填：量墨迹/取底色/试扩框一律看**绘制前的原图**，不被上一行画下的字污染（缺陷②真因）
+  L32 图片回填：越框墨迹一律丢弃（掩膜按框裁剪），不落进邻行地盘被邻行底色抹成半截字
 
 环境变量（**只给 Go 侧反证用**，把被测对象换成一份变异副本，证明这些腿真的会红）：
   CAPSHAPE_OCR_MODULE=<path>  指定被测的 ocr_recognize.py 副本
@@ -590,6 +597,8 @@ def leg_l20_full_height_ink_columns_dropped():
 
     造一张 20×60 白底样张：第 0 列整列有墨（框线），第 6~12 行第 20~40 列有一块文字墨。
     正确读数＝文字的 7 行；不剔除列则整列墨让「每一行都有墨」⇒ 读数 20（地板随之被抬错）。
+    ★ 2026-10-19 缺陷②批：这条框线刻意取**满列**（贯穿整框）——细而不满高的色条归 L28。
+      两条判据在实现里刻意**不重叠**：重叠过一次，本腿的变异体当场退化成"摘掉判据也不红"的空转锁。
     """
     import numpy as np
     arr = np.full((20, 60, 3), 255, dtype=np.uint8)
@@ -677,6 +686,139 @@ def leg_l27_blank_box_identity_not_painted():
         assert rc != 0 and not out.exists(), "无墨框 + 原文交付不许造出幽灵内容（rc=%d，产物=%s）" % (rc, out.exists())
         rc2 = _render(src, out, [{"text": "0", "box": [10, 10, 200, 80], "tran": "Zero"}])
         assert rc2 == 0 and _ink_count(out) > 0, "真译文（≠ 原文）即便框内无墨也必须照旧绘制（rc=%d）" % rc2
+
+
+# ------------------------------------------------------------------ 图片：缺陷②（2026-10-19 现网图片单）
+
+def _ink_rows(path, rect):
+    """rect 内**有墨的行数**（与 `_line_ink_height` 同一把尺子：非白即可）。
+
+    抹底之后框内只剩我们画的那一行字 ⇒ 这个读数就是**实际落笔的墨迹高度**。
+    """
+    import numpy as np
+    from PIL import Image
+    arr = np.asarray(Image.open(str(path)).convert("RGB"))
+    x0, y0, x1, y1 = rect
+    sub = arr[y0:y1, x0:x1]
+    return int((sub < 250).any(axis=2).any(axis=1).sum())
+
+
+@leg("L28")
+def leg_l28_thin_tall_rule_dropped():
+    """★ 2026-10-19 缺陷②：细长竖条（标题左侧色条、表格竖线）不是文字，必须与框线同尺剔除。
+
+    现网实证：`因子战法` 框里那条 6px 宽、44px 高的蓝色色条把 ink_h 从 25 抬到 44 ⇒
+    译文按 44 起算被放大成 32px，而同排**同级**标题只有 20px（用户报的「字号忽大忽小」）。
+    造 60×160 白底样张：第 4~9 列、第 2~57 行一条**细而不满高**的色条（满高列已被 L20 判据
+    吃掉，本腿守的是"细"这一维），另加 20~46 行 × 20~140 列的文字墨。正确读数＝文字的 27 行。
+    """
+    import numpy as np
+    arr = np.full((60, 160, 3), 255, dtype=np.uint8)
+    arr[2:58, 4:10, :] = 0      # 细长色条：6 列 × 56 行（刻意不满高，绕开 L20 的满列判据）
+    arr[20:47, 20:141, :] = 0   # 文字墨块：行 20..46
+    h = IMG._line_ink_height(_rgb_image(arr))
+    assert h == 27, "细长色条没被剔除（读数 %d，期望文字本身的 27 行）" % h
+
+
+@leg("L29")
+def leg_l29_wide_ink_run_is_kept():
+    """★ 同批**反证腿**：宽墨块/粗笔画不许被当色条剔掉——判据两维缺一不可，只按覆盖率一味剔会把字切没。
+
+    现网字里 `の` 左弧连续 **13 列**覆盖率 ≥0.6（实测值，见 `RULE_MAX_COLS` 常量注释）；
+    这里就用 13 列 × 42 行（覆盖率 0.70）的实心块当最接近的形态：读数必须是块本身的 42 行。
+    宽度上限一旦放到 ≥13 就会把它剔空、读数变 0（字号随即退到"框高 ×0.86"的兜底档）。
+    """
+    import numpy as np
+    arr = np.full((60, 160, 3), 255, dtype=np.uint8)
+    arr[8:50, 40:53, :] = 0     # 13 列 × 42 行、覆盖率 0.70：宽度超上限 ⇒ 必须保留
+    h = IMG._line_ink_height(_rgb_image(arr))
+    assert h == 42, "宽墨块被误当色条剔除（读数 %d，期望 42）——宽度上限把文字切没了" % h
+
+
+@leg("L30")
+def leg_l30_layout_fits_by_real_ink_block_height():
+    """★ 2026-10-19 缺陷②：`_layout` 的"放得下"必须按**真实墨迹块高**判，不是名义块高。
+
+    名义式 `px*LINE_SPACING*(n-1)+px` 漏算下伸部与字体自带留白 ⇒ 判"放得下"而实际越框，
+    越出去的那半行随后被**邻行的底色**抹掉（现网 `Strategy` 只剩半截的真身）。两段判据：
+      ① 源码级——`_layout` 必须拿 `_block_ink_h` 现算块高（换回名义式即红）。这一处只有源码问得出
+         "用的是哪一把尺子"，与 L18「挑字函数写对但没被绘制调用＝白修」同一口径；
+      ② 语义级——任何盒高下凡报 `overflow=0`，真实墨迹高度必须 ≤ 盒高（不许虚报放得下）。
+    """
+    import inspect
+    src = inspect.getsource(IMG._layout)
+    assert "_block_ink_h(" in src, "布局没走真实墨迹块高（名义块高漏算下伸部 ⇒ 越框被邻行底色抹半截）"
+    flat = "".join(src.split())
+    assert "LINE_SPACING)*(len(lines)-1)" not in flat, "块高又变回名义式了（漏算下伸部与字体留白）"
+    for h in (18, 22, 26, 30, 40, 63):
+        for floor in (8, 12):
+            px, lines, overflow = IMG._layout("Volatility Breakout Strategy", 120, h, floor, 25)
+            ink = IMG._block_ink_h(IMG._chain(px), lines, px, int(px * IMG.LINE_SPACING))
+            if not overflow:
+                assert ink <= h, "报 overflow=0 但真实墨迹 %d > 盒高 %d（越框那半行会被邻行抹掉）" % (ink, h)
+
+
+@leg("L31")
+def leg_l31_ink_measured_on_frozen_reference():
+    """★ 2026-10-19 缺陷②：量墨迹/取底色/试扩框必须看**绘制前的原图**，不许看就地改写的画布。
+
+    机制：OCR 的框**本身就互相重叠**（现网单相邻两行重叠 9px）。逐行就地绘制时，上一行画下的字
+    （含下伸部）落进下一行的框内；拿画布去量，下一行的 ink_h 就被读成「上一行的尾巴 + 自己的字」
+    （现网 fac_1 实证 21→44 ⇒ 字号 19px 涨成 36px）。判据：下框里**实际落笔的墨迹高度**必须等于
+    按原图墨迹算出来的那一档，而不是按"上一行尾巴"算出来的那一档。
+    ⚠️ 夹具自证（原地留档）：两档字号必须真拉开——哪天 `_layout` 不再按墨迹起算，两档会相等，
+      这条腿就退化成空转锁，故先断言拉开了再比读数。反证在 Go 侧：把量测改回 `img.crop` 必红。
+    """
+    import numpy as np
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        arr = np.full((150, 200, 3), 255, dtype=np.uint8)
+        arr[66:82, 30:90, :] = 0     # 下框**自己的**原墨迹：行 66..81 ⇒ ink_h=16
+        _rgb_image(arr).save(src)
+        box_a, box_b = [20, 20, 180, 70], [10, 56, 190, 110]   # 两框行向重叠 56..70
+        rc = _render(src, out, [
+            {"text": "上", "box": box_a, "tran": "Neighbor Overlap Text Spills Downwards"},
+            {"text": "下", "box": box_b, "tran": "Bottom"},
+        ])
+        assert rc == 0, "两行重叠框渲染失败（rc=%d）" % rc
+        ref = _rgb_image(arr)
+        r0 = IMG._box_rect(box_b)
+        left, top, right, bottom = IMG._expand_rect(ref, r0, [IMG._box_rect(box_a)])
+        iw, ih = max(1, right - left - 2), max(1, bottom - top - 2)
+        want_px = IMG._layout("Bottom", iw, ih, IMG._font_floor(16, ih), 16)[0]
+        bad_px = IMG._layout("Bottom", iw, ih, IMG._font_floor(27, ih), 27)[0]
+        assert bad_px > want_px + 3, \
+            "夹具自证不过：污染档与参照档字号没拉开（%d vs %d）⇒ 这条腿是空转的" % (bad_px, want_px)
+        got = _ink_rows(out, r0)
+        chain = IMG._chain(want_px)
+        exp = IMG._block_ink_h(chain, IMG._wrap_text(chain, "Bottom", iw), want_px, int(want_px * IMG.LINE_SPACING))
+        assert abs(got - exp) <= 2, \
+            "下框字号按**被污染的画布**算了（实读墨高 %d，按原图应 %d；污染档字号 %d）" % (got, exp, bad_px)
+
+
+@leg("L32")
+def leg_l32_drawn_ink_never_leaves_its_box():
+    """★ 缺陷②：越框的墨迹一律丢弃（掩膜按框裁剪）——落进邻行地盘就会被邻行底色抹掉半截。
+
+    造一张**纯白**原图（原图无墨 ⇒ 框外任何墨点都只能是我们画的）：上框放一段放不下的长译文
+    （到字号地板仍越框），下框故意是坏框（跳过、永不被重绘）⇒ 上框**之外**必须一个墨点都没有。
+    反证在 Go 侧：贴回改成"整张掩膜直接贴"（不按框裁剪）必红。
+    """
+    import numpy as np
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        src, out = Path(d) / "s.png", Path(d) / "o.png"
+        _blank_png(src)
+        rc = _render(src, out, [
+            {"text": "上", "box": [20, 20, 200, 50],
+             "tran": "A very long translated sentence that cannot fit in this tiny box"},
+            {"text": "下", "box": [], "tran": "bad box"},
+        ])
+        assert rc == 0, "渲染失败（rc=%d）" % rc
+        arr = np.asarray(Image.open(str(out)).convert("RGB"))
+        below = arr[51:120, :, :]     # 上框 (20,20,200,50) 加 1px 边距后的下沿＝行 51
+        leaked = int((below < 250).any(axis=2).sum())
+        assert leaked == 0, "墨迹越过了自己的框（框下还有 %d 个墨点）——会被邻行底色抹成半截字" % leaked
 
 
 # ------------------------------------------------------------------ ASR：无语音门（⭐ 2026-10-19 G11）
