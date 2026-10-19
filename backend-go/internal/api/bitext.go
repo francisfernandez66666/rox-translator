@@ -315,6 +315,6 @@ func (s *Server) handleExportTMX(w http.ResponseWriter, r *http.Request) {
 	doc := buildTMX(rows, mod)
 	filename := fmt.Sprintf("langcross_tm_%s.tmx", time.Now().UTC().Format("20060102T150405"))
 	w.Header().Set("Content-Type", "application/x-tmx; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename="+filename)
+	w.Header().Set("Content-Disposition", contentDisposition(filename))
 	_, _ = w.Write(doc)
 }

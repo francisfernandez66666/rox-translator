@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   orgUsers: vi.fn(),
   orgBudgetSummary: vi.fn(),
   adminUserCreate: vi.fn(),
+  adminUserUpdate: vi.fn(),
 }))
 
 // ---- '@/api' mock：只提供 OrgP 具名导入的运行时最小集（type 导入编译期擦除） ----
@@ -34,6 +35,7 @@ vi.mock('@/api', () => ({
   adminUserCreate: mocks.adminUserCreate,
   adminUserDelete: vi.fn(),
   adminUserResetPassword: vi.fn(),
+  adminUserUpdate: mocks.adminUserUpdate,
   userBulkImport: vi.fn(),
   downloadUserImportTemplate: vi.fn(),
   inviteCodes: vi.fn(),
@@ -106,5 +108,64 @@ describe('组织架构 · 新建用户 org_id 类型（★ F-22）', () => {
     expect(json).not.toContain(strOrgIdProbe)
     // 同串正向确认：number 形态的 "org_id":7 必须在（防空载荷/字段丢失的假绿）
     expect(json).toContain('"org_id":7')
+  })
+})
+
+// ============================================================================
+// ★ 2026-10-19 G8：成员「显示名」行内编辑改为「草稿 + 失焦/回车提交」
+// 缺陷背景：旧形态 onChange 每敲一个字符就 editUser → PUT 写请求 + loadAll 全量刷新，
+//   逐字符把失焦前每一次键入都打成一次写与一次全量拉取（现网实测 N 击 ≈ N 次写）。
+// 本用例锁三向（等值 + 反证）：
+//   ① 逐字符 12 击期间：adminUserUpdate 零调用、orgUsers（全量拉取）计数不增长；
+//   ② 失焦提交**恰一次**，载荷 display_name 为整串草稿、其余字段沿用该行；
+//   ③ 回车亦提交一次，且显示名这一路**不触发全量刷新**（就地更新该行）；
+//   末行下界式收口「12 击 + 两提交 ⇒ 写请求 ≤2」——把「逐字符」这条旧形态钉死。
+// 运行：npx vitest run src/components/admin/OrgP.dom.test.tsx
+// ============================================================================
+describe('组织架构 · 成员显示名行内编辑（★ G8）', () => {
+  /** 取成员表里那一枚显示名输入框（无 placeholder、初值＝该行 display_name） */
+  function nameInput(container: HTMLElement, value: string): HTMLInputElement | undefined {
+    return (Array.from(container.querySelectorAll('input.lc-input')) as HTMLInputElement[])
+      .find((i) => !i.placeholder && i.value === value)
+  }
+
+  beforeEach(() => {
+    mocks.orgUsers.mockResolvedValue({
+      success: true,
+      users: [{ id: 9, username: 'kim', display_name: 'OldName', role: 'user', status: 'active', org_id: 7, last_login_at: '' }],
+    })
+    mocks.adminUserUpdate.mockResolvedValue({ success: true })
+  })
+
+  it('逐字符 12 击零写请求；失焦/回车各提交一次；显示名不触发全量刷新', async () => {
+    const { container } = render(<OrgP />)
+    await vi.waitFor(() => { expect(nameInput(container, 'OldName')).toBeTruthy() })
+    const input = nameInput(container, 'OldName')!
+    const usersAfterMount = mocks.orgUsers.mock.calls.length
+
+    // ① 逐字符 12 击：只落草稿，不发写请求、不触发全量拉取
+    for (let i = 0; i < 12; i++) {
+      fireEvent.change(input, { target: { value: 'A'.repeat(i + 1) } })
+    }
+    expect(mocks.adminUserUpdate, '逐字符期间不许发写请求').not.toHaveBeenCalled()
+    expect(mocks.orgUsers.mock.calls.length, '逐字符期间不许全量刷新').toBe(usersAfterMount)
+
+    // ② 失焦提交恰一次，载荷＝整串草稿，其余字段沿用该行
+    fireEvent.blur(input)
+    await vi.waitFor(() => { expect(mocks.adminUserUpdate).toHaveBeenCalledTimes(1) })
+    const payload = mocks.adminUserUpdate.mock.calls[0][1]
+    expect(payload.display_name).toBe('A'.repeat(12))
+    expect(payload.org_id).toBe(7)
+    expect(mocks.adminUserUpdate.mock.calls[0][0]).toBe(9)
+    // 显示名走就地更新：仍不许全量刷新
+    expect(mocks.orgUsers.mock.calls.length, '显示名提交后不许全量刷新').toBe(usersAfterMount)
+
+    // ③ 回车提交第二个样本
+    fireEvent.change(input, { target: { value: 'Renamed' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await vi.waitFor(() => { expect(mocks.adminUserUpdate).toHaveBeenCalledTimes(2) })
+    expect(mocks.adminUserUpdate.mock.calls[1][1].display_name).toBe('Renamed')
+    // 下界式收口：12 击 + 两次提交，写请求仍然 ≤2
+    expect(mocks.adminUserUpdate.mock.calls.length).toBeLessThanOrEqual(2)
   })
 })

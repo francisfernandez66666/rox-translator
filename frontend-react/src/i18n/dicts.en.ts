@@ -50,6 +50,8 @@ export const baseEn: Record<string,string> = {
   //   还指向上一代哈希 chunk）时的可读文案与整页重载钮。
   'common.chunkLoadFailed': 'Page content could not be loaded — the site was probably just updated. Please reload the page.',
   'common.reloadPage': 'Reload page',
+  // ★ 2026-10-19 G20：同 zh 键——BootErrorBoundary 正文走词典（标题/按钮复用 common.pageError / common.reloadPage）。
+  'common.bootErrorBody': 'The interface was interrupted while displaying. Reloading usually fixes it; if it keeps stopping on this page, send the first red line in your browser console to support.',
   'app.brandTitle': '{name} Translation Platform',
   'app.notify': 'Notifications',
   'app.openMenu': 'Open menu',
@@ -839,5 +841,14 @@ export const baseEn: Record<string,string> = {
   'tr.fileFmtText': "Unsupported file format: {name} (plain-text mode supports {fmts})",
   'tr.fileFmtLegacy': "Unsupported file format: {name} (legacy {ext} format is only supported in ticket plain-text mode; convert it to the new format first)",
   'tr.fileFmtOnly': "Unsupported file format: {name} (only {fmts} supported)",
-  'tr.fileTooBig': "File too large ({mb}MB), exceeds the {maxMB}MB translation limit; please split or compress and retry"
+  'tr.fileTooBig': "File too large ({mb}MB), exceeds the {maxMB}MB translation limit; please split or compress and retry",
+  'tk.deliverablesTitle': 'Deliverables',
+  'tk.degradedBadge': 'Layout restore failed',
+  'tk.degradedTip': 'Degraded delivery for: {langs} (layout restore failed; delivered as plain-text .md)',
+  'tk.downloading': 'Downloading…',
+  'tk.downloadingAt': 'Downloading… ({n} KB received)',
+  'tk.downloadInterrupted': 'Download interrupted (connection ended early; please retry)',
+  'tk.downloadInterruptedAt': 'Download interrupted ({n} KB received; connection ended early, please retry)',
+  'chat.micNoSpeech': 'No speech detected — move closer to the microphone, check the permission, and try again',
+  'audit.action.invite_revoke': 'Revoke invite code',
 }

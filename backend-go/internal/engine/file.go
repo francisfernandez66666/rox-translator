@@ -290,6 +290,64 @@ func (e *Engine) normalizeFileBrandTerms(ctx context.Context, texts []string, la
 	return len(fixedLang)
 }
 
+// countBrandPresenceDrops ★ G4（2026-10-19）：统计「源文含品牌名、译文却逐字找不到规定译法」
+// 的段落数。品牌名是**不可译**的常量（挂件出栈有 guardReplyBrand，工单/文件链此前没有同一道
+// 闸，D5 实测同一原件两次交付首行不同：`Can LangCross speak?` vs `Can you speak LangCross?`）。
+//
+// 判据（per-language）：源段命中某品牌源名（KB module=brand+layer=1 的 SourceText）时，
+// 该段译文必须至少包含其中一个对应的规定译法；一段都没包含 ⇒ 记一次「品牌被翻掉」。
+// 长词/短词不在此处再判（protectSourceByLang 已在翻译前按长词优先替换）。
+//
+// **fail-soft 方向（§一·13③）**：brandTerms 为空（名单取不到）时一律返回 0——「拿不到清单」
+// 是「不知道品牌名是什么」，不是「什么都算丢」；宁可这一轮不判，也不许把正常交付误报成缺品牌。
+func countBrandPresenceDrops(langTranslations map[string]map[string]string, brandTerms map[string]map[string]string) (int, map[string]bool) {
+	drops := 0
+	langs := map[string]bool{}
+	if len(langTranslations) == 0 || len(brandTerms) == 0 {
+		return 0, langs
+	}
+	for lc, segs := range langTranslations {
+		terms := brandTerms[lc]
+		if len(terms) == 0 {
+			continue
+		}
+		for orig, tr := range segs {
+			if strings.TrimSpace(tr) == "" {
+				continue
+			}
+			hit, present := false, false
+			for src, tgt := range terms {
+				if src == "" || !strings.Contains(orig, src) {
+					continue
+				}
+				hit = true
+				if tgt != "" && strings.Contains(tr, tgt) {
+					present = true
+					break
+				}
+			}
+			if hit && !present {
+				drops++
+				langs[lc] = true
+			}
+		}
+	}
+	return drops, langs
+}
+
+// checkFileBrandPresence 取该租户品牌术语后委托给 countBrandPresenceDrops（纯函数便于单测）。
+// 名单取不到即 fail-soft（返回 0）。
+func (e *Engine) checkFileBrandPresence(ctx context.Context, texts []string, langTranslations map[string]map[string]string) (int, map[string]bool) {
+	if e.St == nil || len(texts) == 0 || len(langTranslations) == 0 {
+		return 0, map[string]bool{}
+	}
+	retrieve := strings.Join(texts, "\n")
+	if len([]rune(retrieve)) > 200 {
+		retrieve = string([]rune(retrieve)[:200])
+	}
+	return countBrandPresenceDrops(langTranslations, e.fetchBrandTerms(ctx, retrieve))
+}
+
 // extractFailureReason 把「提取这一步没产出」收敛成该给客户看的那句话（★ 2026-10-15 OCR/ASR 批）。
 // 只有**图片／音频**这两条新腿放宽成「原样带出底层错误」，理由有三层：
 //   - fileproc 给这两族写的错误句子**本身就是可行动口径**（见 ocr.go / asr.go）：
@@ -844,6 +902,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		log.Println(result)
 	}
 	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
+	// ★ G4（2026-10-19 D5）：品牌名是不可译常量，工单/文件链此前没有挂件那道 guardReplyBrand。
+	//   译文里品牌名逐字缺失 ⇒ 出声 + 记账（客户与审批台可见）。名单取不到时 checkFileBrandPresence
+	//   内部 fail-soft 返回 0（拿不到清单＝不知道品牌名，不误报）。
+	if drops, langs := e.checkFileBrandPresence(ctx, texts, langTranslations); drops > 0 {
+		observability.Warn(ctx, "文件交付品牌名缺失", "drops", drops, "langs", len(langs))
+		gateWarnings = append(gateWarnings, fmt.Sprintf("brand_dropped=%d（%d 个语言的译文里品牌名缺失，可能被翻掉）", drops, len(langs)))
+	}
 	// ★B3（A2 挂载点3·语言收尾）：品牌归一/敏感词兑底/质量闸门三道覆写全部落地后，
 	// 对「最后已发文本」做 diff 补推 segment_final(stage=gated)，随后逐语言 segments_sealed。
 	se.sweep(langTranslations, finalLangs)
@@ -973,20 +1038,26 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		outPath := filepath.Join(outputDir, xlsxBase+xlsxSuffix)
 		var aerr error
+		xlsxHits := -1 // ★ G17：-1＝本轮无命中数口径（多语言多 Sheet 路径）
 		if len(finalLangs) == 1 {
 			// ★ 单目标语言：原地替换单元格为译文，产物文件即译文本身
 			// （符合「把文件翻成 X 语」的预期；原文件保持不变，下载的 _translated.xlsx 为译文）。
 			// 此前多 Sheet 模式会把原文 Sheet 留在首位、译文放新增 Sheet，Excel 默认打开原文 Sheet
 			// 造成「还是中文」的误解（实际译文在 en Sheet 中已正确生成）。
-			aerr = fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]])
+			xlsxHits, aerr = fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]])
 		} else {
 			// ★ 多目标语言：单文件多 Sheet，每个目标语言一个 Sheet（Sheet 名=语言代码）
 			//   base 与上面 outPath 同一份已翻译名，否则降级/成功两条路会产出两个不同文件名。
 			aerr = writeMultiSheetXlsx(filePath, outputDir, xlsxBase, finalLangs, langTranslations)
 		}
+		// ★ G17：零命中与写回失败同走退化通道——不再静默交付未翻译的 xlsx。
+		if aerr == nil && xlsxHits == 0 {
+			aerr = fmt.Errorf("xlsx 写回零命中（没有任何单元格被替换，疑似译文键与表格内容不对应）")
+		}
 		if aerr == nil {
 			filesOut = append(filesOut, outPath)
 		} else {
+			_ = os.Remove(outPath)
 			// ★ 双模式（2026-09-13）：回写失败降级纯文案交付（翻译是资产，回写是增值）
 			log.Printf("[file-degrade] xlsx 回写失败，降级纯文案: %v", aerr)
 			for _, lc := range finalLangs {
@@ -1012,6 +1083,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if cerr := copyFileContents(filePath, audioSrc); cerr != nil {
 				// 走 observability 而不是标准库：AGENTS「日志与观测」那条口径，且存量 log.Printf 受棘轮只减不增约束。
 				observability.Warn(ctx, "音频原文件随产物拷贝失败（不影响字幕交付）", "error", cerr.Error(), "artifact", filepath.Base(audioSrc))
+				// ★ G18：原音频副本缺位必须进 GateWarnings——用户拿不到原音轨就无法挂载字幕自行核对。
+				gateWarnings = append(gateWarnings, fmt.Sprintf("原音频副本未随包交付：%s", cerr.Error()))
 			} else {
 				filesOut = append(filesOut, audioSrc)
 			}
@@ -1054,10 +1127,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				//   “只有译文 .md”的既有形态——译文已经翻好，绝不能让“图没画出来”把整单判死。
 				inPlaceSuffix := fmt.Sprintf("_%s%s", lc, ext)
 				inPlacePath := filepath.Join(outputDir, artifactBase(lc, inPlaceSuffix)+inPlaceSuffix)
-				if rerr := fileproc.RenderTranslatedImage(ctx, filePath, inPlacePath, tr); rerr != nil {
-					observability.Warn(ctx, "图片原位回填跳过（退回仅译文 .md）", "error", rerr.Error(), "artifact", filepath.Base(inPlacePath))
+				// ★ G2/G18（2026-10-19）：原位回填失败不再只写一行日志——档位名进 GateWarnings，
+				//   该语言同时进 degraded（交付形态实为「仅译文 .md」，与话术口径一致）。
+				if stats, rerr := fileproc.RenderTranslatedImage(ctx, filePath, inPlacePath, tr); rerr != nil {
+					reason := fileproc.ImageRenderReason(rerr)
+					observability.Warn(ctx, "图片原位回填跳过（退回仅译文 .md）", "error", rerr.Error(), "reason", reason, "artifact", filepath.Base(inPlacePath))
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填未生成（%s）：%s；译文 .md 已完整交付", config.LangNames[lc], reason, rerr.Error()))
+					degraded = append(degraded, lc)
 				} else {
 					filesOut = append(filesOut, inPlacePath)
+					// ★ G3-c：有行没译出（由原文顶上）必须出声——否则「图上还是中文」被静默交付。
+					if stats.Residue > 0 {
+						observability.Warn(ctx, "图片原位回填存在未译出行（保留原文）", "lang", lc, "residue", stats.Residue, "total", stats.Total)
+						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填有 %d/%d 行未译出（保留原文）", config.LangNames[lc], stats.Residue, stats.Total))
+					}
 				}
 				continue
 			}
@@ -1105,7 +1188,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					}
 				}
 				if len(ttsLines) == 0 {
-					// 一段译文都没拿到（不该发生：上面已判 len(tr)==0 就 continue）——不合成，也不报警。
+					// ★ G18（2026-10-19）：一段译文都没拿到时不再静默——进 GateWarnings，
+					//   让审批/QA 看得出「这一语言没有配音」是内容层原因而非合成层原因。
+					observability.Warn(ctx, "译文配音跳过（无可用译文行）", "lang", lc)
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 未生成译文配音（无可用译文行）", config.LangNames[lc]))
 				} else {
 					// ★ 2026-10-16 用户令「处理完回成原文件格式」：配音容器**照搬输入音频的容器**
 					//   （mp3 进就 mp3 出、m4a 进就 m4a 出），用户拿回去能直接替换原件。
@@ -1124,13 +1210,20 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			//   自动重试（子进程转换偶发失败：LibreOffice profile 锁/资源竞争）；
 			//   ★ 2026-09-13 双模式：重试仍败改为「纯文案 .md 降级交付 + warning」，不再整单判死。
 			var aerr error
+			// ★ G17（2026-10-19）：office 写回回传命中数；0 命中＝文档里没换过任何文本，
+			//   与「键不对应/译文整段没落进去」同形，绝不静默交付未翻译件。
+			//   writeHits == -1 表示该格式本轮无命中数口径（txt/csv/md 行对齐写回），跳过判定。
+			writeHits := -1
+			pdfFallbackReason := ""
 			for attempt := 0; attempt <= 2; attempt++ {
 				aerr = nil
+				writeHits = -1
+				pdfFallbackReason = ""
 				switch ext {
 				case ".docx":
-					aerr = fileproc.ApplyDocx(filePath, outPath, tr)
+					writeHits, aerr = fileproc.ApplyDocx(filePath, outPath, tr)
 				case ".pptx":
-					aerr = fileproc.ApplyPptx(filePath, outPath, tr)
+					writeHits, aerr = fileproc.ApplyPptx(filePath, outPath, tr)
 				case ".pdf":
 					// ★ 2026-09-18 新链：原地替换（redact+overlay）——原版式/原字体/
 					//   不越界/自适应（单元格矢量线钳制换行宽度，字号 1.0→0.45 逐级自适应）。
@@ -1145,26 +1238,32 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					// ★ P0-7（2026-09-18）：返回命中统计，零命中/低命中由 fileproc 判错，
 					//   与子进程失败同走「降级版式重建」路径——不再交付未翻译原样件。
 					if st, perr := fileproc.ApplyTranslatedPdfOverlay(ctx, outPath, filePath, tr, lc); perr == nil {
+						writeHits = st.Replaced
 						if st.Overflow > 0 {
-							log.Printf("[file] %s PDF 原地替换完成（%d/%d 段，其中 %d 段轻微越界仍原字号写出）", lc, st.Replaced, st.Requested, st.Overflow)
+							observability.Info(ctx, "PDF 原地替换完成（部分段轻微越界仍原字号写出）",
+								"lang", lc, "replaced", st.Replaced, "requested", st.Requested, "overflow", st.Overflow)
 						}
 						break
 					} else {
-						log.Printf("[file] %s PDF 原地替换失败，降级版式重建: %v", lc, perr)
+						// ★ G18（2026-10-19）：原版式覆盖失败不再只写日志——失败原因先记下，
+						//   若版式重建兜住了，出栈时给一条 GateWarning（单次，与重试次数无关）。
+						pdfFallbackReason = perr.Error()
 					}
 					// 兜底重建只需要「有序段列表 + 原文→译文映射」，不依赖 overlay 的几何信息，
 					// 故原地替换崩了仍能用同一份 tr 兜底，不至于这一语言颗粒无收。
+					// 版式重建路径无命中数口径（writeHits 保持 -1，跳过零命中判定）。
 					if perr := fileproc.WriteTranslatedPDF(ctx, outPath, texts, tr); perr == nil {
-						log.Printf("[file] %s PDF 原地替换不可用，已降级版式重建交付", lc)
 						break
 					} else {
-						log.Printf("[file] %s PDF 版式重建兜底失败: %v", lc, perr)
+						aerr = fmt.Errorf("PDF 写回失败：原版式覆盖 %s；版式重建 %s", pdfFallbackReason, perr.Error())
 					}
-					aerr = fmt.Errorf("PDF 写回失败")
 				case ".txt", ".csv", ".md":
 					aerr = fileproc.ApplyAlignedText(ext, filePath, outPath, tr) // ★ D5：按原行对齐写回
 				default:
 					aerr = fmt.Errorf("不支持的写回格式")
+				}
+				if aerr == nil && writeHits == 0 {
+					aerr = fmt.Errorf("写回零命中：文档中没有任何文本被替换（疑似译文键与文档内容不对应）")
 				}
 				if aerr == nil {
 					break // 写回成功
@@ -1173,6 +1272,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if attempt < 2 && !sleepCtx(ctx, 2*time.Second) {
 					break // ★ D9：客户端已断开，停止烧下一轮子进程/LLM 资源
 				}
+			}
+			if aerr == nil && pdfFallbackReason != "" {
+				// ★ G18：原版式覆盖失败但版式重建兜住了——交付成立，但必须出声（单次）。
+				gateWarnings = append(gateWarnings, fmt.Sprintf("%s PDF 原版式覆盖失败，已改用版式重建交付：%s", config.LangNames[lc], pdfFallbackReason))
 			}
 			if aerr != nil {
 				// ★ 双模式（2026-09-13）：重试仍败不再整单判死——该语言交付物降级为
@@ -1213,7 +1316,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if p, perr := writeTextMd(lc); perr == nil {
 				textOut = append(textOut, p)
 			} else {
-				log.Printf("[file-text] 纯文案旁路产物生成失败（%s，不影响主交付）: %v", lc, perr)
+				// ★ G18：旁路产物失败不判死，但必须进 GateWarnings（否则客户以为一直都有 .md 可读）。
+				gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案旁路产物生成失败（不影响主交付）：%s", config.LangNames[lc], perr.Error()))
+				observability.Warn(ctx, "纯文案旁路产物生成失败（不影响主交付）", "lang", lc, "error", perr.Error())
 			}
 		}
 	}
@@ -1225,8 +1330,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   警告并入 GateWarnings（与既有闸门同一口径进工单轨迹/审批台），只提示不判死——
 	//   结构变化既可能是真丢失也可能是合法重排（PDF 版式重建），交由人工判断。
 	fidelityWarnings := collectFidelityWarnings(filePath, ext, texts, langTranslations, langArtifact, finalLangs)
-	gateWarnings = append(gateWarnings, fidelityWarnings...)
 	if len(fidelityWarnings) > 0 {
+		// ★ G18：append 与 warn 同块——「出声」与「记进工单」必须成对，
+		//   否则日志里看得见、工单轨迹里查不到（反之亦然）。
+		gateWarnings = append(gateWarnings, fidelityWarnings...)
 		// 结构化日志（AGENTS 二：新代码走 observability，不加 log.Printf 存量）
 		observability.Warn(ctx, "文件产物结构保真闸门发出警告（不判失败，明细见工单 gate_warnings）",
 			"count", len(fidelityWarnings), "langs", strings.Join(finalLangs, ","), "file", filepath.Base(filePath))

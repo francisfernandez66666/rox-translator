@@ -180,41 +180,89 @@ type imageRenderLine struct {
 	Tran string    `json:"tran"`
 }
 
+// 原位回填失败的**档位名**（对外排障契约：与 ~/g 的 canned 分档同纪律，逐字钉进单测，禁止漂移）。
+// 判据只问本包自己给出的档位，调用方（engine）据此写可行动的 GateWarnings。
+const (
+	ImageReasonCapabilityMissing = "capability_missing" // 缺依赖或 assets/ocr 权重
+	ImageReasonNoBoxes           = "no_boxes"           // 进程内坐标缓存取空（OCR 未跑过/被淘汰）
+	ImageReasonScriptMissing     = "script_missing"     // 回填脚本未随包部署
+	ImageReasonWriteFailed       = "write_failed"       // 回填数据/产出暂存失败
+	ImageReasonRenderFailed      = "render_failed"      // 子进程失败（字体缺失/超时等）
+	ImageReasonEmptyOutput       = "empty_output"       // 子进程退出码 0 但产出空图
+)
+
+// ImageRenderError 带档位的原位回填失败（Reason 是机器可读档位，Msg 是人话）。
+type ImageRenderError struct {
+	Reason string
+	Msg    string
+}
+
+// Error 实现 error 接口（对外排障只看到人话那一层）。
+func (e *ImageRenderError) Error() string { return e.Msg }
+
+// ImageRenderReason 取错误的档位名；非本包抛出的错误返回空串（调用方按"未知"处理，不硬猜）。
+func ImageRenderReason(err error) string {
+	if e, ok := err.(*ImageRenderError); ok {
+		return e.Reason
+	}
+	return ""
+}
+
+// ImageRenderStats 一次原位回填的统计读数（G3-c：残留行必须在 GateWarnings 出声）。
+type ImageRenderStats struct {
+	Total   int // 送进回填的总行数（= 该图 OCR 坐标框数）
+	Painted int // 真正带回译文的行数
+	Residue int // 未译出、由原文顶上的行数（>0 时调用方须出声，不许静默）
+}
+
 // RenderTranslatedImage 在原图上按 OCR 框坐标回填译文，产出 outPath 图片。
 // 参数 tr 是 源文行 → 译文 映射；拿不到译文的行**保留原文**（吸收 render 脚本的同一口径）。
 //
 // ★ 失败即跳过：返回错误时调用方（engine）只记日志并退回「仅译文 .md」的既有形态，
 //
-//	绝不因为「图没画出来」把已经翻好的东西判死。
-func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[string]string) error {
+//	绝不因为「图没画出来」把已经翻好的东西判死。错误一律是 *ImageRenderError（带档位）。
+//
+// ★ 返回 (统计, 错误)：统计里的 Residue 是「本轮没译出、由原文顶上」的行数——
+//
+//	那是客户要看见的读数，调用方据此写 GateWarnings（G3-c）。
+func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[string]string) (ImageRenderStats, error) {
 	if !OcrAvailable() {
-		return fmt.Errorf("原位图片翻译不可用：OCR 能力未就绪（缺依赖或 assets/ocr/*.onnx）")
+		return ImageRenderStats{}, &ImageRenderError{Reason: ImageReasonCapabilityMissing,
+			Msg: "原位图片翻译不可用：OCR 能力未就绪（缺依赖或 assets/ocr/*.onnx）"}
 	}
 	boxes := ImageBoxes(srcPath)
 	if len(boxes) == 0 {
-		return fmt.Errorf("原位图片翻译不可用：没有可用的文本框坐标（OCR 未跑过或结果为空）")
+		return ImageRenderStats{}, &ImageRenderError{Reason: ImageReasonNoBoxes,
+			Msg: "原位图片翻译不可用：没有可用的文本框坐标（OCR 未跑过或结果为空）"}
 	}
 	render := imageRenderScriptPath()
 	if _, err := os.Stat(render); err != nil {
-		return fmt.Errorf("原位翻译脚本缺失：%s 未随二进制部署", imageRenderScriptName)
+		return ImageRenderStats{}, &ImageRenderError{Reason: ImageReasonScriptMissing,
+			Msg: fmt.Sprintf("原位翻译脚本缺失：%s 未随二进制部署", imageRenderScriptName)}
 	}
 	lines := make([]imageRenderLine, 0, len(boxes))
+	stats := ImageRenderStats{Total: len(boxes)}
 	for _, b := range boxes {
 		t := tr[b.Text]
 		if strings.TrimSpace(t) == "" {
 			t = b.Text // 未译出的行保留原文：把原文抹掉却不写东西＝图片上出现一块空洞
+			stats.Residue++
+		} else {
+			stats.Painted++
 		}
 		lines = append(lines, imageRenderLine{Text: b.Text, Box: b.Box, Tran: t})
 	}
 	payload, merr := json.Marshal(lines)
 	if merr != nil {
-		return fmt.Errorf("回填数据序列化失败: %w", merr)
+		return stats, &ImageRenderError{Reason: ImageReasonWriteFailed,
+			Msg: fmt.Sprintf("回填数据序列化失败: %v", merr)}
 	}
 	// 用一个临时文件传参而**不是命令行参数**：一行 echoed 行译文可以很长，
 	// 命令行有长度上限且会让 ps 输出里出现整段客户内容（多租户机器上这是信息泄漏）。
 	tmp := outPath + ".lines.json"
 	if werr := os.WriteFile(tmp, payload, 0o644); werr != nil {
-		return fmt.Errorf("回填数据暂存失败: %w", werr)
+		return stats, &ImageRenderError{Reason: ImageReasonWriteFailed,
+			Msg: fmt.Sprintf("回填数据暂存失败: %v", werr)}
 	}
 	defer os.Remove(tmp)
 	if dir := filepath.Dir(outPath); dir != "" {
@@ -224,12 +272,13 @@ func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[
 	_, stderr, err := runSubprocess(ctx, imageRenderTimeout(), bin, argv, nil)
 	if err != nil {
 		if msg := friendlyOcrError(string(stderr)); msg != "" {
-			return fmt.Errorf("%s", msg)
+			return stats, &ImageRenderError{Reason: ImageReasonRenderFailed, Msg: msg}
 		}
-		return fmt.Errorf("原位图片翻译失败: %w\n%s", err, truncateTail(stderr))
+		return stats, &ImageRenderError{Reason: ImageReasonRenderFailed,
+			Msg: fmt.Sprintf("原位图片翻译失败: %v\n%s", err, truncateTail(stderr))}
 	}
 	if info, serr := os.Stat(outPath); serr != nil || info.Size() == 0 {
-		return fmt.Errorf("原位图片翻译产出了空图")
+		return stats, &ImageRenderError{Reason: ImageReasonEmptyOutput, Msg: "原位图片翻译产出了空图"}
 	}
-	return nil
+	return stats, nil
 }

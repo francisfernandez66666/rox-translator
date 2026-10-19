@@ -18,6 +18,13 @@
     所以按「系统候选（中英双全的 Noto CJK／阿里普惠体 → 退纯拉丁的 DejaVu）→ 随包 CJK」
     组一条**字体链**，绘制时逐字挑第一个真有这个字形的字体——同一条译文里中英混排也能各用各的。
     缺字体时如实报 ERR:Font，绝不用 PIL 默认字体画豆腐块。
+  · **字号地板按原行高派生、长译文换行而非缩字**（★ 2026-10-19 G3-a）：旧形态从框高起、一味按宽度
+    缩到 8px 兜底 ⇒ 长译文被缩成蚂蚁字（用户报障「译后图看不清」）。现：量原行**墨迹高度**，
+    地板＝原行高的 FONT_FLOOR_RATIO（0.6），先尝试向右扩进均匀空白区、再按语种换行
+    （CJK 按字、拉丁按词、超长词按字符硬切），实在放不下才降到地板并在 stderr 出声。
+  · **抹字底色与文字色按原图自适应**（★ 2026-10-19 G3-b）：底色取框外 12px 环带的**中位色**（取不到
+    则不填底、留轻微残影），文字色按底色亮度反差自动选黑/白——旧形态填框内 1×1 均值色 + 恒黑字，
+    在深色底/彩色卡片上要么抹出灰块、要么黑字看不见。
   · **框坐标收两种形态**（★ 2026-10-17 修）：4 值矩形 [x0,y0,x1,y1]（`ocr_recognize.py`
     现役输出，见其 `boxes_out.append([x0, y0, x1, y1])`）与 8 值四点（历史/未来的多边形检测器）。
     其余（少于 4 个坐标、坐标数不成对、非数值）按**坏行跳过**，不打断整张图。
@@ -46,6 +53,20 @@ FONT_CANDIDATES = (
 )
 # 兜底字号下限：再小就用下限，避免长行被缩到不可读（宁可略微超出框，也不画蚂蚁字）。
 MIN_FONT_PX = 8
+# ★ 2026-10-19 G3-a：字号地板＝原行**墨迹高度**的这一比例。
+#   旧形态一律从 8px 兜底 ⇒ 长译文被缩成蚂蚁字（用户报障「译后图看不清」的真身）。
+#   地板按原行高派生，等于「最多比原文小到 60%」，是保真而不是拍脑袋的常数。
+FONT_FLOOR_RATIO = 0.6
+# 多行块高＝LINE_SPACING×(行数-1) + 字号；1.18 与常见正文行距同档。
+LINE_SPACING = 1.18
+# 墨迹判据：与框内背景亮度差超过此值算作笔画（给 JPEG 压缩噪声留余量）。
+INK_LUMA_DELTA = 48.0
+# ★ 2026-10-19 G3-b：抹字用底色的采样环带宽度（框外 BG_RING_PX 宽的中位色）。
+BG_RING_PX = 12
+# 扩框（长译文放不下时向右扩进均匀空白区）的步长与上限，以及「均匀」的标准差门槛。
+EXPAND_STEP = 4
+EXPAND_MAX_PX = 24
+EXPAND_UNIFORM_STD = 14.0
 # `.notdef` 哨兵用的探测码位（私用区，任何正常字体都不会有它的字形）。
 _SENTINEL_CH = "\uE000"
 
@@ -180,15 +201,204 @@ def _box_rect(box):
     return max(0, min(xs) - pad), max(0, min(ys) - pad), max(xs) + pad, max(ys) + pad
 
 
-def _fit_size(text: str, w: int, h: int) -> int:
-    """按框高起字号，再按框宽收敛（长译文自动缩到刚好放得下）；返回最终字号 px。"""
-    px = max(MIN_FONT_PX, int(h * 0.86))
-    for _ in range(24):
-        tw = _measure(_chain(px), text)
-        if tw <= w or px <= MIN_FONT_PX:
-            return px
-        px = max(MIN_FONT_PX, int(px * max(0.55, w / max(tw, 1))))
-    return MIN_FONT_PX
+def _line_ink_height(patch) -> int:
+    """原行在框内的**墨迹高度**（像素行数）：与框内背景亮度差超阈值的像素行跨度。
+
+    ★ 全高墨色列（框线/竖线/表格边框）必须先剔除：它们每一行都有墨，
+      不剔除会把「一行 12px 的字」读成「整框 40px 高」，字号地板随之被抬到不该有的高度。
+    """
+    import numpy as np
+
+    arr = np.asarray(patch.convert("RGB"), dtype=np.float32)
+    if arr.size == 0 or arr.shape[0] < 3 or arr.shape[1] < 3:
+        return 0
+    lum = arr[:, :, 0] * 0.299 + arr[:, :, 1] * 0.587 + arr[:, :, 2] * 0.114
+    bg = float(np.median(lum))
+    ink = np.abs(lum - bg) > INK_LUMA_DELTA
+    full_cols = ink.all(axis=0)   # 整列都有墨＝框线/竖线，不是文字
+    ink[:, full_cols] = False
+    rows = np.where(ink.any(axis=1))[0]
+    if rows.size == 0:
+        return 0
+    return int(rows[-1] - rows[0] + 1)
+
+
+def _font_floor(ink_h: int, box_h: int) -> int:
+    """字号地板＝原行墨迹高度的 FONT_FLOOR_RATIO 倍（量不到原行时退用框高估一个参考高度）。"""
+    ref = ink_h if ink_h > 0 else int(box_h * 0.86)
+    return max(MIN_FONT_PX, int(ref * FONT_FLOOR_RATIO))
+
+
+def _is_cjk(ch: str) -> bool:
+    """是否 CJK 字符（按字换行的档）：汉字/假名/谚文/扩展区。"""
+    o = ord(ch)
+    return (0x3400 <= o <= 0x4DBF) or (0x4E00 <= o <= 0x9FFF) or (0xF900 <= o <= 0xFAFF) \
+        or (0x3040 <= o <= 0x30FF) or (0xAC00 <= o <= 0xD7A3)
+
+
+def _tokenize(text: str):
+    """切成可换行的最小单位：CJK 单字成 token（按字换行），拉丁/西里尔等连写段成 token（按词换行）。
+    空白挂在上一 token 尾部，避免换行时把词间空格丢掉。"""
+    out, buf = [], ""
+    for ch in text:
+        if _is_cjk(ch):
+            if buf:
+                out.append(buf)
+                buf = ""
+            out.append(ch)
+        elif ch.isspace():
+            buf += ch
+            out.append(buf)
+            buf = ""
+        else:
+            buf += ch
+    if buf:
+        out.append(buf)
+    return out
+
+
+def _break_token(chain, token: str, max_w: float):
+    """单个 token 自身比框还宽（超长英文词/URL）：按字符硬切。"""
+    pieces, cur = [], ""
+    for ch in token:
+        if cur and _measure(chain, cur + ch) > max_w:
+            pieces.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        pieces.append(cur)
+    return pieces or [token]
+
+
+def _wrap_text(chain, text: str, max_w: float):
+    """按语种把 text 折进 max_w 宽度：CJK 按字、拉丁按词、超长词按字符硬切。
+
+    返回行列表；单行放得下时就是 [text]（**不主动拆行**——短译文保持一行）。
+    """
+    if max_w <= 0 or _measure(chain, text) <= max_w:
+        return [text]
+    lines, cur = [], ""
+    for tok in _tokenize(text):
+        if not cur:
+            if _measure(chain, tok) > max_w:
+                pieces = _break_token(chain, tok, max_w)
+                lines.extend(pieces[:-1])
+                cur = pieces[-1]
+            else:
+                cur = tok
+            continue
+        if _measure(chain, cur + tok) <= max_w:
+            cur += tok
+        else:
+            lines.append(cur)
+            if _measure(chain, tok) > max_w:
+                pieces = _break_token(chain, tok, max_w)
+                lines.extend(pieces[:-1])
+                cur = pieces[-1]
+            else:
+                cur = tok
+    if cur:
+        lines.append(cur)
+    return [l for l in lines if l] or [text]
+
+
+def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
+    """定最终字号与折行：优先按原行高起、尽量单行；放不下就**换行**；换行也放不下才降到地板。
+
+    返回 (px, lines, overflow)。overflow=True＝已到地板仍超出框，调用方据此出声（不静默画超框）。
+    """
+    ref = ink_h if ink_h > 0 else int(h * 0.86)
+    px = max(floor, int(ref * 0.92))
+    px = min(px, max(floor, int(h * 0.98)))
+    while True:
+        lines = _wrap_text(_chain(px), text, w)
+        block_h = int(px * LINE_SPACING) * (len(lines) - 1) + px
+        if block_h <= h or px <= floor:
+            return px, lines, block_h > h
+        px = max(floor, int(px * 0.9))
+
+
+def _pick_bg(img, rect):
+    """取「抹字用底色」：框外环带（BG_RING_PX 宽）的中位色；环带取不到就退用框内中位色。
+
+    都取不到（框贴图片边缘、面积过小）返回 None —— 宁可不抹底（留轻微残影）也不填一块灰。
+    中位色而非均值：环带里混进邻行文字/噪点时，均值会被拉偏、中位色不会。
+    """
+    import numpy as np
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    H, W = arr.shape[:2]
+    x0, y0, x1, y1 = rect
+    bx0, by0 = max(0, x0 - BG_RING_PX), max(0, y0 - BG_RING_PX)
+    bx1, by1 = min(W, x1 + BG_RING_PX), min(H, y1 + BG_RING_PX)
+    strips = []
+    if by0 < y0:
+        strips.append(arr[by0:y0, bx0:bx1])
+    if y1 < by1:
+        strips.append(arr[y1:by1, bx0:bx1])
+    if bx0 < x0:
+        strips.append(arr[by0:by1, bx0:x0])
+    if x1 < bx1:
+        strips.append(arr[by0:by1, x1:bx1])
+    ring = np.concatenate([s.reshape(-1, 3) for s in strips], axis=0) if strips else np.empty((0, 3), dtype=np.float32)
+    if ring.shape[0] >= 8:
+        return tuple(int(round(v)) for v in np.median(ring, axis=0))
+    inside = arr[y0:y1, x0:x1].reshape(-1, 3)
+    if inside.shape[0] >= 8:
+        return tuple(int(round(v)) for v in np.median(inside, axis=0))
+    return None
+
+
+def _text_color(bg):
+    """按底色亮度挑文字色：亮底出黑字、暗底出白字（对比度固定，不随主题变量漂）。"""
+    if not bg:
+        return (0, 0, 0)
+    lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
+    return (0, 0, 0) if lum >= 128 else (255, 255, 255)
+
+
+def _hits_any(rect, others) -> bool:
+    """矩形是否与任一 blocker 相交（扩框时防压到别的行）。"""
+    x0, y0, x1, y1 = rect
+    for ox0, oy0, ox1, oy1 in others:
+        if x0 < ox1 and ox0 < x1 and y0 < oy1 and oy0 < y1:
+            return True
+    return False
+
+
+def _expand_rect(img, rect, blockers, max_px: int = EXPAND_MAX_PX):
+    """把框向右**逐步**扩进均匀空白区（每步 EXPAND_STEP），上限 max_px、且不与 blockers 相交。
+
+    「均匀」＝新增条带的像素亮度标准差低于 EXPAND_UNIFORM_STD（有字/有图形的地方不扩）。
+    只向右：译文一般比原文长，向右单侧已能容纳，且不会压到左侧/上方的邻行——
+    扩不动时由换行与字号地板兜底（_layout），不会因此把字号缩没。
+    """
+    import numpy as np
+
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    H, W = arr.shape[:2]
+    x0, y0, x1, y1 = rect
+    grew = 0
+    while grew < max_px:
+        step = min(EXPAND_STEP, max_px - grew)
+        nx1 = min(W, x1 + step)
+        if nx1 == x1:
+            break
+        strip = arr[y0:y1, x1:nx1]
+        if strip.size == 0 or float(strip.std()) > EXPAND_UNIFORM_STD:
+            break
+        if _hits_any((x0, y0, nx1, y1), blockers):
+            break
+        x1 = nx1
+        grew += step
+    return (x0, y0, x1, y1)
+
+
+def _draw_lines(draw, chain, x: float, y: float, lines, lh: int, fill) -> None:
+    """多行绘制（逐行、逐字挑字体）；返回时无副作用。"""
+    for i, line in enumerate(lines):
+        _draw_text(draw, chain, x, y + i * lh, line, fill)
 
 
 def cmd_render(src: str, out: str, lines_path: str) -> int:
@@ -213,34 +423,61 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         return _err("ImageCorrupt", "图片无法读取或已损坏 %s" % src)
     draw = ImageDraw.Draw(img)
 
-    painted = 0
+    # 先算好每一行的矩形：坏行留 None（跳过），其余进 blockers 供扩框防重叠。
+    rects = []
     for ln in lines:
+        r = None
+        if isinstance(ln, dict):
+            box = ln.get("box") or []
+            if _valid_box(box):
+                try:
+                    r = _box_rect(box)
+                except Exception:
+                    r = None
+                if r is not None and (r[2] <= r[0] or r[3] <= r[1]):
+                    r = None
+        rects.append(r)
+    blockers_all = [r for r in rects if r]
+
+    painted = 0
+    overflowed = 0
+    for idx, ln in enumerate(lines):
         if not isinstance(ln, dict):
             continue
-        box = ln.get("box") or []
-        if not _valid_box(box):
-            continue  # 坏行（坐标缺失/不成对）：跳过这一行，不打断整张图
+        r0 = rects[idx]
+        if r0 is None:
+            continue  # 坏行（坐标缺失/不成对/非数值）：跳过这一行，不打断整张图
         text = (ln.get("tran") or "").strip() or (ln.get("text") or "")
         text = " ".join(str(text).replace("\r", " ").replace("\n", " ").split())
         if not text:
             continue
-        try:
-            left, top, right, bottom = _box_rect(box)
-        except Exception:
-            continue  # 坐标不是数值：同样按坏行跳过
-        if right <= left or bottom <= top:
-            continue
-        # ① 抹掉原文：用框内**原有底色**（取框周边像素的中位色）填充，
-        #    比一律填白更耐看（线图/深色底的截图不会被抹成一片白块）。
-        patch = img.crop((left, top, right, bottom))
-        bg = patch.resize((1, 1)).getpixel((0, 0))
-        draw.rectangle([left, top, right, bottom], fill=bg)
-        # ② 写译文：字号按框高起、按框宽收敛；上下居中、左对齐（与原图排版同手）。
-        size = _fit_size(text, max(1, right - left - 2), max(1, bottom - top - 2))
+        # ① 量原行墨迹高度（字号地板的依据；量不到就退用框高），并取框外环带中位色作抹字底色。
+        patch = img.crop(r0)
+        ink_h = _line_ink_height(patch)
+        bg = _pick_bg(img, r0)
+        if bg is not None:
+            # 抹掉原文：填**原有底色**（环带中位色），比一律填白/填灰更耐看
+            # （线图/深色底/彩色卡片的截图不会被抹出一块突兀的灰或白）。
+            # 取不到底色则**不填**（宁愿留轻微残影，也不填一块与周围不一致的灰）。
+            draw.rectangle([r0[0], r0[1], r0[2], r0[3]], fill=bg)
+        # ② 长译文先尝试向右扩进均匀空白区（只扩右，不压邻行；扩不动由换行兜底）。
+        blockers_wo = [b for b in blockers_all if b != r0]
+        left, top, right, bottom = _expand_rect(img, r0, blockers_wo)
+        inner_w = max(1, right - left - 2)
+        inner_h = max(1, bottom - top - 2)
+        floor = _font_floor(ink_h, inner_h)
+        # ③ 定字号与折行：尽量保持原字号、放不下换行、实在放不下才降到地板（绝不缩成蚂蚁字）。
+        size, draw_lines, overflow = _layout(text, inner_w, inner_h, floor, ink_h)
+        if overflow:
+            overflowed += 1
         chain = _chain(size)
-        y = top + max(0, ((bottom - top) - size) // 2)
+        # ④ 文字色按底色亮度反差自动选：亮底黑字、暗底白字（暗底上用黑字＝看不见）。
+        fill = _text_color(bg)
+        lh = int(size * LINE_SPACING)
+        block_h = lh * (len(draw_lines) - 1) + size
+        y = top + max(0, ((bottom - top) - block_h) // 2)
         try:
-            _draw_text(draw, chain, left + 1, y, text, (0, 0, 0))
+            _draw_lines(draw, chain, left + 1, y, draw_lines, lh, fill)
         except Exception as exc:
             return _err("Draw", "绘制失败 %s" % exc)
         painted += 1
@@ -254,7 +491,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         img.save(out)
     except Exception as exc:
         return _err("Out", "产物写入失败 %s" % exc)
-    print("INFO:painted=%d/%d" % (painted, len(lines)), file=sys.stderr)
+    print("INFO:painted=%d/%d overflow=%d" % (painted, len(lines), overflowed), file=sys.stderr)
     return 0
 
 

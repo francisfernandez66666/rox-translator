@@ -177,24 +177,25 @@ func paragraphText(p docxParagraph) string {
 
 // ApplyDocx 写回 docx：按原文→译文映射替换正文、页眉页脚中的文本并重建 zip 文件。
 // 参数：path=原 docx 路径，outPath=输出 docx 路径，translations=原文→译文映射。
-// 返回错误。
-func ApplyDocx(path, outPath string, translations map[string]string) error {
+// ★ G17（2026-10-19）：返回命中段数；零命中不再静默交付未翻译件，由调用方走退化通道。
+// 产物一律写出（写了就有件、退化由上层决定）。
+func ApplyDocx(path, outPath string, translations map[string]string) (int, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer zr.Close()
 
 	mainData, err := readZipEntry(zr, "word/document.xml")
 	if err != nil {
-		return err
+		return 0, err
 	}
-	newMain := translateDocxXML(mainData, translations) // 先翻译主文档
+	newMain, hits := translateDocxXML(mainData, translations) // 先翻译主文档
 
 	// 重建 zip：逐文件写出，主文档用译文版，页眉页脚也翻译
 	osFile, err := os.Create(outPath)
 	if err != nil {
-		return err
+		return hits, err
 	}
 	defer osFile.Close()
 	zw := zip.NewWriter(osFile)
@@ -208,26 +209,28 @@ func ApplyDocx(path, outPath string, translations map[string]string) error {
 			data = newMain // 替换为主文档译文
 		} else if strings.HasPrefix(f.Name, "word/header") || strings.HasPrefix(f.Name, "word/footer") ||
 			f.Name == "word/footnotes.xml" || f.Name == "word/endnotes.xml" {
-			data = translateDocxXML(data, translations) // ★ D7：页眉页脚 + 脚注尾注同链路写回
+			translated, n := translateDocxXML(data, translations) // ★ D7：页眉页脚 + 脚注尾注同链路写回
+			data, hits = translated, hits+n
 		}
 		w, err := zw.Create(f.Name)
 		if err != nil {
-			return err
+			return hits, err
 		}
 		if _, err := w.Write(data); err != nil {
-			return err
+			return hits, err
 		}
 	}
-	return zw.Close()
+	return hits, zw.Close()
 }
 
 // translateDocxXML 在 XML 级别替换段落文本：找到所有 w:p 内第一个 w:r/w:t，替换内容。
-// 参数：data=原始 XML 字节，translations=原文→译文映射；返回替换后的 XML 字节。
-func translateDocxXML(data []byte, translations map[string]string) []byte {
+// 参数：data=原始 XML 字节，translations=原文→译文映射；返回替换后的 XML 字节与命中段数（G17）。
+func translateDocxXML(data []byte, translations map[string]string) ([]byte, int) {
 	// 按 <w:p>...</w:p> 切分处理段落（兼容带属性的 <w:p ...>）
 	s := string(data)
 	var out strings.Builder
 	idx := 0
+	hits := 0
 	for {
 		start := strings.Index(s[idx:], "<w:p")
 		if start < 0 {
@@ -254,32 +257,33 @@ func translateDocxXML(data []byte, translations map[string]string) []byte {
 		}
 		absEnd := startEnd + end + len("</w:p>")
 		para := s[start:absEnd]
-		translated := translateDocxParagraph(para, translations) // 翻译该段落
+		translated, hit := translateDocxParagraph(para, translations) // 翻译该段落
+		hits += hit
 		out.WriteString(s[idx:start])
 		out.WriteString(translated)
 		idx = absEnd
 	}
 	out.WriteString(s[idx:])
-	return []byte(out.String())
+	return []byte(out.String()), hits
 }
 
 // translateDocxParagraph 取段落原文，匹配译文，若命中则替换第一个 w:t 内容，清空其余。
-// 参数：para=段落 XML，translations=原文→译文映射；返回替换后的段落 XML。
-func translateDocxParagraph(para string, translations map[string]string) string {
+// 参数：para=段落 XML，translations=原文→译文映射；返回替换后的段落 XML 与是否命中（G17）。
+func translateDocxParagraph(para string, translations map[string]string) (string, int) {
 	// 提取纯文本（去掉所有标签；跳过 w:hyperlink 内文本，与 ExtractTexts 提取逻辑一致）
 	plain, firstIdx := paragraphRunText(para)
 	original := strings.TrimSpace(plain)
 	if original == "" {
-		return para // 空段落不改
+		return para, 0 // 空段落不改
 	}
 	translated, ok := translations[original]
 	if !ok || firstIdx < 0 {
-		return para // 未命中译文则原样返回
+		return para, 0 // 未命中译文则原样返回
 	}
 	// 定位第一个 w:t 的闭合标签起始位置（保留 </w:t> 标签本身）
 	closeStart := strings.Index(para[firstIdx:], "</w:t>")
 	if closeStart < 0 {
-		return para
+		return para, 0
 	}
 	closeStart += firstIdx
 	// 替换第一个 w:t 内容为译文（保留其闭合标签）
@@ -303,7 +307,7 @@ func translateDocxParagraph(para string, translations map[string]string) string 
 			prev = n.end
 		}
 		b.WriteString(para[prev:])
-		return b.String()
+		return b.String(), 1
 	}
 	escaped := EscapeXML(translated)
 	newPara := para[:firstIdx] + escaped + para[closeStart:]
@@ -311,7 +315,7 @@ func translateDocxParagraph(para string, translations map[string]string) string 
 	cut := firstIdx + len(escaped)
 	after := newPara[cut:]
 	cleaned := emptyWTextRe.ReplaceAllString(after, `${1}${3}`)
-	return newPara[:cut] + cleaned
+	return newPara[:cut] + cleaned, 1
 }
 
 // ★ D21（2026-09-12）：多 run 段落的节点枚举与按权重分配译文——

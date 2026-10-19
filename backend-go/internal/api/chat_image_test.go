@@ -11,12 +11,24 @@
 //	   Image 留空），也绝不把译文盖到错误的框上（与 ocr.go parseOcrJSON 同一条纪律）。
 //	⑤ 路由接线：server.go 必须把 /api/chat/image 挂上 handleChatImage（漏挂＝接口 404，
 //	   而单测直调 handler 是看不见这一层的，故另立一条源码级接线锁）。
+//	⑥ ★ 2026-10-19 新增：**暂存写盘必须真件跑一遍**——此前全文件无一条喂真 multipart，
+//	   stageChatImage 里「先 io.Copy 再 Close」那段代码在 CI 里从没执行过，
+//	   于是"往已关闭句柄写"这个 100% 失败的缺陷活了整整两天（有锁而射程不足）。
+//	   ⇒ 真 multipart 逐字节往返锁＋AST 源码顺序锁（Close 挪回 Copy 之前必须红）。
+//	   为什么不写"handler 交真件断 200"：那要 OCR 权重在位才走得到暂存，
+//	   CI 无权重时它会以 capability_missing 早退＝结构性空转，正是本条要治的射程病。
 //
 // =============================================
 package api
 
 import (
+	"bytes"
+	"encoding/base64"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -24,6 +36,9 @@ import (
 	"strings"
 	"testing"
 )
+
+// minPNGBase64 1×1 像素的最小合法 PNG（真实图片字节，用于"真件"往返锁）。
+const minPNGBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 // TestChatImageRequireLoginAndMethod ① 方法闸门与方法顺序：GET→405、匿名 POST→401。
 // 判据顺序也钉住：方法先于登录判（否则 GET 会先被登录闸拦成 401，客户以为"接口不存在"）。
@@ -115,5 +130,155 @@ func TestChatImageRouteWired(t *testing.T) {
 		if !strings.Contains(string(src), p) {
 			t.Fatalf("server.go 缺少既有路由 %s（本判据的射程自证腿）", p)
 		}
+	}
+}
+
+// TestStageChatImageRoundTrip ⑥ 真件往返：真 multipart + 真 PNG 字节 ⇒ 落盘件逐字节等值。
+//
+// 这条锁的射程就是 G1 缺陷本体：只要 stageChatImage 里 Close 排在 io.Copy 之前，
+// io.Copy 会退 "file already closed"，本用例以"暂存失败"现形（不是"文案不对"）。
+func TestStageChatImageRoundTrip(t *testing.T) {
+	png, err := base64.StdEncoding.DecodeString(minPNGBase64)
+	if err != nil {
+		t.Fatalf("夹具 PNG 解码失败（自证腿坏了）: %v", err)
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	fw, err := mw.CreateFormFile("file", "in.png")
+	if err != nil {
+		t.Fatalf("构造 multipart 失败: %v", err)
+	}
+	if _, err := fw.Write(png); err != nil {
+		t.Fatalf("写 multipart 体失败: %v", err)
+	}
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/image", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if err := req.ParseMultipartForm(chatImageMaxBytes); err != nil {
+		t.Fatalf("解析 multipart 失败: %v", err)
+	}
+	f, hdr, err := req.FormFile("file")
+	if err != nil {
+		t.Fatalf("取 multipart 文件失败: %v", err)
+	}
+	defer f.Close()
+	ext := strings.ToLower(filepath.Ext(hdr.Filename))
+
+	tmpPath, cleanup, err := stageChatImage(f, ext)
+	if err != nil {
+		t.Fatalf("暂存失败（G1 缺陷本体：Close 必须排在 io.Copy 之后）: %v", err)
+	}
+	defer cleanup()
+	if _, statErr := os.Stat(tmpPath); statErr != nil {
+		t.Fatalf("暂存成功后临时文件应存在: %v", statErr)
+	}
+	got, err := os.ReadFile(tmpPath)
+	if err != nil {
+		t.Fatalf("读回暂存件失败: %v", err)
+	}
+	if !bytes.Equal(got, png) {
+		t.Fatalf("暂存件与上传件不逐字节等值：got=%d want=%d", len(got), len(png))
+	}
+	// 清理腿必须真删掉（防句柄/磁盘泄漏：失败分支也要 Close 的那条纪律）。
+	cleanup()
+	if _, statErr := os.Stat(tmpPath); !os.IsNotExist(statErr) {
+		t.Fatalf("cleanup 后临时文件应已删除: statErr=%v", statErr)
+	}
+}
+
+// imageStageOrder 在源码里定位 stageChatImage 的「首个 io.Copy 行号」与「首个 tmp.Close 行号」。
+// 返回 0 表示没找到（判据靶子漂了，调用方必须判红而不是当"通过"）。
+func imageStageOrder(src string) (copyLine, closeLine int) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "chat_image.go", src, 0)
+	if err != nil {
+		return 0, 0
+	}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "stageChatImage" || fn.Body == nil {
+			continue
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if recv.Name == "io" && sel.Sel.Name == "Copy" && copyLine == 0 {
+				copyLine = fset.Position(call.Pos()).Line
+			}
+			if recv.Name == "tmp" && sel.Sel.Name == "Close" && closeLine == 0 {
+				closeLine = fset.Position(call.Pos()).Line
+			}
+			return true
+		})
+	}
+	return copyLine, closeLine
+}
+
+// TestChatImageStageClosesAfterCopy ⑥ 源码顺序锁：stageChatImage 必须「先 io.Copy 再 tmp.Close」。
+// 反证（同一判据喂反向顺序的合成源码）必须判红，证明这条锁抓的是顺序本身。
+func TestChatImageStageClosesAfterCopy(t *testing.T) {
+	src, err := os.ReadFile("chat_image.go")
+	if err != nil {
+		t.Fatalf("读取 chat_image.go 失败: %v", err)
+	}
+	cl, kl := imageStageOrder(string(src))
+	if cl == 0 || kl == 0 {
+		t.Fatalf("未定位到 io.Copy / tmp.Close（判据靶子已漂，闸门失明 copy=%d close=%d）", cl, kl)
+	}
+	if cl >= kl {
+		t.Fatalf("stageChatImage 必须先 io.Copy 再 tmp.Close（copy=%d close=%d）：往已关闭句柄写必退 file already closed",
+			cl, kl)
+	}
+
+	// 反证：把 Close 挪到 Copy 之前，同一条判据必须判红。
+	bad := `package api
+
+import (
+	"io"
+	"os"
+)
+
+func stageChatImage(f io.Reader, ext string) (string, func(), error) {
+	tmp, err := os.CreateTemp("", "x*"+ext)
+	if err != nil {
+		return "", nil, err
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	if _, cerr := io.Copy(tmp, io.LimitReader(f, 1)); cerr != nil {
+		tmp.Close()
+		return "", nil, cerr
+	}
+	return tmpPath, func() {}, nil
+}
+`
+	bcl, bkl := imageStageOrder(bad)
+	if bcl == 0 || bkl == 0 {
+		t.Fatalf("反证夹具本身没解析到靶子（copy=%d close=%d）", bcl, bkl)
+	}
+	if bcl < bkl {
+		t.Fatalf("反证失效：反向顺序竟被判绿（copy=%d close=%d）", bcl, bkl)
+	}
+}
+
+// TestChatImageStagingWired ⑥ 接线锁：handler 必须经 stageChatImage 落盘（否则上面两条锁的是孤儿代码）。
+func TestChatImageStagingWired(t *testing.T) {
+	src, err := os.ReadFile("chat_image.go")
+	if err != nil {
+		t.Fatalf("读取 chat_image.go 失败: %v", err)
+	}
+	if !strings.Contains(string(src), "stageChatImage(f, ext)") {
+		t.Fatalf("handleChatImage 未接 stageChatImage 落盘（真件乘车的路径与锁不在同一条线上）")
 	}
 }

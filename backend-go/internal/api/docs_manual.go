@@ -34,7 +34,6 @@ package api
 import (
 	"bytes"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -47,29 +46,6 @@ const manualPDFPrefix = "/docs/manual/"
 
 // manualPDFSuffix 文件名后缀（只认 .pdf，大小写不敏感）。
 const manualPDFSuffix = ".pdf"
-
-// sanitizeManualFilename 把命中文件名收敛成 ASCII 安全串（老单文件链的名称不可控，
-// Content-Disposition 里塞引号/换行会破坏响应头，非 ASCII 一律折成 '-' 占位）。
-// 返回串保证**无引号、无换行、无斜杠**且以 .pdf 结尾（响应头兜底名与单测等值判据同源）。
-func sanitizeManualFilename(name string) string {
-	out := make([]rune, 0, len(name))
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
-			out = append(out, r)
-		default:
-			out = append(out, '-')
-		}
-	}
-	s := strings.Trim(string(out), "-.")
-	if !strings.HasSuffix(strings.ToLower(s), manualPDFSuffix) {
-		s += manualPDFSuffix
-	}
-	if s == manualPDFSuffix {
-		return "manual.pdf" // 只剩后缀（原名全非 ASCII 或全点）时给个中性兜底名
-	}
-	return s
-}
 
 // handleManualPDFDownload GET/HEAD /docs/manual/{语种码}.pdf —— 手册 PDF 直出（公开只读）。
 // 路由挂在 "/" 兜底之前（ServeMux 前缀更长者优先），因此未命中的语种码不会再生成 SPA 空壳。
@@ -104,12 +80,10 @@ func (s *Server) handleManualPDFDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 文件名回显**实际命中**的那份（回落链走了 en/zh 时文件名如实显示，不假装是请求语种）。
-	// 老单文件链的文件名由运维配置、不可控，故双写：ASCII 兜底名（防引号/换行注入响应头）
-	// + RFC 5987 的 filename*（非 ASCII 名如「用户手册.pdf」在浏览器里仍可正常显示）。
+	// 具体头值由唯一出口 contentDisposition 拼装（ASCII 兜底名 + RFC 5987 filename*，防注入）。
 	base := filepath.Base(path)
 	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition",
-		"inline; filename=\""+sanitizeManualFilename(base)+"\"; filename*=UTF-8''"+url.PathEscape(base))
+	w.Header().Set("Content-Disposition", contentDisposition(base))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "public, max-age=600")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))

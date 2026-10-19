@@ -15,7 +15,8 @@ import {
 } from '@/api'
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
-import type { Ticket, TicketResp, TicketQuality, QAReportIssue } from '@/api/tickets'
+import type { Ticket, TicketResp, TicketQuality, QAReportIssue, TicketDeliverable } from '@/api/tickets'
+import { DownloadError } from '@/api/tickets'
 import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TRANSLATE_FILE_EXTS, TEXT_DELIVERY_ACCEPT, TEXT_DELIVERY_ONLY_EXTS, validateTranslateFile } from '@/api/translate'
 // ★ 2026-10-16 能力门批：图片/音频这两类素材**不是**纯文本链路，要先经服务端的识别能力
 //   （图片 → OCR，音频 → ASR）。部署机没投放对应模型时这两个接口恒回 capability_missing，
@@ -323,6 +324,8 @@ export default function TicketsPage() {
   const [tickets, setTickets] = useState<Ticket[]>([])
   const [detail, setDetail] = useState<TicketResp | null>(null)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
+  // ★ 2026-10-19 §五#2：下载字节进度（null＝不在下载）。total=0 表示服务端没给 Content-Length。
+  const [dlProgress, setDlProgress] = useState<{ received: number; total: number } | null>(null)
 
   // 反馈弹窗目标（已完成工单）
   const [feedbackTarget, setFeedbackTarget] = useState<{ type: 'ticket'; ticket_id: number; mode: string } | null>(null)
@@ -527,21 +530,40 @@ export default function TicketsPage() {
     if (!r.success) { toastError(r.message || t('tk.opFail')); return }
     void load()
   }
+  // ★ 2026-10-19 §五#2：两种失败分开报——network（这一跳没走完，可重试）vs broken（真坏了）。
+  function downloadErrMsg(e: any): string {
+    // ★ 2026-10-19 §五#2：两种失败分开报——network（这一跳没走完，可重试）vs broken（真坏了）。
+    //   键已进 12 语种词典（本批收尾补译），走 t/tpl 取词；别再退回带中文兜底的 textOr/tplOr
+    //   （那样 parity F2 的中文字面量扫描会把这句当成漏译残渣）。
+    if (e instanceof DownloadError && e.kind === 'network') {
+      const kb = e.received ? Math.max(1, Math.round(e.received / 1024)) : 0
+      return kb
+        ? tpl('tk.downloadInterruptedAt', { n: kb })
+        : t('tk.downloadInterrupted')
+    }
+    return e?.message || t('tk.downloadFail')
+  }
   // 下载工单结果（带防重入标记）
-  async function download(row: Ticket) {
+  async function download(row: Ticket, fileId?: number) {
     if (downloadingId !== null) return
     // 全局单飞（不是按行标记）：同一时刻只允许一个下载在途，其余行的按钮保持原样不可点进第二单
     setDownloadingId(row.id)
-    try { await ticketDownload(row.id) } catch (e: any) { toastError(e?.message || t('tk.downloadFail')) }
-    finally { setDownloadingId(null) } // finally：blob 失败也要解锁，否则整页下载按钮永久置灰
+    setDlProgress(null)
+    try {
+      await ticketDownload(row.id, { fileId, onProgress: (received, total) => setDlProgress({ received, total }) })
+    } catch (e: any) { toastError(downloadErrMsg(e)) }
+    finally { setDownloadingId(null); setDlProgress(null) } // finally：blob 失败也要解锁，否则整页下载按钮永久置灰
   }
   // ★ 工单双模式（2026-09-13）：仅下载译文纯文案（.md，不取还原产物）
   // 与 download 共用 downloadingId：两条下载路径互斥，不会同时拉两份 blob
   async function downloadText(row: Ticket) {
     if (downloadingId !== null) return
     setDownloadingId(row.id)
-    try { await ticketDownload(row.id, { fmt: 'text' }) } catch (e: any) { toastError(e?.message || t('tk.downloadFail')) }
-    finally { setDownloadingId(null) }
+    setDlProgress(null)
+    try {
+      await ticketDownload(row.id, { fmt: 'text', onProgress: (received, total) => setDlProgress({ received, total }) })
+    } catch (e: any) { toastError(downloadErrMsg(e)) }
+    finally { setDownloadingId(null); setDlProgress(null) }
   }
 
   // 展开/收起步骤进度气泡
@@ -569,6 +591,10 @@ export default function TicketsPage() {
   const pct = ticketProgress()
   const stepLabel = currentStepLabel()
   const states = (detail?.states as any[]) || []
+  // ★ 2026-10-19 G13：交付件清单（实际产物）——区别于 files（输入件）。字段名假设见 api/tickets.ts。
+  const deliverables: TicketDeliverable[] = ((detail?.deliverables || detail?.outputs) as TicketDeliverable[] | undefined) || []
+  // ★ 2026-10-19 G2：退化交付语言（版式还原失败、以纯文案 .md 交付）——过去客户面只有站内信，详情面零露出。
+  const degradedLangs: string[] = ((detail?.ticket?.degraded_langs) as string[] | undefined) || []
   // ★ 2026-09-22：进度弹窗换词动效的演出条件——只有「排队/执行中」才演，
   //   完成/取消/失败等终态立即停（避免演完的动效误导成「还在干活」）。
   //   为什么这里用状态驱动、不用冷启动那套 useWordSwapGate 时长闸门：
@@ -740,6 +766,14 @@ export default function TicketsPage() {
                       </Link>
                     </span>
                   )}
+                  {downloadingId === row.id && (
+                    // ★ 2026-10-19 §五#2：把"还在传"显出来（字节进度），别让人以为卡死。
+                    <span data-testid="tk-dl-progress" style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>
+                      {dlProgress && dlProgress.received > 0
+                        ? tpl('tk.downloadingAt', { n: Math.round(dlProgress.received / 1024) })
+                        : t('tk.downloading')}
+                    </span>
+                  )}
                   {row.status === 'completed' && (
                     <Link onClick={() => openFeedback(row)}><Icon n="chat" /> {t('fb.entry')}</Link>
                   )}
@@ -805,6 +839,42 @@ export default function TicketsPage() {
         ) : (
           <p style={{ fontSize: 14, color: 'var(--lc-text-3)', margin: '8px 0 0' }}>{t('tk.noSteps')}</p>
         )}
+        {/* ★ 2026-10-19 G13：交付件清单（实际产物）——过去详情面只显示 files（自己上传的输入件），
+            于是"下载包里四件齐全、页面上只看得见一件"。可见性判据一律 isVisible()，禁用 count()（§一·5）。 */}
+        {deliverables.length > 0 && (
+          <div data-testid="tk-deliverables" style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.deliverablesTitle')}</div>
+            <div style={{ maxHeight: 160, overflowY: 'auto' }}>
+              {deliverables.map((d, i) => (
+                <div key={`${d.name}-${i}`} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, padding: '3px 0' }}>
+                  <Icon n="doc" />
+                  {typeof d.file_id === 'number' ? (
+                    <Link onClick={() => detail?.ticket && download(detail.ticket, d.file_id)}>
+                      <span style={{ wordBreak: 'break-all' }}>{d.name}</span>
+                    </Link>
+                  ) : (
+                    <span style={{ flex: 1, color: 'var(--lc-text-2)', wordBreak: 'break-all' }}>{d.name}</span>
+                  )}
+                  {d.lang ? <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{langLabel(d.lang, lang)}</span> : null}
+                  {typeof d.size === 'number' && d.size > 0 ? (
+                    <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{Math.max(1, Math.round(d.size / 1024))} KB</span>
+                  ) : null}
+                  {d.degraded ? (
+                    <span style={{ fontSize: 13, padding: '1px 6px', borderRadius: 4, background: 'rgba(210,153,34,0.10)', color: '#D29922' }}>
+                      {t('tk.degradedBadge')}
+                    </span>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* ★ 2026-10-19 G2：退化交付露出（客户面过去只有站内信，页面上仍是"已完成"） */}
+        {degradedLangs.length > 0 && (
+          <div data-testid="tk-degraded" style={{ marginTop: 10, fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+            <Icon n="alert" /> {tpl('tk.degradedTip', { langs: degradedLangs.map((c) => langLabel(c, lang)).join('、') })}
+          </div>
+        )}
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口
@@ -816,6 +886,14 @@ export default function TicketsPage() {
             </Button>
           </div>
         ) : null}
+        {/* ★ 2026-10-19 §五#2：详情面内发起的下载也显示字节进度（别让人以为卡死） */}
+        {downloadingId !== null && (
+          <div data-testid="tk-dl-progress" style={{ marginTop: 8, fontSize: 13, color: 'var(--lc-text-3)' }}>
+            {dlProgress && dlProgress.received > 0
+              ? tpl('tk.downloadingAt', { n: Math.round(dlProgress.received / 1024) })
+              : t('tk.downloading')}
+          </div>
+        )}
         </div>
       </TkDialog>
       )}

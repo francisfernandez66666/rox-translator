@@ -57,16 +57,30 @@ describe('Bell · 展开直拉列表（消 stale-refresh）', () => {
     expect(notifications, '收起态不得请求通知列表（30s 轻量轮询口径不变）').toHaveBeenCalledTimes(0)
 
     fireEvent.click(container.querySelector('.bell-trigger') as HTMLElement)
+    // ★ G20：浮层 portal 到 body ⇒ 面板类选择器一律查 document（container 里找不到）
     // 锁①：展开后 1s 内 EmptyState 消失（列表到手）
     await waitFor(() => {
-      expect(container.querySelector('.lc-empty'), '列表已到手仍闪空态 = 展开没直拉列表').toBeNull()
+      expect(document.querySelector('.lc-empty'), '列表已到手仍闪空态 = 展开没直拉列表').toBeNull()
     }, { timeout: 1000 })
-    expect(container.querySelectorAll('.bell-item')).toHaveLength(1)
+    expect(document.querySelectorAll('.bell-item')).toHaveLength(1)
 
     // 锁②：notifications() 调起时浮层尚未 commit 进 DOM ⇒ 请求出自点击处理器本身
     expect(h.panelPresentAtCall, '列表请求发生在渲染后 = 仍靠 useEffect 兜底（stale-refresh 未消）').toBe(false)
     // 等值计数锁：本次开合列表接口恰打 1 次（toggle 直拉；refresh 已不随 open 重建，无 effect 补刀）
     expect(notifications).toHaveBeenCalledTimes(1)
+  })
+
+  // ★ G20：浮层 portal 形态腿——面板必须脱离 .bell-wrap（顶栏容器）落到 body 下，
+  //   否则后台顶栏的 overflow 仍会把它裁切。与 AccountMenu 的 inSidebar 腿同口径。
+  it('展开后浮层在 document.body 下、且已不在 .bell-wrap 容器内', async () => {
+    const { container } = render(<Bell />)
+    await waitFor(() => expect(notificationsUnread).toHaveBeenCalled())
+    fireEvent.click(container.querySelector('.bell-trigger') as HTMLElement)
+    await waitFor(() => expect(document.querySelector('.bell-pop')).toBeTruthy())
+    const pop = document.querySelector('.bell-pop') as HTMLElement
+    expect(pop.parentElement, '浮层未 portal 到 body（仍在顶栏容器内）').toBe(document.body)
+    // 负向：容器里不许再有一份（既 portal 又留在原地＝两份浮层）
+    expect(container.querySelector('.bell-pop'), '容器内仍有浮层副本').toBeNull()
   })
 })
 
@@ -94,21 +108,21 @@ describe('Bell · 通知列表分页（一页 20 条＋「更多」追加）', (
     expect(notifications).toHaveBeenCalledTimes(0)
 
     fireEvent.click(container.querySelector('.bell-trigger') as HTMLElement)
-    await waitFor(() => expect(container.querySelectorAll('.bell-item')).toHaveLength(20))
+    await waitFor(() => expect(document.querySelectorAll('.bell-item')).toHaveLength(20))
     // 锁①：请求参数是 (20, 0)——档位真的进了请求，不是"后端整包＋前端截渲染"的旧形态
     expect(mock.mock.calls[0]).toEqual([20, 0])
     // 锁②前半：还有下一页 ⇒ 「更多」在位
-    const more = container.querySelector('.bell-more') as HTMLElement
+    const more = document.querySelector('.bell-more') as HTMLElement
     expect(more, 'has_more 为真却不给「更多」＝ 用户永远看不到第 21 条以后').toBeTruthy()
 
     fireEvent.click(more)
-    await waitFor(() => expect(container.querySelectorAll('.bell-item')).toHaveLength(25))
+    await waitFor(() => expect(document.querySelectorAll('.bell-item')).toHaveLength(25))
     // 锁③：offset ＝ 已到手条数（20），不是写死的某个数
     expect(mock.mock.calls[1]).toEqual([20, 20])
     // 锁②后半：第二页没取满 ⇒ 到底，按钮必须自己收（挂着不消失会让人反复点空页）
-    await waitFor(() => expect(container.querySelector('.bell-more')).toBeNull())
+    await waitFor(() => expect(document.querySelector('.bell-more')).toBeNull())
     // 拼接顺序锁：追加发生在尾部，且第一页 20 条没被覆盖（函数式更新写坏会在这里现形）
-    const titles = Array.from(container.querySelectorAll('.bell-item')).map((el) => el.querySelector('div')?.textContent)
+    const titles = Array.from(document.querySelectorAll('.bell-item')).map((el) => el.querySelector('div')?.textContent)
     expect(titles[0]).toBe('T1')
     expect(titles[20]).toBe('T21')
     expect(titles).toHaveLength(25)

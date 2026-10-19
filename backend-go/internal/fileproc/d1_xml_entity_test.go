@@ -12,7 +12,10 @@ import (
 
 func TestD1EscapeCursorParity(t *testing.T) {
 	para := `<w:p><w:r><w:t>R&amp;D 方案</w:t></w:r><w:r><w:t> 附录</w:t></w:r></w:p>`
-	out := translateDocxParagraph(para, map[string]string{"R&D 方案 附录": `Q&A <tag> "引" '单'`})
+	out, hit := translateDocxParagraph(para, map[string]string{"R&D 方案 附录": `Q&A <tag> "引" '单'`})
+	if hit == 0 {
+		t.Fatal("G17：命中段数不该为 0")
+	}
 	if out == para {
 		t.Fatal("译文未命中（提取键异常）")
 	}

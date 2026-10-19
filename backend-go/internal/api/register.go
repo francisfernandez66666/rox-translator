@@ -8,8 +8,9 @@ package api
 //   - handleRegister：自助注册（无邀请码→新建独立试用租户 + tenant_admin 账号；有绑定租户的邀请码→加入已有租户 + user 账号）
 //   - 体验额度：新租户自动发放 free_trial_tokens（system_config 可配置，出厂档 1,000 积分折 400000 token/14 天，★ F-78 汇率 1:400）并写入每日字符上限权限
 //   - 注册开关：system_config registration_enabled=0 时关闭注册
-//   - 邀请码管理（super_admin）：列表 / 创建（handleInviteCodes / handleInviteCodeCreate）
+//   - 邀请码管理（super_admin）：列表 / 创建 / 撤销（handleInviteCodes / handleInviteCodeCreate / handleInviteCodeRevoke）
 // 安全要点：邀请码一次性使用（used=1 即失效）；受邀加入前校验该租户用户名唯一。
+// ★ G9（2026-10-19）：撤销是状态位（revoked=1）而非删行，保留 used_by/used_at 追溯；撤销后注册口拒收且不烧码。
 
 import (
 	"encoding/json"
@@ -210,7 +211,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			roleChoice := strings.ToLower(strings.TrimSpace(req.RoleChoice))
 			if roleChoice == "member" {
 				if code := strings.TrimSpace(req.Invite); code != "" {
-					if inv, e := s.Store.GetInviteCodeByCode(code); e == nil && inv.Used == 0 && inv.TenantID > 0 {
+					if inv, e := s.Store.GetInviteCodeByCode(code); e == nil && inv.Used == 0 && inv.Revoked == 0 && inv.TenantID > 0 {
 						// 有效企业邀请码：保留 invite，后续走受邀加入（普通成员）
 						joinWithInvite = true
 					} else {
@@ -291,7 +292,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		inv, ierr := s.Store.GetInviteCodeByCode(invCode)
-		if ierr != nil || inv.Used == 1 || inv.TenantID != dedicatedTid {
+		if ierr != nil || inv.Used == 1 || inv.Revoked == 1 || inv.TenantID != dedicatedTid {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效、已使用或不属于该企业"})
 			return
 		}
@@ -300,7 +301,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
-		if err != nil || inv.Used == 1 {
+		if err != nil || inv.Used == 1 || inv.Revoked == 1 {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效或已使用"})
 			return
 		}
@@ -854,4 +855,68 @@ func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) 
 	// 创建审计
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invite_create", "invite", req.Code)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "code": c})
+}
+
+// handleInviteCodeRevoke 撤销邀请码接口（tenant_admin 及以上；企业用户仅可撤销本企业码）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id 或 code）。
+// 返回: success=true 时携带 revoked=true 与新 status。已使用的码不可撤销（人已经进来了）。
+//
+// ★ G9（2026-10-19）：撤销是状态位，**绝不删行**——used_by/used_at 是「谁通过这枚码进来」的
+// 唯一追溯资产，删行会让客户来问「我发的码被谁用了」时无从查起。撤销后注册口必须拒收该码
+// 且**不得烧码**（拒绝发生在 MarkInviteCodeUsed 之前，见 handleRegister 的既有顺序）。
+func (s *Server) handleInviteCodeRevoke(w http.ResponseWriter, r *http.Request) {
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		s.writeAuthzError(w, r, err)
+		return
+	}
+	var req struct {
+		ID   int64  `json:"id"`   // 邀请码主键 ID（优先）
+		Code string `json:"code"` // 邀请码字符串（id 缺失时按码定位）
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	// 允许 query 传参（老缓存包/手写脚本可能不带 JSON body，与公开接口软档口径一致）
+	if req.ID <= 0 {
+		if idStr := strings.TrimSpace(r.URL.Query().Get("id")); idStr != "" {
+			req.ID, _ = strconv.ParseInt(idStr, 10, 64)
+		}
+	}
+	if strings.TrimSpace(req.Code) == "" {
+		req.Code = r.URL.Query().Get("code")
+	}
+	if req.ID <= 0 && strings.TrimSpace(req.Code) == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供邀请码 id 或 code"))
+		return
+	}
+	// 定位目标码：id 优先，其次 code。
+	var inv *store.InviteCode
+	var gerr error
+	if req.ID > 0 {
+		inv, gerr = s.Store.GetInviteCode(req.ID)
+	} else {
+		inv, gerr = s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Code))
+	}
+	if gerr != nil || inv == nil {
+		// 不存在与跨租户都回 404（不泄露他租户码的存在性，与 handleTenantBrandingSet 同口径）
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "邀请码不存在"))
+		return
+	}
+	// 企业用户（非超管）只能撤销本租户名下的码。
+	if !auth.IsSuperAdmin(u) && inv.TenantID != u.TenantID {
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "邀请码不存在"))
+		return
+	}
+	ok, used, rerr := s.Store.RevokeInviteCode(inv.ID)
+	if rerr != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), rerr)))
+		return
+	}
+	if !ok && used {
+		// 已使用：撤销没有意义（用户已经加入），给可行动文案而不是含糊的「撤销失败」
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邀请码已被使用，无法撤销"))
+		return
+	}
+	// ok=true 真撤销；ok=false 且未使用＝此前已撤销（幂等）。两者都按撤销态返回，并留审计。
+	s.Store.LogAudit(s.effTenant(r, u), u.ID, "invite_revoke", "invite", inv.Code)
+	writeJSON(w, 200, map[string]interface{}{"success": true, "revoked": true, "status": "revoked"})
 }

@@ -19,7 +19,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 	"translator/internal/auth"
@@ -608,7 +607,7 @@ func (s *Server) handleEditorExportDownload(w http.ResponseWriter, r *http.Reque
 		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "文件不存在"))
 		return
 	}
-	w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(filepath.Base(abs)))
+	w.Header().Set("Content-Disposition", contentDisposition(filepath.Base(abs)))
 	http.ServeFile(w, r, abs)
 }
 

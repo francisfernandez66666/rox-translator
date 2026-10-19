@@ -31,4 +31,9 @@ func TestHandleHealthCapabilityReadiness(t *testing.T) {
 			t.Errorf("%s 应为布尔字段，出参: %s", key, rec.Body.String())
 		}
 	}
+	// ★ 2026-10-19 G12：asr_engine 是**字符串**字段（有效路由档；不就绪时为空串）。
+	//   类型判据在这里锁"字段在且是字符串"，取值随机器权重而变（同上面三个布尔的口径）。
+	if _, ok := body["asr_engine"].(string); !ok {
+		t.Errorf("asr_engine 应为字符串字段，出参: %s", rec.Body.String())
+	}
 }

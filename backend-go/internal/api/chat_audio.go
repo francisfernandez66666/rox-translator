@@ -63,6 +63,11 @@ func asrReason(err error) string {
 		strings.Contains(msg, "ASR 模型资产缺失") || strings.Contains(msg, "库未安装") {
 		return "capability_missing"
 	}
+	// ★ 静音/未授权档单列（2026-10-19 G11）：判据取自 fileproc 的同一个常量，
+	//   前端按 reason==='no_speech' 出「请靠近麦克风重试」而不是笼统的失败话术。
+	if strings.HasPrefix(err.Error(), fileproc.AsrNoSpeechMessage) {
+		return fileproc.AsrNoSpeechReason
+	}
 	return "failed"
 }
 

@@ -148,7 +148,8 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   const [isMobile, setIsMobile] = useState(typeof window !== 'undefined' && window.innerWidth <= 768)
   const [copied, setCopied] = useState(false) // ★ F7 复制反馈
   // ★ 2026-10-13 用户令③：双语对照的「查看原文」从 <details> 换成受控展开——
-  // details 展开时面板在 flex 行内部长高，会把四个控件那一行顶歪（正是本条要治的「高低不统一」），
+  // details 展开时面板在 flex 行内部长高，会把五个控件那一行顶歪（本批 P3 朗读加入后为五件，
+  // 正是本条要治的「高低不统一」），
   // 所以展开态归组件管，面板渲染成行下方的兄弟节点（折叠/展开语义与旧版一致，功能一项未减）。
   const [srcOpen, setSrcOpen] = useState(false)
   // ★ 决策⑪②（2026-10-10）：慢预警横幅的「继续等待」本地消隐态——用户点了继续等就

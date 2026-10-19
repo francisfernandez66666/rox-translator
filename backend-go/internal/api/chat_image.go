@@ -137,20 +137,12 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		ext = v
 	}
 	// 落盘到临时文件：OCR 脚本与回填脚本都要**文件路径**（不是字节流）。
-	tmp, terr := os.CreateTemp("", "chat-image-*"+ext)
+	tmpPath, cleanup, terr := stageChatImage(f, ext)
 	if terr != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "图片暂存失败"))
 		return
 	}
-	tmpPath := tmp.Name()
-	tmp.Close()
-	defer os.Remove(tmpPath)
-	// ★ 限流 COPY：MaxBytesReader/ParseMultipartForm 管的是请求体，COPY 阶段不加这道墙，
-	//   一个伪造的 Content-Length 就能把磁盘写满（与 chat_audio.go 同款教训）。
-	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatImageMaxBytes)); cerr != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "图片暂存失败"))
-		return
-	}
+	defer cleanup()
 
 	// 配额闸门：图片翻译是一次真实算力调用（OCR + LLM），与 /api/chat 同口径先过闸再干活。
 	tid, release, gateErr := s.gateUsage(r)
@@ -221,6 +213,35 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, resp)
 }
 
+// stageChatImage 把上传的图片字节落盘到临时文件，返回路径与清理函数。
+//
+// ★ 句柄顺序是这条链唯一的硬约束：必须**先 io.Copy 写完、再 Close**。
+// 对已关闭的 *os.File 写入必退 "file already closed"，而那条错误分支是**每次都走到**的
+// （2026-10-19 修复：此前 Close 排在 Copy 之前，图片即时翻译从上线起恒 500——这是
+// "有锁而射程不足"的典型：老用例从不喂真件，那段写盘代码在 CI 里从没执行过）。
+// 形态与 chat_audio.go 同款；失败分支也要 Close，防句柄泄漏。
+//
+// ★ 限流 COPY 一字不动：MaxBytesReader/ParseMultipartForm 管的是请求体，COPY 阶段不加这道墙，
+// 一个伪造的 Content-Length 就能把磁盘写满（与 chat_audio.go 同款教训）。
+func stageChatImage(f io.Reader, ext string) (string, func(), error) {
+	tmp, err := os.CreateTemp("", "chat-image-*"+ext)
+	if err != nil {
+		return "", nil, err
+	}
+	tmpPath := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpPath) }
+	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatImageMaxBytes)); cerr != nil {
+		tmp.Close()
+		cleanup()
+		return "", nil, cerr
+	}
+	if cerr := tmp.Close(); cerr != nil {
+		cleanup()
+		return "", nil, cerr
+	}
+	return tmpPath, cleanup, nil
+}
+
 // renderChatImage 生成译后图并把 data URL（或降级原因）写进 resp。
 // 参数：r＝请求（取 ctx）；srcPath＝原图；lang＝目标语种；lines＝OCR 行；
 // translated＝该语种整段译文；resp＝出参（就地填 Image/ImageError）。
@@ -244,7 +265,7 @@ func renderChatImage(r *http.Request, srcPath, lang string, lines []string, tran
 	}
 	outPath := srcPath + ".translated.png"
 	defer os.Remove(outPath)
-	if err := fileproc.RenderTranslatedImage(r.Context(), srcPath, outPath, tr); err != nil {
+	if _, err := fileproc.RenderTranslatedImage(r.Context(), srcPath, outPath, tr); err != nil {
 		// 原位回填失败（缺中文字体/坐标没缓存住/绘制超时）只跳过该产物，译文照常在。
 		resp.ImageError = "render_failed"
 		return

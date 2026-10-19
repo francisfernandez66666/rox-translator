@@ -12,8 +12,11 @@
 //   对齐 worker（asr-worker.js）。官方流式模型（zipformer 中英双语）烘焙在
 //   sherpa-onnx-wasm-main-asr.data（199MB）内——该文件超 GitHub 单文件 100MB 硬限，
 //   gitignore，由部署机跑 scripts/fetch_sherpa_assets.sh 落盘（禁运行时联网）。
-//   isAvailable() 因此对 manifest、wasm、.data 三者各发 HEAD，缺一即 false，
+//   isAvailable() 因此对 manifest、wasm、.data 三者各发 HEAD，**确定缺件**即 false，
 //   上层自动回落服务端（与 P3 行为零回归）。
+//   ★ 2026-10-19 G10：HEAD 不带 content-length 时（部分 CDN/反代如此）补一次 Range 探测
+//   读 content-range 的总长；仍问不到＝「未知」⇒ **按可用处理**（fail-open，不因探针自己
+//   坏掉就摘掉端侧引擎，也不把一次网络抖动钉成"这台永远没有端侧"）。
 //
 // 契约（两个引擎必须同构）：
 //   start() 开麦 → 返回 AsrSession；session.final 在 stop() 后 resolve 出识别文本
@@ -118,23 +121,61 @@ const WASM_BASE = '/wasm/sherpa-onnx'
 //   **整页 index.html**（几十 KB 且 content-type=text/html）。两把尺子（非 HTML ＋ 体积）
 //   一起用，单靠 status 会被 200 的兜底页骗过去。
 const WASM_MIN_BYTES = 1_000_000
-const WASM_DATA_MIN_BYTES = 10_000_000
+// ★ 2026-10-19 G10：.data 单列一档（真件 ≈199MB）。旧值 10MB 会把"占位/半截"当就绪；
+//   199MB 真件远高于此档，缺件则由 text/html 那一腿判死（体积档只管"够不够大"）。
+const WASM_DATA_MIN_BYTES = 150_000_000
+
+// ★ 2026-10-19 G10：资产门的三态——true 真件 / false 确定不可用 / 'unknown' 探不到。
+//   旧形态只有真/假两态，而 `content-length` 缺失（部分 CDN/反代对 HEAD 不回它）会被
+//   `Number('' || '0')=0` 判成"体积不足"⇒ 真件被误杀、端侧引擎恒不可用（用户报障的
+//   「语音按钮无法录入」的另一形态）。现在缺 content-length 时补一次 Range 探测问总长，
+//   问不到＝'unknown'（**不判死**：一次网络抖动不许钉成"这台永远没有端侧"，同 §一·17②）。
+type AssetReadiness = boolean | 'unknown'
 
 // assetReady 判「这个 URL 回的是真资产，不是 SPA 兜底页」。
 // ★ 为什么不能只判 `res.ok`：spa.go 对**不存在的路径**会回整页 index.html 且状态码仍是 200
 //   （AGENTS §一·6 那族「文件在仓库里 ≠ 线上点得开」），于是「缺 .data」在旧判据下
 //   看起来是「资产就绪」⇒ 选中端侧 WASM ⇒ worker 拿 HTML 当模型包、识别器建不起来
-//   ⇒ 点录音既不弹麦克风授权也不出声（用户报障「语音按钮无法录入」的真身）。
-//   判据＝2xx ＋ content-type 不是 text/html ＋ content-length 达下限。
+//   ⇒ 点录音既不弹麦克风授权也不出声。
+//   判据＝2xx ＋ content-type 不是 text/html ＋ 体积达下限；content-length 缺失时走 Range 探测。
 //   ⚠️ 这是**可用性探测**、不是下载校验：真件的字节魔数由部署侧
 //   check_frontend_tar.sh / fetch_sherpa_assets.sh 的 sha256 负责，这里只回答「能不能选它」。
-async function assetReady(url: string, minBytes: number): Promise<boolean> {
-  const res = await fetch(url, { method: 'HEAD' })
-  if (!res.ok) return false
-  const ct = (res.headers.get('content-type') || '').toLowerCase()
-  if (ct.includes('text/html')) return false // SPA 兜底页：缺件时的 200 假绿形态
-  const len = Number(res.headers.get('content-length') || '0')
-  return len >= minBytes
+async function assetReady(url: string, minBytes: number): Promise<AssetReadiness> {
+  try {
+    const res = await fetch(url, { method: 'HEAD' })
+    if (!res.ok) return false
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('text/html')) return false // SPA 兜底页：缺件时的 200 假绿形态
+    const lenRaw = res.headers.get('content-length')
+    if (lenRaw !== null && lenRaw !== '') {
+      const len = Number(lenRaw)
+      if (Number.isFinite(len)) return len >= minBytes
+    }
+    // content-length 缺失：不判死，用 Range 探测问总长（见 assetTotalViaRange 的说明）。
+    return await assetTotalViaRange(url, minBytes)
+  } catch {
+    return 'unknown' // 网络抖动：当作"未知"，由上层 fail-open（渲染/选择端侧），绝不钉死
+  }
+}
+
+// assetTotalViaRange 用 `Range: bytes=0-0` 取回 `content-range: bytes 0-0/<total>` 里的总长，
+// 再与下限比。为什么是 Range 而不是再发一次 HEAD：Range 回的是 206 且**必带** content-range，
+// 是"文件真实存在且有多大"的最直接读数。拿不到总长＝'unknown'（不许把"问不到"读成"不存在"）。
+async function assetTotalViaRange(url: string, minBytes: number): Promise<AssetReadiness> {
+  try {
+    const res = await fetch(url, { headers: { Range: 'bytes=0-0' } })
+    if (!res.ok && res.status !== 206) return false
+    const ct = (res.headers.get('content-type') || '').toLowerCase()
+    if (ct.includes('text/html')) return false
+    const m = (res.headers.get('content-range') || '').match(/\/(\d+)\s*$/)
+    if (m) {
+      const total = Number(m[1])
+      if (Number.isFinite(total)) return total >= minBytes
+    }
+    return 'unknown'
+  } catch {
+    return 'unknown'
+  }
 }
 
 // 端侧 WASM 引擎：资产（manifest/wasm/.data）三件齐了才可选，否则 isAvailable=false。
@@ -150,11 +191,13 @@ export class WasmAsrEngine implements AsrEngine {
       const m = await mres.json().catch(() => null)
       if (!m || !m.defaultModel || !m.models) return false
       // 2) 真实 wasm 运行时必须落盘（否则 worker new 出来也跑不起推理）
-      if (!(await assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.wasm`, WASM_MIN_BYTES))) {
+      //    ★ 只有**确定不可用**（false）才判死；'unknown'（探不到）按可用处理——
+      //    fail-open：探针自己坏掉不该摘掉端侧引擎，真跑起来失败仍有服务端回落与错误提示。
+      if ((await assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.wasm`, WASM_MIN_BYTES)) === false) {
         return false
       }
       // 3) 官方预载模型包 .data 必须落盘（模型烘焙其中，缺它识别器无法建立）
-      return assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.data`, WASM_DATA_MIN_BYTES)
+      return (await assetReady(`${WASM_BASE}/sherpa-onnx-wasm-main-asr.data`, WASM_DATA_MIN_BYTES)) !== false
     } catch {
       return false
     }

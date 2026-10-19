@@ -722,10 +722,62 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	states, _ := s.Store.TicketStates(id)
 	// ★ 文件工单附带各文件处理状态（前端进度面板渲染用）
 	tfiles, _ := s.Store.TicketFiles(id)
+	// ★ G13（2026-10-19）：交付件清单回读——此前详情面只有 files（输入件＋状态），
+	//   客户在页面上看不见自己已经拿到手的产物（四件都在 zip 里）。真值仍是磁盘上那一个 zip，
+	//   这里只列条目名与大小，不新造第二份清单。
+	deliverables := ticketDeliverables(t, tfiles)
 	// ★ 改造 5（2026-09-17）用户侧 QA 报告透出：从 FinalResult payload 解析
 	//   质检报告/评估分/不达标语言，详情接口一并返回（此前仅 xlsx 下载有 QA 列，界面零透出）。
 	quality := parseTicketQuality(t.FinalResult)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "states": states, "files": tfiles, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "states": states, "files": tfiles, "deliverables": deliverables, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
+}
+
+// ticketDeliverableItem 交付件清单的一条（★ G13）。
+type ticketDeliverableItem struct {
+	Name string `json:"name"` // 交付件文件名（多产物＝zip 内条目名；单产物＝文件名）
+	Size int64  `json:"size"` // 字节数
+	Kind string `json:"kind"` // restore=还原回写/主产物；text=纯文案 .md 旁路
+}
+
+// ticketDeliverables 回读本单的交付件清单（★ G13，2026-10-19）。
+//
+// 事实源就在磁盘上：多产物单在 service 层被 zipOutputs 打成一个 zip 存进 tickets.result_path
+// （ticket_files.result_path 同值），按单号打开 zip 列条目即得「四件」；单产物单直接列一行；
+// 纯文案旁路（text_result_path）另计为 text 档。**只读名字与大小**（zip.File 头部即带），
+// 不读内容、不改库。与 zip 下载出口同一把尺子，避免详情面另造一份会漂的清单（同 §一·14）。
+// 参数 t: 工单；tfiles: 该单源文件行。返回: 去重后的交付件列表（按读取顺序）。
+func ticketDeliverables(t *store.Ticket, tfiles []*store.TicketFile) []ticketDeliverableItem {
+	out := []ticketDeliverableItem{}
+	seen := map[string]bool{}
+	add := func(p, kind string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		if zr, err := zip.OpenReader(p); err == nil {
+			for _, f := range zr.File {
+				out = append(out, ticketDeliverableItem{Name: f.Name, Size: int64(f.UncompressedSize64), Kind: kind})
+			}
+			_ = zr.Close()
+			return
+		}
+		if info, err := os.Stat(p); err == nil && !info.IsDir() {
+			out = append(out, ticketDeliverableItem{Name: filepath.Base(p), Size: info.Size(), Kind: kind})
+		}
+	}
+	if t != nil {
+		add(t.ResultPath, "restore")
+		add(t.TextResultPath, "text")
+	}
+	for _, f := range tfiles {
+		if f == nil {
+			continue
+		}
+		add(f.ResultPath, "restore")
+		add(f.TextResultPath, "text")
+	}
+	return out
 }
 
 // ticketQualityView 工单质量视图（改造 5）：从 FinalResult JSON 抽取用户侧可读的
@@ -873,7 +925,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 				if f.ID == fid && f.ResultPath != "" {
 					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
 						defer fh.Close()
-						w.Header().Set("Content-Disposition", `attachment; filename="`+mimeEscape(f.FileName)+`"`)
+						w.Header().Set("Content-Disposition", contentDisposition(f.FileName))
 						http.ServeContent(w, r, f.FileName, time.Now(), fh)
 						return
 					}
@@ -897,14 +949,14 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 			fh, oerr := os.Open(paths[0])
 			if oerr == nil {
 				defer fh.Close()
-				w.Header().Set("Content-Disposition", `attachment; filename="`+names[0]+`"`)
+				w.Header().Set("Content-Disposition", contentDisposition(names[0]))
 				http.ServeContent(w, r, names[0], time.Now(), fh)
 				return
 			}
 		}
 		// 多产物：逐份读入写 zip 条目（单份读失败跳过，不阻断整包）
 		if len(paths) > 1 {
-			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.zip"`)
+			w.Header().Set("Content-Disposition", contentDisposition(baseName+".zip"))
 			w.Header().Set("Content-Type", "application/zip")
 			zw := zip.NewWriter(w)
 			for i, p := range paths {
@@ -929,7 +981,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		f, ferr := os.Open(t.ResultPath)
 		if ferr == nil {
 			defer f.Close()
-			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+filepath.Ext(t.ResultPath)+`"`)
+			w.Header().Set("Content-Disposition", contentDisposition(baseName+filepath.Ext(t.ResultPath)))
 			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
 			return
 		}
@@ -1010,7 +1062,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "生成 xlsx 失败"})
 		return
 	}
-	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.xlsx"`)
+	w.Header().Set("Content-Disposition", contentDisposition(baseName+".xlsx"))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	_, _ = w.Write(buf.Bytes())
 }
@@ -1276,7 +1328,7 @@ func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// 多份纯文案产物打 zip 下载（单份读失败跳过不阻断整包）
-	w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+"_texts.zip"+`"`)
+	w.Header().Set("Content-Disposition", contentDisposition(baseName+"_texts.zip"))
 	w.Header().Set("Content-Type", "application/zip")
 	zw := zip.NewWriter(w)
 	for i, p := range paths {
@@ -1298,7 +1350,7 @@ func (s *Server) serveOneFile(w http.ResponseWriter, r *http.Request, path, dlNa
 		return
 	}
 	defer fh.Close()
-	w.Header().Set("Content-Disposition", `attachment; filename="`+mimeEscape(dlName)+`"`)
+	w.Header().Set("Content-Disposition", contentDisposition(dlName))
 	http.ServeContent(w, r, dlName, time.Now(), fh)
 }
 
@@ -1313,11 +1365,6 @@ func textDeliverableName(f *store.TicketFile) string {
 		p = f.ResultPath
 	}
 	return base + "_译文" + filepath.Ext(p)
-}
-
-// mimeEscape Content-Disposition 文件名兜底转义（非 ASCII 场景由前端 zip 名承担）。
-func mimeEscape(name string) string {
-	return strings.ReplaceAll(name, `"`, `_`)
 }
 
 // handleTicketDelete 删除已完成工单及其关联文件（创建者或超管；弹窗确认由前端负责）。

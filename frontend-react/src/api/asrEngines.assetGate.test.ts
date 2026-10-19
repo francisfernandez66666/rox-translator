@@ -12,6 +12,16 @@
 //   · W1/W3/W4 三档缺失形态必须判不可用（旧判据在这三档全假绿）；
 //   · W7 是**只问 status 的实现**会踩的那一格：200 + 体积不足（真件下限）仍须判死。
 //   · S1/S2 守住「不可用即无缝回落服务端」这条与 P3 零回归的契约。
+//
+// ★ 2026-10-19 G10 补腿（X1~X6）：HEAD **不带 content-length** 的 CDN/反代形态。
+//   旧实现 `Number('' || '0')=0 < 下限` ⇒ 真件被误杀、端侧引擎恒不可用（用户报障
+//   「语音按钮无法录入」的另一形态）。现在缺长度时补一次 Range 探测读 content-range 总长：
+//     · X1 总长达标 ⇒ 可用（旧实现在此**误杀**，这是本条的本体）；
+//     · X2 总长不足 ⇒ 判死（Range 问到了，证明文件真小）；
+//     · X3 Range 回兜底 HTML ⇒ 判死（不许把兜底页当资产）；
+//     · X4 Range 抛错 ⇒ 'unknown' ⇒ **仍可用**（fail-open：探不到不钉死，同 §一·17②）；
+//     · X5 .data 缺长度 + Range 达标 ⇒ 可用（199MB 档这条腿）；
+//     · X6 反证：把 Range 探测摘掉（只信 HEAD 的长度）⇒ X1 型形态必须判不可用。
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -39,6 +49,7 @@ function resp(opts: {
   status?: number
   contentType?: string | null
   contentLength?: number
+  contentRange?: string
   json?: unknown
 }) {
   const status = opts.status ?? 200
@@ -48,6 +59,9 @@ function resp(opts: {
   }
   if (opts.contentLength !== undefined) {
     headers.set('content-length', String(opts.contentLength))
+  }
+  if (opts.contentRange !== undefined) {
+    headers.set('content-range', opts.contentRange)
   }
   return {
     ok: status >= 200 && status < 300,
@@ -67,12 +81,16 @@ const REAL_MANIFEST = resp({ contentType: 'application/json', contentLength: 170
 const REAL_WASM = resp({ contentType: 'application/wasm', contentLength: 13150239 })
 const REAL_DATA = resp({ contentType: 'application/octet-stream', contentLength: 199_000_000 })
 
-// 装一个按 URL 分派的 fetch 桩；返回被调用的 URL 清单（供「不发请求」那档断言）
-function installFetch(map: Record<string, Response>) {
+// 装一个按 URL 分派的 fetch 桩；返回被调用的 URL 清单（供「不发请求」那档断言）。
+// ★ 2026-10-19 G10：带 `Range` 头的请求走 rangeMap（缺省回同一个 map），
+//   这样「HEAD 无 content-length → Range 补探」这条链才测得到（旧桩忽略 init ⇒ Range 腿结构性空转）。
+function installFetch(map: Record<string, Response>, rangeMap: Record<string, Response> = {}) {
   const calls: string[] = []
-  const fn = vi.fn(async (url: string) => {
+  const fn = vi.fn(async (url: string, init?: RequestInit) => {
     calls.push(url)
-    const hit = map[url]
+    const hdrs = (init?.headers || {}) as Record<string, string>
+    const isRange = !!(hdrs.Range || hdrs.range)
+    const hit = (isRange ? rangeMap[url] ?? map[url] : map[url])
     if (!hit) throw new Error('unexpected fetch: ' + url)
     return hit
   })
@@ -149,6 +167,72 @@ describe('端侧 WASM 资产门（真件 vs SPA 兜底页）', () => {
       }),
     )
     expect(await new WasmAsrEngine().isAvailable()).toBe(false)
+  })
+
+  // ===== ★ 2026-10-19 G10：HEAD 无 content-length 的 CDN/反代形态 =====
+  const wasmUrl = `${WASM}/sherpa-onnx-wasm-main-asr.wasm`
+  const dataUrl = `${WASM}/sherpa-onnx-wasm-main-asr.data`
+  // HEAD 不带长度：真件只留 content-type（模拟 CDN 不回 content-length 的 HEAD）
+  const headNoLen = (ct: string) => resp({ contentType: ct })
+  // Range 206 回总长
+  const rangeTotal = (total: number, ct = 'application/octet-stream') =>
+    resp({ status: 206, contentType: ct, contentRange: `bytes 0-0/${total}` })
+
+  it('X1 .wasm 的 HEAD 无 content-length、Range 总长达标 ⇒ 可用（旧实现在此误杀真件）', async () => {
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      { [wasmUrl]: rangeTotal(13_150_239, 'application/wasm') },
+    )
+    expect(await new WasmAsrEngine().isAvailable()).toBe(true)
+  })
+
+  it('X2 Range 问到总长、但不足下限 ⇒ 判死（问到了就说明文件真小）', async () => {
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      { [wasmUrl]: rangeTotal(12_000, 'application/wasm') },
+    )
+    expect(await new WasmAsrEngine().isAvailable()).toBe(false)
+  })
+
+  it('X3 Range 回的是 SPA 兜底页（text/html）⇒ 判死（兜底页不是资产）', async () => {
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      { [wasmUrl]: FALLBACK },
+    )
+    expect(await new WasmAsrEngine().isAvailable()).toBe(false)
+  })
+
+  it('X4 Range 探测抛错 ⇒ 按未知处理、不钉死（fail-open，仍可用）', async () => {
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      // rangeMap 缺该 URL ⇒ 桩抛 unexpected fetch ⇒ assetTotalViaRange 收成 'unknown'
+    )
+    expect(await new WasmAsrEngine().isAvailable()).toBe(true)
+  })
+
+  it('X5 .data 的 HEAD 无 content-length、Range 达标（199MB 档）⇒ 可用', async () => {
+    installFetch(
+      fullMap({ [dataUrl]: headNoLen('application/octet-stream') }),
+      { [dataUrl]: rangeTotal(199_000_000) },
+    )
+    expect(await new WasmAsrEngine().isAvailable()).toBe(true)
+  })
+
+  it('X6 射程自证：同一条 HEAD（无长度），只改 Range 的总长读数 ⇒ 判定必须跟着翻', async () => {
+    // 「无长度 ⇒ 补探」这条腿真的在决定结果，而不是恰好/一律判真：
+    // 两份夹具除了 Range 的 content-range 总长以外**完全相同**。
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      { [wasmUrl]: rangeTotal(13_150_239, 'application/wasm') },
+    )
+    const big = await new WasmAsrEngine().isAvailable()
+    resetAsrEngineCache()
+    installFetch(
+      fullMap({ [wasmUrl]: headNoLen('application/wasm') }),
+      { [wasmUrl]: rangeTotal(1, 'application/wasm') },
+    )
+    const tiny = await new WasmAsrEngine().isAvailable()
+    expect([big, tiny], 'Range 读数没进入判定＝补探腿是空的').toEqual([true, false])
   })
 
   it('S1 auto：端侧不可用 ⇒ 无缝回落服务端（与 P3 零回归）', async () => {

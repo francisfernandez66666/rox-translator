@@ -64,6 +64,7 @@ func New(db *sql.DB) (*Store, error) {
 	s.BillingIndexMigrate()       // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
 	s.PackagesTenantMigrate()     // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
 	s.ReferralMigrate()           // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.InvitesRevokeMigrate()      // ★ G9（2026-10-19）：invite_codes 补 revoked/revoked_at 列（邀请码可撤销不删行）
 	s.KBSearchIndexMigrate()      // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
 	s.OneidMigrate()              // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
 	s.KBRewardMigrate()           // ★ KB 上传奖励流水表（幂等；任务2.3）

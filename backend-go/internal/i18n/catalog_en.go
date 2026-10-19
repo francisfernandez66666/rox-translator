@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（442 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（445 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -393,6 +393,7 @@ var exactEN = map[string]string{
 	"该邮箱已被其他账号绑定":                                      "This email is already bound to another account",
 	"该邮箱已被用于邀请注册奖励，无法换绑":                               "This email has been used for referral rewards and cannot be rebound",
 	"该邮箱未开通账号，请联系管理员":                                  "This email has no account; contact your administrator",
+	"该邀请码已被使用，无法撤销":                                    "This invite code has already been used and cannot be revoked",
 	"语音产物暂存失败":                                         "Failed to stage the audio result on the server",
 	"语音产物读取失败":                                         "Failed to read the audio result",
 	"请以 multipart/form-data 提交图片":                      "Please submit the image as multipart/form-data",
@@ -411,6 +412,7 @@ var exactEN = map[string]string{
 	"请提供源文本":                                           "Source text is required",
 	"请提供租户编码":                                          "Tenant code is required",
 	"请提供订单 id":                                         "Order id is required",
+	"请提供邀请码 id 或 code":                                 "Provide the invite code id or code",
 	"请求体格式错误":                                          "Malformed request body",
 	"请求无法转发到 AI 助手服务":                                  "Request could not be forwarded to the AI assistant service",
 	"请求格式错误":                                           "Malformed request",
@@ -431,6 +433,7 @@ var exactEN = map[string]string{
 	"运营策略仅超级管理员可设置":                       "Only super-admins can set ops policies",
 	"运营策略已保存":            "Ops policy saved",
 	"邀请开关保存失败: ":         "Failed to save referral switch: ",
+	"邀请码不存在":             "Invite code not found",
 	"邀请码不能为空":            "Invite code must not be empty",
 	"邀请码无效、已使用或不属于该企业":   "Invite code invalid, used, or not belonging to this company",
 	"邀请码无效或已使用":          "Invite code invalid or already used",

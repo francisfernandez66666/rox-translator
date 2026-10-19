@@ -408,7 +408,14 @@ describe('启动链锁 C：main.tsx 的渲染期兜底在位', () => {
   })
 
   it('兜底文案是人话且不含堆栈／内部路径（只把详情留在控制台）', () => {
-    expect(main).toContain('页面出错了')
+    // ★ 2026-10-19 G20：兜底文案改走词典（旧形态硬编码中文，非中文访客启动失败看中文）。
+    //   判据从「含旧中文字面量」翻转为「三个 i18n 键在位 + 旧硬编码文案清零」——
+    //   负向腿同时在注释上生效：不许把旧文案留在注释里糊过判据。
+    expect(main).toContain("t('common.pageError')")
+    expect(main).toContain("t('common.bootErrorBody')")
+    expect(main).toContain("t('common.reloadPage')")
+    expect(main).not.toContain('页面出错了')
+    expect(main).not.toContain('重新加载通常就能恢复')
     expect(main).toContain('console.error')
     expect(main).not.toContain('error.stack')
     expect(main).not.toContain('/src/')

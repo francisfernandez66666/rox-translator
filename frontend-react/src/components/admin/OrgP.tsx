@@ -39,6 +39,11 @@ export function OrgP() {
   const [budgetMap, setBudgetMap] = useState<Record<number, { limit: number; used: number }>>({})
   const [selectedOrg, setSelectedOrg] = useState(0)
   const [orgUserList, setOrgUserList] = useState<Any[]>([])
+  // ★ 2026-10-19 G8：成员「显示名」行内编辑的**草稿态**（key=用户 id）。
+  //   旧形态 onChange 每敲一个字符就 editUser→PUT + loadAll 全量刷新：逐字符把
+  //   失焦前的每一次键入都打成一次写请求与一次全量拉取（现网实测 N 击 ≈ N 次写）。
+  //   现在键入只落草稿，失焦/回车才提交一次；提交成功后只就地更新该行。
+  const [nameDraft, setNameDraft] = useState<Record<number, string>>({})
   const [parentId, setParentId] = useState(0)
   const [newName, setNewName] = useState('')
   const [nu, setNu] = useState<Any>({ username: '', password: '', display_name: '', role: 'user' })
@@ -187,6 +192,7 @@ export function OrgP() {
   useEffect(() => { void loadAll(); void loadBudget() }, [loadAll])
   useEffect(() => {
     setSelectedOrg(0); setNuOrgId(0)
+    setNameDraft({}) // ★ G8：切租户即清草稿，防上一租户的同 id 草稿遮住新列表的值
     void loadAll(); void loadBudget()
   }, [ad.activeTenantId])
 
@@ -262,10 +268,34 @@ export function OrgP() {
   }
 
   // 成员表格行内编辑：显示名/组织/角色单字段更新
-  async function editUser(u: Any, field: string, val: string) {
+  // ★ 2026-10-19 G8：返回是否成功，供 commitName 决定草稿留存；显示名成功后**只改该行**，
+  //   不再 loadAll 全量（组织/角色会改变列表归属口径，仍走全量刷新）。
+  async function editUser(u: Any, field: string, val: string): Promise<boolean> {
     const v = field === 'org_id' ? Number(val) : val
-    if (field === 'display_name' && !String(val).trim()) return
-    if (await updateUser(u, { [field]: v })) await loadAll()
+    if (field === 'display_name' && !String(val).trim()) return false
+    if (!(await updateUser(u, { [field]: v }))) return false
+    if (field === 'display_name') {
+      setOrgUserList((list) => list.map((x) => (x.id === u.id ? { ...x, display_name: v } : x)))
+    } else {
+      await loadAll()
+    }
+    return true
+  }
+
+  // ★ 2026-10-19 G8：提交「显示名」草稿（失焦 / 回车触发一次）。
+  //   空值或无变化 → 撤草稿、**不发请求**；成功 → 撤草稿（该行已就地更新）；
+  //   失败 → 保留草稿（屏幕上是用户输入的原值，便于重试），错误已由 updateUser 提示。
+  async function commitName(u: Any) {
+    const typed = nameDraft[u.id]
+    if (typed === undefined) return
+    const v = String(typed)
+    if (!v.trim() || v === String(u.display_name ?? '')) {
+      setNameDraft((d) => { const n = { ...d }; delete n[u.id]; return n })
+      return
+    }
+    if (await editUser(u, 'display_name', v)) {
+      setNameDraft((d) => { const n = { ...d }; delete n[u.id]; return n })
+    }
   }
 
   // 按 org 查其租户当前状态（平台视图启停按钮用）
@@ -484,8 +514,13 @@ export function OrgP() {
                    { key: 'id', title: t('org.colId'), width: 60 },
                    { key: 'username', title: t('org.colUsername'), width: 110 },
                    { key: 'display_name', title: t('org.colName'), render: (row) => (
-                     <input className="lc-input" value={String(row.display_name ?? '')}
-                            onChange={(e) => editUser(row, 'display_name', e.target.value)} />
+                     // ★ 2026-10-19 G8：改名改为「草稿 + 失焦/回车提交」——
+                     //   键入只更新草稿（不再逐字符发写请求），失焦或回车才提交一次。
+                     <input className="lc-input"
+                            value={nameDraft[row.id] ?? String(row.display_name ?? '')}
+                            onChange={(e) => setNameDraft((d) => ({ ...d, [row.id]: e.target.value }))}
+                            onBlur={() => { void commitName(row) }}
+                            onKeyDown={(e) => { if (e.key === 'Enter') void commitName(row) }} />
                    ) },
                    { key: 'org', title: t('org.colOrg'), width: 160, render: (row) => (
                      <select className="lc-select" value={String(Number(row.org_id || 0))} onChange={(e) => editUser(row, 'org_id', e.target.value)}>

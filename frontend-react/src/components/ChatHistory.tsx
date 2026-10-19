@@ -200,7 +200,7 @@ function MessagePanel({ conv, messages, msgLoading, tpl }: MessagePanelProps) {
           padding: '8px 16px', borderTop: '1px solid var(--lc-border-faint)',
           fontSize: 13, color: 'var(--lc-text-2)',
         }}>
-          {conv.title} · {messages.length} 条消息
+          {conv.title} · {tpl('chat.msgCount', { n: messages.length })}
         </div>
       )}
     </div>

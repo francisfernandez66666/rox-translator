@@ -8,6 +8,7 @@
 package store
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"database/sql"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"strings"
 	"time"
 	"translator/internal/db"
+	"translator/internal/observability"
 	"translator/internal/ops"
 )
 
@@ -1975,9 +1977,17 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	}
 	if clawDiff > 0 {
 		summary += fmt.Sprintf("；⚠️ 余额不足以收回全部剩余权益，缺口 %d token 请人工核对", clawDiff)
-		s.CreateAlert(tid, "warning", "refund_revoke", summary)
+		// ★ G18（2026-10-19）：退款告警写失败不再静默——退款已提交，缺了这条告警
+		//   对账/人工核对就失去对象；出声让运维能从日志侧发现告警链断了。
+		if aerr := s.CreateAlert(tid, "warning", "refund_revoke", summary); aerr != nil {
+			observability.Warn(context.Background(), "退款收回权益告警写入失败",
+				"order_id", orderID, "tenant_id", tid, "error", aerr.Error())
+		}
 	} else {
-		s.CreateAlert(tid, "info", "refund_revoke", summary)
+		if aerr := s.CreateAlert(tid, "info", "refund_revoke", summary); aerr != nil {
+			observability.Warn(context.Background(), "退款收回权益告警写入失败",
+				"order_id", orderID, "tenant_id", tid, "error", aerr.Error())
+		}
 	}
 	// ★ P1 多实例闭环：退款收回权益后通知影子失效（本租户 + 买家的双桶均已变动；
 	//   邀请人奖励回收部分若遗漏通知，由其影子 TTL(5s) 自愈兜底）
@@ -2003,9 +2013,32 @@ func (s *Store) revokePaidReferralIfAllRefunded(buyerUID int64) int64 {
 	}
 	// 被邀人仍有其它已支付订单 → 付费事实成立，奖励保留
 	var stillPaid int64
-	_ = db.QueryRow(s.db, d, "SELECT COUNT(*) FROM orders WHERE created_by=? AND status='paid'", buyerUID).Scan(&stillPaid)
+	// ★ G18（2026-10-19）：付费校验读失败必须 fail-closed（不回收）——吞 err 会让 stillPaid=0，
+	//   把仍有已付订单的用户（付费事实成立）的裂变奖励错扣回。
+	if err := db.QueryRow(s.db, d, "SELECT COUNT(*) FROM orders WHERE created_by=? AND status='paid'", buyerUID).Scan(&stillPaid); err != nil {
+		observability.Warn(context.Background(), "裂变奖励回收：付费校验读失败，本轮不回收",
+			"invitee", buyerUID, "error", err.Error())
+		return 0
+	}
 	if stillPaid > 0 {
 		return 0
+	}
+	// ★ G18：先算应扣金额、后删行——旧形态「先删流水、后读余额」在「删行成功但读余额失败」时
+	//   会造出重放窗口：奖励流水已消失、余额却一分没扣，下一个退款事件可再次回收（或奖励被重发）。
+	if err := s.EnsureBalance(inviterTID); err != nil {
+		observability.Warn(context.Background(), "裂变奖励回收：确保余额账户失败，本轮不回收",
+			"inviter_tid", inviterTID, "error", err.Error())
+		return 0
+	}
+	var bal int64
+	if err := db.QueryRow(s.db, d, "SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", inviterTID).Scan(&bal); err != nil {
+		observability.Warn(context.Background(), "裂变奖励回收：读邀请人余额失败，本轮不回收",
+			"inviter_tid", inviterTID, "error", err.Error())
+		return 0
+	}
+	revoked := tokens
+	if bal < revoked {
+		revoked = bal
 	}
 	// 条件删除（并发双退时仅一方命中，天然幂等）
 	res, err := db.Exec(s.db, d, "DELETE FROM referral_rewards WHERE id=? AND type='paid_perm'", rowID)
@@ -2015,14 +2048,6 @@ func (s *Store) revokePaidReferralIfAllRefunded(buyerUID int64) int64 {
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return 0
-	}
-	// 邀请人永久余额守卫式扣回，不足扣到 0 并告警缺口
-	_ = s.EnsureBalance(inviterTID)
-	var bal int64
-	_ = db.QueryRow(s.db, d, "SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", inviterTID).Scan(&bal)
-	revoked := tokens
-	if bal < revoked {
-		revoked = bal
 	}
 	if revoked > 0 {
 		if _, err := db.Exec(s.db, d,

@@ -723,6 +723,7 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if len(files) > 0 {
 		var mu sync.Mutex
 		var okCount, failCount, unTotal, degradedFiles int64
+		var zipFailCount int64 // ★ G18：多语言打包失败计数（静默回落单文件＝静默丢产物）
 		var firstErr string
 		s.Store.SetTicketState(t.ID, "file_extract", "running",
 			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
@@ -756,13 +757,29 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 					zp, zerr := zipOutputs(res.Files, zipDeliveryName(res.Files, langs, tf.FilePath))
 					if zerr == nil {
 						zipPath = zp
+					} else {
+						// ★ G18（2026-10-19）：打包失败不再静默回落首个文件——那等于把其余语言的
+						//   产物悄悄丢掉（用户以为只有一份产出）。出声 + 站内信 + 写回步骤置 warning。
+						observability.Warn(ctx, "多语言产物打包失败，已回落仅首个文件", "ticket", t.ID, "file", tf.FileName, "error", zerr.Error())
+						zipFailCount++
+						s.Store.CreateNotification(t.CreatedBy,
+							fmt.Sprintf("多语言产物打包失败：%s", tf.FileName),
+							fmt.Sprintf("%s 翻译已完成，但多语言产物打包失败（%s），已回落到仅首个文件交付；其余语言产物未打包，请联系管理员。", tf.FileName, zerr.Error()),
+							store.NotifyRefTicket, t.ID)
 					}
 				}
 				storePath := zipPath
 				if storePath == "" && len(res.Files) > 0 {
 					storePath = res.Files[0]
 				}
-				_ = s.Store.SetTicketFileResult(tf.ID, storePath)
+				// ★ G18：产物路径落库失败必须出声——0 行影响不会报错，否则工单看着成功、artifact 路径却是空的。
+				if serr := s.Store.SetTicketFileResult(tf.ID, storePath); serr != nil {
+					observability.Warn(ctx, "工单文件产物路径落库失败", "ticket", t.ID, "file", tf.FileName, "error", serr.Error())
+					s.Store.CreateNotification(t.CreatedBy,
+						fmt.Sprintf("产物路径登记失败：%s", tf.FileName),
+						fmt.Sprintf("%s 翻译已完成，但产物路径未能登记（%s）；请打开工单核对产物，必要时联系管理员。", tf.FileName, serr.Error()),
+						store.NotifyRefTicket, t.ID)
+				}
 				s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 				// ★ 双模式（2026-09-13）：纯文案旁路产物登记（还原模式兜底附加物）
 				if p := s.persistTextOutputs(t, ownerUID, res.TextFiles); p != "" {
@@ -804,9 +821,16 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				fmt.Sprintf("ok=%d fail=%d", okCount, failCount))
 			s.Store.SetTicketState(t.ID, "file_writeback", "success", "")
 			// ★ 双模式（2026-09-13）：任一文件版式还原失败降级 → 回写步骤置 warning（阶梯语义仍完成）
+			// ★ G18：打包失败与降级合并成一条 warning（避免后写覆盖前写丢掉信息）。
+			wbNotes := []string{}
 			if degradedFiles > 0 {
-				s.Store.SetTicketState(t.ID, "file_writeback", "warning",
-					fmt.Sprintf("degraded_files=%d（版式还原失败，已以纯文案 .md 交付，详见通知）", degradedFiles))
+				wbNotes = append(wbNotes, fmt.Sprintf("degraded_files=%d（版式还原失败，已以纯文案 .md 交付，详见通知）", degradedFiles))
+			}
+			if zipFailCount > 0 {
+				wbNotes = append(wbNotes, fmt.Sprintf("zip_failed=%d（多语言打包失败，已回落首个文件，其余语言产物未打包，详见通知）", zipFailCount))
+			}
+			if len(wbNotes) > 0 {
+				s.Store.SetTicketState(t.ID, "file_writeback", "warning", strings.Join(wbNotes, "；"))
 			}
 		}
 		// ★ 漏翻可见性（2026-08-26）：硬闸结束后仍有缺失时，追加 warning 轨迹 + 通知创建人

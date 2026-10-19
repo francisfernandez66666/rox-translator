@@ -13,8 +13,9 @@
 // 相：A1 目录 URL 命中该目录 index.html（且与 A2 无斜杠、A3 显式文件名**逐字节等值**）／
 //
 //	A4 出口仍走 serveIndexHTML 注入链（带 __BRANDING__，与显式写法同一条脸）／
-//	B 反向对照：目录**没有** index.html（`/assets/`）仍回退 SPA 首页（防"把所有目录都当页面"）／
-//	C 不存在路径仍回退 SPA（改动前的既有行为不许被动到）／
+//	B 反向对照：目录**没有** index.html 且非已知路由（`/assets/`）⇒ 真 404（防"把所有目录都当页面"，
+//	  口径已随 G6 从"回退 SPA 首页"翻转为"未知深链 404"）／
+//	C 未知路径（`/nope/xyz`）真 404（G6）／
 //	D 根 `/` 仍出 root shell（主站首页字节数判据的形态不许被目录解析改掉）／
 //	E 静态文件直出不受影响（`/g/x.html` 不带品牌注入）／
 //	F 目录穿越不能读到 dist 之外（`/blindtest/../../../../etc/passwd` 只许回退或 404）。
@@ -98,18 +99,19 @@ func TestSPADirectoryIndex(t *testing.T) {
 		t.Fatalf("目录 index.html 出口 Content-Type 不是 HTML：%q", ct)
 	}
 
-	// B 反向对照：目录存在但没有 index.html ⇒ 必须仍回退 SPA 首页（防"所有目录都当页面"）
+	// B 反向对照：目录存在但没有 index.html 且**不是前端已知路由** ⇒ 现在是真 404 面（G6）。
+	// 旧形态会回退 SPA 首页（状态码 200）；这里点明口径已翻转为"未知深链 404"。
 	assets := spaDirIndexGet(t, s, "/assets/")
-	if !strings.Contains(assets.Body.String(), "ROOT_SHELL_MARK") {
-		t.Fatalf("`/assets/`（无 index.html）没回退 SPA 首页：\n%s", assets.Body.String())
+	if assets.Code != 404 {
+		t.Fatalf("`/assets/`（无 index.html、非已知路由）应回 404，实际 %d：\n%s", assets.Code, assets.Body.String())
 	}
-	if strings.Contains(assets.Body.String(), "BLIND_MARK") {
-		t.Fatal("`/assets/` 串到了别的目录的 index.html（目录解析越界）")
+	if strings.Contains(assets.Body.String(), "ROOT_SHELL_MARK") || strings.Contains(assets.Body.String(), "BLIND_MARK") {
+		t.Fatal("`/assets/` 404 面串到了别的页面内容（目录解析越界）")
 	}
 
-	// C 既有行为：不存在的路径仍回退 SPA
-	if got := spaDirIndexGet(t, s, "/nope/xyz").Body.String(); !strings.Contains(got, "ROOT_SHELL_MARK") {
-		t.Fatalf("不存在路径不再回退 SPA（动了无关行为）：\n%s", got)
+	// C 未知路径现在回真 404（G6：只有已知前端路由才回退 SPA）
+	if rec := spaDirIndexGet(t, s, "/nope/xyz"); rec.Code != 404 {
+		t.Fatalf("未知深链 `/nope/xyz` 应回 404，实际 %d：\n%s", rec.Code, rec.Body.String())
 	}
 	// D 根路径形态不许变（主站首页字节数判据依赖它）
 	root := spaDirIndexGet(t, s, "/")

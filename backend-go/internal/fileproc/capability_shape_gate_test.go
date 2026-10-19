@@ -57,6 +57,7 @@ var capShapeLegs = []string{
 	"L01", "L02", "L03", "L04", "L05", "L06", "L07",
 	"L08", "L09", "L10", "L11", "L12", "L13",
 	"L14", "L15", "L16", "L17", "L18",
+	"L19", "L20", "L21", "L22", "L23", "L24",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -103,7 +104,7 @@ var capShapeMutations = []capShapeMutation{
 		"read_wave 优先腿被摘（将来版本又导出它时不再走模型侧同款解析）"},
 	// ===== ★ 2026-10-17 批：图片原位回填（L14~L18）。两条真缺陷（框判据按八值、字体缺拉丁字形）
 	// 都是「运行期形状错」——健康面全绿、日志零红，只有把译文图打开才看得出。
-	{"L14", capShapeImgFile, `if not _valid_box(box):`, `if len(box) < 8:`,
+	{"L14", capShapeImgFile, `            if _valid_box(box):`, `            if len(box) >= 8:`,
 		"退回旧判据：四值矩形被当坏行跳过 ⇒ 译文图＝重编码的原图（本批用户报障形态）"},
 	{"L15", capShapeImgFile, `return isinstance(box, (list, tuple)) and len(box) >= 4 and len(box) % 2 == 0`,
 		`return isinstance(box, (list, tuple)) and len(box) == 4`,
@@ -116,6 +117,22 @@ var capShapeMutations = []capShapeMutation{
 	{"L18", capShapeImgFile, "        f = _pick_font(chain, ch)\n        draw.text((x, y), ch, font=f, fill=fill)",
 		"        f = chain[0]\n        draw.text((x, y), ch, font=f, fill=fill)",
 		"绘制不再逐字挑字体（挑字函数写对却没人调用＝白修）"},
+	// ===== ★ 2026-10-19 批：图片保真（G3-a 字号/底色/扩框、G3-b 底色与文字色）＋ ASR 无语音门（G11）。
+	// 这四条同样是「运行期形状错」——健康面全绿、日志零红，只有把译后图/录音真跑一次才看得出。
+	{"L19", capShapeImgFile, `FONT_FLOOR_RATIO = 0.6`, `FONT_FLOOR_RATIO = 0.0`,
+		"字号地板被抹平（长译文从框高一路缩到 8px 蚂蚁字）"},
+	{"L20", capShapeImgFile, `    ink[:, full_cols] = False`, `    pass`,
+		"全高墨色列不剔除（框线让原行高被读成满框高，地板随之抬错）"},
+	{"L21", capShapeImgFile, "    lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]\n    return (0, 0, 0) if lum >= 128 else (255, 255, 255)",
+		"    return (0, 0, 0)",
+		"文字色恒黑（深色底/彩色卡片上字看不见）"},
+	{"L22", capShapeImgFile, `        return tuple(int(round(v)) for v in np.median(ring, axis=0))`,
+		`        return (128, 128, 128)`,
+		"抹字底色恒灰（彩色底/深色底被抹出一块突兀的灰）"},
+	{"L23", capShapeImgFile, `    grew = 0`, `    grew = max_px`,
+		"扩框被摘（长译文不再争取空白区，只能靠缩字兜底）"},
+	{"L24", capShapeAsrFile, `    if rms < NO_SPEECH_RMS and peak < NO_SPEECH_PEAK:`, `    if True:`,
+		"无语音门退化成「一律判无语音」（小声真人语音被误伤＝客户说话被判没听到）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
@@ -179,7 +196,7 @@ func capShapeReadings(stdout string) (pass, fail []string, detail map[string]str
 	return
 }
 
-// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 18 条）全绿，且**读数形状本身合规**：
+// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 24 条）全绿，且**读数形状本身合规**：
 // 每腿恰好一行、没有 FAIL、末行 CAPSHAPE_ALL_OK=1。
 // 「少一行」也算红——那是腿被删掉的形态，不是「剩下的都过了」。
 func TestCapabilityShapeSelftestGreen(t *testing.T) {

@@ -208,3 +208,44 @@ func TestParseAsrJSON(t *testing.T) {
 		t.Fatal("非 JSON 应报错")
 	}
 }
+
+// TestAsrEngineFromAssets ★ 2026-10-19 G12：asr_engine 出的是**有效路由档**，
+// 判据必须与 asr_transcribe.py 的 _build_recognizer 同序（SenseVoice ＞ Transducer ＞ Whisper ＞ 单权重兜底）。
+// 这里用临时目录喂四档形态，不必装 sherpa-onnx/权重——判据是"资产形状 → 档位词"这一层。
+func TestAsrEngineFromAssets(t *testing.T) {
+	write := func(dir string, names ...string) {
+		for _, n := range names {
+			if err := os.WriteFile(filepath.Join(dir, n), []byte("x"), 0o644); err != nil {
+				t.Fatalf("写夹具 %s 失败: %v", n, err)
+			}
+		}
+	}
+	cases := []struct {
+		name  string
+		files []string
+		want  string
+	}{
+		{"sense", []string{"model.onnx", "tokens.txt"}, "sense_voice"},
+		{"transducer", []string{"encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"}, "transducer"},
+		{"whisper", []string{"whisper_encoder.onnx", "whisper_decoder.onnx", "tokens.txt"}, "whisper"},
+		{"single-fallback", []string{"foo.onnx", "tokens.txt"}, "transducer"},
+		{"no-tokens", []string{"model.onnx"}, ""},
+		{"empty", nil, ""},
+	}
+	for _, c := range cases {
+		dir := t.TempDir()
+		write(dir, c.files...)
+		if got := asrEngineFromAssets(dir); got != c.want {
+			t.Errorf("%s: asrEngineFromAssets = %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// TestFriendlyAsrErrorNoSpeechNoSpeech ★ G11 映射腿：脚本的 ERR:NoSpeech 必须落成人话，
+// 且这句话**逐字等于** AsrNoSpeechMessage（api/asrReason 靠同一常量前缀判档，两处各写一份就会漂移）。
+func TestFriendlyAsrErrorNoSpeech(t *testing.T) {
+	got := friendlyAsrError("ERR:NoSpeech:no_speech 未检测到有效语音（输入能量低于门限，可能是纯静音或极低音量）")
+	if got != AsrNoSpeechMessage {
+		t.Fatalf("NoSpeech 人话 = %q, want %q", got, AsrNoSpeechMessage)
+	}
+}

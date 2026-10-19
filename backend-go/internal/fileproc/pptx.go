@@ -139,20 +139,25 @@ func cellText(cell string) string {
 
 // ApplyPptx 写回 pptx：按段落原文映射替换文本。
 // 参数：path=原 pptx 路径，outPath=输出路径，translations=原文→译文映射。
-func ApplyPptx(path, outPath string, translations map[string]string) error {
+//
+// ★ G17（2026-10-19）：返回**命中段数**——零命中不再静默交付未翻译件。
+// 三处 Apply* 同口径，调用方（engine）据此走既有退化通道。产物一律写出，
+// 由调用方在判为退化时删除（保持"写了就有件、退化由上层决定"的单一语义）。
+func ApplyPptx(path, outPath string, translations map[string]string) (int, error) {
 	zr, err := zip.OpenReader(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer zr.Close()
 
 	osFile, err := os.Create(outPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer osFile.Close()
 	zw := zip.NewWriter(osFile)
 
+	hits := 0
 	// 逐文件写出；slide XML 做翻译替换，其余文件原样复制
 	for _, f := range zr.File {
 		data, err := readZipEntry(zr, f.Name)
@@ -160,22 +165,24 @@ func ApplyPptx(path, outPath string, translations map[string]string) error {
 			continue
 		}
 		if strings.HasPrefix(f.Name, "ppt/slides/slide") && strings.HasSuffix(f.Name, ".xml") {
-			data = translatePptxXML(data, translations) // 翻译 slide 并自适应字号
+			translated, n := translatePptxXML(data, translations) // 翻译 slide 并自适应字号
+			data, hits = translated, hits+n
 		} else if pptxNotesEnabled() && strings.HasPrefix(f.Name, "ppt/notesSlides/notesSlide") && strings.HasSuffix(f.Name, ".xml") {
-			data = translatePptxXML(data, translations) // ★ D8：备注页同链路写回
+			translated, n := translatePptxXML(data, translations) // ★ D8：备注页同链路写回
+			data, hits = translated, hits+n
 		}
 		w, err := zw.Create(f.Name)
 		if err != nil {
-			return err
+			return hits, err
 		}
 		if _, err := w.Write(data); err != nil {
-			return err
+			return hits, err
 		}
 	}
 	if err := zw.Close(); err != nil {
-		return err
+		return hits, err
 	}
-	return osFile.Close()
+	return hits, osFile.Close()
 }
 
 // ============ pptx 写回（含自动缩放） ============
@@ -199,28 +206,35 @@ var (
 )
 
 // translatePptxXML 对 shape 做文本替换 + 字号自动缩放 + autofit；表格单元格单独缩放。
-// 参数：data=slide XML 字节，translations=原文→译文映射；返回处理后的 XML 字节。
-func translatePptxXML(data []byte, translations map[string]string) []byte {
+// 参数：data=slide XML 字节，translations=原文→译文映射；返回处理后的 XML 字节与命中段数（G17）。
+func translatePptxXML(data []byte, translations map[string]string) ([]byte, int) {
 	s := string(data)
+	hits := 0
 	// 1. shape 级：段落替换 + 溢出估算缩放字号/行距 + autofit=shrink
 	out := spBlockRe.ReplaceAllStringFunc(s, func(block string) string {
-		return translatePptxShape(block, translations)
+		b, n := translatePptxShape(block, translations)
+		hits += n
+		return b
 	})
 	// 2. 表格单元格：文本替换 + 按长度比缩小字号
 	out = cellRe.ReplaceAllStringFunc(out, func(cell string) string {
-		return translatePptxCell(cell, translations)
+		c, n := translatePptxCell(cell, translations)
+		hits += n
+		return c
 	})
 	// 3. 兜底：剩余未处理段落（graphicFrame 等）
 	out = pptParaRe.ReplaceAllStringFunc(out, func(para string) string {
-		return translatePptxParagraph(para, translations)
+		p, n := translatePptxParagraph(para, translations)
+		hits += n
+		return p
 	})
-	return []byte(out)
+	return []byte(out), hits
 }
 
 // translatePptxShape 处理单个 shape：按分组合并匹配翻译（与提取逻辑一致），
 // 再 shape 级字号/行距适配 + autofit=shrink。
-// 参数：block=shape XML，translations=原文→译文映射；返回处理后的 shape XML。
-func translatePptxShape(block string, translations map[string]string) string {
+// 参数：block=shape XML，translations=原文→译文映射；返回处理后的 shape XML 与命中段数（G17）。
+func translatePptxShape(block string, translations map[string]string) (string, int) {
 	// 收集 shape 内全部段落 XML
 	paraRanges := pptParaRe.FindAllStringSubmatchIndex(block, -1)
 	paraXMLs := make([]string, len(paraRanges))
@@ -280,7 +294,7 @@ func translatePptxShape(block string, translations map[string]string) string {
 		}
 	}
 	if len(hits) == 0 {
-		return block // 无命中不改动
+		return block, 0 // 无命中不改动
 	}
 
 	// shape 尺寸（EMU）+ 合并译文估算溢出 → 适配字号
@@ -299,17 +313,17 @@ func translatePptxShape(block string, translations map[string]string) string {
 		out = strings.Replace(out, h.orig, h.after, 1)
 	}
 	// 设置 bodyPr autofit="shrink"，让 PowerPoint 打开时自动缩小
-	return setBodyPrAutofit(out)
+	return setBodyPrAutofit(out), len(hits)
 }
 
 // translatePptxParagraph 替换单个段落（不命中返回原样）。
-// 参数：para=段落 XML，translations=原文→译文映射；返回替换后的段落 XML。
-func translatePptxParagraph(para string, translations map[string]string) string {
+// 参数：para=段落 XML，translations=原文→译文映射；返回替换后的段落 XML 与是否命中（G17）。
+func translatePptxParagraph(para string, translations map[string]string) (string, int) {
 	trans, ok := matchPptxParagraph(para, translations)
 	if !ok {
-		return para // 未命中原文样返回
+		return para, 0 // 未命中原文样返回
 	}
-	return replacePptxParagraph(para, trans)
+	return replacePptxParagraph(para, trans), 1
 }
 
 // matchPptxParagraph 返回段落命中的译文。
@@ -552,15 +566,15 @@ func setBodyPrAutofit(block string) string {
 
 // translatePptxCell 处理表格单元格：整体匹配翻译（与提取一致），译文按 \n 拆分写回各段，
 // 译文变长时按比例缩小字号。
-// 参数：cell=单元格 XML，translations=原文→译文映射；返回处理后的单元格 XML。
-func translatePptxCell(cell string, translations map[string]string) string {
+// 参数：cell=单元格 XML，translations=原文→译文映射；返回处理后的单元格 XML 与是否命中（G17）。
+func translatePptxCell(cell string, translations map[string]string) (string, int) {
 	orig := strings.TrimSpace(cellText(cell))
 	if orig == "" {
-		return cell // 空单元格不改
+		return cell, 0 // 空单元格不改
 	}
 	trans, ok := translations[orig]
 	if !ok || trans == "" {
-		return cell // 未命中不改
+		return cell, 0 // 未命中不改
 	}
 	// 拆分译文写回各段
 	paras := pptParaRe.FindAllStringSubmatchIndex(cell, -1)
@@ -593,7 +607,7 @@ func translatePptxCell(cell string, translations map[string]string) string {
 			}
 		}
 	}
-	return out
+	return out, 1
 }
 
 // pptxNotesEnabled ★ D8：备注页（notesSlides）是否纳入提取/写回链。

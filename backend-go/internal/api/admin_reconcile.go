@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 
+	"translator/internal/auth"
 	apierrors "translator/internal/errors"
 	"translator/internal/observability"
 	"translator/internal/store"
@@ -45,7 +46,13 @@ func (s *Server) handleAdminReconcile(w http.ResponseWriter, r *http.Request) {
 		s.writeAuthzError(w, r, err)
 		return
 	}
-	if u.Role != "super_admin" {
+	// ★ G7（2026-10-19）：全站"是不是超管"唯一一把尺子是 auth.IsSuperAdmin（等级≥4 **且** tenant_id==0，
+	//   §一·15）。旧写法 `u.Role != "super_admin"` 吃角色字符串，而现网该账号 role 值是 `admin` ⇒ 恒假、
+	//   超管被自己的对账面拒之门外（D19），与 §一·8②「读侧与写侧同一把尺子」同形。
+	// ⚠️ 取证待通道恢复（ssh 22 那一跳被拒）：本批未能读出「哪些账号是 role=admin 且 tenant_id=0」的
+	//   现网分布。改动方向取全站同尺（放宽到 IsSuperAdmin），若后续取证发现对账面本该只认字面
+	//   super_admin，则应改为收紧提权写侧（写 admin→super_admin），本处判据随之下调。
+	if !auth.IsSuperAdmin(u) {
 		// 角色专属文案原样保留（仍 403，只是补上统一错误码与 trace_id）
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超级管理员可对账"))
 		return

@@ -637,7 +637,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 				if f.ID == fid && f.ResultPath != "" {
 					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
 						defer fh.Close()
-						w.Header().Set("Content-Disposition", `attachment; filename="`+mimeEscape(f.FileName)+`"`)
+						w.Header().Set("Content-Disposition", contentDisposition(f.FileName))
 						http.ServeContent(w, r, f.FileName, time.Now(), fh)
 						return
 					}
@@ -661,14 +661,14 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 			fh, oerr := os.Open(paths[0])
 			if oerr == nil {
 				defer fh.Close()
-				w.Header().Set("Content-Disposition", `attachment; filename="`+names[0]+`"`)
+				w.Header().Set("Content-Disposition", contentDisposition(names[0]))
 				http.ServeContent(w, r, names[0], time.Now(), fh)
 				return
 			}
 		}
 		// 多产物打 zip：逐份读入写 zip 条目（单份读失败跳过不阻断整包）
 		if len(paths) > 1 {
-			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+`.zip"`)
+			w.Header().Set("Content-Disposition", contentDisposition(baseName+".zip"))
 			w.Header().Set("Content-Type", "application/zip")
 			zw := zip.NewWriter(w)
 			for i, p := range paths {
@@ -689,7 +689,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 	if t.ResultPath != "" {
 		if f, ferr := os.Open(t.ResultPath); ferr == nil {
 			defer f.Close()
-			w.Header().Set("Content-Disposition", `attachment; filename="`+baseName+filepath.Ext(t.ResultPath)+`"`)
+			w.Header().Set("Content-Disposition", contentDisposition(baseName+filepath.Ext(t.ResultPath)))
 			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
 			return
 		}

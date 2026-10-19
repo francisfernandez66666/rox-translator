@@ -21,7 +21,7 @@
 任一失败打 `LEG <id> FAIL <原因>` 并退 1。Go 侧同时核「腿的**全集**都在位」——
 有人删掉一条腿（或让它恒过）时，那一行 LEG 消失即红，这是本锁的射程自证。
 
-射程（18 条腿，逐条点名）：
+射程（24 条腿，逐条点名）：
   L01 词典装载：blank 恒占类 0（文件自带空首行时不重复前插）
   L02 词典补齐：类别数比表长时逐位补空格
   L03 CTC 解码：跳类 0＋连续重复去重＋就地补齐到类别数（表长于类别数不许截断）
@@ -40,6 +40,12 @@
   L16 图片回填：坏行（坐标不成对/缺失）跳过且如实报 NothingPainted，不产出"与原文无异"的图
   L17 图片回填：逐字挑字体——拉丁字落到有拉丁字形的字体上（本批"英文画成豆腐块"的根治腿）
   L18 图片回填：绘制真的走逐字挑选（挑字函数写对但没被调用＝白修）
+  L19 图片回填：字号地板按原行高派生、长译文换行而不缩成蚂蚁字（★ 2026-10-19 G3-a）
+  L20 图片回填：全高墨色列（框线/竖线）剔除，原行高不被读成满框高（同批 G3-a）
+  L21 图片回填：文字色按底色亮度反差自动选黑/白（★ 同批 G3-b）
+  L22 图片回填：抹字底色取框外环带中位色，彩色底不被抹成灰（同批 G3-b）
+  L23 图片回填：长译文优先向右扩进均匀空白区，遇墨/别的框即停（同批 G3-a）
+  L24 ASR：无语音门（纯静音判 no_speech，小声真人语音不误伤）（★ 2026-10-19 G11）
 
 环境变量（**只给 Go 侧反证用**，把被测对象换成一份变异副本，证明这些腿真的会红）：
   CAPSHAPE_OCR_MODULE=<path>  指定被测的 ocr_recognize.py 副本
@@ -548,6 +554,115 @@ def leg_l18_draw_uses_per_char_picker():
     finally:
         IMG._pick_font, IMG._measure = orig_pick, orig_measure
     assert "A" in seen and "中" in seen, "绘制没走逐字挑字体（只见到 %r）⇒ 挑字腿形同虚设" % (seen,)
+
+
+# ---------------------------------------------------- 图片保真腿（⭐ 2026-10-19 G3-a/G3-b）
+
+def _rgb_image(arr):
+    """numpy (H,W,3) → PIL Image（供捏造带墨/带底色的样张）。"""
+    from PIL import Image
+    import numpy as np
+    return Image.fromarray(np.asarray(arr, dtype=np.uint8), "RGB")
+
+
+@leg("L19")
+def leg_l19_font_floor_is_derived_and_wraps():
+    """★ 2026-10-19 G3-a：字号地板必须按原行高派生，且长译文要**换行**而不是缩到地板以下。
+
+    旧形态一律从 8px 兜底 ⇒ 长译文缩成蚂蚁字。判据两段：
+      ① 地板 = max(8, int(原行墨迹高度 × FONT_FLOOR_RATIO))；原行 16px ⇒ 地板 9px
+         （0.6×16=9.6→9）。这里刻意用**字面 9** 而不是读 IMG.FONT_FLOOR_RATIO 现算：
+         读现算值会在「比例被改成 0」时一起变成 0，断言恒真＝空转锁。
+      ② 一段长译文放进窄框，`_layout` 出来的字号不低于地板（换行吸收宽度、不缩字）。
+    """
+    assert IMG._font_floor(16, 20) == 9, "字号地板没按原行高 0.6 派生（实读 %d）" % IMG._font_floor(16, 20)
+    assert IMG._font_floor(0, 20) >= IMG.MIN_FONT_PX, "量不到原行高时必须回落到 MIN_FONT_PX 地板"
+    long_text = "这是一段特意写得很长的译文用来强制换行并检验字号不会缩到不可读"
+    floor = IMG._font_floor(16, 20)
+    px, lines, _ = IMG._layout(long_text, 60, 20, floor, 16)
+    assert px >= floor, "长译文把字号缩到地板以下了（%d < %d）" % (px, floor)
+    assert len(lines) > 1, "窄框里的长译文没有换行（%r）" % (lines,)
+
+
+@leg("L20")
+def leg_l20_full_height_ink_columns_dropped():
+    """★ 2026-10-19 G3-a：全高墨色列（框线/竖线/表格边）必须被剔除，否则原行高被读成满框高。
+
+    造一张 20×60 白底样张：第 0 列整列有墨（框线），第 6~12 行第 20~40 列有一块文字墨。
+    正确读数＝文字的 7 行；不剔除列则整列墨让「每一行都有墨」⇒ 读数 20（地板随之被抬错）。
+    """
+    import numpy as np
+    arr = np.full((20, 60, 3), 255, dtype=np.uint8)
+    arr[:, 0, :] = 0            # 全高竖线（框线）
+    arr[6:13, 20:41, :] = 0     # 文字墨块：行 6..12
+    h = IMG._line_ink_height(_rgb_image(arr))
+    assert h == 7, "全高墨色列没被剔除（读数 %d，期望文字本身的 7 行）" % h
+
+
+@leg("L21")
+def leg_l21_text_color_by_background_luminance():
+    """★ 2026-10-19 G3-b：文字色按底色亮度反差自动选——亮底黑字、暗底白字。
+
+    旧形态恒黑字：深色底/彩色卡片上字看不见（用户报障的另一形态）。
+    """
+    assert IMG._text_color((255, 255, 255)) == (0, 0, 0), "白底必须出黑字"
+    assert IMG._text_color((245, 245, 245)) == (0, 0, 0), "近白底也必须出黑字"
+    assert IMG._text_color((16, 16, 16)) == (255, 255, 255), "深色底必须出白字（旧形态黑字看不见）"
+    assert IMG._text_color((40, 60, 90)) == (255, 255, 255), "暗蓝底必须出白字"
+    assert IMG._text_color(None) == (0, 0, 0), "底色取不到时按黑字"
+
+
+@leg("L22")
+def leg_l22_bg_from_ring_median_keeps_color():
+    """★ 2026-10-19 G3-b：抹字底色取**框外环带的中位色**，彩色底不被抹成灰/白。
+
+    造一张纯色底图，框四周环带就是该底色 ⇒ `_pick_bg` 必须回该色（不是灰 128）。
+    """
+    import numpy as np
+    arr = np.full((120, 200, 3), (30, 90, 200), dtype=np.uint8)   # 一块蓝色底
+    bg = IMG._pick_bg(_rgb_image(arr), (80, 50, 120, 70))
+    assert bg == (30, 90, 200), "彩色底的抹字底色被改成了别的东西（实读 %r）" % (bg,)
+    # 白底文档：环带中位色＝白
+    white = np.full((120, 200, 3), 255, dtype=np.uint8)
+    assert IMG._pick_bg(_rgb_image(white), (80, 50, 120, 70)) == (255, 255, 255), "白底取样不为白"
+
+
+@leg("L23")
+def leg_l23_expand_rect_into_uniform_margin_only():
+    """★ 2026-10-19 G3-a：长译文优先向右扩进**均匀空白区**，遇到墨/别的框就地停下。
+
+    白底图右侧留 24px 空白 ⇒ 框应扩满上限；把右侧改成有墨（高方差）⇒ 一步都不扩。
+    """
+    import numpy as np
+    arr = np.full((80, 200, 3), 255, dtype=np.uint8)
+    rect = (20, 20, 100, 60)
+    grown = IMG._expand_rect(_rgb_image(arr), rect, [])
+    assert grown == (20, 20, 100 + IMG.EXPAND_MAX_PX, 60), "白底右侧空白必须扩满上限，实读 %r" % (grown,)
+    arr2 = np.full((80, 200, 3), 255, dtype=np.uint8)
+    arr2[20:60, 102:150, :] = 0            # 紧邻框右侧就是墨块 ⇒ 不许扩
+    assert IMG._expand_rect(_rgb_image(arr2), rect, []) == rect, "右侧有墨时不许扩（会压到别人）"
+    # 有别的框挡路：右侧空白但 blocker 贴着 ⇒ 不许扩进 blocker
+    blocked = IMG._expand_rect(_rgb_image(arr), rect, [(101, 20, 160, 60)])
+    assert blocked == rect, "与相邻框相交时不许扩，实读 %r" % (blocked,)
+
+
+# ------------------------------------------------------------------ ASR：无语音门（⭐ 2026-10-19 G11）
+
+@leg("L24")
+def leg_l24_no_speech_gate():
+    """★ 2026-10-19 G11：纯静音/极低能量必须判无语音（否则模型在静音上幻觉出一句话）。
+
+    判据：全零/空采样 → no_speech；**小声真人语音不许被误伤**（宁可放过静音不可误伤真人）；
+    且 `cmd_transcribe` 真的调用了这道门（函数写对却没人调用＝白修）。
+    """
+    import inspect
+    import numpy as np
+    assert ASR.detect_no_speech(np.zeros(16000, dtype=np.float32)) == ASR.REASON_NO_SPEECH, "全零采样必须判无语音"
+    assert ASR.detect_no_speech(np.zeros(0, dtype=np.float32)) == ASR.REASON_NO_SPEECH, "空采样必须判无语音"
+    t = np.arange(16000, dtype=np.float32)
+    quiet = (0.01 * np.sin(2 * np.pi * 220.0 * t / 16000.0)).astype(np.float32)  # rms≈0.007 的小声语音
+    assert ASR.detect_no_speech(quiet) == "", "小声真人语音被误判为无语音（宁可放过静音，不可误伤真人）"
+    assert "detect_no_speech" in inspect.getsource(ASR.cmd_transcribe), "无语音门没被 cmd_transcribe 调用＝白修"
 
 
 def main() -> int:

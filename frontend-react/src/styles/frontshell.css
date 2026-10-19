@@ -32,6 +32,23 @@
 .fs-page { width: 100%; max-width: 1080px; margin: 0 auto; display: flex; flex-direction: column;
   gap: 16px; padding: 20px 24px 32px; }
 
+/* ---- 自助页卡片在桌面档的收缩口径（★ 2026-10-19 G15-D9）----
+   缺陷形态（现网 /my 桌面档实测横滚）：`.ss-grid/.ss-row` 的基础样式在 App.tsx 的内联 <style> 里，
+   窄屏那套收缩规则只在 mobile.css 的 ≤900 媒体查询内（.ss-grid>*{min-width:0}），
+   桌面档于是留下两条无法收缩的腿：
+     ① 网格项默认 min-width:auto，卡片内容最小宽度直接顶宽列；
+     ② `.ss-row>span{flex:none}` 会命中值侧的 <Badge>（它渲染成 <span>），
+        长 URL／长邮箱那一格既不收缩也不换行 ⇒ 卡片被撑破、整页横向滚动。
+   这里的三条覆盖是**无条件**的（不分档），且选择器特异度压过 App.tsx 里的基础规则：
+     · .ss-grid > *           → (0,1,0)：允许网格项收缩到轨道内（与 mobile.css 同一条口径，桌面也生效）
+     · .ssc-card              → (0,1,0)：卡片自身允许收缩到内容最小值以下
+     · .ss-row > :last-child  → (0,2,0)：压过 `.ss-row>span`(0,1,1)，值侧一律可收缩＋长串换行
+   ⚠ 只做「收缩」不做「改观」：不碰间距/字色/边框（那些仍归 App.tsx 与 theme.css）。
+   判据＝styles/selfserviceOverflow.lock.test.ts（等值锁 + 摘掉一条即红的反证）。 */
+.ss-grid > * { min-width: 0; }
+.ssc-card { min-width: 0; }
+.ss-row > :last-child { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
 /* ---- 左栏导航与信息带 ---- */
 /* 导航列：左栏内两处复用（中部工作台 Tab、底部自助入口） */
 .fs-nav { display: flex; flex-direction: column; gap: 2px; }

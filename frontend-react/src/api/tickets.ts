@@ -44,8 +44,36 @@ export interface Ticket {
   qa_errors?: number
   /** ★ 改造 5：确定性质检 warning 级提示数 */
   qa_warnings?: number
+  /**
+   * ★ 2026-10-19 G2：退化交付的语言（版式还原失败、已以纯文案 .md 交付）。
+   * 与后端 `engine.DegradedLangs` 出栈字段同名；详情面据此在客户屏幕上"露出这张脸"。
+   * ⚠️ 字段名假设：Go 侧另一 agent 尚未定稿，按 `degraded_langs` 兼容读取（缺失即视为无退化）。
+   */
+  degraded_langs?: string[]
   created_at: string
   updated_at: string
+}
+
+/**
+ * ★ 2026-10-19 G13：工单**交付件**（实际可拿到的产物：译后图/配音/字幕/译文 .md…）。
+ * 与 `files`（用户上传的**输入件**＋处理状态，见 store/ticketfiles.go）是两回事——
+ * 详情面过去只渲染 files，于是"下载包里四件齐全、页面上只看得见自己上传那件"。
+ * ⚠️ 字段名假设：Go 侧另一 agent 尚未定稿（后端需按单号回读产物清单）。
+ * 前端按 `deliverables` 读取，并兼容 `outputs` 别名；两处都要既有 name 又有可下载标识才算一件。
+ */
+export interface TicketDeliverable {
+  /** 展示名（含扩展名，如 `Voice_en.m4a`） */
+  name: string
+  /** 字节数（可选；用于列表尾部体积读数） */
+  size?: number
+  /** 产物类别：image/audio/subtitle/text/office…（可选，用于图标/分组） */
+  kind?: string
+  /** 所属目标语言（可选） */
+  lang?: string
+  /** 该件是否为退化产物（如"仅译文 .md"替代原版式回写） */
+  degraded?: boolean
+  /** 下载该件用的 file_id（可选；走 ticketDownload 的 fileId 档） */
+  file_id?: number
 }
 
 /** 单条质检问题（对应后端 qa.Issue，改造 5 用户侧透出） */
@@ -94,6 +122,12 @@ export interface TicketResp {
   files?: { id: number; file_name: string; result_path: string; text_result_path?: string; error: string }[]
   /** ★ 改造 4/5：详情接口附带的质量视图（列表接口不返回） */
   quality?: TicketQuality
+  /**
+   * ★ 2026-10-19 G13：详情接口的**交付件清单**（实际产出物，区别于 files＝输入件）。
+   * 字段名假设，见 TicketDeliverable 注释；`outputs` 为兼容别名，读取侧二者取其一。
+   */
+  deliverables?: TicketDeliverable[]
+  outputs?: TicketDeliverable[]
 }
 
 /** 获取工单列表（mine=true 仅查看自己创建的） */
@@ -138,35 +172,108 @@ export async function ticketDetail(id: number): Promise<TicketResp> {
 /**
  * filenameFromDisposition 从 Content-Disposition 取落盘文件名，取不到用调用方给的兜底名。
  * 为什么抽成单点而不是两侧各写一遍正则：本仓的「写死中文闸门」
- *   （src/i18n/hardcodedCjkGate.test.ts）用引号配对粗扫源码，而这条正则
- *   `/filename="?([^";]+)"?/` 内部含**奇数个**双引号（3 个），同一文件里出现两次就会让配对
- *   错位一路延伸到后面的中文兜底句上，把带 apiMsg 豁免的行判成违规（2026-09-29 实测踩过）。
- *   单点＝形态只有一份、两侧解析口径也不会漂开。
+ *   （src/i18n/hardcodedCjkGate.test.ts）用引号配对粗扫源码，而这条正则的字面量写法
+ *   `/filename="?([^";]+)"?/` 内部含**奇数个**双引号（3 个）——配对会从这行起错位，
+ *   一路延伸到后面的中文兜底句上，把带 apiMsg 豁免的行判成违规（2026-09-29 实测踩过）。
+ *   ★ 2026-10-19 收尾：改成 `new RegExp('…')` 形态——引号包在单引号字符串里，
+ *   闸门的同引号配对不再被这 3 个双引号打断（判据是"源码里没有裸的奇数引号正则字面量"，
+ *   不是删掉这条正则）。单点＝形态只有一份、两侧解析口径也不会漂开。
  */
 function filenameFromDisposition(cd: string, fallback: string): string {
-  const m = cd.match(/filename="?([^";]+)"?/)
+  const m = cd.match(new RegExp('filename="?([^";]+)"?'))
   return m && m[1] ? m[1] : fallback
 }
 
-/** 下载工单结果文件（fetch→blob 触发保存，需鉴权头）；fmt='text' 仅下载译文纯文案(.md) */
-export async function ticketDownload(id: number, opts?: { fmt?: 'text'; fileId?: number }): Promise<void> {
+/**
+ * ★ 2026-10-19 §五#2：交付件下载失败的两类——**必须分开报**（AGENTS §一·12「有自动降级的链路，
+ * 产物能打开不算验收」的同族取向：把"没传到"说成"坏了"会把人引向错误的排查方向）。
+ *   · `network`＝这一跳没走完：fetch 被拒（断网/DNS/TLS/超时）、或收流中途断掉。
+ *     现场信息是"还在传，已收到 N 字节"（`received`），用户该做的是**重试**。
+ *   · `broken`＝真的坏了：4xx/5xx、文件不存在、或拿到的是 SPA 兜底 HTML（不是文件）。
+ *     用户该做的是**别重试**（重试一万次也不会好），看具体错误文案。
+ */
+export class DownloadError extends Error {
+  readonly kind: 'network' | 'broken'
+  readonly status?: number
+  /** 已收到的字节数（network 档用来告诉用户"这一跳走到了哪里"） */
+  readonly received?: number
+  constructor(kind: 'network' | 'broken', message: string, extra?: { status?: number; received?: number }) {
+    super(message)
+    this.name = 'DownloadError'
+    this.kind = kind
+    this.status = extra?.status
+    this.received = extra?.received
+  }
+}
+
+// readBodyWithProgress 流式读响应体并回报字节进度；环境不支持 ReadableStream（jsdom/旧内核）
+// 时退回 blob()（无进度但功能不变）。收流中途出错按 network 档抛（"这一跳没走完"）。
+async function readBodyWithProgress(
+  r: Response,
+  total: number,
+  onProgress?: (received: number, total: number) => void,
+): Promise<Blob> {
+  const body = (r as unknown as { body?: ReadableStream<Uint8Array> | null }).body
+  if (!body || typeof body.getReader !== 'function') return r.blob()
+  const reader = body.getReader()
+  const chunks: Uint8Array[] = []
+  let received = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) {
+        chunks.push(value)
+        received += value.byteLength
+        onProgress?.(received, total)
+      }
+    }
+  } catch (e: any) {
+    onProgress?.(received, total)
+    throw new DownloadError('network', e?.message || apiMsg('tk.downloadInterrupted', '下载中断（网络未走完，请重试）'), { received })
+  }
+  return new Blob(chunks as BlobPart[], { type: r.headers.get('Content-Type') || 'application/octet-stream' })
+}
+
+/**
+ * 下载工单结果文件（fetch→blob 触发保存，需鉴权头）；fmt='text' 仅下载译文纯文案(.md)。
+ * ★ 2026-10-19 §五#2：带字节进度（`onProgress(received, total)`，total＝Content-Length，0 未知），
+ *   失败分 network/broken 两类（见 DownloadError）。
+ */
+export async function ticketDownload(
+  id: number,
+  opts?: { fmt?: 'text'; fileId?: number; onProgress?: (received: number, total: number) => void },
+): Promise<void> {
   // ★ §4.2-2：结果文件走 fetch→blob（需二进制响应，无法经 request() 的 JSON 出口），属正当裸用；
   //   但 401/403 必须与统一 client 同源——复用 core 的 handleUnauthorized/handleForbidden，
   //   不再像旧实现那样把越权当普通 Error 抛出、丢失登录态失效与权限提示语义。
   let url = `${API_BASE}/api/tickets/download?id=${id}`
   if (opts?.fmt) url += `&fmt=${encodeURIComponent(opts.fmt)}`
   if (opts?.fileId) url += `&file_id=${opts.fileId}`
-  const r = await fetch(url, { headers: authHeaders() })
+  let r: Response
+  try {
+    r = await fetch(url, { headers: authHeaders() })
+  } catch (e: any) {
+    // fetch 直接 reject＝链路层没走完（断网/DNS/TLS/超时），不是"文件坏了"
+    throw new DownloadError('network', e?.message || apiMsg('tk.downloadInterrupted', '下载中断（网络未走完，请重试）'))
+  }
   if (r.status === 401) handleUnauthorized(url)
   if (!r.ok) {
     let msg = `HTTP ${r.status}`
-    try { msg = (await r.json()).message || msg } catch {}
+    try { msg = (await r.json()).message || msg } catch { /* 非 JSON 错误体（网关页等）保持状态码文案 */ }
     // 403 越权：文案走统一解析器（本地化既有键）、附稳定码 FORBIDDEN，与 request() 口径一致
     if (r.status === 403) throw new ApiError(handleForbidden(msg), 403, 'FORBIDDEN')
-    throw new Error(msg)
+    // ★ 4xx/5xx＝真的坏了（文件不存在/服务端错），与"这一跳没走完"分开报
+    throw new DownloadError('broken', msg, { status: r.status })
   }
+  // ★ SPA 兜底陷阱（AGENTS §一·6）：spa.go 对不存在的路径回 200 + 整页 index.html，
+  //   交付件若是 HTML ⇒ 拿到的不是文件。如实判"坏了"，绝不把 HTML 壳存成交付件。
+  if ((r.headers.get('Content-Type') || '').toLowerCase().includes('text/html')) {
+    throw new DownloadError('broken', apiMsg('tk.downloadBroken', '下载的产物不是文件（可能已被删除或链接失效）'), { status: r.status })
+  }
+  const total = Number(r.headers.get('Content-Length') || '') || 0
   // 从 Content-Disposition 提取文件名；无则用默认名（★ D-4：解析收进 filenameFromDisposition 单点）
-  const blob = await r.blob()
+  const blob = await readBodyWithProgress(r, total, opts?.onProgress)
   const url2 = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url2

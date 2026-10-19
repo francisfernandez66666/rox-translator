@@ -14,6 +14,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -337,7 +338,30 @@ func (s *Server) handleAdminPackageSettings(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-// handleAdminPackageSettingsSave 保存商业包全局设置（super_admin）。
+// validateStaticQRImageRef 校验静态收款码配置值（★ G14，2026-10-19）。
+//
+// 只对「本机相对路径 /api/qr-image/<文件名>」这一形态做落盘校验：写侧与读侧（handleQRImage）
+// 必须共用同一把尺子，否则手工粘贴/历史批次写进库的名字在 _qr/ 下不存在 ⇒ 保存成功、收银台
+// 四处 404（现网 D23 就是这一形态）。base64 dataURI 与外部 http(s) URL 不是本机路径，
+// 读侧本就不会命中本目录，原样放行（不越权去猜外部可达性）。
+// 参数 v: 配置值。返回: 需要拦截时的错误，放行返回 nil。
+func (s *Server) validateStaticQRImageRef(v string) error {
+	v = strings.TrimSpace(v)
+	if v == "" || !strings.HasPrefix(v, "/api/qr-image/") {
+		return nil
+	}
+	name := strings.TrimPrefix(v, "/api/qr-image/")
+	if name == "" || strings.ContainsAny(name, "/\\") {
+		return fmt.Errorf("收款码图片名非法（不得为空或含路径分隔符）")
+	}
+	full := filepath.Join(s.Cfg.UploadDir, "_qr", filepath.Base(name))
+	if info, err := os.Stat(full); err != nil || info.IsDir() {
+		return fmt.Errorf("收款码图片不存在：%s（请重新上传，或填写已落盘到 _qr/ 的文件名）", name)
+	}
+	return nil
+}
+
+// handleAdminPackageSettingsSave 保存套餐中心计费/试用/支付/触达等配置（super_admin）。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 billing_enforced/free_trial_points/free_trial_days/pay_mode/static_qr_image 可选字段）。
 // 返回: success=true 表示保存成功。
 func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.Request) {
@@ -410,6 +434,11 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		add("pay_mode", *req.PayMode)
 	}
 	if req.StaticQRImage != nil {
+		// ★ G14：本机相对路径形态必须落盘可得，否则保存成功、读侧 404（写读同尺）。
+		if verr := s.validateStaticQRImageRef(*req.StaticQRImage); verr != nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, verr.Error()))
+			return
+		}
 		add("static_qr_image", *req.StaticQRImage)
 	}
 	// ★ USDT 收款（2026-09-15）：开关键 + 收款要素（地址/汇率按链校验后才可开启总闸）

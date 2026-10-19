@@ -937,7 +937,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// 附件下载（保留原始文件名）
 	// 只取 filepath.Base 一个成分写进响应头：路径分隔符/换行不可能进 Content-Disposition，
 	// 既防头注入，也不把内部目录结构（tickets/、translated/<落盘名>/）泄露给客户端。
-	w.Header().Set("Content-Disposition", "attachment; filename=\""+filepath.Base(filePath)+"\"")
+	w.Header().Set("Content-Disposition", contentDisposition(filepath.Base(filePath)))
 	// 用 ServeContent 而非 io.Copy：自带 Range（大文件断点续传）与 ModTime/304 处理
 	http.ServeContent(w, r, info.Name(), info.ModTime(), f)
 }

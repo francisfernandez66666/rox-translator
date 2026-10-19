@@ -835,18 +835,18 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	tid := req.ID
 	if tid <= 0 {
 		// 超管以 id=0 显式表示「平台主站（租户根）」；其余角色回落到本租户
-		if auth.RoleLevel(u.Role) >= 4 {
+		if auth.IsSuperAdmin(u) {
 			tid = 0
 		} else {
 			tid = s.effTenant(r, u)
 		}
 	}
-	if auth.RoleLevel(u.Role) < 4 && tid != u.TenantID {
+	if !auth.IsSuperAdmin(u) && tid != u.TenantID {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "只能设置本租户品牌"})
 		return
 	}
 	// ★ 品牌定制鉴权：付费套餐且在有效期内才能编辑（超管拥有覆盖权）
-	if auth.RoleLevel(u.Role) < 4 && !tenantBrandingUnlocked(s, tid) {
+	if !auth.IsSuperAdmin(u) && !tenantBrandingUnlocked(s, tid) {
 		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"})
 		return
 	}
@@ -941,7 +941,7 @@ func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
 	// 格式化 JSON 并作为附件下载
 	b, _ := json.MarshalIndent(data, "", "  ")
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Disposition", `attachment; filename=tenant_`+strconv.FormatInt(req.ID, 10)+`_export.json`)
+	w.Header().Set("Content-Disposition", contentDisposition(`tenant_`+strconv.FormatInt(req.ID, 10)+`_export.json`))
 	_, _ = w.Write(b)
 }
 

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"translator/internal/auth"
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
 	"translator/internal/store"
@@ -139,7 +140,10 @@ func (s *Server) handleAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	if u.Role == "super_admin" || u.Role == "admin" {
+	// ★ G19（2026-10-19）：全站"是不是超管"唯一一把尺子是 auth.IsSuperAdmin（§一·15）。
+	//   旧写法吃角色字符串 `u.Role == "super_admin" || u.Role == "admin"`，现网 role='admin' 的
+	//   平台账号（tenant_id=0）反而漏判，与 G7 是同一族的另一处。
+	if auth.IsSuperAdmin(u) {
 		tid = 0 // 超管看全平台
 	}
 	q := r.URL.Query()
@@ -174,7 +178,9 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	if u.Role == "super_admin" {
+	// ★ G19：与上同尺（旧写法 `u.Role == "super_admin"` 比谓词更窄——平台级 role='admin' 账号
+	//   反而无法指定 req.TenantID，静默留在本租）。
+	if auth.IsSuperAdmin(u) {
 		tid = req.TenantID // 超管：0=平台级，>0=指定租户
 	}
 	if err := s.Store.SilenceAlert(tid, req.Kind, req.Minutes, u.ID); err != nil {
@@ -206,7 +212,8 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
-	if u.Role == "super_admin" {
+	// ★ G19：与上同尺（同 handleAlertSilence 那一处）。
+	if auth.IsSuperAdmin(u) {
 		tid = req.TenantID
 	}
 	if err := s.Store.UnsilenceAlert(tid, req.Kind); err != nil {
@@ -252,7 +259,7 @@ func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 // exportAuditCSV 导出审计日志为 CSV
 func (s *Server) exportAuditCSV(w http.ResponseWriter, logs []*store.AuditLog) {
 	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", "attachment; filename=audit.csv")
+	w.Header().Set("Content-Disposition", contentDisposition("audit.csv"))
 	var sb strings.Builder
 	sb.WriteString("\xEF\xBB\xBF") // UTF-8 BOM（Excel 兼容）
 	sb.WriteString("id,tenant_id,user_id,action,resource,detail,before_val,after_val,created_at\n")

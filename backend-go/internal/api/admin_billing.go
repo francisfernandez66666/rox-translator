@@ -141,7 +141,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		}
 		name := fmt.Sprintf("usage_%d_%s_%s.csv", tid, strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", ""))
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", "attachment; filename="+name)
+		w.Header().Set("Content-Disposition", contentDisposition(name))
 		// UTF-8 BOM：Excel 直开不乱码（与审计导出同口径）
 		w.Write([]byte{0xEF, 0xBB, 0xBF})
 		fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,cost_points,biz_kind,biz_mode,charge_kind,created_at\n")

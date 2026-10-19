@@ -90,7 +90,7 @@ func (s *Server) handleReferralQrcode(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	if r.URL.Query().Get("download") == "1" {
-		w.Header().Set("Content-Disposition", "attachment; filename=\"invite-"+code+".png\"")
+		w.Header().Set("Content-Disposition", contentDisposition("invite-"+code+".png"))
 	}
 	_, _ = w.Write(png)
 }

@@ -16,6 +16,7 @@
 package fileproc
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,8 +193,42 @@ func TestRenderTranslatedImageGuards(t *testing.T) {
 		t.Skip("本机 OCR 就绪：缺依赖这一档无法构造（其余两档在下面单独测）")
 	}
 	out := filepath.Join(t.TempDir(), "out.png")
-	if err := RenderTranslatedImage(nil, "/tmp/whatever.png", out, nil); err == nil {
+	if _, err := RenderTranslatedImage(nil, "/tmp/whatever.png", out, nil); err == nil {
 		t.Fatal("OCR 不可用时应返回错误，让调用方退回仅译文 .md")
+	}
+}
+
+// TestRenderTranslatedImageReasonBands ★ G2/G3-c：回填失败的六个出口各带**档位名**（对外排障契约）。
+//
+// 为什么值得一条锁：engine 只按这个档位写可行动的 GateWarnings，档位漂了日志就只剩人话那句，
+//
+//	排障要的"是哪一类失败"（缺依赖 / 坐标没了 / 脚本没了 / …）当场丢失。
+//
+// 本锁用 OcrAvailable() 的当前档决定能构到哪一档，另一档走桩（把环境变量指到不存在的脚本）。
+func TestRenderTranslatedImageReasonBands(t *testing.T) {
+	resetImageBoxCache(t)
+	out := filepath.Join(t.TempDir(), "out.png")
+	if !OcrAvailable() {
+		// 缺依赖档：判据只问档位，不问人话。
+		_, err := RenderTranslatedImage(nil, "/tmp/whatever.png", out, nil)
+		if got := ImageRenderReason(err); got != ImageReasonCapabilityMissing {
+			t.Fatalf("缺依赖应回 capabilty 档，实得 %q（err=%v）", got, err)
+		}
+		return
+	}
+	// OCR 就绪 ⇒ 先撞"坐标缓存取空"档。
+	_, err := RenderTranslatedImage(context.Background(), "/tmp/no-boxes.png", out, nil)
+	if got := ImageRenderReason(err); got != ImageReasonNoBoxes {
+		t.Fatalf("坐标取空应回 no_boxes 档，实得 %q（err=%v）", got, err)
+	}
+	// 有坐标、但脚本路径指到不存在处 ⇒ 撞"脚本缺失"档。
+	RememberImageBoxes("/tmp/has-boxes.png", []OcrBox{{Text: "你好", Box: []float64{0, 0, 10, 10}}})
+	old := os.Getenv(ImageRenderScriptEnv)
+	t.Cleanup(func() { _ = os.Setenv(ImageRenderScriptEnv, old) })
+	_ = os.Setenv(ImageRenderScriptEnv, filepath.Join(t.TempDir(), "no-such-render.py"))
+	_, err = RenderTranslatedImage(context.Background(), "/tmp/has-boxes.png", out, nil)
+	if got := ImageRenderReason(err); got != ImageReasonScriptMissing {
+		t.Fatalf("脚本缺失应回 script_missing 档，实得 %q（err=%v）", got, err)
 	}
 }
 

@@ -787,7 +787,11 @@ MEMT=$(tok uatmem-h30 mem123456)
 ck T31-tmx-member-403 '"success":false' "$(get "Authorization: Bearer $MEMT" /api/translation/export-tmx)"
 R=$(curl -s -D /tmp/t31_h.txt "$B/api/translation/export-tmx?lang=en" -H "$H1")
 ck T31-tmx-doc 'tmx version="1.4"' "$R"
-ck T31-tmx-disposition 'attachment; filename=langcross_tm_' "$(cat /tmp/t31_h.txt 2>/dev/null)"
+# ★ 2026-10-19 G5：Content-Disposition 收敛为唯一出口 contentDisposition()，头形态变为
+#   `attachment; filename="<ASCII 兜底>"; filename*=UTF-8''<percent 编码真名>`（旧形态是裸 `filename=` 无引号、
+#   无 filename*）。判据随之改判两腿：ASCII 兜底名带引号 + RFC 5987 真名腿在位（中文/特殊名不再乱码）。
+ck T31-tmx-disposition 'attachment; filename="langcross_tm_' "$(cat /tmp/t31_h.txt 2>/dev/null)"
+ck T31-tmx-disposition-star "filename\\*=UTF-8''langcross_tm_" "$(cat /tmp/t31_h.txt 2>/dev/null)"
 rm -f /tmp/t31_h.txt
 ck T31-tmx-bad-lang '不支持的语言' "$(get "$H1" '/api/translation/export-tmx?lang=zzz')"
 ck T31-tmx-anon-denied '"success":false' "$(curl -s $B/api/translation/export-tmx)"
@@ -1076,7 +1080,9 @@ CKC37=$(sq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TAID AND charge_k
 CSVH=$(mktemp); CSVB=$(mktemp)
 curl -s -D "$CSVH" -o "$CSVB" "$B/api/billing/usage?export=csv" -H "$H1"
 ck T38-ctype-csv 'text/csv' "$(cat "$CSVH")"
-ck T38-disposition-attachment 'attachment; filename=usage_' "$(cat "$CSVH")"
+# ★ 2026-10-19 G5：同 T31，头形态改判 ASCII 兜底带引号 + filename* 两腿。
+ck T38-disposition-attachment 'attachment; filename="usage_' "$(cat "$CSVH")"
+ck T38-disposition-utf8 "filename\\*=UTF-8''usage_" "$(cat "$CSVH")"
 ck T38-header-cols 'charge_kind,created_at' "$(head -1 "$CSVB")"
 # 数据行数>0（本脚本前序用例已产生实扣流水）
 CSVN=$(( $(wc -l < "$CSVB") - 1 ))
@@ -2519,9 +2525,14 @@ dbq "DELETE FROM audit_logs WHERE action='tenant_quota_save' AND tenant_id=$T58T
 #   F-50  对话页脚把 token 裸值拼进 reply 逐字渲染进客户气泡 ⇒ 穿透 AGENTS §一·5
 #         「计费口径统一积分、公开接口零 token 裸值」，而既有闸门只扫结构化字段、扫不到文案里的数字。
 # 本节把「同一笔调用的三个数必须相等」钉死：
-#   报文 points_used ＝ 台账 SUM(quantity) 折积分 ＝「我的用量」计数增量；异步侧再加一条
-#   tickets.tokens_billed ＝ 同一窗口台账 SUM(quantity)（sink 2s ticker ⇒ 有界重试等收敛，
-#   判据目标取自 tickets 行、独立于台账，不会自证）。
+#   报文 points_used ＝ **翻译腿**台账 SUM(quantity) 折积分 ＝「我的用量」计数增量（同一客户面口径）；
+#   异步侧再加一条 tickets.tokens_billed ＝ 同一窗口**翻译腿**台账 SUM(quantity)
+#   （sink 2s ticker ⇒ 有界重试等收敛，判据目标取自 tickets 行、独立于台账，不会自证）。
+# ★ 2026-10-19 口径补丁（T59 四条既有基线红收口，记档见 PROGRESS §三十四）：本链内部会对知识库
+#   做一次 Embed（task_type='kb_embed'，平台承担留痕行、归因到当前用户）⇒ 一切「窗口裸行数/裸 SUM」
+#   都多出那一条。故：与实扣相关的等值只取 task_type='translate'；与客户面计数等值走 CustomerUsagePred
+#   （排平台用途标签 + 排无归因 'log'/'settle'），与读侧 handleUsageMe 同尺；「积分 > 0」类正向锁
+#   一律改钉「实扣 token > 0」（积分四舍五入，短文本折 0 分是正确的，拿 points>0 当锁会误伤正确行为）。
 # ★ 断言侧口径（沿用 T57 首跑踩坑账）：用户令牌就地重登（前段改密/轮换会让顶部 $H1 变 401）；
 #   数值直读一律过 mny_norm 方言归一再等值（AGENTS §一·7）。
 T59U=$(tok uatuser_a uatpass123); H59="Authorization: Bearer $T59U"
@@ -2551,19 +2562,33 @@ BODY59='{"text":"账务同源测试文本F49","target_langs":["en"],"mode":"fast
 R=$(curl -s $B/openapi/v1/translate -H "$J" -H "Authorization: Bearer $AK59" --max-time 120 -d "$BODY59")
 ck T59-sync-ok '"success":true' "$R"
 P59=$(printf '%s' "$R" | pv "['points_used']")
-ck T59-sync-points-positive '^[1-9][0-9]*$' "$P59" # 旧缺陷现场：收集器被遮蔽 ⇒ 恒 0
 T59W="id>$T59MARK AND tenant_id=$TAID AND user_id=$AK59UID"
+# 平台用途标签谓词（与 store.PlatformTaskTypeExclPred 同源，见 billing_platform_cost.go:67）：
+# 翻译链内部会对知识库做一次 Embed 调用（task_type='kb_embed'，charge_kind='log'）——它是平台承担的
+# 留痕行，归因到当前用户但**不进客户面口径**。判据若拿裸窗口行/裸 SUM 去比，差的就是这一行。
+T59PLATEXCL="task_type NOT IN ('kb_embed','system_task','pack_scrape','evals')"
 T59Q=$(t59num "$(dbq "SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE $T59W")")
+# 仅翻译腿的台账 SUM ＝ 本笔实扣 token（billed）；平台留痕行（kb_embed）不计入
+T59TQ=$(t59num "$(dbq "SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE $T59W AND task_type='translate'")")
 T59N=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE $T59W" | tr -d '[:space:]')
 ck T59-ledger-rows '^[1-9][0-9]*$' "$T59N"
 ck T59-ledger-qty-positive '^[1-9][0-9]*$' "$T59Q"
-t59eq T59-points-equals-ledger "$P59" "$(t59pts "$T59Q" "$T59RATE")"
+# ★ 2026-10-19 判据修正（原 T59-sync-points-positive 恒红，记档见 PROGRESS §三十四）：
+#   旧锁「报文积分 > 0」把**四舍五入到 0**的正确行为判红——折算率 rate=400 ⇒ billed<200 token 折 0 分，
+#   短文本（本用例约 58 token）本来就该是 0 分。收集器被遮蔽这一真缺陷的锁改钉在
+#   「本笔实扣 token（翻译腿）非零」上：它与积分同源，且短文本下仍必为正，射程不缩反准。
+ck T59-sync-billed-positive '^[1-9][0-9]*$' "$T59TQ" # 旧缺陷现场：收集器被遮蔽 ⇒ 实扣恒 0
+t59eq T59-points-equals-ledger "$P59" "$(t59pts "$T59TQ" "$T59RATE")"
 # ② F-51 归因：窗口内不得出现「别的用户」的行（旧形态 user_id=0 ⇒ 客户账单漏计这一笔）
 T59BAD=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE id>$T59MARK AND tenant_id=$TAID AND user_id<>$AK59UID" | tr -d '[:space:]')
 t59eq T59-ledger-user-scoped "$T59BAD" "0"
 ME59B=$(get "$H59" /api/billing/usage/me)
 CNT59B=$(printf '%s' "$ME59B" | pv "['count']"); [ -n "$CNT59B" ] || CNT59B=0
-t59eq T59-usage-me-count "$((CNT59B - CNT59A))" "$T59N" # 「我的用量」计数增量＝台账新增行数（读侧同源）
+# ★ 2026-10-19 判据修正：读侧 handleUsageMe→UsageByUser 走客户面谓词 CustomerUsagePred
+#   （排平台用途标签行 + 排无归因 uid=0 的 'log'/'settle' 留痕行，见 billing.go 的 UsageByUser 注释），
+#   所以增量必须与**同一口径**的台账行数等值，而不是窗口裸行数（旧形态把 kb_embed 留痕行算进去 ⇒ want=2 got=1）。
+T59CN=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE $T59W AND $T59PLATEXCL AND NOT (charge_kind IN ('log','settle') AND COALESCE(user_id,0)=0)" | tr -d '[:space:]')
+t59eq T59-usage-me-count "$((CNT59B - CNT59A))" "$T59CN" # 「我的用量」计数增量＝同口径台账新增行数（读侧同源）
 # ③ F-50 公开面零 token 裸值：开放接口与站内对话两条对外通道都不得出现「token：123」形态
 printf '%s' "$R" | grep -qE 'token[:：][[:space:]]*[0-9]' && { FAIL=$((FAIL+1)); echo "FAIL|T59-openapi-no-token-raw"; } || { PASS=$((PASS+1)); echo "PASS|T59-openapi-no-token-raw"; }
 ck T59-openapi-mode-badge '快速模式' "$R"
@@ -2589,11 +2614,12 @@ for i in $(seq 1 20); do
 done
 ck T59-task-completed '"status":"completed"' "$POLL59"
 PA59=$(printf '%s' "$POLL59" | pv "['points_used']")
-ck T59-async-points-positive '^[1-9][0-9]*$' "$PA59"
 TB59=$(t59num "$(dbq "SELECT COALESCE(MAX(tokens_billed),0) FROM tickets WHERE id=$TASK59")")
 ck T59-async-billed-positive '^[1-9][0-9]*$' "$TB59" # 旧缺陷：tokens_billed 落裸用量，与实扣差一个系数
 t59eq T59-async-points-equals-ticket "$PA59" "$(t59pts "$TB59" "$T59RATE")"
-T59WA="id>$T59AMARK AND tenant_id=$TAID AND user_id=$AK59UID"
+# 窗口只取本单的**翻译腿**（平台留痕 kb_embed 排除）——tickets.tokens_billed 只汇总本单翻译腿实扣，
+# 旧形态拿裸窗口 SUM 比会把平台留痕行算进去（UAT 现场 68 vs 58 的差额 10 即那一条 Embed 行）。
+T59WA="id>$T59AMARK AND tenant_id=$TAID AND user_id=$AK59UID AND task_type='translate'"
 T59ASUM=0
 for i in $(seq 1 10); do
   T59ASUM=$(t59num "$(dbq "SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE $T59WA")")
@@ -2603,6 +2629,9 @@ done
 t59eq T59-async-ledger-equals-ticket "$T59ASUM" "$TB59"
 # 判据反空锁：等值两侧都必须是正整数（两侧同为空串也会「相等」，那是假绿不是通过）
 ck T59-async-ledger-qty-positive '^[1-9][0-9]*$' "$T59ASUM"
+# ★ 2026-10-19 判据修正（原 T59-async-points-positive 同因恒红：短文本积分为 0 是正确的）：
+#   改钉「报文积分 ＝ 本单翻译腿实扣 token 折积分」——报文与台账同一把尺子（F-49① 的正面锁）。
+t59eq T59-async-points-equals-ledger "$PA59" "$(t59pts "$T59ASUM" "$T59RATE")"
 # 收尾：撤销本次签发的 Key（不留测试常开凭据），并复验已失效
 KID59=$(dbq "SELECT id FROM api_keys WHERE tenant_id=$TAID AND name='f49-key'" | tr -d '[:space:]')
 R=$(post "$H59" "{\"id\":$KID59}" /api/apikeys/delete)

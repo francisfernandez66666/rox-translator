@@ -52,6 +52,9 @@ export const baseZh: Record<string,string> = {
   //   消费点＝components/ErrorBoundary.tsx，恢复腿＝lib/chunkRecovery.ts。
   'common.chunkLoadFailed': '页面内容没有取到，通常是网站刚更新过。请重新加载页面。',
   'common.reloadPage': '重新加载页面',
+  // ★ 2026-10-19 G20：main.tsx 的 BootErrorBoundary 正文（旧形态硬编码中文，非中文访客
+  //   启动失败只看到中文；标题/按钮已复用 common.pageError / common.reloadPage）。
+  'common.bootErrorBody': '界面在显示的过程中被打断了。重新加载通常就能恢复；如果每次都停在这一页，请把浏览器控制台里的第一行红字发给技术支持。',
   'app.brandTitle': '{name} 智能翻译平台',
   'app.notify': '通知',
   'app.openMenu': '打开菜单',
@@ -843,5 +846,14 @@ export const baseZh: Record<string,string> = {
   'tr.fileFmtText': "不支持的文件格式：{name}（纯文案模式支持 {fmts}）",
   'tr.fileFmtLegacy': "不支持的文件格式：{name}（{ext} 老格式仅在工单「纯文案模式」下支持；或请先转换为对应新版格式）",
   'tr.fileFmtOnly': "不支持的文件格式：{name}（仅支持 {fmts}）",
-  'tr.fileTooBig': "文件过大（{mb}MB），超出翻译上限 {maxMB}MB，请拆分或压缩后重试"
+  'tr.fileTooBig': "文件过大（{mb}MB），超出翻译上限 {maxMB}MB，请拆分或压缩后重试",
+  'tk.deliverablesTitle': '交付件',
+  'tk.degradedBadge': '版式还原失败',
+  'tk.degradedTip': '以下语言为退化交付（版式还原失败，已以纯文案 .md 交付）：{langs}',
+  'tk.downloading': '正在下载…',
+  'tk.downloadingAt': '正在下载…（已收到 {n} KB）',
+  'tk.downloadInterrupted': '下载中断（网络未走完，请重试）',
+  'tk.downloadInterruptedAt': '下载中断（已收到 {n} KB，网络未走完，请重试）',
+  'chat.micNoSpeech': '没有听到语音，请靠近麦克风、确认已授权后再说一次',
+  'audit.action.invite_revoke': '撤销邀请码',
 }

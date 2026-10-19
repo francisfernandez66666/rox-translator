@@ -59,6 +59,10 @@ import { DialogHost } from './components/uiDialogs'
 // 而 CSS 预载失败那一族根本不会走到渲染期（只有这个事件看得见）。
 // 实现与三条口径见 src/lib/chunkRecovery.ts。
 import { installChunkRecovery } from './lib/chunkRecovery'
+// ★ 2026-10-19 G20：BootErrorBoundary 的兜底文案走词典（旧形态硬编码中文，
+//   非中文访客启动失败时只看到中文）。词典已在入口包（zh/en 静态背，
+//   十语种懒加载），故这一处 import 不新增入口体积；缺词典时回退链兜底。
+import { t } from './i18n'
 
 // 项目主题覆盖样式（变量已重映射到 --lc-* 纯黑单色令牌）
 import './styles/theme.css'
@@ -126,12 +130,10 @@ class BootErrorBoundary extends React.Component<{ children: React.ReactNode }, {
     }
     return (
       <div style={box} role="alert">
-        <p style={{ margin: '0 0 10px', fontWeight: 600 }}>页面出错了</p>
-        <p style={{ margin: '0 0 10px' }}>
-          界面在显示的过程中被打断了。重新加载通常就能恢复；如果每次都停在这一页，请把浏览器控制台里的第一行红字发给技术支持。
-        </p>
+        <p style={{ margin: '0 0 10px', fontWeight: 600 }}>{t('common.pageError')}</p>
+        <p style={{ margin: '0 0 10px' }}>{t('common.bootErrorBody')}</p>
         <button style={btn} onClick={() => location.reload()}>
-          重新加载
+          {t('common.reloadPage')}
         </button>
       </div>
     )

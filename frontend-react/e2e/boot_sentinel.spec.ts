@@ -27,7 +27,12 @@ test('慢链路入口：哨兵只出底部横幅（不挡界面），界面挂�
     await new Promise((r) => setTimeout(r, 10000))
     await route.continue()
   })
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  // ★ 2026-10-19：waitUntil 用 `commit`（不是 `domcontentloaded`）——入口是 `<script type="module">`，
+  //   模块脚本是 deferred，`DOMContentLoaded` 要等它执行完才触发；而本用例把入口请求按住了 10s，
+  //   于是 `domcontentloaded` 返回时入口早已执行、骨架已被哨兵撤掉 ⇒ 首屏骨架腿与"8s 该出横幅"腿
+  //   全部落空（判据跟着侦察时机走，成了竞态）。`commit` 在导航一提交就返回，骨架/横幅的断言本身
+  //   带 auto-retry，正好落在"入口还没到"那段时间里——射程对准被测对象，不靠运气。
+  await page.goto(BASE, { waitUntil: 'commit' })
   // 首屏骨架：入口还在下载的这段时间，屏幕不该只有一个空 #root（纯黑）
   await expect(page.locator('#__boot_skeleton'),
     '入口没到之前只有一块纯黑：首屏骨架没渲染（用户看到的就是"点了没反应"）。').toBeVisible()
@@ -48,7 +53,8 @@ test('慢链路入口：哨兵只出底部横幅（不挡界面），界面挂�
 test('反向对照：入口脚本真失败 ⇒ 出全屏面板并点明脚本没加载', async ({ page }) => {
   test.setTimeout(90000)
   await page.route(ENTRY_RE, (route) => route.abort())
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' })
+  // 见 A 段同处注释：`commit` 而非 `domcontentloaded`（模块脚本 deferred，abort 时 DCL 也不该被当同步点）。
+  await page.goto(BASE, { waitUntil: 'commit' })
   const panel = page.locator('#__boot_fail[data-kind="panel"]')
   await expect(panel, '脚本都失败了却没出面板（哨兵失效，A 的宽松就没有反证）').toBeVisible({ timeout: 25000 })
   await expect(panel, '面板没点明是脚本没加载（文案退化成"没抓到具体报错"）').toContainText('没能加载')

@@ -12,9 +12,11 @@
 package store
 
 import (
+	"context"
 	"time"
 
 	"translator/internal/db"
+	"translator/internal/observability"
 )
 
 // UserTask 任务中心任务定义。
@@ -340,13 +342,24 @@ func (s *Store) ClaimUserTask(uid, tid, taskID int64) (ok bool, tokens int64) {
 	key := t.claimDateKey(today)
 	// 去重：同用户同任务同 key 已存在则跳过
 	var exists int
-	_ = db.QueryRow(tx, d, "SELECT COUNT(*) FROM user_task_claims WHERE user_id=? AND task_id=? AND claim_date=?", uid, taskID, key).Scan(&exists)
+	// ★ G18（2026-10-19）：去重查询失败必须 fail-closed——吞掉 err 会让 exists 保持 0，
+	//   被当成「没领过」⇒ 同一任务重复发放永久积分。
+	if err := db.QueryRow(tx, d, "SELECT COUNT(*) FROM user_task_claims WHERE user_id=? AND task_id=? AND claim_date=?", uid, taskID, key).Scan(&exists); err != nil {
+		observability.Warn(context.Background(), "任务奖励去重查询失败，拒绝本次领取（fail-closed）",
+			"user_id", uid, "task_id", taskID, "error", err.Error())
+		return false, 0
+	}
 	if exists > 0 {
 		return false, 0
 	}
 	// 领取用户租户（奖励入其租户永久余额）
 	var tenantID int64
-	_ = db.QueryRow(tx, d, "SELECT COALESCE(tenant_id,0) FROM users WHERE id=?", uid).Scan(&tenantID)
+	// ★ G18：租户读失败同样 fail-closed——吞 err 会退成 tenant_id=0，把奖励发进平台桶（孤儿）。
+	if err := db.QueryRow(tx, d, "SELECT COALESCE(tenant_id,0) FROM users WHERE id=?", uid).Scan(&tenantID); err != nil {
+		observability.Warn(context.Background(), "任务奖励租户读取失败，拒绝本次领取（fail-closed）",
+			"user_id", uid, "error", err.Error())
+		return false, 0
+	}
 	// 事务内确保余额账户行存在后原子累加（与 GrantKBRewardByChars 同款并发安全）
 	if _, err := db.Exec(tx, d, "INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
 		tenantID, now); err != nil {

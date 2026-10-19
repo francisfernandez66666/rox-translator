@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,17 @@ var asrPythonModules = []string{"sherpa_onnx"}
 
 // asrAssetGlob ASR 模型资产判别串：assets/asr/ 下至少一个 .onnx 权重才算资产落盘。
 const asrAssetGlob = "*.onnx"
+
+// AsrNoSpeechReason 是"这段音频没有有效语音"这一档的**对外排障契约名**（前端按它取
+// chat.micNoSpeech 词典；与 asr_transcribe.py 的 REASON_NO_SPEECH 逐字同源）。
+// ★ 为什么单列一档而不是并进 failed：静音/没授权麦克风与"服务端坏了"给用户的动作完全不同
+//
+//	（前者让他靠近麦克风重说，后者是报障），混成一档等于把可行动提示换成一句"失败"。
+const AsrNoSpeechReason = "no_speech"
+
+// AsrNoSpeechMessage 是 NoSpeech 档面向用户的人话句子（api/asrReason 按它前缀判档，
+// 与 friendlyAsrError 的 NoSpeech 分支**同一常量**，避免两处各写一份字符串后漂移）。
+const AsrNoSpeechMessage = "ASR 未检测到有效语音：录音可能过于安静或麦克风未授权，请靠近麦克风再说一次"
 
 // AsrScriptEnv asr_transcribe.py 路径覆盖环境变量（开发/测试用，同 ANYDOC_SCRIPT 约定）。
 const AsrScriptEnv = "ASR_SCRIPT"
@@ -60,6 +72,74 @@ func probeAsr(pythonPath string) (bool, string) {
 func asrAssetsReady() bool {
 	matches, err := filepath.Glob(filepath.Join(asrAssetsDir(), asrAssetGlob))
 	return err == nil && len(matches) > 0
+}
+
+// AsrAvailable ASR 就绪时，本机**实际会路由到**哪一档识别引擎（供 /api/health 的 asr_engine 出栈）。
+//
+// ★ 为什么出这一档：`asr_ready=true` 只说"这台机器能识别"，读者无从知道它是 SenseVoice（带 ITN 标点/多语热切）
+//
+//	还是 Whisper 兜底档——两者对同一段音频的产出形态不同（D12 排障就卡在"这台到底跑的是哪个"）。
+//	取值口径与 asr_transcribe.py 的 `_build_recognizer` **同一顺序**（SenseVoice ＞ Transducer ＞ Whisper ＞ 单权重兜底），
+//	所以它是"真会用到的那一档"而不是"声明档"；资产认不出型号或不就绪时回空串（前端/运维按"未知"处理）。
+//	同 #42 口径：只出档位词（sense_voice / transducer / whisper），绝不出权重文件名或绝对路径。
+func AsrEngineName() string {
+	if !AsrAvailable() {
+		return ""
+	}
+	return asrEngineFromAssets(asrAssetsDir())
+}
+
+// asrEngineFromAssets 判据本体（**纯函数**：喂一个目录即可覆盖四种路由组合，不必装 sherpa-onnx）。
+func asrEngineFromAssets(dir string) string {
+	onnx, _ := filepath.Glob(filepath.Join(dir, asrAssetGlob))
+	sort.Strings(onnx)
+	if len(onnx) == 0 {
+		return ""
+	}
+	tokens := filepath.Join(dir, "tokens.txt")
+	hasTokens := false
+	if _, err := os.Stat(tokens); err == nil {
+		hasTokens = true
+	}
+	anyTxt, _ := filepath.Glob(filepath.Join(dir, "*.txt"))
+	// find 与脚本同序：全部关键词都命中文件名才算（"model" 命中即 SenseVoice 主力档）。
+	find := func(keywords ...string) string {
+		for _, p := range onnx {
+			name := strings.ToLower(filepath.Base(p))
+			ok := true
+			for _, k := range keywords {
+				if !strings.Contains(name, k) {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				return p
+			}
+		}
+		return ""
+	}
+	if (find("model") != "" || find("sense") != "") && hasTokens {
+		return "sense_voice"
+	}
+	if find("encoder") != "" && find("decoder") != "" && find("joiner") != "" && hasTokens {
+		return "transducer"
+	}
+	wenc := find("whisper", "encoder")
+	if wenc == "" {
+		wenc = find("encoder")
+	}
+	wdec := find("whisper", "decoder")
+	if wdec == "" {
+		wdec = find("decoder")
+	}
+	if wenc != "" && wdec != "" && hasTokens {
+		return "whisper"
+	}
+	if len(anyTxt) > 0 && len(onnx) == 1 {
+		return "transducer"
+	}
+	return ""
 }
 
 // asrScriptPath 定位 asr_transcribe.py（与可执行文件同目录，同 anydoc_md.py 部署约定；
@@ -206,6 +286,10 @@ func friendlyAsrError(stderr string) string {
 		return "不支持的音频格式或编码，请使用 mp3/m4a/wav/ogg/flac/aac/opus"
 	case "Empty":
 		return "ASR 未识别出语音内容（音频可能无人声、纯音乐或已损坏）"
+	case "NoSpeech":
+		// 静音门在喂模型**之前**拦下（见 asr_transcribe.py detect_no_speech），
+		// 与 Empty 的区别：Empty 是模型跑完了没吐字，NoSpeech 是压根没进模型。
+		return AsrNoSpeechMessage
 	case "Import":
 		return "音频语音识别（ASR）依赖未就绪：服务器未安装 sherpa-onnx"
 	case "FFmpeg":

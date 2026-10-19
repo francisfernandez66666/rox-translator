@@ -82,8 +82,15 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		// SPA 路由回退到 index.html（注入当前域名品牌，消除首屏「先通用后品牌」闪烁）
-		s.serveIndexHTML(w, r, filepath.Join(dist, "index.html"))
+		// ★ G6（2026-10-19）：只有**前端已知路由**才回退 SPA 入口；其余未知深链直出真 404 面。
+		//   旧形态对任何磁盘上不存在的路径一律回 index.html（状态码 200），于是「地址不存在」与
+		//   「要登录」在访客眼里同形（D7），且 SEO 拿不到真实状态码。已知路由白名单见 spaClientRoutes。
+		if isKnownClientRoute(path) {
+			// SPA 路由回退到 index.html（注入当前域名品牌，消除首屏「先通用后品牌」闪烁）
+			s.serveIndexHTML(w, r, filepath.Join(dist, "index.html"))
+			return
+		}
+		s.serveSPANotFound(w, r)
 		return
 	}
 	// 入口 HTML（index.html）：注入当前访问域名的品牌定制，避免首屏闪烁
@@ -100,8 +107,67 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, full)
 }
 
+// spaClientExactRoutes 前端客户端路由的**精确**白名单（G6）。
+// ★ 维护口径：与 frontend-react/src/App.tsx 的 <Routes> / Root 分诊段同源——新增顶层路由必须同步补这里，
+// 否则该路由的深链会被 handleSPA 判成「非路由」而由后端直出 404（构建不出错、只在访问时现形）。
+// 只放**前端自己消费**的路径；后端注册的 API/静态前缀（/api、/docs、/brand、/office、/extensions、/sdk…）
+// 根本不进 handleSPA，无需登记。
+var spaClientExactRoutes = map[string]bool{
+	"/":             true,
+	"/login":        true,
+	"/register":     true,
+	"/pricing":      true,
+	"/compare":      true,
+	"/tickets":      true,
+	"/editor":       true,
+	"/billing":      true,
+	"/invites":      true,
+	"/packages":     true,
+	"/my":           true,
+	"/chat-history": true,
+}
+
+// spaClientRoutePrefixes 带子树的前端路由（/admin 内的面板由本地 tab 态切换，但仍保守放行整棵子树）。
+var spaClientRoutePrefixes = []string{"/admin"}
+
+// isKnownClientRoute 判断路径是否为前端已知路由（G6：仅已知路由才回退 SPA 入口）。
+// 参数 path: URL 路径（已由 handleSPA 归一为该形态）。返回: 命中白名单即 true。
+func isKnownClientRoute(path string) bool {
+	if spaClientExactRoutes[path] {
+		return true
+	}
+	for _, p := range spaClientRoutePrefixes {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// serveSPANotFound 对未知深链直出真 404 面（G6）。
+//
+// 三条硬口径：① 状态码必须真 404（旧形态回 200 整页 index.html，SEO 与访客都无法分辨「不存在」）；
+// ② 必须显式 `Cache-Control: no-store`——AGENTS §一·5 批④ 实测「源站不发 cache-control ≠ 不缓存」，
+// Cloudflare 会给 404 自补 max-age 并 HIT；③ 面文案只说「不存在」，不泄露任何内部信息。
+func (s *Server) serveSPANotFound(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusNotFound)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write([]byte(`<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">` +
+		`<meta name="viewport" content="width=device-width,initial-scale=1">` +
+		`<title>404 · 页面不存在</title></head>` +
+		`<body style="margin:0;background:#000;color:#E7E9EA;font-family:system-ui,-apple-system,sans-serif">` +
+		`<main style="max-width:560px;margin:18vh auto;padding:0 24px;text-align:center">` +
+		`<h1 style="font-size:56px;margin:0 0 8px">404</h1>` +
+		`<p style="font-size:18px;color:#B9BFC6;margin:0 0 24px">这个地址不存在 · This page does not exist</p>` +
+		`<a href="/" style="display:inline-block;padding:10px 20px;border:1.2px solid #565E6B;border-radius:999px;color:#FFFFFF;text-decoration:none">返回首页 · Back to home</a>` +
+		`</main></body></html>`))
+}
+
 // serveIndexHTML 读取并回退前端入口 HTML，并在 </head> 前注入当前访问域名的品牌定制
-// （window.__BRANDING__），使前端首屏直接采用品牌设计，避免「先通用后品牌」的闪烁。
 //
 // ★ F-46（2026-09-26 批 I-9）缓存口径——**修到一半推翻了自己原来的改法，这里记成决策**：
 //

@@ -206,7 +206,7 @@
         ],
         "responses": {
           "200": {
-            "description": "文件流（attachment）",
+            "description": "文件流（attachment）。下载文件名按 RFC 5987 双写：filename=\"<ASCII 兜底名>\" + filename*=UTF-8''<百分号编码真名>，中文名不再乱码。",
             "content": {
               "application/octet-stream": {}
             }

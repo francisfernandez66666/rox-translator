@@ -315,6 +315,7 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/users/bulk-import", s.handleUserBulkImport)
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
+	s.mux.HandleFunc("/api/admin/invite-codes/revoke", s.handleInviteCodeRevoke)
 	// ★ 邀请裂变（白皮书 §五）：我的邀请码/记录 + 二维码
 	s.registerReferralRoutes()
 	s.routesEditor()
@@ -932,6 +933,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"ocr_ready": fileproc.OcrAvailable(),
 		"asr_ready": fileproc.AsrAvailable(),
 		"tts_ready": fileproc.TtsAvailable(),
+		// ★ 2026-10-19 G12：ASR 实际路由档（sense_voice / transducer / whisper；不就绪或认不出型号回空串）。
+		//   asr_ready 只说"这台能识别"，两者对同一段音频的产出形态不同（ITN 标点/多语热切 vs 兜底），
+		//   排障需要知道"跑的是哪一档"。判据与 asr_transcribe.py 的模型选择同序（有效档，非声明档）。
+		//   同 #42 口径：只出档位词，绝不出权重文件名或路径。
+		"asr_engine": fileproc.AsrEngineName(),
 		// ★ 2026-10-16：TTS 覆盖的目标语种清单，出的是**这台机器真正能合成**的档
 		//   （fileproc.TtsCoveredLangs()：中英档 zh/en ＋ 多语档 ja/ko/fr/de/es/pt/ru/ar，
 		//   按两条路线的资产实况现读现算；缺档即不出现在这里）。

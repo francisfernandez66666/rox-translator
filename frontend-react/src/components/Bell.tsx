@@ -6,7 +6,8 @@
 //   （见 AccountMenu.tsx）。为此把数据层抽成 useNotify()、面板抽成 NotifyPanel()：
 //   默认导出 Bell（后台顶栏仍在用）＝触发器 + 面板；AccountMenu 只复用 NotifyPanel。
 // ============================================================================
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Badge, BellIcon, EmptyState } from '@/ui/langcross/src'
 import { notificationsUnread, notifications, notificationRead, notificationsReadAll } from '@/api'
 import { fmtTime } from '@/lib/ui'
@@ -44,6 +45,8 @@ export interface NotifyCtl {
   loadingMore: boolean
   /** 触发器（Bell）的定位基准；AccountMenu 场景不用它，由调用方自己管外点 */
   wrapRef: React.RefObject<HTMLDivElement>
+  /** ★ G20：portal 到 body 的浮层节点基准——浮层不再是 wrapRef 的后代，外点判定要单独放行它 */
+  panelRef: React.RefObject<HTMLDivElement>
   setOpen: (v: boolean) => void
   toggle: () => void
   /** 展开时手动拉一页列表（AccountMenu 点开「消息」时调它） */
@@ -66,6 +69,7 @@ export function useNotify(): NotifyCtl {
   const openRef = useRef(false)
   const timerRef = useRef<number | null>(null)
   const wrapRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
 
   // 拉取最近 20 条通知列表（deps 空 ⇒ 引用稳定，不连带重启 30s 轮询）
   const loadList = useCallback(async () => {
@@ -110,11 +114,16 @@ export function useNotify(): NotifyCtl {
     return () => { if (timerRef.current) window.clearInterval(timerRef.current) }
   }, [refresh])
 
-  // 点击浮层外部关闭（只在默认 Bell 触发器场景生效：wrapRef 包住钮与浮层）
+  // 点击浮层外部关闭（只在默认 Bell 触发器场景生效：wrapRef 包住触发器）
+  // ★ G20：浮层已 portal 到 body（不再是 wrapRef 的后代），故必须单独放行浮层自身的点击，
+  //   否则 portal 后 `!wrapRef.contains(target)` 对每一次浮层内点击都成立、当场误关。
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+      const t = e.target as Node
+      if (wrapRef.current?.contains(t)) return
+      if (panelRef.current?.contains(t)) return
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
@@ -146,7 +155,7 @@ export function useNotify(): NotifyCtl {
     if (next) void loadList()
   }
 
-  return { unread, items, open, hasMore, loadingMore, wrapRef, setOpen, toggle, loadList, markRead, markAll, loadMore }
+  return { unread, items, open, hasMore, loadingMore, wrapRef, panelRef, setOpen, toggle, loadList, markRead, markAll, loadMore }
 }
 
 /** 通知浮层（.bell-panel）：头部未读全清 + 列表 + 分页「更多」。调用方决定何时挂载。 */
@@ -193,6 +202,22 @@ export function NotifyPanel({ ctl }: { ctl: NotifyCtl }) {
 // 默认导出组件：通知铃铛触发器 + 浮层（后台顶栏用；前台改由账号下拉承载）
 export default function Bell() {
   const ctl = useNotify()
+  // ★ G20：浮层 portal 到 body + 固定定位，落点现算。触发器在后台顶栏里，浮层若仍用
+  //   `position:absolute` 就会被顶栏/左栏的 overflow 裁切；portal 出去才不会。
+  const [pos, setPos] = useState<{ left: number; top: number; width: number; maxHeight: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!ctl.open) { setPos(null); return }
+    const place = () => setPos(placeBellPanel(ctl.wrapRef.current))
+    place()
+    window.addEventListener('resize', place)
+    // capture 阶段挂 scroll：滚动事件不冒泡到 document，浮层内的滚动祖先也要跟着重锚
+    document.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      document.removeEventListener('scroll', place, true)
+    }
+  }, [ctl.open, ctl.wrapRef])
+
   return (
     <div className="bell-wrap" ref={ctl.wrapRef}>
       <style>{BELL_CSS}</style>
@@ -200,14 +225,40 @@ export default function Bell() {
         <BellIcon size={18} />
         {ctl.unread > 0 && <Badge className="bell-count">{ctl.unread}</Badge>}
       </button>
-      {ctl.open && <NotifyPanel ctl={ctl} />}
+      {ctl.open && pos && createPortal(
+        <div className="bell-pop" ref={ctl.panelRef}
+             style={{ left: pos.left, top: pos.top, width: pos.width, maxHeight: pos.maxHeight }}>
+          <NotifyPanel ctl={ctl} />
+        </div>,
+        document.body,
+      )}
     </div>
   )
+}
+
+// ★ G20：Bell 浮层落点——开在触发器下沿、四边夹进视口，宽/高随视口收。现算而非写死
+//   （参照 AccountMenu.placeNotice() 的口径：夹边 + 向上翻 + 撑不满就收）。
+function placeBellPanel(anchor: HTMLElement | null) {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+  const width = Math.min(340, vw - 24)
+  const maxHeight = Math.min(420, Math.max(160, vh - 24))
+  if (!anchor) return { left: Math.max(8, vw - width - 8), top: 8, width, maxHeight }
+  const r = anchor.getBoundingClientRect()
+  const left = Math.max(8, Math.min(r.right - width, vw - width - 8))
+  let top = r.bottom + 8
+  // 下沿越出视口就翻到触发器上沿（向上展开），并据当下上沿收高
+  if (top + maxHeight > vh - 8) top = Math.max(8, r.top - maxHeight - 8)
+  return { left, top, width, maxHeight: Math.min(maxHeight, vh - top - 8) }
 }
 
 // —— 浮层（bell- 前缀，避免与组件库类名重名）——
 const BELL_CSS = `
 .bell-wrap{position:relative;display:inline-flex}
+/* ★ G20：浮层 portal 到 body 的固定定位容器（落点由 placeBellPanel() 现算）——
+   内层 .bell-panel 退回静态流并撑满容器，宽/高一律由这里的 inline style 决定 */
+.bell-pop{position:fixed;z-index:70}
+.bell-pop .bell-panel{position:static;width:100%;box-sizing:border-box;max-height:inherit}
 .bell-trigger{position:relative;display:inline-flex;align-items:center;justify-content:center;padding:6px;
   background:transparent;border:0;color:var(--lc-text-2);cursor:pointer;font-family:var(--lc-font);border-radius:var(--lc-r-bar)}
 .bell-trigger:hover{color:var(--lc-text)}

@@ -76,7 +76,7 @@ func (s *Server) handleUserImportTemplate(w http.ResponseWriter, r *http.Request
 	}
 	f := buildUserImportTemplate()
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-	w.Header().Set("Content-Disposition", `attachment; filename="user_import_template.xlsx"`)
+	w.Header().Set("Content-Disposition", contentDisposition("user_import_template.xlsx"))
 	_ = f.Write(w)
 	_ = u.ID // tid 鉴权已由 requireTenantAdmin 完成，此处仅保持权限一致性
 }

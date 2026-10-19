@@ -38,14 +38,16 @@ func extractXlsx(path string, e *Extractor) error {
 
 // ApplyXlsx 写回 xlsx：替换匹配的单元格值，译文过长时缩小字号。
 // 参数：path=原 xlsx 路径，outPath=输出路径，translations=原文→译文映射。
-func ApplyXlsx(path, outPath string, translations map[string]string) error {
+// ★ G17（2026-10-19）：返回命中单元格数；零命中不再静默交付未翻译件，由调用方走退化通道。
+// 产物一律写出（写了就有件、退化由上层决定）。
+func ApplyXlsx(path, outPath string, translations map[string]string) (int, error) {
 	f, err := excelize.OpenFile(path)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
 
-	changed := false
+	hits := 0
 	// 遍历所有 sheet 的单元格，命中译文则写入
 	for _, sheet := range f.GetSheetList() {
 		rows, err := f.GetRows(sheet)
@@ -82,16 +84,13 @@ func ApplyXlsx(path, outPath string, translations map[string]string) error {
 						}
 					}
 				}
-				changed = true
+				hits++
 			}
 		}
 		// 调整列宽
 		adjustXlsxColWidth(f, sheet)
 	}
-	if !changed {
-		// 即便无变化也复制文件
-	}
-	return f.SaveAs(outPath)
+	return hits, f.SaveAs(outPath)
 }
 
 // adjustXlsxColWidth 按列最大字符数自动调整列宽（范围 8~50）。

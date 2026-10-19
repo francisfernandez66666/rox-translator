@@ -242,3 +242,44 @@ describe('useMobileShell · 档位与抽屉状态机', () => {
     expect(screen.getByTestId('mobile').textContent).toBe('false')
   })
 })
+
+// ============================================================================
+// ★ 2026-10-19 G15-D8：激活态「恰一项」等值锁（现网 /billing、/packages 亮两项）
+// 缺陷形态：外壳传来的 tab 对 /billing、/packages 落默认 'workbench'，
+//   而「计费与套餐」钮自己按 path 点亮 ⇒ 这两个路径下左栏亮两枚胶囊。
+// 判据：逐路径数 .lc-side-item--active **恰为 1**，并点名亮的是哪一项。
+//   反证（tab 被忽略）：传 tab="tickets" + path="/billing"，仍只能亮「计费与套餐」。
+// ============================================================================
+describe('FrontSideNav · 激活态恰一项（★ G15-D8）', () => {
+  /** 当前左栏亮起的那一枚胶囊的文字 */
+  function activeText(): string {
+    const items = Array.from(document.querySelectorAll('.lc-side-item--active'))
+    return items.map((el) => (el.textContent || '').trim()).join('|')
+  }
+
+  const cases: { path: string; expect: string }[] = [
+    { path: '/', expect: t('app.tabWorkbench') },
+    { path: '/tickets', expect: t('app.tabTickets') },
+    { path: '/editor', expect: t('app.tabEditor') },
+    // workbench 兜底：这两个路径必须仍亮「即时翻译」（与 K6 现读数一致，不许顺带改掉）
+    { path: '/my', expect: t('app.tabWorkbench') },
+    { path: '/chat-history', expect: t('app.tabWorkbench') },
+    // 本批唯一被改的两档：由 2 改 1
+    { path: '/billing', expect: t('hub.menuBilling') },
+    { path: '/packages', expect: t('hub.menuBilling') },
+    // isPersonal 已在 renderShell 默认开启，/invites 会露出并点亮
+    { path: '/invites', expect: t('app.navInvites') },
+  ]
+
+  it.each(cases)('path=$path ⇒ 恰一项激活且为「$expect」', ({ path, expect: want }) => {
+    renderShell({ path }, false)
+    expect(document.querySelectorAll('.lc-side-item--active').length, `path=${path} 亮起的胶囊数`).toBe(1)
+    expect(activeText()).toBe(want)
+  })
+
+  it('反证：外壳传来的 tab 已不再参与激活态（tab=tickets + path=/billing ⇒ 仍只亮计费）', () => {
+    renderShell({ path: '/billing', tab: 'tickets' } as Partial<React.ComponentProps<typeof FrontSideNav>>, false)
+    expect(document.querySelectorAll('.lc-side-item--active').length).toBe(1)
+    expect(activeText()).toBe(t('hub.menuBilling'))
+  })
+})

@@ -323,35 +323,6 @@ func TestManualPDFMethodAndHead(t *testing.T) {
 	}
 }
 
-// TestSanitizeManualFilename 响应头净化单测：引号/换行/非 ASCII 都不得进 Content-Disposition
-// （老单文件链的文件名来自运维配置，不可控）。
-func TestSanitizeManualFilename(t *testing.T) {
-	cases := map[string]string{
-		"ja.pdf":          "ja.pdf",
-		"zh_hant.pdf":     "zh_hant.pdf",
-		"manual.pdf":      "manual.pdf",
-		`evil".pdf`:       "evil-.pdf",           // 引号会提前终结 filename 参数
-		"a\nb.pdf":        "a-b.pdf",             // 换行可用于响应头注入
-		"用户手册.pdf":        "pdf.pdf",             // 纯非 ASCII 名折成占位（真名走 filename*）
-		"":                "manual.pdf",          // 空名回落
-		"..":              "manual.pdf",          // 点串不得成为文件名
-		"LangCross-Guide": "LangCross-Guide.pdf", // 缺后缀补上
-		"/etc/passwd.pdf": "etc-passwd.pdf",      // filepath.Base 之后仍可能带斜杠的兜底
-	}
-	for in, want := range cases {
-		if got := sanitizeManualFilename(in); got != want {
-			t.Fatalf("sanitizeManualFilename(%q) 期望 %q，实际 %q", in, want, got)
-		}
-	}
-	// 等值锁：任何输入的结果里都不得出现引号、换行、斜杠
-	for in := range cases {
-		got := sanitizeManualFilename(in)
-		if strings.ContainsAny(got, "\"\n\r\\/") {
-			t.Fatalf("净化后的文件名仍含危险字符：%q → %q", in, got)
-		}
-	}
-}
-
 // TestManualPDFRegisteredOnRealRoutes 锁⑥（真接线）：**生产 routes() 注册的 mux** 必须把
 // /docs/manual/zh.pdf 送到 PDF 处理方，而不是 spa.go 的 "/" 兜底。
 // 为什么单独立一条：前面几条用的是测试自建的 mux（把 PDF 路由与兜底桩挂一起），
@@ -395,5 +366,5 @@ func TestManualPDFRegisteredOnRealRoutes(t *testing.T) {
 //   · 删掉 %PDF 魔数判据 ⇒ 锁④「坏文件 500」红（HTML 改名 .pdf 被当手册发出）；
 //   · 把 normalizeMailLang 的空码分支改成「回落 zh」⇒ 锁④白名单外 400 红（静默给中文）；
 //   · 把 Content-Disposition 改成请求语种名（th.pdf）⇒ 锁③等值红；
-//   · 去掉 sanitizeManualFilename 的引号替换 ⇒ 锁净化的「无引号/换行/斜杠」等值红。
+//   · 把响应头改回裸拼（绕过 contentDisposition 出口）⇒ G5 家族级静态闸红。
 // ============================================================================

@@ -387,9 +387,9 @@ export default function ChatWindow() {
     sendNow(input.trim())
   }
 
-  // ★ 2026-10-15 用户令「语音改成元宝那样：先发送→再识别→再翻译」：
-  //   发送逻辑抽成 sendNow(text)，供键盘发送与语音识别自动发送共用同一套守卫
-  //   （慢文本预检 / 忙碌拦截 / 缩翻 / 目标语言），避免两处各写一份口径。
+  // ★ 2026-10-15 用户令「语音改成元宝那样」的发送口径已由 2026-10-19 用户令覆盖：
+  //   语音识别产物改为**回填输入框**（见 stopMic），sendNow 现在只服务键盘发送（handleSend），
+  //   但它仍是唯一的发送咽喉（慢文本预检 / 忙碌拦截 / 缩翻 / 目标语言四条守卫只此一份）。
   function sendNow(rawText: string) {
     if (!rawText) return
     // ★ 决策⑪①「宁误拦」：预检判 reject（预计超 90s 时限）直接不发送——
@@ -407,9 +407,9 @@ export default function ChatWindow() {
   }
 
   // ---- ★ P3 麦克风录音（2026-10-14）----
-  // ★ 2026-10-15 用户令（覆盖 P3 原「不自动发送」口径）：「语音改成元宝那样，先发送、再识别、再翻译」。
-  //   现在的口径＝**一次手势走完**：按下录音 → 松开 → 立即把识别文本发出去翻译，不再要求用户
-  //   在输入框里再点一次「翻译」。识别失败仍只提示、不发送（错原文发出去既费积分又没法挽回）。
+  // ★ 2026-10-19 用户令（覆盖 2026-10-15「一次手势直接发送」口径）：识别出文本后**回填输入框**，
+  //   允许用户二次编辑，点「翻译」才发送。理由＝误识别/口误先校对再计费，目标语种也能在发送前改；
+  //   识别失败仍只提示、不回填、不发送（错原文发出去既费积分又没法挽回）。
   // 可用性：浏览器不支持就直接**不渲染这颗按钮**（不给一个点了必然报错的入口）。
   // ★ 2026-10-16：再加一道服务端能力门——cap.asr===false（服务端没装识别模型）时同样整颗不渲染；
   //   cap.asr===null（探不到）走 fail-open 照常渲染，真点了仍有识别失败的本地化提示兜底。
@@ -451,16 +451,24 @@ export default function ChatWindow() {
     try {
       const text = await session.final
       if (text && text.trim()) {
-        // ★ 2026-10-15 用户令：识别出文本后直接发送翻译（元宝式一次手势走完），
-        //   不再回填输入框等用户手动再点「翻译」；输入框保持展开便于随后追问。
+        // ★ 2026-10-19 用户令：识别出文本后**回填输入框**（允许二次编辑），由用户点「翻译」再发送
+        //   ——推翻 2026-10-15「识别完直接发送」的做法：误识别/口误先校对再计费，目标语种也可在
+        //   发送前改。expandFromEntry 同时把焦点落到输入框，方便接着改。
         expandFromEntry()
-        sendNow(text.trim())
+        setInput(text.trim())
       }
-    } catch {
+    } catch (e) {
       // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：服务端引擎抛的是 VoiceError，
       //   message 是后端给运维看的中文，直接 toast 即「俄语界面里一句中文」。
       //   ASR 失败在客户侧只有一个可行动作——重试或改用键盘输入，那句本就在词典里。
-      toast({ title: t2('chat.micFailed'), tone: 'warn' })
+      // ★ 2026-10-19 G11：静音/极低能量（后端 reason='no_speech'）与"识别失败"分开说——
+      //   前者要用户「再说一遍」，后者是能力/链路问题，行动不同。档位由后端 asrReason 给；
+      //   键已进 12 语种词典（本批收尾补译），走 t() 取词。
+      if ((e as { reason?: string } | null)?.reason === 'no_speech') {
+        toast({ title: t('chat.micNoSpeech'), tone: 'warn' })
+      } else {
+        toast({ title: t2('chat.micFailed'), tone: 'warn' })
+      }
     } finally {
       setMicBusy(false)
     }
@@ -751,8 +759,8 @@ export default function ChatWindow() {
                   <UploadIcon size={16} />
                 </button>
               )}
-              {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送），见上方 startMic 注释。
-                  不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。 */}
+              {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送，★ 2026-10-19 用户令恢复此口径），
+                  见上方 stopMic 注释。不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。 */}
               {canMic && (
                 <button type="button" className="cw-icon-btn" data-testid="mic-btn"
                   title={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}

@@ -19,6 +19,7 @@
 
 错误协议（stderr 打 ERR:<Variant>:<msg>，fileproc/asr.go 的 friendlyAsrError 逐档翻译）：
   Asset/ModelLoad/Import/AudioOpen/AudioCorrupt/Decode/Unsupported/Container/Empty/FFmpeg
+  ★ 2026-10-19 G11 新增 NoSpeech：输入能量低于门限＝"这次没听到人声"（不许让模型在静音上幻觉出一句话）。
 """
 import importlib.util
 import json
@@ -38,6 +39,36 @@ ASSETS_DIR = Path(__file__).resolve().parent / "assets" / "asr"
 # （SenseVoice / ParaParakeet / Whisper 全系一致）。统一先把任意容器砸成这个形态，
 # 后面模型侧就不必再操心 resample —— 与其在四个模型里各写一遍重采样，不如在这里一次性做对。
 TARGET_SAMPLE_RATE = 16000
+
+# ★ 2026-10-19 G11：无语音门限。纯静音/极低能量输入交给模型会**幻觉**出一句凭空的话
+#   （模型在无声段"补"出常见词），客户看到的是"我什么都没说却识别出一句话"。
+#   判据用 RMS 与峰值两条同时成立（字面静音 rms=0/peak=0；小声真人语音 rms≈0.005 量级，两条都远高）。
+#   参数刻意宽松：宁可放过一段真静音，也不误伤小声的真人语音（误伤比偶发幻觉更伤可用性）。
+NO_SPEECH_RMS = 1e-4      # ≈ -80 dBFS
+NO_SPEECH_PEAK = 1e-3
+REASON_NO_SPEECH = "no_speech"
+
+
+def detect_no_speech(samples) -> str:
+    """判这段采样是不是「没有语音」：是则返回 REASON_NO_SPEECH，否则返回空串。
+
+    ★ 为什么必须有这道门（而不是靠模型自己出空串）：sherpa-onnx 的离线识别器在纯静音/极低能量输入上
+      会**幻觉**出一句常见文本（本仓真踩：麦克风没收到人声却"识别"出一段话填进输入框）。
+    ★ 为什么不用「幻听词黑名单」：词表打地鼠追不上模型措辞（同 §一·13 提示词泄漏那条口径），
+      判据落在**输入能量**这一侧才稳定。
+    """
+    import numpy as np
+
+    if samples is None:
+        return REASON_NO_SPEECH
+    arr = np.asarray(samples, dtype=np.float32)
+    if arr.size == 0:
+        return REASON_NO_SPEECH
+    rms = float(np.sqrt(np.mean(arr * arr)))
+    peak = float(np.max(np.abs(arr)))
+    if rms < NO_SPEECH_RMS and peak < NO_SPEECH_PEAK:
+        return REASON_NO_SPEECH
+    return ""
 
 
 # ---------------------------------------------------------------- probe
@@ -275,6 +306,13 @@ def cmd_transcribe(path: str) -> int:
                                    (sample_rate, TARGET_SAMPLE_RATE))
             if samples.size == 0:
                 print("ERR:Empty:音频无有效采样（时长为零或纯静音）", file=sys.stderr)
+                return 2
+            # ★ 无语音门：纯静音/极低能量时模型会幻觉出一句话，必须在喂模型**之前**拦下
+            #   （否则幻觉文本会溜进客户输入框，比报一次失败更坏）。档位名 NoSpeech 是对外排障契约，
+            #   与 fileproc/asr.go 的 friendlyAsrError 逐档对齐。
+            if detect_no_speech(samples) == REASON_NO_SPEECH:
+                print("ERR:NoSpeech:%s 未检测到有效语音（输入能量低于门限，可能是纯静音或极低音量）" % REASON_NO_SPEECH,
+                      file=sys.stderr)
                 return 2
 
             stream = recognizer.create_stream()

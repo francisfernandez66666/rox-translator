@@ -49,7 +49,8 @@ export interface FrontSideNavProps {
   onClose: () => void
   /** 当前路径：决定自助入口的激活态 */
   path: string
-  /** 当前工作台 Tab：决定三枚 Tab 的激活态（由外壳从 URL 反推后传入，推导只留一处） */
+  /** 当前工作台 Tab。★ 2026-10-19 G15-D8：本件**不再消费它**（激活态改由 path 单向派生，
+   *  见组件内 activeKey），保留此字段仅为不影响调用方（外壳仍在传）；将来从 props 摘除属破坏性改动。 */
   tab: WorkbenchTab
   /** 切工作台 Tab */
   onTab: (tab: WorkbenchTab) => void
@@ -78,12 +79,24 @@ export interface FrontSideNavProps {
  * 不用「桌面一套 + 移动一套」两棵子树（那种写法迟早漂移出两种观感）。
  */
 export default function FrontSideNav({
-  isMobile, open, onClose, path, tab, onTab, onRoute,
+  isMobile, open, onClose, path, onTab, onRoute,
   tenantTag, pkgLine, isPersonal, canUploadKb, onUploadKb, roleLevel,
   AccountMenu, SiteFooter,
 }: FrontSideNavProps) {
   const [, t] = useT()
   const branding = useBranding()
+
+  // ★ 2026-10-19 G15-D8：「当前在哪一项」由 path **单向派生**，不再吃外壳传来的 tab。
+  //   缺陷形态（现网 D8 实测）：外壳的 tab 派生对 /billing、/packages 落默认 'workbench'，
+  //   于是这三个路径下「即时翻译」与「计费与套餐」**各亮一次**（两把尺子）。
+  //   派生口径与外壳一致（workbench 兜底保持 /my、/chat-history 仍亮「即时翻译」，
+  //   只有 /billing、/packages 由 2 改 1）。激活态旁落项为零是本条判据，见 frontshell.dom.test.tsx。
+  const activeKey: WorkbenchTab | 'billing' | 'invites' =
+    path.startsWith('/tickets') ? 'tickets'
+      : path.startsWith('/editor') ? 'editor'
+        : (path.startsWith('/billing') || path.startsWith('/packages')) ? 'billing'
+          : path.startsWith('/invites') ? 'invites'
+            : 'workbench'
 
   // 点完即收（移动档）：只靠路口 effect 对「点当前那一项」无效（path 没变）——见口径①
   // 普通函数即可（不是 hook）：本件不做 memo 稳定性优化，闭包每次渲染重建的成本远低于误用的风险
@@ -130,13 +143,13 @@ export default function FrontSideNav({
         {/* 功能菜单：三个工作台 Tab（原桌面顶栏三枚 .app-tab 迁此），选中态从 URL 反推。
             行样式复用 .lc-side-item / .lc-side-item--active（白底黑字反相胶囊，同后台侧栏）。 */}
         <nav className="fs-nav">
-          <button type="button" className={'lc-side-item' + (tab === 'workbench' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('workbench'))}>
+          <button type="button" className={'lc-side-item' + (activeKey === 'workbench' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('workbench'))}>
             <span className="lc-side-item__icon"><Icon n="chat" /></span>{t('app.tabWorkbench')}
           </button>
-          <button type="button" className={'lc-side-item' + (tab === 'tickets' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('tickets'))}>
+          <button type="button" className={'lc-side-item' + (activeKey === 'tickets' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('tickets'))}>
             <span className="lc-side-item__icon"><Icon n="clipboard" /></span>{t('app.tabTickets')}
           </button>
-          <button type="button" className={'lc-side-item' + (tab === 'editor' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('editor'))}>
+          <button type="button" className={'lc-side-item' + (activeKey === 'editor' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onTab('editor'))}>
             <span className="lc-side-item__icon"><Icon n="pencil" /></span>{t('app.tabEditor')}
           </button>
         </nav>
@@ -150,11 +163,11 @@ export default function FrontSideNav({
           <nav className="fs-nav">
             {/* 我的套餐 + 我的余额已合并为一项（落 /billing 账单中心，该页含余额+流水+发票）；
                 /packages 也点亮这一项：它已并入账单中心，两个路径都算「在账单区」 */}
-            <button type="button" className={'lc-side-item' + (path.startsWith('/billing') || path.startsWith('/packages') ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onRoute('/billing'))}>
+            <button type="button" className={'lc-side-item' + (activeKey === 'billing' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onRoute('/billing'))}>
               <span className="lc-side-item__icon"><Icon n="card" /></span>{t('hub.menuBilling')}
             </button>
             {isPersonal && (
-              <button type="button" className={'lc-side-item' + (path.startsWith('/invites') ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onRoute('/invites'))}>
+              <button type="button" className={'lc-side-item' + (activeKey === 'invites' ? ' lc-side-item--active' : '')} onClick={() => pickNav(() => onRoute('/invites'))}>
                 <span className="lc-side-item__icon"><Icon n="chain" /></span>{t('app.navInvites')}
               </button>
             )}

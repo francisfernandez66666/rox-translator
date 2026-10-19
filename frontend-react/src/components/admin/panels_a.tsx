@@ -4,14 +4,15 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Button, DataTable, Dialog, EmptyState, Link, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
-// confirmDialog 已不再使用（危险操作改走 promptText/直接执行）
-import { promptText } from '@/components/uiDialogs'
+// confirmDialog 用于邀请码撤销的**唯一**确认点（★ G9，2026-10-19）；其余危险操作仍走 promptText/直接执行
+import { promptText, confirmDialog } from '@/components/uiDialogs'
 import {
   systemHealth, systemAudit, systemAlerts, alertResolve, alertSilence, alertUnsilence,
   adminUsers, adminUserCreate, adminUserUpdate, adminUserDelete, adminUserResetPassword,
   usageMe, usageOrg, usageCost, inviteCodes, inviteCodeCreate,
   orgList, adminPackageSettings, adminPackageSettingsSave,
   API_BASE, authHeaders, getAuthToken, getActiveTenantId, handleUnauthorized,
+  request, bizResp, // ★ G9：邀请码撤销（后端端点尚缺，前端按契约先接；失败走诚实错误提示）
   type OrgInfo,
 } from '@/api'
 import { useAdmin, roleName } from '@/stores/admin'
@@ -19,7 +20,7 @@ import { Panel, Field, toastResp } from './parts'
 import { fmtTime, fmtNum } from '@/lib/ui'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分口径展示
 import { useT, t as tFn, tpl as tplFn } from '@/i18n'
-import { toastError, toastWarn } from '@/lib/toastBus'
+import { toastError, toastWarn, toastSuccess } from '@/lib/toastBus'
 import { runGuarded } from '@/lib/runGuarded' // ★ #42：取数失败必须有可见出口（见 loadDash / 用量看板注释）
 
 /** 审计动作键→中英文映射名（模块级，避免渲染闭包作用域问题；未命中字典时回退原始动作键） */
@@ -799,7 +800,7 @@ export function UsageP() {
 
 /** 邀请码列表与创建组件：可指定归属租户或新建组织 */
 export function InvitesP() {
-  const [, t] = useT()
+  const [, t, tpl] = useT()
   const { tenants, activeTenantId, isSuper } = useAdmin()
   // 邀请码列表数据
   const [rows, setRows] = useState<Any[]>([])
@@ -819,6 +820,21 @@ export function InvitesP() {
   useEffect(() => { void load() }, [load])
   useEffect(() => { void load() }, [activeTenantId, load])
 
+  // ★ G9（2026-10-19）：撤销邀请码。误发的码过去无法作废（面板只能生成/查看）。
+  //   确认框**只此一处**（行内 Link 不再叠一层，见 admin/doubleConfirmGate.test.ts）。
+  //   后端 revoke 端点尚缺 ⇒ 打到即回结构化失败，这里按诚实错误提示（不谎报成功）。
+  //   只对「未使用且未撤销」的行开放此动作（已使用的码保留用于追溯，不删行）。
+  async function revokeCode(row: Any) {
+    if (!(await confirmDialog({ body: tpl('invites.revokeConfirm', { code: String(row.code ?? '') }), danger: true }))) return
+    const r: any = await bizResp(() => request('/api/admin/invite-codes/revoke', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ id: row.id }),
+    }))
+    if (r.success) { toastSuccess(t('invites.revokeDone')); void load() }
+    else toastError(r.message)
+  }
+
   return (
     <Panel title={t('invites.title')}
       extra={<Button variant="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
@@ -828,10 +844,25 @@ export function InvitesP() {
         columns={[
           { key: 'code', title: t('invites.colCode') },
           { key: 'tenant_id', title: t('invites.colTenant'), width: 110, render: (row) => row.tenant_id > 0 ? `#${row.tenant_id}` : t('invites.newOrg') },
-          { key: 'used', title: t('invites.colStatus'), width: 90, render: (row) => <StatusPill tone={Number(row.used) === 1 ? 'idle' : 'success'}>{Number(row.used) === 1 ? t('invites.used') : t('invites.unused')}</StatusPill> },
+          { key: 'used', title: t('invites.colStatus'), width: 90, render: (row) => {
+            // ★ G9：三态——已撤销 > 已使用 > 未使用（撤销只作废未使用的码，已使用的码保留追溯）
+            const revoked = !!row.revoked
+            const used = Number(row.used) === 1
+            return (
+              <StatusPill tone={revoked ? 'danger' : used ? 'idle' : 'success'}>
+                {revoked ? t('invites.revoked') : used ? t('invites.used') : t('invites.unused')}
+              </StatusPill>
+            )
+          } },
           { key: 'used_by', title: t('invites.colUsedBy'), width: 140 },
           { key: 'created_at', title: t('invites.colCreatedAt'), width: 165, render: (row) => fmtTime(row.created_at) },
           { key: 'used_at', title: t('invites.colUsedAt'), width: 165, render: (row) => fmtTime(row.used_at) },
+          // ★ G9：撤销动作列——只对「未使用且未撤销」的行开放（其余行显示占位，行本身不删）
+          { key: 'op', title: t('invites.colActions'), width: 90, render: (row) => (
+            (Number(row.used) === 1 || row.revoked)
+              ? <span style={{ color: 'var(--adm-faint)' }}>—</span>
+              : <Link tone="danger" onClick={() => { void revokeCode(row) }}>{t('invites.revoke')}</Link>
+          ) },
         ]}  />
       {!rows.length && <div style={{ textAlign: 'center', color: 'var(--adm-faint)', padding: 12 }}>{t('invites.empty')}</div>}
 

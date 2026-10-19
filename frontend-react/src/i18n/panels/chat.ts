@@ -210,6 +210,8 @@ export const zh: Record<string, string> = {
   'chat.empty': '暂无对话记录',
   'chat.selectHint': '选择左侧对话查看详情',
   'chat.noMsgs': '该对话暂无消息',
+  // ★ 2026-10-19 G20：ChatHistory 底部信息条「{n} 条消息」（旧形态硬编码中文）。
+  'chat.msgCount': '{n} 条消息',
   'chat.now': '刚刚',
   'chat.unknown': '未命名',
   'chat.minAgo': '分钟前',
@@ -414,6 +416,7 @@ export const en: Record<string, string> = {
   'chat.empty': 'No chat history',
   'chat.selectHint': 'Select a conversation on the left',
   'chat.noMsgs': 'No messages in this conversation',
+  'chat.msgCount': '{n} messages',
   'chat.now': 'Just now',
   'chat.unknown': 'Untitled',
   'chat.minAgo': 'min ago',

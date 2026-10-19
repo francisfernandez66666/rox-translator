@@ -413,6 +413,8 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 - 单次 ≤20 个文件、总量 ≤30MB
 - 支持 {{FORMATS}}
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
+- 下载响应头的文件名按 RFC 5987 双写（ASCII 兜底名 + filename*=UTF-8'' 百分号编码真名），
+  含中文/非 ASCII 的原名在浏览器里正常显示，脚本按 filename* 解码即可
 
 ## 图片与音频（OCR / ASR：识别 → 翻译 → **按原文件格式回写**）
 
@@ -580,6 +582,8 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 - Up to 20 files, 30MB total per request
 - Accepted: {{FORMATS}}
 - Download via the download endpoint when completed; artifacts are kept for 14 days
+- The download filename is written per RFC 5987 (ASCII fallback name + filename*=UTF-8'' percent-encoded real name),
+  so non-ASCII original names display correctly in browsers; scripts can decode filename*
 
 ## Images & audio (OCR / ASR: recognise → translate → **write back in the original format**)
 

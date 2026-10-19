@@ -11,7 +11,11 @@ import (
 func TestTranslateDocxParagraphMultiRunDistribution(t *testing.T) {
 	para := `<w:p><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">你好</w:t></w:r><w:r><w:rPr><w:color w:val="FF0000"/></w:rPr><w:t>世界</w:t></w:r></w:p>`
 	tr := map[string]string{"你好世界": "Hello my dear world"}
-	out := string(translateDocxXML([]byte(para), tr))
+	xout, hits := translateDocxXML([]byte(para), tr)
+	if hits == 0 {
+		t.Fatal("G17：命中段数不该为 0")
+	}
+	out := string(xout)
 	if !strings.Contains(out, "<w:b/>") || !strings.Contains(out, `w:val="FF0000"`) {
 		t.Fatalf("run 级格式标记丢失: %s", out)
 	}
@@ -42,7 +46,8 @@ func TestTranslateDocxParagraphMultiRunDistribution(t *testing.T) {
 func TestTranslateDocxParagraphAmpersandSafe(t *testing.T) {
 	para := `<w:p><w:r><w:t>AB</w:t></w:r><w:r><w:t>CD</w:t></w:r></w:p>`
 	tr := map[string]string{"ABCD": "R&D 50% <x>"}
-	out := string(translateDocxXML([]byte(para), tr))
+	xout2, _ := translateDocxXML([]byte(para), tr)
+	out := string(xout2)
 	if strings.Contains(out, "R&D") || strings.Contains(out, "<x>") {
 		t.Fatalf("转义未生效: %s", out)
 	}
