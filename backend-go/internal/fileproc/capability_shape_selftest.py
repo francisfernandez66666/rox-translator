@@ -21,7 +21,7 @@
 任一失败打 `LEG <id> FAIL <原因>` 并退 1。Go 侧同时核「腿的**全集**都在位」——
 有人删掉一条腿（或让它恒过）时，那一行 LEG 消失即红，这是本锁的射程自证。
 
-射程（24 条腿，逐条点名）：
+射程（38 条腿，逐条点名）：
   L01 词典装载：blank 恒占类 0（文件自带空首行时不重复前插）
   L02 词典补齐：类别数比表长时逐位补空格
   L03 CTC 解码：跳类 0＋连续重复去重＋就地补齐到类别数（表长于类别数不许截断）
@@ -57,6 +57,9 @@
    L34 图片回填：超长 token **先在分隔符后断**（`Yuan/`+`time`），无分隔符才按字符硬切、不丢字符（同批）
    L35 图片回填：有"不劈词也放得下"的字号就先降字号（1px 档），不把词劈开当第一选择（同批）
    L36 图片回填：单字噪声（开关被读成 `の`）且交付原文时不重画，原件像素逐字节保住（同批）
+   L37 图片回填：译后图沿用**原字体色**——浅蓝徽章的白字仍白、白底黑字仍黑（★ 2026-10-19 用户令）
+   L38 图片回填：字色取**墨迹核心**（前 FG_CORE_PCT%），抗锯齿过渡色不把估计拉向底色（同批）
+   L39 图片回填：估不准（无墨/墨少/无底色）回落底色反差档，且渲染真调用了估计函数（同批）
 
 环境变量（**只给 Go 侧反证用**，把被测对象换成一份变异副本，证明这些腿真的会红）：
   CAPSHAPE_OCR_MODULE=<path>  指定被测的 ocr_recognize.py 副本
@@ -949,6 +952,132 @@ def leg_l36_lone_nonascii_line_not_repainted():
         assert IMG._is_lone_nonascii("はの") is False, "两个字符＝可能是真词，不许跳"
         assert IMG._is_lone_nonascii("D") is False, "ASCII 短源文不许被跳"
         assert IMG._is_lone_nonascii("") is False
+
+
+# ---------------------------------------------- 图片：原字体色还原（⭐ 2026-10-19 用户令）
+
+def _ink_median(arr, bg):
+    """arr 里**笔画本色**的读数：与底色亮度差最大那一档（前 FG_CORE_PCT%）墨迹像素的中位色。
+
+    用与实现同一把尺子取墨迹（`_ink_mask`）。为什么还要再取一次核心：暗字的**抗锯齿边缘**
+    与底色差常常仍 > INK_LUMA_DELTA（黑字 50% 过渡＝中灰，差 119），它们会把整块墨迹的中位色
+    拉到中灰（实测 (17,17,17) 被读成 (83,83,83)）——那是**读数手法**的偏差，不是画错了色。
+    取核心即"笔画最实的那部分"，天线两侧一致：实现估色取核心，判据也只在核心上读。
+    """
+    import numpy as np
+    lum = IMG._luma_plane(arr)
+    bg_lum = IMG._luma_of(bg)
+    ink = IMG._ink_mask(lum, bg_lum)
+    assert int(ink.sum()) > 0, "框内一个墨点都没有（夹具没画上字，或实现把这一行漏绘了）"
+    delta = np.abs(lum - bg_lum)
+    core = ink & (delta >= float(np.percentile(delta[ink], IMG.FG_CORE_PCT)))
+    return tuple(int(round(v)) for v in np.median(arr[core], axis=0))
+
+
+def _dist(a, b) -> float:
+    """两色的欧氏距离（judge "落笔色更接近谁"用；抗锯齿会把落笔色往底色带一点，
+    等值判据在换机器/换字体时会假红，比"离哪个候选色更近"才是这条腿真问的事）。"""
+    return sum((float(a[i]) - float(b[i])) ** 2 for i in range(3)) ** 0.5
+
+
+@leg("L37")
+def leg_l37_render_keeps_original_font_color():
+    """★ 2026-10-19 用户令：译后图必须沿用**原字体色**（不只是原背景色）。
+
+    旧形态只按底色亮度二选一 ⇒ 浅蓝徽章（底 (180,198,255)，亮度 199≥128）上的**白字**被画成黑字，
+    红/绿/品牌色文字一律被拍成黑或白——用户报的就是「译文把原来的配色改掉了」。
+    判据取"落笔色**更接近原字体色**、且离旧口径那个色足够远"（不判逐字节等值：抗锯齿会把落笔色
+    往底色方向带一点，等值判据在换机器/换字体时假红——这条腿问的是"用了哪一档色"，两档相距 >400）。
+    两半一起判（只判"蓝徽章出白字"会让"恒白字"也一路绿）：
+      ① 浅蓝徽章 + 白字 ⇒ 落笔色必须接近白（旧口径会是黑）；
+      ② 白底 + 黑字 ⇒ 必须接近黑（不许一律改成"更亮的那一档"）。
+    """
+    import numpy as np
+    from PIL import Image
+    with tempfile.TemporaryDirectory() as d:
+        box = [80, 60, 240, 160]
+        # ① 浅蓝徽章：框＝徽章（字块占 15% ⇒ 纯色占比 0.85 ≥ BG_INNER_PURE_MIN，底色取徽章蓝）
+        #    每档配一个"竞争色" alt：徽章档的竞争色＝旧口径会画的黑，文档档＝反相的白。
+        for tag, base, orig, alt, out_src, out_dst in (
+            ("badge", (180, 198, 255), (255, 255, 255), (0, 0, 0), "s1.png", "o1.png"),
+            ("doc", (255, 255, 255), (17, 17, 17), (255, 255, 255), "s2.png", "o2.png"),
+        ):
+            arr = np.full((200, 320, 3), 255, dtype=np.uint8)
+            arr[60:160, 80:240, :] = base       # 控件/卡片底色
+            arr[100:140, 140:200, :] = orig     # 原字体色（大字号 ⇒ 笔画够实，读数不被抗锯齿主导）
+            src, dst = Path(d) / out_src, Path(d) / out_dst
+            _rgb_image(arr).save(src)
+            rc = _render(src, dst, [{"text": "已同步", "box": box, "tran": "Synced"}])
+            assert rc == 0, "%s 图渲染失败（rc=%d）" % (tag, rc)
+            got = np.asarray(Image.open(str(dst)).convert("RGB"), dtype=np.float32)
+            sub = got[60:160, 80:240]
+            bg = IMG._pick_bg(_rgb_image(sub), (0, 0, sub.shape[1], sub.shape[0]))
+            med = _ink_median(sub, bg)
+            assert bg == base, "%s 的底色没被保住（实读 %r，期望 %r）" % (tag, bg, base)
+            d_orig, d_alt = _dist(med, orig), _dist(med, alt)
+            assert d_orig <= 60, "%s 档没沿用原字体色（落笔 %r，原字体色 %r）" % (tag, med, orig)
+            assert d_alt >= d_orig + 150, \
+                "%s 档落笔色（%r）离竞争色 %r（%.0f）不够远，说明没在用原字体色（离原色仅 %.0f）" \
+                % (tag, med, alt, d_alt, d_orig)
+        # 估计器侧的硬读数（渲染腿之外再钉一次"认出了什么色"）
+        arr = np.full((200, 320, 3), 255, dtype=np.uint8)
+        arr[60:160, 80:240, :] = (180, 198, 255)
+        arr[100:140, 140:200, :] = (255, 255, 255)
+        est = IMG._pick_fg(_rgb_image(arr), (180, 198, 255))
+        assert est is not None and _dist(est, (255, 255, 255)) <= 40, \
+            "字色估计器没认出徽章上的白字（实读 %r）" % (est,)
+
+
+@leg("L38")
+def leg_l38_font_color_uses_ink_core():
+    """★ 2026-10-19 用户令：估字色取**墨迹核心**（按 |Δ亮度| 前 FG_CORE_PCT%），不是整块墨迹。
+
+    现网的字都带抗锯齿/压缩过渡色：整块取中位会被过渡色拉向底色——白字估成浅灰、深红估成粉，
+    「沿用原字体色」于是变成「沿用一个比原文淡一档的色」。两半：
+      ① 本色 (200,0,0) 只占墨迹约 1/4、其余是过渡色 (235,170,170) ⇒ 估计必须≈本色；
+      ② 夹具自证：同一块墨迹按**全部**像素取中位确实明显更淡——否则这条腿是空转的
+         （"核心百分位"这一维根本没被测到）。
+    """
+    import numpy as np
+    from PIL import Image
+    arr = np.full((40, 120, 3), 255, dtype=np.uint8)
+    arr[10:30, 20:60, :] = (235, 170, 170)     # 过渡色（抗锯齿外圈）：800 px
+    arr[14:26, 70:94, :] = (200, 0, 0)         # 本色：288 px（约 26%）
+    patch = Image.fromarray(arr, "RGB")
+    fg = IMG._pick_fg(patch, (255, 255, 255))
+    assert fg is not None, "白底深红字居然估不出字色"
+    assert abs(fg[0] - 200) <= 12 and fg[1] <= 12 and fg[2] <= 12, \
+        "字色没取墨迹核心（实读 %r，期望≈(200,0,0)；过渡色把估计拉亮了）" % (fg,)
+    lum = IMG._luma_plane(np.asarray(patch.convert("RGB"), dtype=np.float32))
+    ink = IMG._ink_mask(lum, 255.0)
+    all_med = tuple(int(round(v)) for v in np.median(np.asarray(patch.convert("RGB"), dtype=np.float32)[ink], axis=0))
+    assert all_med[0] - all_med[2] < fg[0] - fg[2] - 40, \
+        "夹具自证不过：全部墨迹的中位色 %r 没明显比核心色 %r 淡 ⇒ 这条腿测不到「核心百分位」" % (all_med, fg)
+
+
+@leg("L39")
+def leg_l39_font_color_falls_back_and_is_wired():
+    """★ 2026-10-19 用户令：估不准时**必须回落**底色反差档，且 `cmd_render` 真的用了 `_pick_fg`。
+
+    边界三档（都要回 None，由 `_text_color` 兜底——取向是**可见性 > 配色还原**）：
+      ① 无墨 / ② 墨太少（样本不足）/ ③ 底色取不到（不猜）。
+    ★ 接线腿与 L18/L30 同一口径：函数写对而没被调用＝白修——这里做**源码级**断言
+      （`cmd_render` 必须出现 `_pick_fg(`）；"估计出的色真被用上"由 L37 的渲染腿承担。
+    """
+    import inspect
+    import numpy as np
+    from PIL import Image
+    blank = Image.fromarray(np.full((30, 80, 3), 255, dtype=np.uint8), "RGB")
+    assert IMG._pick_fg(blank, (255, 255, 255)) is None, "无墨框不许估出字色"
+    few = np.full((30, 80, 3), 255, dtype=np.uint8)
+    few[10:13, 10:12, :] = 0                    # 6 px < FG_MIN_INK_PX：样本不足
+    assert IMG._pick_fg(Image.fromarray(few, "RGB"), (255, 255, 255)) is None, \
+        "墨太少时估出的色不可信，必须回落底色反差档"
+    solid = np.full((30, 80, 3), 255, dtype=np.uint8)
+    solid[10:22, 10:70, :] = 0
+    assert IMG._pick_fg(Image.fromarray(solid, "RGB"), None) is None, "底色取不到时不许猜字色"
+    assert "_pick_fg(" in inspect.getsource(IMG.cmd_render), \
+        "字色估计函数写对却没被渲染调用＝白修（旧形态恒 `_text_color`）"
 
 
 # ------------------------------------------------------------------ ASR：无语音门（⭐ 2026-10-19 G11）

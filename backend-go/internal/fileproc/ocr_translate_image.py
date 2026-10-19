@@ -28,9 +28,11 @@
     若这一行要写的又恰好是原文本身（identity 交付，符号段），直接跳过——画上去就是原文里
     根本不存在的「幽灵内容」（现网单里那批被画成满格巨字的 `0`/`4` 与乱入的 `の`）。
     真译文（≠ 原文）即便墨色很淡也照旧绘制，避免把「字号问题」换成「漏译问题」。
-  · **抹字底色与文字色按原图自适应**（★ 2026-10-19 G3-b）：底色取框外 12px 环带的**中位色**（取不到
-    则不填底、留轻微残影），文字色按底色亮度反差自动选黑/白——旧形态填框内 1×1 均值色 + 恒黑字，
-    在深色底/彩色卡片上要么抹出灰块、要么黑字看不见。
+  · **抹字底色与文字色按原图自适应**（★ 2026-10-19 G3-b；★ 2026-10-19 用户令加字色还原）：底色取框外
+    12px 环带的**中位色**（取不到则不填底、留轻微残影），**文字色从原文墨迹估计、沿用原字体色**
+    （`_pick_fg`：墨迹核心中位色；估不准才回落 `_text_color` 的亮底黑字/暗底白字）——旧形态填框内
+    1×1 均值色 + 恒黑字，在深色底/彩色卡片上要么抹出灰块、要么黑字看不见；后续又改成"按底色亮度二选一"，
+    于是**蓝徽章上的白字被拍成黑字**（底色亮度 199 ≥ 128），用户报的正是「译文没沿用原来的配色」。
   · **框坐标收两种形态**（★ 2026-10-17 修）：4 值矩形 [x0,y0,x1,y1]（`ocr_recognize.py`
     现役输出，见其 `boxes_out.append([x0, y0, x1, y1])`）与 8 值四点（历史/未来的多边形检测器）。
     其余（少于 4 个坐标、坐标数不成对、非数值）按**坏行跳过**，不打断整张图。
@@ -84,6 +86,15 @@ BG_RING_PX = 12
 #   达不到就仍走环带（普通文字行的框内是"底+字"混合，占比自然上不去，故不受影响）。
 BG_INNER_PURE_TOL = 12
 BG_INNER_PURE_MIN = 0.75
+# ★ 2026-10-19 用户令：译后图必须沿用**原背景色与原字体色**——旧形态的 `_text_color(bg)` 只按底色
+#   亮度二选一（亮底黑字／暗底白字），于是蓝徽章上的**白字**被画成黑字（该底色亮度 199 ≥ 128）、
+#   红/绿/品牌色文字一律被拍成黑或白：用户看到的正是「译文把原来的配色改掉了」。
+#   现改为从**原文墨迹**估计字体色（`_pick_fg`），下面两个数就是这条估计的两个口径。
+#   核心百分位：墨迹里按 |Δ亮度| 取前 25% 当"笔画本色"——抗锯齿过渡色与 JPEG 噪声留在外围，
+#   中位色比均值稳（均值会被过渡色拉向底色）。取整块墨迹的均值/中位会把字色估淡。
+FG_CORE_PCT = 75.0
+# 墨迹像素少于此数就不估计（样本太少，中位色不可信）⇒ 回落底色反差档。
+FG_MIN_INK_PX = 12
 # ★ 2026-10-19 本批：**软换行机会**（断词修复）。token 比框宽时先在分隔符后断（`Yuan/`＋`time`），
 #   不再一律按字符硬切（旧形态把 `Synchronized` 切成 `Synchronize`＋`d`）。
 SOFT_BREAK_AFTER = "/-_·\\|,;：、，；"
@@ -254,6 +265,18 @@ def _box_rect(box):
     return max(0, min(xs) - pad), max(0, min(ys) - pad), max(xs) + pad, max(ys) + pad
 
 
+def _luma_of(rgb):
+    """单色亮度（Rec.601 权重）。**全文件只有这一份系数**——`_luma_plane` 与它同源，
+    「什么算亮/暗」不许各处各写一份（同 AGENTS §一·11「多把尺子」那条：这类漂移正是
+    蓝徽章白字被画成黑字的成因，判据差一点点，观感全变）。"""
+    return 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
+
+
+def _luma_plane(arr):
+    """(H,W,3) 数组 → 亮度平面（与 `_luma_of` 同一组系数，供量墨迹/估字色共用）。"""
+    return arr[:, :, 0] * 0.299 + arr[:, :, 1] * 0.587 + arr[:, :, 2] * 0.114
+
+
 def _thin_rule_cols(ink, full_cols):
     """细长竖条（色条/竖线）的列掩膜：连续 ≤RULE_MAX_COLS 列、每列覆盖率 ≥RULE_COVER。
 
@@ -283,6 +306,26 @@ def _thin_rule_cols(ink, full_cols):
     return out
 
 
+def _ink_mask(lum, bg_lum):
+    """墨迹掩膜：与背景亮度差超 INK_LUMA_DELTA 的像素，剔掉框线/竖线/细长色条/横线。
+
+    ★ 抽成一把尺子的理由：`_line_ink_height`（量行高）与 `_pick_fg`（估字体色）问的是
+      同一个问题——「这个框里哪些像素算文字」。各写一份迟早漂开：一处补了新判据（细长色条、
+      满宽横线都是后补的），另一处没跟，于是「字号按 A 口径、字色按 B 口径」——这类漂移
+      正是本文件反复出现过的缺陷形态（同 AGENTS §一·11「计费三把尺子」那条通用教训）。
+    """
+    import numpy as np
+
+    ink = np.abs(lum - bg_lum) > INK_LUMA_DELTA
+    full_cols = ink.all(axis=0)   # 整列都有墨＝框线/竖线，不是文字
+    ink[:, full_cols] = False
+    ink[:, _thin_rule_cols(ink, full_cols)] = False   # 细长色条/竖线，同样不是文字
+    if ink.size:
+        full_rows = ink.all(axis=1)   # 整行都有墨＝横线/上下边，同样不是文字
+        ink[full_rows, :] = False
+    return ink
+
+
 def _line_ink_height(patch) -> int:
     """原行在框内的**墨迹高度**（像素行数）：与框内背景亮度差超阈值的像素行跨度。
 
@@ -300,15 +343,9 @@ def _line_ink_height(patch) -> int:
     arr = np.asarray(patch.convert("RGB"), dtype=np.float32)
     if arr.size == 0 or arr.shape[0] < 3 or arr.shape[1] < 3:
         return 0
-    lum = arr[:, :, 0] * 0.299 + arr[:, :, 1] * 0.587 + arr[:, :, 2] * 0.114
+    lum = _luma_plane(arr)
     bg = float(np.median(lum))
-    ink = np.abs(lum - bg) > INK_LUMA_DELTA
-    full_cols = ink.all(axis=0)   # 整列都有墨＝框线/竖线，不是文字
-    ink[:, full_cols] = False
-    ink[:, _thin_rule_cols(ink, full_cols)] = False   # 细长色条/竖线，同样不是文字
-    if ink.size:
-        full_rows = ink.all(axis=1)   # 整行都有墨＝横线/上下边，同样不是文字
-        ink[full_rows, :] = False
+    ink = _ink_mask(lum, bg)
     rows = np.where(ink.any(axis=1))[0]
     if rows.size == 0:
         return 0
@@ -526,11 +563,55 @@ def _pick_bg(img, rect):
 
 
 def _text_color(bg):
-    """按底色亮度挑文字色：亮底出黑字、暗底出白字（对比度固定，不随主题变量漂）。"""
+    """按底色亮度挑文字色：亮底出黑字、暗底出白字（对比度固定，不随主题变量漂）。
+
+    ★ 2026-10-19：本函数降级为**兜底档**——正常路径先由 `_pick_fg` 从原文墨迹估计原字体色，
+      估不准（墨太少/对比不足）才回落这里。"亮底黑字"对普通文档仍是正确的，
+      它只是答不出「浅蓝徽章上的白字」这类问题（底色亮度 199 ≥ 128 ⇒ 拍成黑字）。
+    """
     if not bg:
         return (0, 0, 0)
-    lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
+    lum = _luma_of(bg)
     return (0, 0, 0) if lum >= 128 else (255, 255, 255)
+
+
+def _pick_fg(patch, bg):
+    """从**原文墨迹**估计字体色：译后图沿用原字体色（★ 2026-10-19 用户令）。
+
+    旧形态只用 `_text_color(bg)` 按底色亮度二选一，于是**蓝徽章上的白字被画成黑字**
+    （该浅蓝底 (180,198,255) 亮度 199 ≥ 128 ⇒ 走黑字那支）、红/绿/品牌色文字一律被拍成黑或白
+    ——用户看到的是「译文把原来的配色改掉了」。现按用户令改成"认出原来是什么色，就画什么色"。
+
+    判据＝墨迹**核心**像素的中位色：
+      · 墨迹掩膜与量行高**同一把尺子**（`_ink_mask`）——框线/色条/横线一律不算字，否则
+        这些非文字像素会把估计拖向蓝/黑（那是"边框的颜色"，不是字的颜色）；
+      · 核心＝按 |Δ亮度| 取前 FG_CORE_PCT%：抗锯齿过渡色与压缩噪声留在外围——
+        取整块墨迹的中位/均值会被过渡色拉向底色，白字会被估成浅灰、深红会被估成粉；
+      · 中位色而非均值：笔画边缘总有过渡像素，均值系统性偏底；中位色抗这一点。
+
+    返回 None＝**估不准**（底色取不到／墨迹少于 FG_MIN_INK_PX）⇒ 调用方回落 `_text_color(bg)`。
+    取向：宁可回到"亮底黑字"的旧口径，也不猜一个来路不明的色——**可见性 > 配色还原**。
+    ⚠️ 刻意**不**另设"估计色与底色对比不足就回落"那道闸：核心是按 |Δ亮度| 取的**上分位**，
+    而 `_ink_mask` 已保证每个核心像素与底色差 > INK_LUMA_DELTA=48 ⇒ 那道闸实际永不触发
+    （本仓纪律：不留恒不触发的判据，见 §三「判据级断言代替不了守卫级」同族）。
+    """
+    import numpy as np
+
+    if not bg:
+        return None
+    arr = np.asarray(patch.convert("RGB"), dtype=np.float32)
+    if arr.size == 0 or arr.shape[0] < 3 or arr.shape[1] < 3:
+        return None
+    bg_lum = _luma_of(bg)
+    lum = _luma_plane(arr)
+    ink = _ink_mask(lum, bg_lum)
+    if int(ink.sum()) < FG_MIN_INK_PX:
+        return None
+    delta = np.abs(lum - bg_lum)
+    core = ink & (delta >= float(np.percentile(delta[ink], FG_CORE_PCT)))
+    if int(core.sum()) < 4:
+        return None
+    return tuple(int(round(v)) for v in np.median(arr[core], axis=0))
 
 
 def _hits_any(rect, others) -> bool:
@@ -669,8 +750,10 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         if overflow:
             overflowed += 1
         chain = _chain(size)
-        # ④ 文字色按底色亮度反差自动选：亮底黑字、暗底白字（暗底上用黑字＝看不见）。
-        fill = _text_color(bg)
+        # ④ 文字色优先**沿用原字体色**（从原文墨迹估计），估不准才按底色亮度反差回落。
+        #    ★ 2026-10-19 用户令：产物必须用**原背景色 + 原字体色**——旧形态只按底色二选一，
+        #    蓝徽章上的白字被画成黑字。patch 是**绘制前的原图**裁片（与量墨迹同一参照系）。
+        fill = _pick_fg(patch, bg) or _text_color(bg)
         lh = int(size * LINE_SPACING)
         # ⑤ 覆盖率掩膜 + **按框裁剪**贴回：墨迹只落在自己的框里（越框部分丢弃），
         #    垂直位置按**真实墨迹**居中。两件事一起做才治得住「字被邻行底色抹掉半截」——

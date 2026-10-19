@@ -61,6 +61,7 @@ var capShapeLegs = []string{
 	"L26", "L27",
 	"L28", "L29", "L30", "L31", "L32",
 	"L33", "L34", "L35", "L36",
+	"L37", "L38", "L39",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -126,9 +127,9 @@ var capShapeMutations = []capShapeMutation{
 		"字号地板被抹平（长译文从框高一路缩到 8px 蚂蚁字）"},
 	{"L20", capShapeImgFile, `    ink[:, full_cols] = False`, `    pass`,
 		"全高墨色列不剔除（框线让原行高被读成满框高，地板随之抬错）"},
-	{"L21", capShapeImgFile, "    lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]\n    return (0, 0, 0) if lum >= 128 else (255, 255, 255)",
+	{"L21", capShapeImgFile, "    lum = _luma_of(bg)\n    return (0, 0, 0) if lum >= 128 else (255, 255, 255)",
 		"    return (0, 0, 0)",
-		"文字色恒黑（深色底/彩色卡片上字看不见）"},
+		"兜底文字色恒黑（深色底/彩色卡片上字看不见——注：正常路径先走 L37~L39 的字色还原）"},
 	{"L22", capShapeImgFile, `        return tuple(int(round(v)) for v in np.median(ring, axis=0))`,
 		`        return (128, 128, 128)`,
 		"抹字底色恒灰（彩色底/深色底被抹出一块突兀的灰）"},
@@ -168,6 +169,15 @@ var capShapeMutations = []capShapeMutation{
 	{"L36", capShapeImgFile, `        noise_identity = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()`,
 		`        noise_identity = False`,
 		"单字噪声行被重画（OCR 把开关读成 `の` ⇒ 旧形态整块涂色再画大白字，圆钮消失）"},
+	// ===== ★ 2026-10-19 用户令批：译后图必须用**原背景色 + 原字体色**（L37~L39）。
+	// 同样是「运行期形状错」：健康面全绿、日志零红，只有把译后图打开才看得出
+	// （旧形态＝蓝徽章上的白字被拍成黑字——用户报的「译文没沿用原来的配色」）。
+	{"L37", capShapeImgFile, `        fill = _pick_fg(patch, bg) or _text_color(bg)`, `        fill = _text_color(bg)`,
+		"字色又只按底色亮度二选一（浅蓝徽章上的白字被画成黑字，用户报障形态）"},
+	{"L38", capShapeImgFile, `    core = ink & (delta >= float(np.percentile(delta[ink], FG_CORE_PCT)))`, `    core = ink`,
+		"字色改回整块墨迹取中位（抗锯齿过渡色把深红估成粉、白字估成浅灰）"},
+	{"L39", capShapeImgFile, `    if int(ink.sum()) < FG_MIN_INK_PX:`, `    if False:`,
+		"墨太少（样本不足）也照样估字色（不可信的读数被当成原字体色用上）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
