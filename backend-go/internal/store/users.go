@@ -83,6 +83,12 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	return s.iam.GetUserByUsernameGlobal(username)
 }
 
+// FindAccountForLogin 委托 iam.Store：登录/找回/重置共用的账号定位三条腿
+// （用户名精确 → 大小写不敏感且唯一 → 邮箱），判据与命中腿名称的口径全在 iam/account.go。
+func (s *Store) FindAccountForLogin(tid int64, account string) ([]*User, string, error) {
+	return s.iam.FindAccountForLogin(tid, account)
+}
+
 // ListUsers 委托 iam.Store
 func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	return s.iam.ListUsers(tid)
@@ -103,8 +109,9 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	return s.iam.ListUsersByOrg(tid, orgIDs)
 }
 
-// ResetPassword 委托 iam.Store
-func (s *Store) ResetPassword(id, tid int64, passHash string) error {
+// ResetPassword 委托 iam.Store：返回**真实受影响行数**（★ 2026-10-21 IAM 重做 P0-2，
+// 判据本体见 iam/store.go 那条注释——0 行不许被写成成功）。
+func (s *Store) ResetPassword(id, tid int64, passHash string) (int64, error) {
 	return s.iam.ResetPassword(id, tid, passHash)
 }
 

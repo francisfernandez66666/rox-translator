@@ -2,7 +2,7 @@
 // 文件翻译：面向 docx/pptx/xlsx/pdf 等格式的整文件翻译主流程（复刻 skill.py _handle_file_translate）。
 // 支持 KB 语言（先 KB 直配、未命中批量模型补漏）与"其他语言"（纯批量模型），
 // 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
-// 含 pro 模式批量审校、硬闸补漏（墙钟预算+零进展熔断）与漏翻可见性（Untranslated），
+// 含 pro 模式批量审校、硬闸补漏（墙钟预算+最多 5 轮）与漏翻可见性（Untranslated），
 // 翻译完成后按语言分别写回产物文件（translated/<落盘名主干>/ 每上传件一个子目录）并统计 KB/模型命中数。
 // ★B3（方案 A2）：主流程挂载逐段事件回调 emit（segment_done/segment_final/segments_sealed），
 // 让 SSE 通道边翻边上屏；发射器与协议见 file_events.go，工单/非流式路径 emit=nil 零开销。
@@ -36,6 +36,10 @@ import (
 	"translator/internal/observability"
 	"translator/internal/tenant"
 )
+
+// fileHardgateMaxAttempts 硬闸补漏轮次上限（★ 2026-10-21 用户令：所有翻译统一重试 5 次）。
+// 5 轮后仍缺失的段按原文交付，并由 UntranslatedSegments/GateWarnings 出声。
+const fileHardgateMaxAttempts = 5
 
 // FileTranslateResult 文件翻译结果
 type FileTranslateResult struct {
@@ -616,6 +620,24 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		modelHitsMu.Unlock()
 	}
 
+	// ★ M1（2026-10-21 UAT 收口）：记录「模型曾对这一段回绝」。判据本体在
+	// translation_guard.go 的 refusalResidue（与正文/文件名同一把尺子），这里只做记账：
+	// 收尾阶段再剔除「后来又补译成功」的段，只把仍然缺失的那些写进 GateWarnings，
+	// 让客户/审批台看得见「这一行模型没翻，已保留原文」而不是一单静默的残缺交付。
+	refusalMu := sync.Mutex{}
+	refusalSeen := map[string]map[string]bool{}
+	noteRefusal := func(lc, src, cand string) {
+		if !refusalResidue(src, cand) {
+			return
+		}
+		refusalMu.Lock()
+		defer refusalMu.Unlock()
+		if refusalSeen[lc] == nil {
+			refusalSeen[lc] = map[string]bool{}
+		}
+		refusalSeen[lc][src] = true
+	}
+
 	// ★ S8 敏感词兑底闸（输入侧·段级）：命中段不送 KB/模型（上游零暴露），
 	// 各语言直接预填占位交付；其余段照常翻译。
 	blockedSeg := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
@@ -695,10 +717,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 							//   「命中的译文」写进成品，且键一旦写入，硬闸按「键存在即已译出」
 							//   会永久跳过该段（不重试、不计 untranslated、不告警）。
 							//   判不过 = 不算命中 ⇒ 该段落入 needModelIdx 走模型补漏。
-							if v, ok := r.Translations[lc]; ok && IsTranslationUsable(t, v) {
-								kbHitIdx[i] = true
-								kbVal[i] = v
-								se.done(lc, t, v) // ★B3：KB 直译命中即推（A2 挂载点1，替代攒齐屏障的上屏时延）
+							if v, ok := r.Translations[lc]; ok {
+								if IsTranslationUsable(t, v) {
+									kbHitIdx[i] = true
+									kbVal[i] = v
+									se.done(lc, t, v) // ★B3：KB 直译命中即推（A2 挂载点1，替代攒齐屏障的上屏时延）
+								} else {
+									noteRefusal(lc, t, v) // ★ M1：KB 脏行是回绝话术也要记账（随后走模型补漏）
+								}
 							}
 						}
 						done := atomic.AddInt64(&kbDoneC, 1)
@@ -741,10 +767,15 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						// ★ 回显检测统一走 IsTranslationUsable（原此处手写 3 个不等式）：
 						//   空/失败占位/与源文同文/指令回显残留任一命中即视为未译出，
 						//   留给硬闸重试并计入 untranslated，绝不静默写进成品。
-						if i < len(batch) && IsTranslationUsable(texts[idx], batch[i]) {
+						if i >= len(batch) {
+							continue
+						}
+						if IsTranslationUsable(texts[idx], batch[i]) {
 							addTrans(lc, texts[idx], batch[i])
 							addModelHit()
 							se.final(lc, texts[idx], batch[i], "reviewed") // ★B3：审校后终稿（同文自动去重）
+						} else {
+							noteRefusal(lc, texts[idx], batch[i]) // ★ M1：回绝话术记账（收尾进 GateWarnings）
 						}
 					}
 				}
@@ -783,11 +814,15 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				t := texts[idx]
 				// ★ 回显检测（与 KB 路径同一口径，见 translation_guard.go）：模型原样返回源文
 				// = 未翻译，视为缺失走重试，否则非中文目标时源文会被当成「译文」静默写入成品。
-				if i < len(batch) && IsTranslationUsable(t, batch[i]) {
-					addTrans(lc, t, batch[i])
-					addModelHit()
-					if !fast {
-						se.final(lc, t, batch[i], "reviewed") // ★B3：fast 模式无审校，终稿统一留给收尾 sweep
+				if i < len(batch) {
+					if IsTranslationUsable(t, batch[i]) {
+						addTrans(lc, t, batch[i])
+						addModelHit()
+						if !fast {
+							se.final(lc, t, batch[i], "reviewed") // ★B3：fast 模式无审校，终稿统一留给收尾 sweep
+						}
+					} else {
+						noteRefusal(lc, t, batch[i]) // ★ M1：回绝话术记账
 					}
 				}
 			}
@@ -797,11 +832,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// ★ 复核补漏（文件工单复核第1层）：扫描各语言未命中段落，重试一次批量模型。
 	// 治「有的中文还没翻译就贴上来」：首翻失败的段不再静默缺失。
 	// ★ 硬闸重试（方案语义）：对缺失段「重启 LLM 翻译」；仍回显则保留原文并计入告警。
+	// ★ 2026-10-21 用户令：所有翻译统一重试 5 次，超过 5 次仍缺的段按原文交付并告警。
 	// ★ 成本预算护栏（不改变上述语义本体）：
 	//   ① 墙钟预算 FILE_HARDGATE_MAX_SEC（默认 600s）——2026-08-26 漏翻整改：
 	//      预算检查从「仅轮首」细化为「轮首+逐段之间」，防止一轮内部超支导致
 	//      尾部段落（如末尾表格的「无」）从未获得补翻机会；
-	//   ② 零进展熔断：连续 2 轮缺失数不减 → 判定模型稳定回显/失败，退出循环；
+	//   ② 轮次上限固定 5 轮（fileHardgateMaxAttempts），不再按「连续零进展」提前熔断——
+	//      用户令要求 5 次机会必须给足；
 	//   ③ 每轮先小批量（bs=10，<sN> 显式配对）重译——对超短段（「无/有/日期」）
 	//      的抗回显性显著优于逐段单发，且吞吐高一个量级；批量后仍缺的段再逐段兜底。
 	untranslated := map[string]int{} // 语言 → 硬闸结束后仍未译出段数（进 Data 供审批/QA 可见）
@@ -817,9 +854,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		budget := hardGateBudget()
 		loopStart := time.Now()
-		prevMissing := -1
-		zeroProgressRounds := 0
-		for attempt := 1; ; attempt++ {
+		for attempt := 1; attempt <= fileHardgateMaxAttempts; attempt++ {
 			if ctx.Err() != nil {
 				break
 			}
@@ -839,16 +874,6 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译", lc, elapsed.Round(time.Second), len(still))
 				break
 			}
-			if prevMissing >= 0 && len(still) >= prevMissing {
-				zeroProgressRounds++
-				if zeroProgressRounds >= 2 {
-					log.Printf("[tm-hardgate] lang=%s 连续 %d 轮零进展（缺失 %d 段），停止重试", lc, zeroProgressRounds, len(still))
-					break
-				}
-			} else {
-				zeroProgressRounds = 0
-			}
-			prevMissing = len(still)
 			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
 			// 轮间间隔防打爆供应商；可被取消打断（不再无条件睡死 500ms）
 			select {
@@ -867,8 +892,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			for i, m := range still {
 				// ★ 硬闸写入点同样走 IsTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
 				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
-				if i < len(batch) && IsTranslationUsable(m, batch[i]) {
-					addTrans(lc, m, batch[i])
+				if i < len(batch) {
+					if IsTranslationUsable(m, batch[i]) {
+						addTrans(lc, m, batch[i])
+					} else {
+						noteRefusal(lc, m, batch[i]) // ★ M1：硬闸这一轮仍是回绝 ⇒ 记账
+					}
 				}
 			}
 			// 本轮第2优先：批量后仍缺失的段逐段兜底（全新调用，绕过 KB/缓存）。
@@ -880,7 +909,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if time.Since(loopStart) > budget {
 					break
 				}
-				if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok && IsTranslationUsable(m, v) {
+				if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok {
+					if !IsTranslationUsable(m, v) {
+						noteRefusal(lc, m, v) // ★ M1：逐段兜底仍是回绝 ⇒ 记账
+						continue
+					}
 					addTrans(lc, m, v)
 					se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
 					// 观测腿：这条日志既是"极简腿真被走到"的现场读数，也是 minimalInstrRescueMarker
@@ -898,6 +931,21 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			log.Printf("[tm-hardgate] lang=%s 结束：仍有 %d/%d 段未译出（已写入工单 Untranslated 供人工补译）", lc, len(missList), len(texts))
 			untranslated[lc] = len(missList)
 			untranslatedSegments[lc] = limitUntranslatedSegments(missList)
+		}
+	}
+	// ★ M1 收尾：把「模型回绝过、且最终仍未补译成功」的段收成读数。
+	// 剔除已补译的段——只有仍然缺失的那些才真的按原文交付，才需要客户/审批台看见。
+	// 只出语言与段数，**不出段文本**（工单内容属客户资料，日志不留原文）。
+	refusalBlocked := map[string]int{}
+	for lc, set := range refusalSeen {
+		n := 0
+		for src := range set {
+			if _, ok := langTranslations[lc][src]; !ok {
+				n++
+			}
+		}
+		if n > 0 {
+			refusalBlocked[lc] = n
 		}
 	}
 	prog("第2步/3：翻译完成", 2, 3)
@@ -935,6 +983,22 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if drops, langs := e.checkFileBrandPresence(ctx, texts, langTranslations); drops > 0 {
 		observability.Warn(ctx, "文件交付品牌名缺失", "drops", drops, "langs", len(langs))
 		gateWarnings = append(gateWarnings, fmt.Sprintf("brand_dropped=%d（%d 个语言的译文里品牌名缺失，可能被翻掉）", drops, len(langs)))
+	}
+	// ★ M1（2026-10-21 UAT 收口）：模型拒译段已回落原文 —— 必须出声。
+	// 旧形态这句回绝直接当译文进成品（五件交付物同名），客户拿到一份"看起来成功"的
+	// 未翻译产物；现在正文回落原文、单据仍可交付，但 gate_warnings 里逐语言点名段数。
+	if len(refusalBlocked) > 0 {
+		langs := make([]string, 0, len(refusalBlocked))
+		total := 0
+		for lc, n := range refusalBlocked {
+			langs = append(langs, lc)
+			total += n
+		}
+		sort.Strings(langs)
+		observability.Warn(ctx, "文件翻译：模型拒译段已回落原文", "segments", total, "langs", strings.Join(langs, ","))
+		gateWarnings = append(gateWarnings, fmt.Sprintf(
+			"refusal_blocked=%d（%s 的译文里模型返回拒译话术，已保留原文交付，请人工补译）",
+			total, strings.Join(langs, "/")))
 	}
 	// ★B3（A2 挂载点3·语言收尾）：品牌归一/敏感词兑底/质量闸门三道覆写全部落地后，
 	// 对「最后已发文本」做 diff 补推 segment_final(stage=gated)，随后逐语言 segments_sealed。
@@ -1167,6 +1231,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					if stats.Residue > 0 {
 						observability.Warn(ctx, "图片原位回填存在未译出行（保留原文）", "lang", lc, "residue", stats.Residue, "total", stats.Total)
 						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填有 %d/%d 行未译出（保留原文）", config.LangNames[lc], stats.Residue, stats.Total))
+					}
+					// ★ 2026-10-21 UAT 收口 M9：图形符号整行（箭头/三角/emoji）被剔除不重画——
+					//   原图标逐像素保留，但客户在完成页上要能读到"这一行不是漏译"。只计数、不判失败。
+					if stats.Dropped > 0 {
+						observability.Info(ctx, "图片原位回填剔除图形符号行（原样保留）", "lang", lc, "dropped", stats.Dropped, "total", stats.Total)
+						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填有 %d 行图形符号（箭头/图标）已原样保留，未重绘", config.LangNames[lc], stats.Dropped))
 					}
 				}
 				continue

@@ -59,11 +59,14 @@ function wiringFailures(app: string): string[] {
   if (!block) return ['取不到未登录分诊块（App.tsx 的 !user 分支锚点漂了 ⇒ 本锁没有射程，不是"通过"）']
   const pageReturns = (block.match(/return \(/g) || []).length
   const shells = (block.match(/<PublicShell/g) || []).length
-  // 射程自证：分诊块本该有 4 支（首页/定价/比价/登录兜底），取到 0 说明切片失败
-  if (pageReturns < 4) bad.push(`未登录分诊块里只数到 ${pageReturns} 个页面 return（预期 ≥4，锚点可能漂了）`)
-  if (shells !== pageReturns) bad.push(`页面返回 ${pageReturns} 支、<PublicShell 只出现 ${shells} 次 ⇒ 有门面漏包外壳`)
-  // 逐页点名：每个页面根之前 600 字符内必须出现过 <PublicShell（这正是四支的收口跨度）
-  for (const p of ['<PricingPage />', '<PriceComparePage />', '<Landing />', '<Login']) {
+  // ★ 2026-10-21 IAM P1-7：登录兜底已收进 LoginFace（它内部出 auth 档 PublicShell），
+  //   所以这里三支营销页各一次 return( + PublicShell，登录支是 `return <LoginFace …>`。
+  //   判据仍按路由全集：三支营销页必须被壳包住，登录支必须走唯一登录面。
+  if (pageReturns < 3) bad.push(`未登录分诊块里只数到 ${pageReturns} 个营销页 return（预期 ≥3，锚点可能漂了）`)
+  if (shells !== pageReturns) bad.push(`营销页返回 ${pageReturns} 支、<PublicShell 只出现 ${shells} 次 ⇒ 有门面漏包外壳`)
+  if (!block.includes('<LoginFace')) bad.push('未登录兜底分支没有走 <LoginFace>（登录支的 PublicShell 已收进该组件）')
+  // 逐页点名：每个页面根之前 600 字符内必须出现过 <PublicShell（这正是三支营销页的收口跨度）
+  for (const p of ['<PricingPage />', '<PriceComparePage />', '<Landing />']) {
     const i = block.indexOf(p)
     if (i < 0) { bad.push(`未登录分诊块里找不到页面 ${p}`); continue }
     const before = block.slice(Math.max(0, i - 600), i)

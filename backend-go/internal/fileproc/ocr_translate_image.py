@@ -370,6 +370,66 @@ def _is_lone_nonascii(src: str) -> bool:
     return len(s) == 1 and ord(s) > 0x7F
 
 
+# ★ 2026-10-21 UAT 收口 M9：图形/内容符号两类清单与 Go 侧
+#   `internal/engine/symbol_lines.go` 的 graphicSymbolRunes / contentSymbolRunes **逐字等值**
+#   （锁＝internal/engine/symbol_table_parity_test.go 现读本文件比对）。
+#   · 图形（箭头/三角/圆点/勾叉/emoji）：不可译；整行命中时**连画都不画**，原图标逐像素保留；
+#   · 内容（货币/百分号/日期标点）：是金额与时间的一部分，必须**原样**保留（本轮交付原文时不重画）。
+GRAPHIC_SYMBOLS = "↑↓⇅⇵⌃⌄▲▼◀▶●○◤◥■□◆◇★☆✓✔✗✘→←↔↕⇒⇐·•—–…™®©"
+CONTENT_SYMBOLS = "¥￥$€£％%‰.,:;，。：；、-+／/()（）[]【】{}「」『』"
+
+
+def _is_graphic_char(ch: str) -> bool:
+    """单个码位是否属「图形符号」。三条腿与 Go 侧 isGraphicRune 逐条同源：
+
+    ① 显式名单（常用箭头/三角/圆点/商标/勾叉）；
+    ② 变体选择符（VS15/VS16）、零宽连接符（ZWJ）、键帽组合符（U+20E3）——
+       emoji 序列的连接件，整行判据里必须与图形一等对待；
+    ③ Extended_Pictographic 的主体区间（emoji / 杂项符号 / 装饰符号 / 旗帜）。
+    """
+    if ch in GRAPHIC_SYMBOLS:
+        return True
+    o = ord(ch)
+    if o in (0xFE0E, 0xFE0F, 0x200D, 0x20E3):
+        return True
+    if 0x1F000 <= o <= 0x1FAFF:   # emoji、象形符号、旗帜（含区域指示符）
+        return True
+    if 0x2600 <= o <= 0x27BF:     # Misc Symbols + Dingbats（☀★✓ 一族）
+        return True
+    if 0x2B00 <= o <= 0x2BFF:     # Miscellaneous Symbols and Arrows（⬆⬇ 一族）
+        return True
+    return False
+
+
+def _is_graphic_only_line(src: str) -> bool:
+    """整行（去空白后）非空且每个字符都是图形符号 ⇒ 这是一枚图标，不是文字。"""
+    s = "".join(str(src or "").split())
+    if not s:
+        return False
+    return all(_is_graphic_char(ch) for ch in s)
+
+
+def _is_content_only_line(src: str) -> bool:
+    """整行（去空白后）非空且只由数字与内容符号组成 ⇒ 金额/日期/编号行（要留、可原样重画）。"""
+    s = "".join(str(src or "").split())
+    if not s:
+        return False
+    return all(ch.isdigit() or ch in CONTENT_SYMBOLS for ch in s)
+
+
+def _is_symbol_only_line(src: str) -> bool:
+    """整行没有任何「文字」（任何书写体系的字母），且不是空白。
+
+    ★ 这是 M9 回填门扩形后的主判据，刻意**不**拿固定符号名单判：OCR 把箭头读成 `<`、`1`、`^`
+    都是真实发生过的形态，名单追不上识别器的想象；「没有字母」才是这件事的结构。
+    与 Go 侧 engine.IsSymbolOnlyLine 同一口径（Go 用 unicode.IsLetter，这里用 str.isalpha()）。
+    """
+    s = "".join(str(src or "").split())
+    if not s:
+        return False
+    return not any(ch.isalpha() for ch in s)
+
+
 def _is_cjk(ch: str) -> bool:
     """是否 CJK 字符（按字换行的档）：汉字/假名/谚文/扩展区。"""
     o = ord(ch)
@@ -703,7 +763,8 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
     ref_img = img.copy()
     painted = 0
     overflowed = 0
-    blank_skipped = 0   # 空框（无墨）+ 原文交付 的跳过计数：排障用（见下面的 INFO 行）
+    blank_skipped = 0   # 空框（无墨）+ 单字噪声 + 内容符号原样交付 的跳过计数：排障用（见下面的 INFO 行）
+    dropped = 0         # 图形符号整行（箭头/三角/emoji）剔除计数：它们不可译，原图标必须逐像素保住
     for idx, ln in enumerate(lines):
         if not isinstance(ln, dict):
             continue
@@ -728,10 +789,24 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         #   ⚠️ 两类的放行条件都必须是「要写的内容 == 原文」：真译文（text ≠ 原文）即便墨色很淡、
         #      或源文就是单假名，也照旧绘制——否则淡灰小字会被漏译（把「字号问题」换成更坏的
         #      「漏译问题」），或真收到了 `の` 的译文却不画。
+        #   ★ 2026-10-21 UAT 收口 M9（止血那一刀）：判据从「单个非 ASCII」扩到**整行没有文字**。
+        #     用户截图＝上下箭头图标被 OCR 读成 `1`/`<`，旧门只认 `の` 那一档 ⇒ 折出来的字符
+        #     被照原样画回图标上（客户看到"原文根本没有的字"）。新门三条：
+        #       ① 图形符号整行（箭头/三角/emoji）：**不管译文是什么都不画**（它们不可译，
+        #          模型给的任何东西都只可能是噪声），计进 dropped；
+        #       ② 内容符号行（金额/日期/编号）或 OCR 折出来的 `<`/`1`：本轮交付原文时**不重画**
+        #          （要写的内容与原文一字不差，重画只会把图标盖掉），计进 blank_skipped；
+        #       ③ 真正的文字行（含任何字母）照旧绘制——否则"不造字"就变成"漏译"。
         no_ink_identity = ink_h == 0 and text == (ln.get("text") or "").strip()
-        noise_identity = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()
-        if no_ink_identity or noise_identity:
-            blank_skipped += 1
+        lone_noise = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()
+        src_raw = ln.get("text") or ""
+        graphic_drop = _is_graphic_only_line(src_raw)
+        symbol_identity = _is_symbol_only_line(src_raw) and text == src_raw.strip()
+        if graphic_drop or no_ink_identity or lone_noise or symbol_identity:
+            if graphic_drop:
+                dropped += 1
+            else:
+                blank_skipped += 1
             continue
         bg = _pick_bg(ref_img, r0)
         if bg is not None:
@@ -778,14 +853,17 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         # "仅译文 .md"，免得交给客户一张"看着像翻过了、其实一个字没换"的图（本批缺陷的形态）。
         # 文案带上 blank_skipped：否则"0 行有可用坐标"会把「坐标全坏」与「整图全是噪声行」
         # 两种成因混成一句（前者要查 OCR，后者是设计内的跳过）——排障读到的成因必须是真成因。
-        return _err("NothingPainted", "没有任何一行被回填（%d 行里 %d 行被跳过为「原文交付/噪声行」，其余无可用坐标）"
-                    % (len(lines), blank_skipped))
+        return _err("NothingPainted", "没有任何一行被回填（%d 行里 %d 行跳过为「原文交付/噪声行」、%d 行为图形符号剔除，其余无可用坐标）"
+                    % (len(lines), blank_skipped, dropped))
 
     try:
         img.save(out)
     except Exception as exc:
         return _err("Out", "产物写入失败 %s" % exc)
-    print("INFO:painted=%d/%d overflow=%d blank_skipped=%d" % (painted, len(lines), overflowed, blank_skipped), file=sys.stderr)
+    # ★ 2026-10-21 M9：dropped 是「图形符号整行剔除」的条数，由 Go 侧解析后进 GateWarnings
+    #   （fileproc.ImageRenderStats.Dropped → engine/file.go），不许只活在这一行日志里。
+    print("INFO:painted=%d/%d overflow=%d blank_skipped=%d dropped=%d"
+          % (painted, len(lines), overflowed, blank_skipped, dropped), file=sys.stderr)
     return 0
 
 

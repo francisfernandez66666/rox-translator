@@ -267,6 +267,15 @@ func (s *Server) writeGateError(w http.ResponseWriter, r *http.Request, gerr err
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（查询参数 mine=1 仅显示本人创建的工单）。
 // 返回: success=true 时携带 tickets 数组。
 func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
+	// ★ 2026-10-21 UAT 收口 M5：方法闸（与 23N7 同一口径）。
+	//   旧形态不判方法：POST／PUT／DELETE 打这个路径会一路走完鉴权与查询、回 200 的列表体，
+	//   按状态码分支的客户端与监控会把它读成"动作成功"，而工单其实一件没动
+	//   （UAT 实测：非 GET 与 GET 的响应体逐字节相同）。方法不允许是可自证的请求侧错误，
+	//   必须在读任何状态之前就以 405 收口，并带上统一错误码与 trace_id。
+	if r.Method != http.MethodGet {
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "该接口仅支持 GET"))
+		return
+	}
 	// 鉴权：登录用户即可查看工单（隐私：非超管强制仅自己的工单）
 	u := s.authUser(r)
 	if u == nil {

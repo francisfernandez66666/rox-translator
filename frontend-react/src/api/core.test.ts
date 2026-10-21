@@ -11,7 +11,15 @@ import { beforeAll, describe, expect, it, vi } from 'vitest'
 /** Core 动态导入类型（便于单测内 vi.resetModules 后重取） */
 type Core = typeof import('./core')
 let core: Core
-let fakeWindow: { location: { href: string } }
+/** 假 window：除 location（既有 401 用例要读 href）外，还记录派发过的事件类型。
+ *  ★ 2026-10-21 IAM P0-8：428 那条链靠 window 事件总线（core 不依赖组件层），
+ *  所以「有没有喊这一声」只能在这里观测；不装 dispatchEvent 时 core 的 try/catch
+ *  会把 TypeError 静默吞掉，断言会变成「怎么改都绿」的空转锁。 */
+let fakeWindow: {
+  location: { href: string }
+  events: string[]
+  dispatchEvent: (e: Event) => boolean
+}
 
 beforeAll(async () => {
   const mem = new Map<string, string>()
@@ -20,7 +28,11 @@ beforeAll(async () => {
     setItem: (k: string, v: string) => { mem.set(k, v) },
     removeItem: (k: string) => { mem.delete(k) },
   })
-  fakeWindow = { location: { href: 'http://localhost/' } }
+  fakeWindow = {
+    location: { href: 'http://localhost/' },
+    events: [],
+    dispatchEvent(e: Event) { fakeWindow.events.push(e.type); return true },
+  }
   vi.stubGlobal('window', fakeWindow)
   core = await import('./core')
 })
@@ -300,5 +312,56 @@ describe('api/core', () => {
     expect(core.bizErrorCode({ code: 'a', error_code: 'b' }), 'code 优先于 error_code').toBe('a')
     expect(core.bizErrorCode(null)).toBeUndefined()
     expect(core.bizErrorCode('字符串')).toBeUndefined()
+  })
+
+  // ==========================================================================
+  // ★ 2026-10-21 IAM 重做 P0-8：428「强制改密」的界面侧入口
+  // 服务端 withPasswordGate 对 must_change_pwd 账号的非认证接口一律回 428；前端若把它
+  // 当普通失败，用户看到「请求失败 (428)」却没有任何地方能改密码（旧弹窗只挂在登录屏，
+  // 而 428 恰恰发生在已经进了工作台之后）。本组锁三件事：
+  //   ① 受保护路由的 428 **喊一声**（派发 lc:force-password），且请求本身仍然失败；
+  //   ② `/api/auth/*` 的 428 不喊（改密/登录/会话恢复都在允许清单里，不该触发自己）；
+  //   ③ 其他状态码不喊（把 401/403 也当改密信号会把用户往错误的路上引）。
+  // 反证口径：摘掉 request() 里那一行 dispatch 调用 ⇒ ① 红、②③ 仍绿（射程只在那一条）。
+  // ==========================================================================
+  describe('★ 2026-10-21 IAM P0-8：428 强制改密事件', () => {
+    /** 桩一个 428 响应（错误体带稳定码，与后端 apierrors 的形态一致） */
+    function stub428() {
+      vi.stubGlobal('fetch', async () => jsonResponse({
+        success: false, code: 'PASSWORD_CHANGE_REQUIRED', message: '账号处于首登强制改密状态：请先修改密码',
+      }, 428))
+    }
+
+    it('受保护路由的 428：派发 FORCE_PASSWORD_EVENT，且仍然抛 ApiError(428 / PASSWORD_CHANGE_REQUIRED)', async () => {
+      fakeWindow.events.length = 0
+      stub428()
+      const e = await core.request('/api/tickets/list').catch((x: unknown) => x) as import('./core').ApiError
+      // 先喊一声、再照常失败：调用方不会因为弹了框就把这次请求当成功
+      expect(e).toBeInstanceOf(core.ApiError)
+      expect(e.status).toBe(428)
+      expect(e.code).toBe('PASSWORD_CHANGE_REQUIRED')
+      expect(fakeWindow.events, '428 必须派发一次强制改密事件').toEqual([core.FORCE_PASSWORD_EVENT])
+    })
+
+    it('/api/auth/* 的 428：不派发（改密接口自己不该触发自己的 428）', async () => {
+      fakeWindow.events.length = 0
+      stub428()
+      await expect(core.request('/api/auth/change-password', { method: 'POST' })).rejects.toMatchObject({ status: 428 })
+      expect(fakeWindow.events, 'auth 前缀是允许清单，不该把用户再拽进改密框').toEqual([])
+    })
+
+    it('非 428：400 / 401 / 403 都不派发（401 仍走既有清态链，互不顶替）', async () => {
+      for (const status of [400, 401, 403]) {
+        fakeWindow.events.length = 0
+        core.setUnauthorizedHandler(null)
+        vi.stubGlobal('fetch', async () => jsonResponse({ success: false, message: `失败${status}` }, status))
+        await expect(core.request('/api/tickets/list')).rejects.toBeTruthy()
+        expect(fakeWindow.events, `HTTP ${status} 不得被当成强制改密信号`).toEqual([])
+      }
+    })
+
+    it('事件名是对外契约，逐字钉死（core 派发与 ForcePasswordGate 监听共用同一常量）', () => {
+      expect(core.FORCE_PASSWORD_EVENT).toBe('lc:force-password')
+    })
   })
 })

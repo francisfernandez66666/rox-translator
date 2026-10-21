@@ -24,7 +24,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -197,7 +196,12 @@ func (s *Server) handleChatTTS(w http.ResponseWriter, r *http.Request) {
 	tmp.Close()
 	defer os.Remove(tmpPath)
 
-	if serr := fileproc.SpeakToWav(context.Background(), text, req.Lang, tmpPath); serr != nil {
+	// ★ 2026-10-21 UAT 收口 M8：合成必须跟请求同生共死（r.Context()，而不是 Background()）。
+	//   旧写法在客户端断开／浏览器放弃之后，这个 Python 子进程仍会继续吃掉一整个 CPU 核
+	//   直到 60s 预算烧完——同一台上每个"点了朗读又关掉"的访客都会留下一条这样的尾巴，
+	//   而 CPU 正是 TTS 最贵的资源。runSubprocess 认 ctx 取消（见 fileproc 侧），
+	//   这里换上下文是零语义改动的资源收口；合成预算本身仍由 ttsTimeout() 那道墙负责。
+	if serr := fileproc.SpeakToWav(r.Context(), text, req.Lang, tmpPath); serr != nil {
 		// 同上：朗读不出来＝"这一次没有语音"，HTTP 200 ＋ reason 档位，译文与主链一个字节都不动。
 		writeJSON(w, 200, chatVoiceFailure{Error: serr.Error(), Reason: fileproc.TtsReasonOf(serr)})
 		return

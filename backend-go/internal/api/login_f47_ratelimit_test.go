@@ -16,6 +16,8 @@
 //	D. 冷却届满即恢复 401 口径（闸门不是永久封禁）；
 //	E. 状态码与「用户名不存在」的 401 可区分，但**文案仍不泄露账号存在性**
 //	   （防枚举口径是 F-47 的约束条件，不是它可以被绕过的理由）。
+//	F. ★ P0-6（2026-10-21）：按**账号**并行的锁定跨 IP 成立、不连坐别的账号，且不存在的账号
+//	   同样记账（否则 429/401 的差别本身就是账号存在性回执）。
 //
 // 方言：自钉 SQLite 内存库（AGENTS.md §一·4），不依赖 DB_DRIVER 环境变量。
 // 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/api/ -run TestF47
@@ -60,6 +62,12 @@ func newF47LoginProbe(t *testing.T) *Server {
 	// 建一个启用状态的真用户：密码哈希与登录时提交的口令**故意不同**，走失败计数这条路。
 	if _, err := st.CreateUser(1, "f47_user", auth.PasswordHash("right-password-123"),
 		"F47 限流测试账号", store.RoleUser, 0, 0); err != nil {
+		t.Fatal(err)
+	}
+	// ★ P0-6 起「另一 IP 不受影响」这一腿需要**另一个账号**：同一账号如今有第二本账（按账号锁定），
+	// 换 IP 也照样 429——那是新行为，不是 IP 隔离失效（见 TestF47_AccountLockIsCrossIP）。
+	if _, err := st.CreateUser(1, "f47_other", auth.PasswordHash("right-password-123"),
+		"F47 另一账号", store.RoleUser, 0, 0); err != nil {
 		t.Fatal(err)
 	}
 	return &Server{Store: st, loginLimit: newLoginLimiter(nil)}
@@ -152,11 +160,17 @@ func TestF47_LockedAttemptsDoNotExtendWindow(t *testing.T) {
 	first := postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
 	h1 := first.Header().Get("Retry-After")
 	snooze := time.Now().Add(2 * time.Second)
+	// ★ IAM P0-6（2026-10-21）改了内存账的**键形**：两档（IP／账号）共用一张 map，
+	//   键一律是 `scope + "|" + key`，IP 档的 scope 是 loginIPScope。
+	//   旧写法直接取 data[f47ProbeIP]（键形还是"裸 IP"那代），本批改成 scope 前缀后它恒为 nil
+	//   ——那是**夹具前提过时**，不是"锁不再生效"：下一条 429 与 C 段语义一字未动，
+	//   只是伪造截止时刻的把手要跟着账本换。所以这里按同一把尺子取键，不放松任何断言。
+	ipKey := loginIPScope + "|" + f47ProbeIP
 	s.loginLimit.mu.Lock()
-	a := s.loginLimit.data[f47ProbeIP]
+	a := s.loginLimit.data[ipKey]
 	if a == nil {
 		s.loginLimit.mu.Unlock()
-		t.Fatal("内存回退路径下冷却项应存在（判据来自 loginLimiter.data）")
+		t.Fatal("内存回退路径下冷却项应存在（判据来自 loginLimiter.data[loginIPScope|ip]）")
 	}
 	a.lockedUntil = snooze // 人为把截止时刻拨近，观察是否被「再失败一次」推回去
 	s.loginLimit.mu.Unlock()
@@ -167,7 +181,7 @@ func TestF47_LockedAttemptsDoNotExtendWindow(t *testing.T) {
 	}
 	s.loginLimit.mu.Lock()
 	remained := 0
-	if cur := s.loginLimit.data[f47ProbeIP]; cur != nil {
+	if cur := s.loginLimit.data[ipKey]; cur != nil {
 		remained = int(time.Until(cur.lockedUntil) / time.Second)
 	}
 	s.loginLimit.mu.Unlock()
@@ -182,6 +196,8 @@ func TestF47_LockedAttemptsDoNotExtendWindow(t *testing.T) {
 }
 
 // D 段：冷却届满自动恢复（闸门不是永久封禁），恢复后回到 401 口径。
+// ★ P0-6 起要**两本账一起**拨到过去：IP 档闸门先于账号档拦人，只到期一本仍会 429，
+// 那读起来像"冷却不恢复"，实际是另一本账还在（判据要跟着行为一起更新，不能只改期望值）。
 func TestF47_CooldownExpiryRestores401(t *testing.T) {
 	s := newF47LoginProbe(t)
 	for i := 0; i < loginFailThreshold; i++ {
@@ -191,8 +207,12 @@ func TestF47_CooldownExpiryRestores401(t *testing.T) {
 		t.Fatalf("前置条件：应已锁定，实际 %d", w.Code)
 	}
 	s.loginLimit.mu.Lock()
-	if a := s.loginLimit.data[f47ProbeIP]; a != nil {
+	// ★ 键形同 C 段：IP 档也带 scope 前缀（IAM P0-6 起两档共用一张账）。
+	if a := s.loginLimit.data[loginIPScope+"|"+f47ProbeIP]; a != nil {
 		a.lockedUntil = time.Now().Add(-time.Second) // 视为已届满
+	}
+	if a := s.loginLimit.data[loginAcctScope+"|f47_user"]; a != nil {
+		a.lockedUntil = time.Now().Add(-time.Second)
 	}
 	s.loginLimit.mu.Unlock()
 
@@ -208,15 +228,53 @@ func TestF47_CooldownExpiryRestores401(t *testing.T) {
 	}
 }
 
-// E 段：不同 IP 不共享冷却（限流按 IP 归属，别把一刀切成全局把真人挡在门外）。
+// E 段：IP 档仍然按 IP 归属，别把一刀切成全局。
+// ★ P0-6 起同一条判据必须**换一个账号**来测：拿 f47_user 换 IP 仍会 429（账号档在拦），
+// 那是设计；这里问的是"另一个 IP 上的**另一个人**会不会被连坐"。
 func TestF47_LockIsPerIP(t *testing.T) {
 	s := newF47LoginProbe(t)
 	const otherIP = "203.0.113.78"
 	for i := 0; i < loginFailThreshold; i++ {
 		postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
 	}
-	if w := postLogin(t, s, otherIP, "f47_user", "wrong-password"); w.Code != http.StatusUnauthorized {
-		t.Errorf("另一 IP 应为 401，实际 %d：限流键归属错会全站误伤（同 F-30 XFF 口径）", w.Code)
+	if w := postLogin(t, s, otherIP, "f47_other", "wrong-password"); w.Code != http.StatusUnauthorized {
+		t.Errorf("另一 IP 上另一账号应为 401，实际 %d：限流键归属错会全站误伤（同 F-30 XFF 口径）", w.Code)
+	}
+}
+
+// F 段（★ P0-6 新增）：按账号的锁定与按 IP 的锁定**并行**，且账号档跨 IP 成立。
+// 判据形态：每次失败换一个来源 IP（不碰 IP 档），第 loginFailThreshold 次之后，
+// 从**又一个全新 IP** 用同一个账号再打，必须是 429 而不是 401——否则"分布式换 IP 打同一个账号"
+// 这条直路还开着（那正是本档存在的理由）。
+func TestF47_AccountLockIsCrossIP(t *testing.T) {
+	s := newF47LoginProbe(t)
+	for i := 0; i < loginFailThreshold; i++ {
+		ip := "198.51.100." + strconv.Itoa(10+i) + ":50000"
+		if w := postLogin(t, s, ip, "f47_user", "wrong-password"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次（来源 %s）应是 401 凭证错，实际 %d body=%s", i+1, ip, w.Code, w.Body.String())
+		}
+	}
+	w := postLogin(t, s, "198.51.100.200:50000", "f47_user", "right-password-123")
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("账号档跨 IP 失效：换 IP 后拿**正确口令**应仍被 429 挡在业务之前，实际 %d body=%s", w.Code, w.Body.String())
+	}
+	if h := w.Header().Get("Retry-After"); h == "" {
+		t.Fatal("账号档 429 缺 Retry-After：客户端无从退避")
+	}
+	// 反向对照：同一次分布式打击不连坐别的人——另一个账号从最新 IP 打，必须回到 401。
+	if w := postLogin(t, s, "198.51.100.200:50000", "f47_other", "wrong-password"); w.Code != http.StatusUnauthorized {
+		t.Errorf("账号档连坐了别的账号：f47_other 应 401，实际 %d", w.Code)
+	}
+	// 反向对照②：**不存在的账号**同样要被记账，否则"打 5 次存在账号被锁、打 5 次不存在不锁"
+	// 本身就是一条账号存在性回执（防枚举在限流面漏回来）。用全新 IP 隔离 IP 档。
+	for i := 0; i < loginFailThreshold; i++ {
+		ip := "198.51.100." + strconv.Itoa(50+i) + ":50000"
+		if w := postLogin(t, s, ip, "f47_ghost", "whatever"); w.Code != http.StatusUnauthorized {
+			t.Fatalf("第 %d 次不存在的账号应仍是 401（不许提前伪装成限流），实际 %d", i+1, w.Code)
+		}
+	}
+	if w := postLogin(t, s, "198.51.100.250:50000", "f47_ghost", "whatever"); w.Code != http.StatusTooManyRequests {
+		t.Errorf("不存在的账号未被记账：第 6 次仍 %d ⇒ 攻方可据 429/401 的差别枚举账号是否存在", w.Code)
 	}
 }
 

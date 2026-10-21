@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode, RefObject } from 'react'
 import { Button, DataTable, Link, Switch } from '@/ui/langcross/src'
-import { toastSuccess, toastError } from '@/lib/toastBus'
+import { toast, toastSuccess, toastError } from '@/lib/toastBus'
 import {
   myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail,
   ticketDownload, ticketDelete, ticketCancel, createFeedback,
@@ -585,6 +585,27 @@ export default function TicketsPage() {
     setFeedbackTarget({ type: 'ticket', ticket_id: tk.id, mode: (tk as any).mode || 'pro' })
   }
 
+  // ★ 2026-10-21 UAT 收口 M1：模型拒译/未译段回落原文后，客户必须有一条可行动的出路。
+  //   动作＝把原单参数回填到建单卡（文本单连原文一起回填，文件单提示重新选择原文件），
+  //   不做"一键复跑同一单"：completed 重跑会重复计费，且旧单的产物/注记会被覆盖（见 handleTicketRun 的状态机口径）。
+  function reinitiate(tk: Ticket) {
+    setMode(tk.file_path ? 'file' : 'text')
+    setTitle(tk.title || '')
+    setQualityMode(tk.mode === 'pro' ? 'pro' : 'fast')
+    setDelivery(tk.delivery === 'text' ? 'text' : 'restore')
+    setLangs((tk.target_langs || 'en').split(',').map((x) => x.trim()).filter(Boolean))
+    setFiles([])
+    if (tk.file_path) {
+      setText('')
+      toast({ title: t('tk.reinitFileHint'), tone: 'warn' })
+    } else {
+      setText(tk.source_text || '')
+    }
+    setDetail(null)
+    stopDetailPoll()
+    window.setTimeout(() => document.getElementById('tk-create-card')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }), 0)
+  }
+
   // 当前工单的整体进度百分比、当前步骤文案与状态列表（用于进度气泡展示）
   // 这三个都是「每次渲染现算」的派生值：detail 由 3s 轮询整体替换，没有可缓存的稳定引用，
   // 且计算量只到十来个步骤，不必 useMemo。
@@ -595,6 +616,9 @@ export default function TicketsPage() {
   const deliverables: TicketDeliverable[] = ((detail?.deliverables || detail?.outputs) as TicketDeliverable[] | undefined) || []
   // ★ 2026-10-19 G2：退化交付语言（版式还原失败、以纯文案 .md 交付）——过去客户面只有站内信，详情面零露出。
   const degradedLangs: string[] = ((detail?.ticket?.degraded_langs) as string[] | undefined) || []
+  // ★ M1：引擎闸门告警（未译段回落原文、结构保真等）过去只进站内信/库列；客户面按条数出声，
+  //   原文是运维向中文，不直接铺到 12 语种界面（详情文案仍走词典）。
+  const gateWarnings: string[] = ((detail?.ticket?.gate_warnings) as string[] | undefined) || []
   // ★ 2026-09-22：进度弹窗换词动效的演出条件——只有「排队/执行中」才演，
   //   完成/取消/失败等终态立即停（避免演完的动效误导成「还在干活」）。
   //   为什么这里用状态驱动、不用冷启动那套 useWordSwapGate 时长闸门：
@@ -620,7 +644,7 @@ export default function TicketsPage() {
       <p style={{ fontSize: 14, color: 'var(--lc-text-3)', margin: '0 0 12px' }}>{t('tk.createHint')}</p>
 
       {/* ===== 创建工单 ===== */}
-      <div style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
+      <div id="tk-create-card" style={{ border: '1.2px solid var(--lc-border-card)', borderRadius: 8, padding: 16, marginBottom: 18 }}>
         {mediaHint && (
           <div style={{ background: 'rgba(210,153,34,0.10)', border: '1.2px solid rgba(210,153,34,0.32)', borderRadius: 8, padding: '8px 12px', marginBottom: 8, fontSize: 14 }}>
             <Icon n="alert" /> {t(mediaHint.key)}
@@ -875,6 +899,11 @@ export default function TicketsPage() {
             <Icon n="alert" /> {tpl('tk.degradedTip', { langs: degradedLangs.map((c) => langLabel(c, lang)).join('、') })}
           </div>
         )}
+        {gateWarnings.length > 0 && (
+          <div data-testid="tk-gate-warnings" style={{ marginTop: 10, fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+            <Icon n="alert" /> {tpl('tk.gateWarningCount', { n: gateWarnings.length })}
+          </div>
+        )}
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口
@@ -883,6 +912,14 @@ export default function TicketsPage() {
           <div style={{ marginTop: 10 }}>
             <Button size="sm" variant="secondary" onClick={() => detail && detail.ticket && downloadText(detail.ticket)}>
               <Icon n="doc" /> {t('tk.downloadMd')}
+            </Button>
+          </div>
+        ) : null}
+        {/* ★ M1：终态工单支持重新发起（回填原参数，不复跑旧单——旧单重跑会重复计费） */}
+        {['completed', 'rejected', 'cancelled'].includes(String(detail?.ticket?.status || '')) ? (
+          <div style={{ marginTop: 10 }}>
+            <Button size="sm" variant="secondary" onClick={() => detail?.ticket && reinitiate(detail.ticket)}>
+              <Icon n="refresh" /> {t('tk.reinitiate')}
             </Button>
           </div>
         ) : null}

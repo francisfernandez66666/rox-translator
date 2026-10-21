@@ -53,6 +53,10 @@ export const zh: Record<string, string> = {
   'auth.agreeTerms': '我已阅读并同意',
   'auth.registerAndLogin': '注册并登录',
   'auth.backToLogin': '返回登录',
+  // ★ 2026-10-21 IAM 重做 P1：减少动效档的 AI 注册入口 / 改密后会话失效 / 注册成功但自动登录失败
+  'auth.aiEntry': 'AI 引导注册',
+  'auth.sessionExpired': '会话已失效，请用新密码重新登录',
+  'auth.regOkLoginFail': '账号已创建成功，但自动登录未完成，请返回登录页用新账号登录',
   'auth.needAgree': '请阅读并同意《用户协议》与《隐私协议》',
   'auth.orgCodeRequired': '请填写组织编码',
   'auth.orgInvite': '组织邀请码',
@@ -141,6 +145,10 @@ export const zh: Record<string, string> = {
   'auth.needInput': '请填写必填项',
   'auth.pwdShort': '密码至少 6 位',
   'auth.emailRequired': '请填写邮箱',
+  // ★ 2026-10-21 IAM 重做 P0-6：找回/注册/换绑三口共用的"格式不对"提示。
+  //   注意这条**只判形状**（有没有 @、域名有没有点），不判"这个邮箱注册过没有"——
+  //   后者是防枚举刻意不回答的那一半（见后端 forgotAlwaysMsg）。
+  'auth.emailBad': '邮箱格式不正确',
   'auth.codeRequired': '请先获取并填写邮箱验证码',
   'auth.regSuccess': '注册成功，正在登录…',
   'auth.flashHint': '这张表单太长了，让我来接管',
@@ -219,6 +227,9 @@ export const en: Record<string, string> = {
   'auth.agreeTerms': 'I have read and agree to',
   'auth.registerAndLogin': 'Sign up & sign in',
   'auth.backToLogin': 'Back to sign in',
+  'auth.aiEntry': 'Guided sign-up with AI',
+  'auth.sessionExpired': 'Your session has expired. Sign in again with the new password',
+  'auth.regOkLoginFail': 'Your account was created, but automatic sign-in failed. Go back to sign in with your new account',
   'auth.needAgree': 'Please read and agree to the Terms of Service and Privacy Policy',
   'auth.orgCodeRequired': 'Please enter the org code',
   'auth.orgInvite': 'Organization invite code',
@@ -307,6 +318,7 @@ export const en: Record<string, string> = {
   'auth.needInput': 'Please fill the required fields',
   'auth.pwdShort': 'Password needs at least 6 characters',
   'auth.emailRequired': 'Please enter your email',
+  'auth.emailBad': 'Please enter a valid email address',
   'auth.codeRequired': 'Get and enter the email code first',
   'auth.regSuccess': 'Signed up, signing in…',
   'auth.flashHint': 'That form is too long — let me take over',

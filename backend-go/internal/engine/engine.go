@@ -94,7 +94,7 @@ type Engine struct {
 	singleLangFn func(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error)
 
 	// ★ 2026-09-09 可靠性改造测试钩子：重试队列参数（0 时用默认值）。
-	//   仅测试注入缩短退避/次数用，生产恒为 0 走默认（maxAttempts=3、轮间 2s）。
+	//   仅测试注入缩短退避/次数用，生产恒为 0 走默认（maxAttempts=5、轮间 2s）。
 	retryMaxAttempts int
 	retrySleep       time.Duration
 }
@@ -907,13 +907,14 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 	//   单语调用失败不再静默置空（此前阿语等偶发超时/429 即整段缺失、界面只见其余语言，
 	//   文件管线则整单 untranslated 全额告警）。改为轮次化重试队列：每轮并发 3 路处理
 	//   待翻语言，失败者排到队尾（下一轮——其余语言先行，天然退避），每语言最多尝试
-	//   3 次；仍失败记日志并置空，由上层漏译率硬闸/漏翻可见性告警兜底。
+	//   5 次（★ 2026-10-21 用户令：所有翻译统一重试 5 次）；仍失败记日志并置空，
+	//   由上层漏译率硬闸/漏翻可见性告警兜底。
 	// ★ D18（2026-09-12）：多语并发可配（LLM_LANG_CONCURRENCY，默认 3=旧值），
 	// 高配机器/高配额供应商可放大，不再硬编码封顶。
 	maxConcurrent := envPositiveInt("LLM_LANG_CONCURRENCY", 3)
 	maxAttempts := e.retryMaxAttempts
 	if maxAttempts <= 0 {
-		maxAttempts = 3 // 每语言最大尝试次数（首轮 + 重试 2 轮）
+		maxAttempts = 5 // 每语言最大尝试次数（首轮 + 重试 4 轮，★ 2026-10-21 用户令）
 	}
 	retrySleep := e.retrySleep
 	if retrySleep <= 0 {
@@ -923,7 +924,7 @@ func (e *Engine) translateLangsConcurrent(ctx context.Context, zhText string, la
 	pending := need
 	// ★ 修法 E（2026-10-04 〇-AR 第 2 波 · 缺陷 ⑭/#13）：认证类失败（401/403）的止损开关。
 	//   这一环是「轮次化重试队列」，为 429/超时/网络抖动设计——退避一轮确实可能过去。
-	//   但同一张废键重试三次只是把它打三遍：现网 R-1 期间三个目标语种 × 三轮 = 9 次恒 401 的
+	//   但同一张废键重试五次只是把它打五遍：现网 R-1 期间三个目标语种 × 五轮 = 15 次恒 401 的
 	//   出站调用，P95 被拖长约 6.6s，还多烧两次配额，而客户看到的仍然是「没译文」。
 	//   所以命中认证类失败时：本轮照常收尾（在途的并发不收，避免半途写脏），
 	//   但**不再排下一轮**，并把日志抬到 ERROR（重试没意义＝键要人来换，这是运维动作不是抖动）。

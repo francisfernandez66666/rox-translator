@@ -27,16 +27,15 @@
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from '@/stores/auth'
 import { BrandingProvider } from './branding'
-import { roleLevelSafe } from '@/lib/ui'
 import { landingEnabledForGuest } from '@/lib/siteFlags'
 import { PublicShell } from './components/publicshell'
 import RouteBoundary from './components/RouteBoundary'
 import BootLoading from './components/BootLoading'
+// ★ 2026-10-21 IAM P1-7：登录面与 App 树共用同一个调用点（不再各写一份 mode/onLogin/挂件）
+import { LoginFace } from './components/LoginFace'
 import { useNav } from '@/lib/nav'
 
-// 与 App.tsx 同为 lazy：这五份都是"按路径才需要"的页面（首页访客不必下定价/比价页）
-// 登录/注册页（未登录分诊白名单里就有 /login，走 PublicRoot 时也不再下 router）
-const Login = lazy(() => import('./components/Login'))
+// 与 App.tsx 同为 lazy：这四份都是"按路径才需要"的页面（首页访客不必下定价/比价页）
 // 官网首页（未登录门面主力页）
 const Landing = lazy(() => import('./components/Landing'))
 // 定价页（未登录可达，与首页共用同一套营销壳）
@@ -57,33 +56,10 @@ function MarketingShell({ children }: { children: ReactNode }) {
   )
 }
 
-/**
- * 登录/注册屏（含未登录兜底路径）。★ 与 App.tsx 那一支逐字对齐：
- * `PublicShell auth`（登录页不给顶栏登录钮：用户就在这一页，再给一枚是自指重复）
- * ＋ `Login mode={path.startsWith('/admin') ? 'admin' : 'home'}` ＋ 挂件（挂件内部对 /login、/register 自隐藏）。
- * ⚠️ `onLogin` 里那次角色校验不是防呆：admin 档下非租管账号登录后要被弹回首页
- * （Login 内部已拦一次，这里补第二道——与 App.tsx 同一段逻辑，别删）。
- */
-function LoginScreen({ mode }: { mode: 'home' | 'admin' }) {
-  const { onLogin } = useAuth()
-  const { pathname, navigate } = useNav()
-  return (
-    <PublicShell auth>
-      <RouteBoundary>
-        <Suspense fallback={<BootLoading />}>
-          <Login
-            mode={mode}
-            onLogin={(u) => {
-              onLogin(u)
-              if (pathname.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/')
-            }}
-          />
-          <AiAssist />
-        </Suspense>
-      </RouteBoundary>
-    </PublicShell>
-  )
-}
+// ★ 2026-10-21 IAM P1-7：原先这里的 `LoginScreen` 与 App.tsx 的未登录兜底各写一份，
+//   现在统一走 `components/LoginFace`（`PublicShell auth` ＋ Login ＋ 挂件 ＋ applyLogin 后处理
+//   都在那一处；admin 档下非租管账号弹回首页的第二道判定也在 `applyLogin` 里）。
+//   占位档仍由各树自选：公开面树用 BootLoading（与首屏骨架同貌），App 树用 PageLoading。
 
 /**
  * 门面关闭（体验机/演示站：后端在首页 HTML 里直出 `window.__SITE_FLAGS__={"landing":false}`）时
@@ -92,10 +68,19 @@ function LoginScreen({ mode }: { mode: 'home' | 'admin' }) {
  * ②**同时直接渲染登录屏**，不然会先空一帧再整页重载（那一帧正是纯黑，本批要治的东西）。
  * 射程只有 `/`：/pricing、/compare 仍对访客可达（体验机也要让人看到价）——与 App.tsx 注释一致。
  */
+// LoginScreen 公开面树内登录页的唯一写法：两个调用点（门面关闭重定向、兜底）共用同一份
+// path/fallback 口径，避免下一批只改一处。⚠️ 本组件内部仍只渲染一次 <LoginFace>——
+// navShim 的「每棵树恰一处 <LoginFace>」判据靠这条成立，别再展开回来。
+function LoginScreen({ path }: { path: string }) {
+  return <LoginFace path={path} fallback={<BootLoading />} />
+}
+
+/** GuestLoginRedirect 门面关闭时把地址栏 replace 到 /login 并同步渲染登录屏，避免空白帧。 */
 function GuestLoginRedirect() {
   const { navigate } = useNav()
   useEffect(() => { navigate('/login', { replace: true }) }, [navigate])
-  return <LoginScreen mode="home" />
+  // 地址栏此刻正在换成 /login；登录面按 home 档出（path 显式给 /login，不依赖尚未刷新的 pathname）
+  return <LoginScreen path="/login" />
 }
 
 /** 公开面分诊（与 App.tsx `Root()` 的 `!user` 三支等值，见文件头口径①） */
@@ -135,7 +120,7 @@ function PublicRoutes() {
   }
   // 未登录兜底：非营销路径一律出登录页（公开面白名单里只会来 /login、/register，
   // 但保留与 App.tsx 同样的 `startsWith('/admin')` 判定——两处逐字相同，见文件头口径①）
-  return <LoginScreen mode={path.startsWith('/admin') ? 'admin' : 'home'} />
+  return <LoginScreen path={path} />
 }
 
 /**

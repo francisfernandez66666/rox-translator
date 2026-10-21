@@ -37,7 +37,6 @@ var fdhAllow = map[string]string{
 	"[kb-match] lang=%s progress=%d/%d":                                "进度心跳，非退化",
 	"[kb-match] lang=%s 命中=%d 走模型=%d 拦截=%d":                            "统计读数，非退化",
 	"[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译":                         "硬闸预算耗尽：未译段另有 untranslated 记账，非静默",
-	"[tm-hardgate] lang=%s 连续 %d 轮零进展（缺失 %d 段），停止重试":                   "硬闸零进展熔断：同上",
 	"[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段":                      "硬闸重译轮次，非退化",
 	"[tm-hardgate] lang=%s 结束：仍有 %d/%d 段未译出（已写入工单 Untranslated 供人工补译）": "硬闸收尾：未译清单已进工单 Data，非静默",
 	"[file-gate] %s 漏译 %d/%d 段（超 50%%），置工单失败":                          "漏译硬闸：紧接 return 错误，整单失败不是静默",
@@ -295,5 +294,24 @@ func deliver(ctx context.Context) {
 				t.Errorf("反证样本里的未配对项 %q 竟在 allowlist 内 ⇒ 样本失去反证力", s.firstLit)
 			}
 		}
+	}
+}
+
+// TestFileHardgateHasFiveAttempts 文件链硬闸必须给足 5 轮（★ 2026-10-21 用户令），
+// 且不许再用「连续零进展」提前熔断——否则用户看到的仍是最多 2 次。
+func TestFileHardgateHasFiveAttempts(t *testing.T) {
+	src, err := os.ReadFile("file.go")
+	if err != nil {
+		t.Fatalf("读 file.go 失败: %v", err)
+	}
+	s := string(src)
+	if !strings.Contains(s, "const fileHardgateMaxAttempts = 5") {
+		t.Fatal("硬闸轮次上限必须为 5")
+	}
+	if !strings.Contains(s, "attempt <= fileHardgateMaxAttempts") {
+		t.Fatal("硬闸循环必须受 fileHardgateMaxAttempts 约束")
+	}
+	if strings.Contains(s, "zeroProgressRounds") {
+		t.Fatal("硬闸不许再按连续零进展提前熔断（用户令要求给足 5 次）")
 	}
 }

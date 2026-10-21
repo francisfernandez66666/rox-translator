@@ -725,6 +725,10 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 		var okCount, failCount, unTotal, degradedFiles int64
 		var zipFailCount int64 // ★ G18：多语言打包失败计数（静默回落单文件＝静默丢产物）
 		var firstErr string
+		// ★ 2026-10-21 UAT 收口 M2：工单级交付注记（降级语言 + 质量闸门告警），收尾统一落库。
+		//   过去这两份数据只进站内信与日志，工单详情面（客户屏幕上那张脸）读不到任何一件，
+		//   前端早就按 detail.ticket.degraded_langs 渲染横幅，Go 侧却从没出过这个键。
+		var degradedLangsAll, gateWarningsAll []string
 		s.Store.SetTicketState(t.ID, "file_extract", "running",
 			fmt.Sprintf("total=%d mode=%s", len(files), normalizeMode(mode)))
 		sem := make(chan struct{}, 3) // 同时最多 3 个文件在翻译
@@ -794,6 +798,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 							tf.FileName, strings.Join(res.Data.DegradedLangs, "/")),
 						store.NotifyRefTicket, t.ID)
 				}
+				// ★ M2：把每个文件的降级语言与闸门告警汇总到工单级注记（跨文件去重在落库时做）。
+				degradedLangsAll = append(degradedLangsAll, res.Data.DegradedLangs...)
+				gateWarningsAll = append(gateWarningsAll, res.Data.GateWarnings...)
 				okCount++
 				// doneN = 本轮成功数 + 库里已标 error 的文件数（重跑同一工单时进度才不会倒退）
 				doneN := okCount + failedCount(s.Store, t.ID)
@@ -841,6 +848,12 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				fmt.Sprintf("文件翻译完成但有 %d 段未译出：%s", unTotal, t.Title),
 				"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
 				store.NotifyRefTicket, t.ID)
+		}
+		// ★ M2：工单级交付注记落库。必须在 wg.Wait() 之后写——各文件并发生成，
+		//   提前写只能拿到先跑完那一份，客户看到的降级清单会随调度顺序变化。
+		//   0 行影响不会报错，所以落库失败必须出声（否则详情面静默回到「一切正常」）。
+		if err := s.Store.SetTicketDeliveryNotes(t.ID, degradedLangsAll, gateWarningsAll); err != nil {
+			observability.Warn(ctx, "工单交付注记落库失败（降级提示将不可见）", "ticket", t.ID, "error", err.Error())
 		}
 		if okCount == 0 && failCount == int64(len(files)) && firstErr != "" {
 			return fmt.Errorf("%s", firstErr)
@@ -904,6 +917,10 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	//   字段，落库晚了就拿不到「提取顺序 ↔ 译文」的精确配对（对照编辑器会退回按下标硬对齐）。
 	s.persistTicketSegments(t, t.FilePath, res)
 	s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
+	// ★ M2：单文件路径同样落工单级交付注记（降级语言 + 闸门告警），口径与多文件路径一致。
+	if err := s.Store.SetTicketDeliveryNotes(t.ID, res.Data.DegradedLangs, res.Data.GateWarnings); err != nil {
+		observability.Warn(ctx, "工单交付注记落库失败（降级提示将不可见）", "ticket", t.ID, "error", err.Error())
+	}
 	return nil
 }
 

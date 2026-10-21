@@ -107,6 +107,70 @@ func (g *registerGuard) allow(ip string, dailyLimit, minIntervalSec int) (ok boo
 	return true, 0
 }
 
+// reserve ★ IAM P0-6（2026-10-21）：**放行即占格**的限流入口（找回密码/重置密码用）。
+//
+// 为什么不是旧的 allow + record 两步式：那两步之间隔着整段业务，而「这次到底有没有真的发码」
+// 取决于账号存不存在（服务端防枚举对外不回答，但**自己**是知道的）——于是"只有发码成功才 record"
+// 就成了一条侧信道：攻击者拿同一批账号名连打，能把"日额度先耗尽的那些"与"打不动的那些"分开，
+// 也就把防枚举在业务层刚关掉的门，从限流层重新打开。现在改成与注册防薅同一口径：
+// 请求一过最小间隔就**原子占掉当日一格**，成败都算——额度只表达"这个 IP 今天来过几次"。
+//
+// 参数 ip: 客户端 IP；dailyLimit: 24h 窗口内允许次数（<=0 不限制）；minIntervalSec: 两次最小间隔（<=0 不限制）。
+// 返回: ok=是否放行并已占格；retryAfterSec=被拒时建议等待秒数。
+// ★ 占格本身出错（库故障）时**放行**并记错误日志，与 reserveFreeAccount 同一 fail-open 口径：
+// 限流表坏了不该把"找回密码"整条链路关掉（IP 档失效时仍有最小间隔与人机验证兜底）。
+func (g *registerGuard) reserve(ip string, dailyLimit, minIntervalSec int) (ok bool, retryAfterSec int) {
+	if g.st != nil {
+		now := time.Now().Unix()
+		// ① 最小间隔先判（不占格）：被间隔挡下的请求不该消耗当日额度——
+		//    那是"手快连点"，不是"今天来查了十次"，扣格子会误伤真人。
+		if minIntervalSec > 0 {
+			if stInt, _ := g.st.RateLoad("guard_int", ip); stInt.WindowStart > 0 {
+				if wait := minIntervalSec - int(now-stInt.WindowStart); wait > 0 {
+					return false, wait
+				}
+			}
+		}
+		// ② 日额度原子占格：判据与自增收在一条带条件的 UPDATE 里（RateReserve），并发不会同时读到"还差一格"。
+		if dailyLimit > 0 {
+			reserved, st, err := g.st.RateReserve("guard_day", ip, 86400, int64(dailyLimit))
+			if err != nil {
+				observability.Error(context.Background(), "找回/重置限流：日额度占格失败，本次放行", "err", err.Error(), "ip", ip)
+			} else if !reserved {
+				return false, regRetryWaitIn(st.WindowStart)
+			}
+		}
+		// ③ 占格成功才推进「最近一次」时间戳（顺序不能反：先推进会让被拒的那次也把间隔往后推）。
+		g.st.RateRecord("guard_int", ip, 1)
+		return true, 0
+	}
+	// 内存回退（Store 未就绪）：判＋占在同一把锁里完成，进程内并发不会击穿。
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	a, exists := g.data[ip]
+	if exists && now.Sub(a.firstAt) > 24*time.Hour {
+		delete(g.data, ip)
+		a, exists = nil, false
+	}
+	if exists && minIntervalSec > 0 {
+		if wait := minIntervalSec - int(now.Sub(a.lastAt).Seconds()); wait > 0 {
+			return false, wait
+		}
+	}
+	if exists && dailyLimit > 0 && a.count >= dailyLimit {
+		wait := int((24*time.Hour - now.Sub(a.firstAt)).Seconds())
+		return false, maxInt(wait+1, 60)
+	}
+	if !exists {
+		g.data[ip] = &regAttempt{count: 1, firstAt: now, lastAt: now}
+	} else {
+		a.count++
+		a.lastAt = now
+	}
+	return true, 0
+}
+
 // record 登记一次成功的注册（窗口与计数推进）。
 // 参数 ip: 客户端 IP。
 func (g *registerGuard) record(ip string) {

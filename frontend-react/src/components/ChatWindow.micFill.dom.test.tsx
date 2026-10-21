@@ -42,13 +42,18 @@ vi.mock('@/api/asrEngines', () => ({
   getAsrEngine: async () => ({
     kind: 'server',
     isAvailable: async () => true,
-    start: () => ({
-      final: new Promise<string>((res) => {
-        ;(globalThis as any).__resolveMic = () => res(mocks.asrText)
-      }),
-      stop() { (globalThis as any).__resolveMic?.() },
-      cancel() {},
-    }),
+    // ★ 2026-10-21 UAT 收口 M7：录音态改由引擎回报 'recording' 驱动（不再乐观置真），
+    //   桩必须按真实引擎契约在 start() 里立刻回报一次，否则界面停在地面态、stopMic 永远走不到。
+    start: (h: { onState?: (s: string) => void }) => {
+      h.onState?.('recording')
+      return {
+        final: new Promise<string>((res) => {
+          ;(globalThis as any).__resolveMic = () => res(mocks.asrText)
+        }),
+        stop() { (globalThis as any).__resolveMic?.() },
+        cancel() {},
+      }
+    },
   }),
   ServerAsrEngine: class {},
 }))

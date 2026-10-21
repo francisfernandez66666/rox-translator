@@ -113,6 +113,25 @@ export function handleForbidden(backendMessage = '', url = ''): string {
   return forbiddenCopy ? forbiddenCopy(backendMessage) : (backendMessage || apiMsg('common.forbidden', '无权限访问该资源'))
 }
 
+// ============================================================================
+// 428 统一处理（★ 2026-10-21 IAM 重做 P0-8：强制改密的「真拦」在服务端已经生效，
+// 这里补上**界面侧**的同一件事）
+// 背景：后端 `withPasswordGate` 对 must_change_pwd 账号的非认证接口一律回 428
+//   PASSWORD_CHANGE_REQUIRED。旧前端只认 401/403，428 落进「普通失败」分支——
+//   用户看到一句"请求失败 (428)"，却没有任何地方能改密码（首登强制改密弹窗只挂在登录屏，
+//   而这条 428 恰恰发生在**已经进了工作台之后**）。
+// 口径：这里只负责**喊一声**（window 事件），不直接渲染 UI——
+//   core 是 api 基础设施，不能反向依赖组件层（同 403 文案解析器的理由）。
+//   监听方＝components/ForcePasswordGate（挂在 main.tsx 的 ToastProvider 里）。
+// ============================================================================
+/** 强制改密事件名（对外契约：core 派发、ForcePasswordGate 监听；改名字必须两处一起改） */
+export const FORCE_PASSWORD_EVENT = 'lc:force-password'
+
+/** handlePasswordChangeRequired 428 统一处理：派发一次强制改密事件（不返回错误文案）。 */
+export function handlePasswordChangeRequired() {
+  try { window.dispatchEvent(new CustomEvent(FORCE_PASSWORD_EVENT)) } catch { /* 非浏览器环境（单测）静默 */ }
+}
+
 /** 设置并持久化超管生效租户 ID（用于租户切换器） */
 export function setActiveTenantId(tid: number) {
   activeTenantId = tid
@@ -284,6 +303,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         throw new ApiError(handleForbidden(message, url), 403, errCode || 'FORBIDDEN')
       }
       const err = new ApiError(message, response.status, errCode, structBody)
+      // ★ 2026-10-21 IAM 重做 P0-8：428 是「口令必须改」的信号，不是普通失败。
+      //   先派发强制改密事件（界面侧弹出改密框），再照常抛出——调用方仍然拿到失败，
+      //   不会因为弹了框就把这次请求当成功。
+      //   `/api/auth/*` 自身不走这条（改密接口、登录、注册都在允许清单里，不该触发自己的 428）。
+      if (response.status === 428 && !url.startsWith('/api/auth/')) handlePasswordChangeRequired()
       throw err
     }
     return await response.json()

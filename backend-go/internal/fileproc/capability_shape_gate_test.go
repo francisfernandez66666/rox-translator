@@ -166,9 +166,20 @@ var capShapeMutations = []capShapeMutation{
 		"超长 token 不再在分隔符后断（`Yuan/time` 又被按字符劈成两截）"},
 	{"L35", capShapeImgFile, `        if fits and (not hard or px <= floor):`, `        if fits:`,
 		"布局把硬切当首选（有「不劈词也放得下」的字号也不再降字号 ⇒ `Synchronized` 被劈成两行）"},
-	{"L36", capShapeImgFile, `        noise_identity = _is_lone_nonascii(ln.get("text") or "") and text == (ln.get("text") or "").strip()`,
-		`        noise_identity = False`,
-		"单字噪声行被重画（OCR 把开关读成 `の` ⇒ 旧形态整块涂色再画大白字，圆钮消失）"},
+	// ★ 2026-10-21 M9：回填门从「单字非 ASCII」扩到「整行无字母」。四枚反证各治一病：
+	// 符号行不跳／图形行不剔／剔除计数恒 0／内容符号白名单缺项；再加一枚把判据改成恒真
+	// （证明它射程够不着真文字）。缺任一枚，L36 都可能只是「别的腿在顺手挡着」。
+	{"L36", capShapeImgFile, `        symbol_identity = _is_symbol_only_line(src_raw) and text == src_raw.strip()`,
+		`        symbol_identity = False`,
+		"符号行交付原文不再跳过（OCR 折出来的 `<`/`1` 又被照原样画回图标上）"},
+	{"L36", capShapeImgFile, `        graphic_drop = _is_graphic_only_line(src_raw)`, `        graphic_drop = False`,
+		"图形符号整行不再剔除（箭头/三角/emoji 被模型噪声或原字符盖住）"},
+	{"L36", capShapeImgFile, `                dropped += 1`, `                dropped += 0`,
+		"图形行剔除计数恒 0（GateWarnings 永不发声，客户以为那一行漏翻了）"},
+	{"L36", capShapeImgFile, `CONTENT_SYMBOLS = "¥`, `CONTENT_SYMBOLS = "`,
+		"内容符号白名单摘掉 ¥（金额行「原样交付」的判据少一档）"},
+	{"L36", capShapeImgFile, `    return not any(ch.isalpha() for ch in s)`, `    return True`,
+		"无字母行判据退化成恒真（`D`/`Hello` 这类真文字也被跳过＝漏译）"},
 	// ===== ★ 2026-10-19 用户令批：译后图必须用**原背景色 + 原字体色**（L37~L39）。
 	// 同样是「运行期形状错」：健康面全绿、日志零红，只有把译后图打开才看得出
 	// （旧形态＝蓝徽章上的白字被拍成黑字——用户报的「译文没沿用原来的配色」）。

@@ -34,6 +34,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -213,6 +214,28 @@ type ImageRenderStats struct {
 	Total   int // 送进回填的总行数（= 该图 OCR 坐标框数）
 	Painted int // 真正带回译文的行数
 	Residue int // 未译出、由原文顶上的行数（>0 时调用方须出声，不许静默）
+	// Dropped 图形符号整行（箭头/三角/emoji）被**剔除不重画**的条数（★ 2026-10-21 M9）。
+	// 这些行不可译，原图标逐像素保留才是正确交付；>0 时调用方须在 GateWarnings 出声，
+	// 否则客户会以为"这一行漏翻了"而找不到成因。
+	Dropped int
+}
+
+// imageDroppedRe 从回填脚本的 INFO 行里取 dropped 计数。
+// INFO 行形如 `INFO:painted=3/9 overflow=0 blank_skipped=5 dropped=1`（stderr，不参与业务判定）。
+var imageDroppedRe = regexp.MustCompile(`dropped=(\d+)`)
+
+// parseImageDropped 解析脚本自报的图形符号剔除条数；取不到回 0（旧脚本无此字段时静默为 0，
+// 这是"读数缺失"而不是"确有 0 条"——调用方只在 >0 时出声，所以回 0 是安全的默认）。
+func parseImageDropped(stderr string) int {
+	m := imageDroppedRe.FindStringSubmatch(stderr)
+	if len(m) != 2 {
+		return 0
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // RenderTranslatedImage 在原图上按 OCR 框坐标回填译文，产出 outPath 图片。
@@ -270,6 +293,8 @@ func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[
 	}
 	bin, argv := wrapNice(pyBin(), []string{render, "render", srcPath, "--out", outPath, "--lines", tmp})
 	_, stderr, err := runSubprocess(ctx, imageRenderTimeout(), bin, argv, nil)
+	// ★ M9：剔除读数只解析、不参与成败判定（图已经画好了；这是给 GateWarnings 的计数）。
+	stats.Dropped = parseImageDropped(string(stderr))
 	if err != nil {
 		if msg := friendlyOcrError(string(stderr)); msg != "" {
 			return stats, &ImageRenderError{Reason: ImageReasonRenderFailed, Msg: msg}

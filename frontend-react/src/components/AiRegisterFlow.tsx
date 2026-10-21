@@ -19,9 +19,12 @@ import { authRegister, login, sendEmailCode, setAuthToken, setActiveTenantId, ty
 import { registerPersonas } from '@/api/persona'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { toastError } from '@/lib/toastBus'
+// ★ 2026-10-21 IAM 重做 P1-1：口令长度与注册/登录共用同一把尺子
+import { PWD_MIN_LEN } from '@/lib/accountForm'
 import { useCountdown } from '@/lib/useCountdown' // ★ F-03（2026-09-25 批G）：发码失败 60s 冷却，复用 #42 收口的倒计时钩子
 import { loadTurnstile, renderTurnstile, reexecTurnstile } from '@/lib/turnstile'
 import { useT, getLang, tpl } from '@/i18n'
+import { EyeIcon, EyeOffIcon } from '@/ui/langcross/src'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
 import { useBranding } from '@/branding'
 
@@ -447,7 +450,8 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   const submitAccount = useCallback(async (my: number) => {
     if (!alive(my)) return
     if (!aiForm.username.trim()) { setBusy(false); return }
-    if (aiForm.password.length < 6) { setBusy(false); return }
+    // ★ 2026-10-21 IAM 重做 P1-1：长度走共享尺子（旧写法写死 6）
+    if (aiForm.password.length < PWD_MIN_LEN) { setBusy(false); return }
     if (!aiForm.email.trim()) { setBusy(false); return }
     if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
@@ -482,8 +486,16 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
       // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
       if (!r.success) { setBusy(false); toastError(r.message || t('auth.sendFail')); return }
-      // 注册成功自动登录
-      const lr = await login(aiForm.username, aiForm.password)
+      // 注册成功即登录（★ 2026-10-21 IAM 重做 P1-6）：
+      // 服务端随注册响应直接下发会话，优先消费它——旧形态在这里**再调一次 login()**，
+      // 而那正是 IAM 报障第 1 条的形态：注册用邮箱/口令落库，登录却只认用户名、
+      // 且注册侧 trim 了口令而登录侧不 trim，只要用户前后敲的空格不一致就"注册成功但进不去"。
+      // 只有服务端签发失败（响应里没有 token）那条兜档才回落到补登，且补登失败要**说清楚**，
+      // 不能像旧形态那样静默 setBusy(false)（用户看到的是"填完了，什么也没发生"）。
+      const lr: { success?: boolean; token?: string; user?: AuthUser } =
+        (typeof r.token === 'string' && r.token && r.user)
+          ? { success: true, token: r.token, user: r.user }
+          : await login(aiForm.username, aiForm.password)
       if (lr.success && lr.token && lr.user) {
         setAuthToken(lr.token)
         setActiveTenantId(0)
@@ -503,7 +515,10 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         }
         await finish(my, kind, sel.industryName)
       } else {
-        setBusy(false) // 注册成功但自动登录失败：只解锁表单，让用户自己回登录屏登（不重复建号）
+        // 账号已经建成，只差进不去：这句必须显式出声（旧形态静默解锁表单，
+        // 用户以为注册失败又提交一次，第二次必吃「用户名已存在」）
+        setBusy(false)
+        toastError(t('auth.regOkLoginFail'))
       }
     } catch (e) {
       setBusy(false) // 接口异常一律转回可重试态
@@ -692,6 +707,8 @@ function AccountFormBlock({
 }) {
   // 单字段改写：form 由上层持有（提交时还要读），这里只回写不本地复制一份，免得两份状态打架
   const set = (k: keyof typeof form, v: string) => setForm({ ...form, [k]: v })
+  // ★ 2026-10-21 IAM 重做 P1-3：口令可见切换（本块自持，不影响上层表单真值）
+  const [showPwd, setShowPwd] = useState(false)
   // OTP 六格：真值只有 form.emailCode 一个字符串，六格是它的派生视图（不做 6 个 state）
   const codeChars = Array.from({ length: 6 }, (_, i) => form.emailCode[i] ?? '')
   const otpRefs = useRef<(HTMLInputElement | null)[]>([])
@@ -719,8 +736,18 @@ function AccountFormBlock({
       </div>
       <div className="ar-fgroup">
         <span className="ar-flabel">{t('auth.fieldPassword')} <i>*</i></span>
-        <input className="lc-input"type="password"value={form.password} placeholder={t('auth.pwdPlaceholder')}
-               onChange={(e) => set('password', e.target.value)} />
+        {/* ★ 2026-10-21 IAM 重做 P1-3：AI 注册口令也配一枚可见切换
+            （传统注册卡加了眼睛、AI 面板没有，等于同一条流程里有一步是盲输） */}
+        <span className="ar-pwd">
+          <input className="lc-input" type={showPwd ? 'text' : 'password'} autoComplete="new-password"
+                 value={form.password} placeholder={t('auth.pwdPlaceholder')}
+                 onChange={(e) => set('password', e.target.value)} />
+          <button type="button" className="ar-pwd-eye" aria-pressed={showPwd}
+                  aria-label={showPwd ? t('auth.hidePwd') : t('auth.showPwd')}
+                  onClick={() => setShowPwd((v) => !v)}>
+            {showPwd ? <EyeOffIcon /> : <EyeIcon />}
+          </button>
+        </span>
       </div>
       <div className="ar-fgroup">
         <span className="ar-flabel">{t('auth.fieldEmail')} <i>*</i></span>
@@ -786,9 +813,12 @@ function AccountFormBlock({
 // ---------- 作用域样式（ar- 前缀，避免与组件库类名重名；§2.5） ----------
 const CSS_AR = `
 .ar-root{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.72);color:var(--lc-text);font-family:var(--lc-font);animation:lc-mo-fade var(--lc-mo-enter) var(--lc-mo-out) both;}
-/* ★ 比例按演示稿（demo-register-ai-motion.html 的 .phone）：390 宽竖版卡、
-   高 min(780, 100dvh-32)、圆角 28、居中 —— 不是全屏接管（2026-09-18 用户裁定） */
-.ar-panel{width:390px;max-width:100%;height:min(780px,calc(100dvh - 32px));min-height:520px;display:flex;flex-direction:column;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:28px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);animation:lc-mo-pop var(--lc-mo-enter) var(--lc-mo-out) both;--lc-mo-origin:50% 92%;}
+/* ★ 比例按演示稿（demo-register-ai-motion.html 的 .phone）：竖版卡、
+   高 min(780, 100dvh-32)、圆角 28、居中 —— 不是全屏接管（2026-09-18 用户裁定）。
+   ★ 2026-10-21 IAM 重做 P1-2：宽 390 → 400，与三张认证卡同档（AuthCard 交付档 400）。
+   同一段注册流程里卡片宽度来回跳 10px，用户看到的是"面板换了一张"，
+   而交付稿的认证面本来就只有一档宽度。 */
+.ar-panel{width:400px;max-width:100%;height:min(780px,calc(100dvh - 32px));min-height:520px;display:flex;flex-direction:column;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:28px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);animation:lc-mo-pop var(--lc-mo-enter) var(--lc-mo-out) both;--lc-mo-origin:50% 92%;}
 @media (max-width:640px){ /* ★ 批3 断点归一：480 → 640（S 档上缘） */
   .ar-root{padding:0;background:var(--lc-bg);}
   .ar-panel{width:100%;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none;}
@@ -840,6 +870,11 @@ const CSS_AR = `
 .ar-chip-v{font-size:14px;color:var(--lc-text);font-weight:500;}
 .ar-form{display:flex;flex-direction:column;gap:14px;padding:20px 16px;border-radius:14px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);box-shadow:var(--lc-panel-highlight);align-self:stretch;}
 .ar-fgroup{display:flex;flex-direction:column;gap:8px;}
+/* ★ P1-3：口令框 + 右端眼睛（与认证卡 .auth-pwd-eye 同形态同尺寸，只换定位方式） */
+.ar-pwd{position:relative;display:block;}
+.ar-pwd .lc-input{width:100%;padding-inline-end:38px;box-sizing:border-box;}
+.ar-pwd-eye{position:absolute;inset-inline-end:6px;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0;}
+.ar-pwd-eye:hover{color:var(--lc-text);}
 /* Turnstile 挂载容器：widget 固定 300px 宽，居中摆放；预留 65px 高度，
    避免脚本晚到时表单内容突然下移（AI 面板是逐条追加的，跳动很显眼） */
 .ar-ts{display:flex;justify-content:center;min-height:65px;}

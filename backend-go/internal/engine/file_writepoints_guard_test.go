@@ -62,10 +62,12 @@ type fwpSite struct {
 }
 
 // fwpScanWritePoints 用 AST 扫出 engine 包内所有 addTrans(...) 调用及其守护形态。
-// 三种合法形态：
-//  1. 祖先 if 的条件里调用了 IsTranslationUsable（写入前判定，覆盖模型/兜底 4 个写入点）；
-//  2. 所在 for-range 的迭代源是 collectKBPass(...) 的返回值（KB 命中写入点，判定收口在纯函数内）；
-//  3. 第三个实参是字面量 SensitivePlaceholderText（S8 占位预填豁免）。
+// 四种合法形态：
+//  1. 祖先 if 的条件里调用了 IsTranslationUsable（写入前判定，覆盖模型/兜底写入点）；
+//  2. 同一块内、写入点之前的 `if !IsTranslationUsable(...) { continue }` 早退（★ 2026-10-21 补，
+//     语义与 1 等价；M1 记账腿把四处改写成早退式后，只按祖先 if 判会全部判成「无守护」）；
+//  3. 所在 for-range 的迭代源是 collectKBPass(...) 的返回值（KB 命中写入点，判定收口在纯函数内）；
+//  4. 第三个实参是字面量 SensitivePlaceholderText（S8 占位预填豁免）。
 func fwpScanWritePoints(t *testing.T, filenames []string) []fwpSite {
 	t.Helper()
 	var sites []fwpSite
@@ -131,7 +133,66 @@ func fwpGuardOf(stack []ast.Node) string {
 			}
 		}
 	}
+	// 形态 4（★ 2026-10-21 M1 记账腿引入）：**早退式**守护——
+	// `if !IsTranslationUsable(...) { continue }` 紧挨在写入点之前。
+	// 语义与「包一层 if」等价（判据同样在写入前、失败即跳过），但 AST 上它**不是**祖先，
+	// 只按祖先 if 找会把它判成「无守护」——2026-10-21 M1 把四处写成早退式后本闸门当场红。
+	// 只认「同一块内、位于写入点之前、条件用到 IsTranslationUsable、且体尾是 continue/return」
+	// 这一种形态：问的是"写入之前有没有被判据拦下"，不是"文件里出现过这个词"。
+	if fwpEarlyContinueGuarded(stack) {
+		return "IsTranslationUsable"
+	}
 	return ""
+}
+
+// fwpEarlyContinueGuarded 判「写入点之前的同一块里，有一条以 continue/return 收尾的判据早退」。
+func fwpEarlyContinueGuarded(stack []ast.Node) bool {
+	// 找到最近的外层块与写入点所在的那条语句。
+	blockIdx := -1
+	for i := len(stack) - 1; i >= 0; i-- {
+		if _, ok := stack[i].(*ast.BlockStmt); ok {
+			blockIdx = i
+			break
+		}
+	}
+	if blockIdx < 0 {
+		return false
+	}
+	block := stack[blockIdx].(*ast.BlockStmt)
+	// 写入点的「语句下标」：向上找最近的 *ast.ExprStmt，再在 block.List 里定位它。
+	stmtIdx := -1
+	for i := blockIdx + 1; i < len(stack); i++ {
+		if es, ok := stack[i].(*ast.ExprStmt); ok {
+			for k, st := range block.List {
+				if st == es {
+					stmtIdx = k
+					break
+				}
+			}
+			break
+		}
+	}
+	if stmtIdx < 0 {
+		return false
+	}
+	for k := 0; k < stmtIdx; k++ {
+		iff, ok := block.List[k].(*ast.IfStmt)
+		if !ok || iff.Body == nil || len(iff.Body.List) == 0 {
+			continue
+		}
+		if !fwpUses(iff.Cond, "IsTranslationUsable") {
+			continue
+		}
+		switch bs := iff.Body.List[len(iff.Body.List)-1].(type) {
+		case *ast.BranchStmt:
+			if bs.Tok == token.CONTINUE {
+				return true
+			}
+		case *ast.ReturnStmt:
+			return true
+		}
+	}
+	return false
 }
 
 // fwpAssignedFromCollect 回溯栈上最近的函数体，检查 name 是否由 collectKBPass 的
@@ -601,5 +662,42 @@ func TestApplySegmentGatesEmptyMapSafe(t *testing.T) {
 	}
 	if ws := h.eng.applySegmentGates(context.Background(), nil, false); ws != nil {
 		t.Fatalf("nil 输入应返回 nil，got %v", ws)
+	}
+}
+
+// TestFwpEarlyContinueGuardForm 早退式守护的射程自证（★ 2026-10-21 M1）。
+//
+// 为什么单测这一条：上面那条闸门扫的是**真件**，它能红只能证明"真件里有未守护写入"，
+// 证明不了"早退式被正确认成守护"与"没有早退式时会判红"这两件事同时成立。
+// 判据函数喂两份合成源码：带早退式必须认作 IsTranslationUsable；摘掉必须判无守护。
+func TestFwpEarlyContinueGuardForm(t *testing.T) {
+	write := func(body string) string {
+		return `package engine
+
+func f(lc, m, v string, xs []string) {
+	for _, x := range xs {
+		_ = x
+		` + body + `
+	}
+}
+`
+	}
+	dir := t.TempDir()
+	good := filepath.Join(dir, "good.go")
+	if err := os.WriteFile(good, []byte(write("if !IsTranslationUsable(m, v) { continue }\n\t\taddTrans(lc, m, v)")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bad := filepath.Join(dir, "bad.go")
+	if err := os.WriteFile(bad, []byte(write("addTrans(lc, m, v)")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gs := fwpScanWritePoints(t, []string{good})
+	if len(gs) != 1 || gs[0].guarded != "IsTranslationUsable" {
+		t.Fatalf("早退式守护没被认出来（sites=%+v）⇒ 真件里这种写法会被误判成无守护", gs)
+	}
+	bs := fwpScanWritePoints(t, []string{bad})
+	if len(bs) != 1 || bs[0].guarded != "" {
+		t.Fatalf("没有早退式竟被判成有守护（sites=%+v）⇒ 这条形态会变成「任何写入都放行」", bs)
 	}
 }

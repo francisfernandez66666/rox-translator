@@ -17,7 +17,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler, getActiveTenantId } from '@/api'
+import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler, getActiveTenantId, logout as authLogout } from '@/api'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
@@ -69,6 +69,14 @@ export const useAuthStore = create<AuthState>()((set) => ({
   restoring: !!getAuthToken(),
   onLogin: (u) => set({ user: u, restoring: false }),
   logout: () => {
+    // ★ 2026-10-21 IAM 重做 P0-11：登出不再只是"本地抹掉 token"。
+    //   JWT 无状态，抹掉本地那份不等于凭证失效——它在到期前被人抄走仍然有效
+    //   （公用电脑上一个人登出、下一个人拿旧 token 照样读得到前一个人的数据）。
+    //   先发起服务端撤销（按 jti 记标记），**再**清本地；顺序不能反——反了 authHeaders()
+    //   就已经拿不到 token，请求变成匿名调用，服务端无从知道该撤销哪一条。
+    //   这一步是 best-effort：网络失败/服务端无共享存储时只清本地（服务端会如实回 revoked:false），
+    //   绝不因为"撤销请求没成功"就把用户卡在已登出不了的状态里。
+    void authLogout().catch(() => { /* 登出永不因服务端不可达而失败 */ })
     setAuthToken('')
     set({ user: null })
   },
@@ -117,10 +125,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 /** 在函数组件中读取认证状态（★ H8：直连 zustand，不再依赖 Provider 层级；
  *  保留 Context 兜底仅为独立预览等无 Provider 场景的旧行为兼容） */
 /** 取认证上下文 */
-export function useAuth(): AuthCtx {
-  const user = useAuthStore((s) => s.user)
+export function useAuth(): AuthCtx {  const user = useAuthStore((s) => s.user)
   const restoring = useAuthStore((s) => s.restoring)
   const onLogin = useAuthStore((s) => s.onLogin)
   const logout = useAuthStore((s) => s.logout)
   return useMemo(() => ({ user, restoring, onLogin, logout }), [user, restoring, onLogin, logout])
+}
+
+/**
+ * applyLogin 登录成功的统一收尾（★ 2026-10-21 IAM 重做 P1：去掉 App.tsx / PublicRoot.tsx 两份手抄）。
+ *
+ * 两棵树（登录态走 App，未登录公开面走 PublicRoot）对「登录成功之后做什么」必须是同一件事：
+ * 落全局 user ＋ 后台档下把不够格的账号弹回首页。旧形态在两边各写了一遍三元判断——
+ * 将来改其中一处（比如把门槛从 2 抬到 3）另一处不会跟，而这两棵树的切换是用户完全无感的，
+ * 于是同一个人从 `/` 登进去和从 `/admin` 登进去会得到两种权限结果。
+ *
+ * @param u        登录接口返回的当前用户
+ * @param onLogin  全局登录态 setter（useAuth().onLogin）
+ * @param pathname 当前路径（判定是否处于后台档）
+ * @param navigate 路由跳转（两棵树各自的实现，签名都是 (to: string) => void）
+ */
+export function applyLogin(
+  u: AuthUser,
+  onLogin: (u: AuthUser) => void,
+  pathname: string,
+  navigate: (to: string) => void,
+): void {
+  onLogin(u)
+  // admin 档下普通成员（<2）即便拿到 token 也不放行：Login 已拦一次，这里是第二道
+  if (pathname.startsWith('/admin') && roleLevel(u.role) < 2) navigate('/')
 }

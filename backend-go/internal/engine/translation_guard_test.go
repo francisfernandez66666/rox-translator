@@ -16,6 +16,80 @@ import (
 	"testing"
 )
 
+// TestIsTranslationUsableRejectsRefusalResidue ★ 2026-10-21（UAT 收口 M1）：
+// 模型整段回绝/答非所问不得当译文交付——现网五件交付物全叫
+// `I am unable to provide the translation you requested_en.*`，正文首行也是这句。
+// 正腿逐形态拦（成对结构 / 换措辞 n-gram / 中文回绝），反腿钉住正常译文不误杀
+// （尤其是「源文自己就谈翻译」和「源文自己就是一句回绝」这两档）。
+func TestIsTranslationUsableRejectsRefusalResidue(t *testing.T) {
+	rejected := []struct{ src, out string }{
+		{"产品方案书", "I am unable to provide the translation you requested"},
+		{"报价单", "I'm sorry, but I cannot help with that translation."},
+		{"当前：全部允许·仓位留空/0 =使用全局单票金额", "抱歉，我无法提供您要求的翻译。"},
+		{"蓝牙钥匙已激活，请勿拆卸。", "无法提供这段文字的翻译"},
+		{"Q3 渠道复盘", "As an AI language model, I cannot translate this content."},
+	}
+	for _, c := range rejected {
+		if IsTranslationUsable(c.src, c.out) {
+			t.Errorf("拒译话术必须判不可用：src=%q out=%q", c.src, c.out)
+		}
+	}
+
+	kept := []struct{ src, out string }{
+		// 正常译文里出现 "cannot provide" —— 源文就是这句话，必须放行
+		{"不能提供该服务", "We cannot provide this service."},
+		// 源文自己在谈翻译（本仓产品文档的典型句式），不能当回绝拦掉
+		{"翻译服务维护中，暂时无法提供", "The translation service is under maintenance and is temporarily unavailable."},
+		// 源文自己是一句道歉（翻译它本来就该出 sorry）
+		{"抱歉，本产品暂不可用。", "We are sorry, but this product is currently unavailable."},
+		// 普通长句，既没有回绝措辞也没有翻译词根
+		{"产品方案书 v5.1 包含定价、渠道与排期三部分。", "The product proposal v5.1 covers pricing, channels and scheduling."},
+	}
+	for _, c := range kept {
+		if !IsTranslationUsable(c.src, c.out) {
+			t.Errorf("正常译文被拒译判据误杀：src=%q out=%q", c.src, c.out)
+		}
+	}
+}
+
+// TestRefusalJudgeIsLoadBearing 反证：把拒译判据摘掉（等价于直接返回 false），
+// 上面那批正腿必须转红——否则这条锁的射程其实落在别的判据上（§三「判据级自伤」）。
+func TestRefusalJudgeIsLoadBearing(t *testing.T) {
+	cases := []struct{ src, out string }{
+		{"产品方案书", "I am unable to provide the translation you requested"},
+		{"报价单", "I'm sorry, but I cannot help with that translation."},
+	}
+	for _, c := range cases {
+		if !refusalResidue(c.src, c.out) {
+			t.Fatalf("拒译判据本身没命中：src=%q out=%q", c.src, c.out)
+		}
+		// 同一条候选在「摘掉判据」的变异体下会落到后续判据，必须判可用，
+		// 才证明正腿的红确实是这条判据撑起来的。
+		if !usableWithoutRefusalJudge(c.src, c.out) {
+			t.Fatalf("变异体仍判不可用 ⇒ 正腿不是这条判据撑起来的：src=%q out=%q", c.src, c.out)
+		}
+	}
+}
+
+// usableWithoutRefusalJudge 判据 9 之外的八类判据（反证专用，逐条抄自 IsTranslationUsable，
+// 唯一的差别是不调 refusalResidue）。它刻意不抽进产品代码：这个函数只服务反证，
+// 抽出去会让「摘掉判据」这件事变成一次产品侧改动。
+func usableWithoutRefusalJudge(src, out string) bool {
+	o := strings.TrimSpace(out)
+	if o == "" || o == translationFailureMark {
+		return false
+	}
+	if normalizeForCompare(src) == normalizeForCompare(out) {
+		return !sourceHasTranslatableLetters(src)
+	}
+	if hasInstructionEcho(src, out) || hasLengthExplosion(src, out) ||
+		nonLinguisticMustStayVerbatim(src, out) || degenerateToFunctionWord(src, out) ||
+		quotedVerbatimSourceExplained(src, out) {
+		return false
+	}
+	return true
+}
+
 func TestIsTranslationUsableRejectsUnusableCandidates(t *testing.T) {
 	cases := []struct {
 		name string

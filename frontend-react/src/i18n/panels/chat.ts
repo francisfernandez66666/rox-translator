@@ -13,8 +13,16 @@ export const zh: Record<string, string> = {
   'chat.micStop': '停止录音',
   'chat.micWorking': '正在识别录音…',
   'chat.micUnsupported': '当前浏览器不支持录音',
+  // ★ 2026-10-21 UAT 收口 M7（录音四态）：录音中带秒数读数（title 用，{sec} 必须是占位符而非写死数字），
+  //   以及「识别结果已回填输入框」的出声提示——旧形态回填后界面零反馈，用户会以为录音没生效而再点一次。
+  'chat.micRecording': '录音中 {sec}s，点击停止',
+  'chat.micFilled': '已填入输入框，确认后点「翻译」发送',
   'chat.speak': '朗读',
   'chat.speakStop': '停止朗读',
+  // ★ 2026-10-21 UAT 收口 M8：朗读专用的加载态（旧形态复用「正在识别录音…」＝串档），
+  //   以及浏览器拒绝自动播放时的可行动提示（再点一次即可，缓存已在手）。
+  'chat.speakLoading': '正在合成语音…',
+  'chat.speakTapAgain': '浏览器阻止了自动播放，请再点一次「朗读」',
   // ★ 2026-10-17 图片翻译（用户令）：按钮/进行中/失败/结果卡四组文案，失败三档与后端 reason 对齐
   //   （capability_missing=服务端无 OCR；no_text=图里没识别出文字；其余=通用失败）。
   'chat.image': '图片翻译',
@@ -31,6 +39,7 @@ export const zh: Record<string, string> = {
   //   三句都必须写明「文字译文不受影响」——译文第一，语音只是择优产出。
   'chat.voiceLangUnavailable': '该语种暂时没有朗读语音，译文不受影响',
   'chat.voiceTooLong': '译文过长，暂时无法一次朗读，请分段后再试',
+  'chat.voiceTimeout': '语音合成超时，请稍后重试；译文不受影响',
   'chat.voiceUnavailable': '暂时没有朗读语音，译文不受影响',
   // ---- 修改密码弹窗 ----
     // ★ F2：聊天状态/额度提示（useChat）
@@ -56,6 +65,8 @@ export const zh: Record<string, string> = {
   'pwd.forceTitle': '首次登录请修改密码',
   'pwd.forceHint': '管理员为您开通了初始密码，出于安全考虑，请先设置新密码后再使用系统。',
   'pwd.oldPassword': '当前密码（初始密码）',
+  // ★ 2026-10-21 IAM 重做 P0-8：全局强制改密闸门（ForcePasswordGate）的空值提示
+  'pwd.oldRequired': '请先输入当前密码',
   'pwd.forceSubmit': '设置新密码',
 
   // ---- 翻译工作台主界面 ----
@@ -228,8 +239,14 @@ export const en: Record<string, string> = {
   'chat.micStop': 'Stop',
   'chat.micWorking': 'Transcribing…',
   'chat.micUnsupported': 'This browser does not support recording',
+  // ★ 2026-10-21 UAT 收口 M7：与 zh 逐键对等（{sec} 占位符两侧同名）。
+  'chat.micRecording': 'Recording {sec}s — click to stop',
+  'chat.micFilled': 'Added to the input box — review it, then press Translate',
   'chat.speak': 'Listen',
   'chat.speakStop': 'Stop audio',
+  // ★ 2026-10-21 UAT 收口 M8：与 zh 逐键对等。
+  'chat.speakLoading': 'Synthesizing audio…',
+  'chat.speakTapAgain': 'The browser blocked autoplay — tap Listen again',
   // ★ 图片翻译（与上方 zh 逐键对等，键名写进 panels parity 锁）
   'chat.image': 'Image translation',
   'chat.imageWorking': 'Recognizing and translating image…',
@@ -243,6 +260,7 @@ export const en: Record<string, string> = {
   // ★ 语音失败三档文案（与上方 zh 逐键对等）：档位名见 lib/voiceFail.ts
   'chat.voiceLangUnavailable': 'No voice audio for this language — your translation is unaffected',
   'chat.voiceTooLong': 'This translation is too long to read at once — try reading it in parts',
+  'chat.voiceTimeout': 'Voice synthesis timed out — try again later; your translation is unaffected',
   'chat.voiceUnavailable': 'Voice audio is unavailable right now — your translation is unaffected',
   'chat.preparing': 'Preparing',
 'chat.quotaExhausted':'Quota exhausted. Top up or upgrade to continue.',
@@ -267,6 +285,7 @@ export const en: Record<string, string> = {
   'pwd.forceTitle': 'Change Your Password (Required)',
   'pwd.forceHint': 'Your administrator set an initial password. For security, set a new password to continue.',
   'pwd.oldPassword': 'Current (initial) password',
+  'pwd.oldRequired': 'Enter your current password first',
   'pwd.forceSubmit': 'Set new password',
   'pwd.submit': 'Confirm change',
   'pwd.done': 'Password updated. Use the new password next time you sign in',

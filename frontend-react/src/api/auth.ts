@@ -87,7 +87,7 @@ export async function authMe(): Promise<LoginResp> {
 /** 自助注册：组织名/邮箱验证码/Turnstile/邀请码/UTM 归因一并上报。
  *  ★ F-17（2026-09-25 批E）：app_lang=注册界面语种（12 码），调用方未显式传入时自动随 currentUiLang() 带上；
  *  后端按「载荷 app_lang → X-App-Lang 头 → 中文」解析，落库 users.preferred_lang 供邮件语种跟随。 */
-export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; app_lang?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string; device_id?: string }): Promise<AdminResp> {
+export async function authRegister(data: { username: string; password: string; type?: string; code?: string; name?: string; invite?: string; email?: string; email_code?: string; captcha_token?: string; industry?: string; job_role?: string; app_lang?: string; role_choice?: string; ref?: string; agreed?: boolean; brand_name?: string; brand_name_en?: string; brand_names?: string; landing_path?: string; utm_source?: string; utm_medium?: string; utm_campaign?: string; utm_term?: string; utm_content?: string; device_id?: string }): Promise<AdminResp & { token?: string; user?: AuthUser }> {
   // ★ F-81（2026-09-28）：device_id 与 app_lang 同口径在出口处兜上，调用方不传也有——
   //   后端拿它做「同一浏览器每日新建免费账号」那一档防薅账（与免登录试用同一份设备号、同一张限流表）。
   //   在这里收口而不是在每个注册表单里各写一遍：漏一个入口就等于给刷号留一个免记账的口子。
@@ -165,4 +165,18 @@ export async function updateEmail(email: string, code: string, oldCode = ''): Pr
 /** 账号自助注销（数据按合规策略处理） */
 export async function deactivateAccount(): Promise<AdminResp> {
   return request('/api/me/deactivate', { method: 'POST' })
+}
+
+/**
+ * logout 服务端登出（★ 2026-10-21 IAM 重做 P0-11）。
+ *
+ * 为什么要请求服务端：JWT 是无状态的，前端把本地 token 抹掉**不等于**那条凭证失效——
+ * 它在到期前仍可被复制出去继续用（公用电脑上"登出"完，前一个人留下的 token 还能读到后一个人的数据）。
+ * 服务端按 jti 记一条撤销标记，之后任何带这条 token 的请求都会被判已撤销。
+ *
+ * 返回值里的 `revoked` 是对外诚实口径：服务端没有共享存储（单机内存/无 Redis）时**撤销不了**，
+ * 这一档必须如实回 false，让调用方与运维看得见"这次登出只清了本地"，绝不能假装成功。
+ */
+export async function logout(): Promise<AdminResp & { revoked?: boolean }> {
+  return bizResp(() => request('/api/auth/logout', { method: 'POST', headers: authHeaders() }))
 }

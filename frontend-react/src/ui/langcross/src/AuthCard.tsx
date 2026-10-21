@@ -14,6 +14,16 @@ export interface AuthCardProps {
   foot?: ReactNode;
   /** 卡片右上角浮件（语言切换胶囊等）；绝对定位在角上，不参与纵向节奏 */
   corner?: ReactNode;
+  /**
+   * busy=true ⇒ 提交钮禁用并标 aria-busy（★ 2026-10-21 IAM 重做 P1-2）。
+   * 旧形态这里**没有**禁用档：登录/注册/找回三张面的提交钮在请求飞行中照样可点，
+   * 于是"连点两下"会真的发两次请求——注册那一腿第二次必吃「该租户下用户名已存在」，
+   * 用户看到的是"我点了注册它报错"。
+   * ⚠️ 刻意**不加新视觉**：禁用态直接复用交付档 `.lc-btn:disabled`
+   *   （background=--lc-raised / color=--lc-disabled / border=--lc-border-faint，
+   *   components.css:59 现值），不新造 loading 样式、不动色值与字阶（AGENTS §一·5 界面规格＝UI 交付真值）。
+   */
+  busy?: boolean;
   className?: string;
 }
 
@@ -29,6 +39,7 @@ export function AuthCard({
   onSubmit,
   foot,
   corner,
+  busy = false,
   className = "",
 }: AuthCardProps) {
   return (
@@ -37,7 +48,13 @@ export function AuthCard({
       <h1 className="lc-auth-card__title">{title}</h1>
       {desc ? <p className="lc-auth-card__desc">{desc}</p> : null}
       {children}
-      <button type="button"className="lc-btn lc-btn--primary lc-auth-card__submit"onClick={onSubmit}>
+      <button
+        type="button"
+        className="lc-btn lc-btn--primary lc-auth-card__submit"
+        onClick={onSubmit}
+        disabled={busy}
+        aria-busy={busy || undefined}
+      >
         {submitText}
       </button>
       {foot ? <p className="lc-auth-card__foot">{foot}</p> : null}

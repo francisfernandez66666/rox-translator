@@ -23,13 +23,14 @@ const mocks = vi.hoisted(() => ({
   detail: {} as Record<string, unknown>,
   download: vi.fn(async () => undefined),
   toastError: vi.fn(),
+  toast: vi.fn(),
 }))
 
 vi.mock('@/lib/toastBus', () => ({
   toastError: mocks.toastError,
   toastSuccess: vi.fn(),
   toastWarn: vi.fn(),
-  toast: vi.fn(),
+  toast: mocks.toast,
   registerToastHandler: vi.fn(),
 }))
 
@@ -49,6 +50,7 @@ vi.mock('@/api', () => {
 
 beforeEach(() => {
   mocks.toastError.mockClear()
+  mocks.toast.mockClear()
   mocks.download.mockClear()
   vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
 })
@@ -96,6 +98,13 @@ describe('工单详情面 · 交付件清单与退化露出', () => {
     expect(document.querySelector('[data-testid="tk-degraded"]')).toBeTruthy()
   })
 
+  it('D2b gate_warnings 非空 ⇒ 出质量提示块（M1：未译段回落原文要出声）', async () => {
+    mocks.detail = { ticket: { ...ticket, gate_warnings: ['untranslated=3'] }, states: [], files: [] }
+    render(<TicketsPage />)
+    await openDetail('T-1')
+    expect(document.querySelector('[data-testid="tk-gate-warnings"]')).toBeTruthy()
+  })
+
   it('D3 无交付件、无退化 ⇒ 两块都不渲染', async () => {
     mocks.detail = { ticket, states: [], files: [] }
     render(<TicketsPage />)
@@ -123,6 +132,36 @@ describe('工单详情面 · 交付件清单与退化露出', () => {
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalled())
     // 文案走 i18n 键（key 由另一 agent 补译），此处只要求它**不是**空、且确实弹了一次
     expect(String(mocks.toastError.mock.calls[0][0])).not.toEqual('')
+  })
+
+  it('D7 文本终态工单「重新发起」⇒ 回填标题/原文/语种/模式并关详情（M1）', async () => {
+    mocks.detail = {
+      ticket: { ...ticket, source_text: '原始待译文本', target_langs: 'en,ja', mode: 'pro', delivery: 'restore' },
+      states: [],
+      files: [],
+    }
+    render(<TicketsPage />)
+    await openDetail('T-1')
+    fireEvent.click(await screen.findByText('重新发起'))
+    await waitFor(() => expect(document.querySelector('[data-testid="tk-progress-dialog"]')).toBeNull())
+    expect((document.querySelector('[data-testid="tk-title"]') as HTMLInputElement).value).toBe('t')
+    expect((document.querySelector('[data-testid="tk-source"]') as HTMLTextAreaElement).value).toBe('原始待译文本')
+  })
+
+  it('D8 文件终态工单「重新发起」⇒ 切文件模式并提示重选原文件（不静默丢参数）', async () => {
+    mocks.detail = {
+      ticket: { ...ticket, file_path: '/srv/up/a.docx', target_langs: 'en', mode: 'fast' },
+      states: [],
+      files: [],
+    }
+    render(<TicketsPage />)
+    await openDetail('T-1')
+    fireEvent.click(await screen.findByText('重新发起'))
+    await waitFor(() => expect(document.querySelector('#tk-file-input')).toBeTruthy())
+    expect(mocks.toast).toHaveBeenCalled()
+    const arg = mocks.toast.mock.calls[0][0] as { title?: string; tone?: string }
+    expect(arg.title, '必须提示重新选择原文件，而不是假装已恢复上传件').toBeTruthy()
+    expect(arg.tone).toBe('warn')
   })
 
   it('D6 下载在途 ⇒ 行内出现字节进度标记（§五#2）', async () => {

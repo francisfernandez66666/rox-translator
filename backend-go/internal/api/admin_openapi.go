@@ -161,16 +161,21 @@ func extractBodyInner(htmlDoc string) string {
 
 // handleOpenAPIDocs 开放 API 文档公开页：中英双容器渲染 + 右上角语言切换
 // （默认语言按浏览器 navigator.language 自动选择；切换结果记忆到 localStorage）。
-func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("zh"))))
-	enBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("en"))))
-	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐。
-	// 样式壳与 renderDocsHTML 同源（openAPIDocsCSS），两条路径不会再各画一套配色。
+// openAPIDocsPage 拼装对外文档页（中英双容器 + 语言切换）。
+//
+// ★ 2026-10-21 UAT 收口 M4：整页正文包在 <!--email_off--> 里。
+//
+//	线上三域经 Cloudflare，它的「邮箱混淆」会把代码示例里的 `files=@手册.docx` 当成邮箱地址
+//	改写成一串 data-cfemail（实测三域字节互不相等，且客户复制到的命令已不可用）。
+//	示例改成 `files=@/path/...` 只能治内置默认；运营在管理台存过的旧抄本仍会被改写，
+//	所以渲染出口无条件加这道标记——CF 只认标记、不看内容形态，库里的旧文案也一并受保护。
+//	⚠️ 标记必须成对且包住正文；只包代码块会在 Markdown 渲染后漏掉内联 code。
+func openAPIDocsPage(zhBody, enBody string) string {
 	page := `<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>能言开放 API 文档</title>
 <style>` + openAPIDocsCSS + `</style></head><body>
+<!--email_off-->
 <div class="lang-switch">
   <button class="lang-btn on" data-l="zh" onclick="setLang('zh')">中文</button>
   <button class="lang-btn" data-l="en" onclick="setLang('en')">English</button>
@@ -189,7 +194,19 @@ function setLang(l){
   setLang(l);
 })();
 </script>
+<!--/email_off-->
 </body></html>`
+	return page
+}
+
+// handleOpenAPIDocs 直出中英双栏开放 API 文档页；正文由 email_off 包裹，避免 Cloudflare 邮箱混淆改写代码示例。
+func (s *Server) handleOpenAPIDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	zhBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("zh"))))
+	enBody := extractBodyInner(renderDocsHTML(s.expandDocsPlaceholders(s.getDocsMD("en"))))
+	// 双容器静态页模板（CSS/JS 内联零外链）：zh/en 各一份 body 同时下发，脚本端切换显隐。
+	// 样式壳与 renderDocsHTML 同源（openAPIDocsCSS），两条路径不会再各画一套配色。
+	page := openAPIDocsPage(zhBody, enBody)
 	_, _ = w.Write([]byte(page))
 }
 
@@ -345,7 +362,7 @@ EOF
 ~~~
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
-  -F 'files=@手册.docx' -F 'files=@清单.xlsx' -F 'target_langs=en,de' -F 'mode=fast' 
+  -F 'files=@/path/手册.docx' -F 'files=@/path/清单.xlsx' -F 'target_langs=en,de' -F 'mode=fast' 
 ~~~
 
 ## ③ 轮询状态（文本 15s / 文件 60s）
@@ -424,12 +441,12 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 # 图片：OCR 识别图上文字 → 翻译 → 产出**同容器译后图**（文字原位回填）＋译文 .md
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
-  -F 'files=@产品说明.png' -F 'target_langs=en' -F 'mode=pro'
+  -F 'files=@/path/产品说明.png' -F 'target_langs=en' -F 'mode=pro'
 
 # 音频：ASR 转写 → 翻译 → 产出**同容器译后配音**＋译文 .srt（带原时间轴）＋译文 .md＋原音频副本
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
-  -F 'files=@会议录音.m4a' -F 'target_langs=en' -F 'mode=pro'
+  -F 'files=@/path/会议录音.m4a' -F 'target_langs=en' -F 'mode=pro'
 ~~~
 
 产物命名与形态（{译名}_{语言码}{后缀}，每语种一份）：
@@ -518,7 +535,7 @@ Response (202): {"task_id":123,"status":"queued","poll_interval_sec":15,"balance
 ## Create a batch file task (mode=fast / pro, default pro)
 
 ~~~bash
-curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@manual.docx' -F 'files=@list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
+curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks -H 'Authorization: Bearer YOUR_API_KEY' -F 'files=@/path/manual.docx' -F 'files=@/path/list.xlsx' -F 'target_langs=en,de' -F 'mode=fast'
 ~~~
 
 ## Poll status
@@ -595,13 +612,13 @@ no extra parameter needed:
 # in place) + translated .md
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer YOUR_API_KEY' \
-  -F 'files=@spec-sheet.png' -F 'target_langs=en' -F 'mode=pro'
+  -F 'files=@/path/spec-sheet.png' -F 'target_langs=en' -F 'mode=pro'
 
 # Audio: ASR → translate → **same-container dubbed audio** + .srt subtitles (original timeline)
 # + translated .md + a copy of the source audio
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer YOUR_API_KEY' \
-  -F 'files=@meeting.m4a' -F 'target_langs=en' -F 'mode=pro'
+  -F 'files=@/path/meeting.m4a' -F 'target_langs=en' -F 'mode=pro'
 ~~~
 
 Artifact naming and shape ({translated-name}_{lang}{ext}, one set per target language):

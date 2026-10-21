@@ -113,8 +113,37 @@ func isFilenameEchoResidue(origBase, modelOut string) bool {
 	if strings.ContainsAny(modelOut, "\n\r") {
 		return true
 	}
+	// ★ 2026-10-21（UAT M1）：模型回绝整句被当成了文件名——现网五件交付物全叫
+	//   `I am unable to provide the translation you requested_en.*`。判据与正文
+	//   同一把尺子（refusalResidue），只在取名这一侧不额外要求"源文没有翻译字样"：
+	//   文件名主干很短，模型对它回一句回绝永远是坏返回，回落原名没有任何损失。
+	if refusalResidue(origBase, modelOut) {
+		return true
+	}
 	o := strings.TrimSpace(origBase)
-	return utf8.RuneCountInString(o) >= 3 && strings.Contains(modelOut, o)
+	if utf8.RuneCountInString(o) >= 3 && strings.Contains(modelOut, o) {
+		return true
+	}
+	// ★ 同批第二腿：长度异常且与原名零字符交集——模型另起一句解释而不是翻这个名字
+	//   （如把「报价单」答成 "Here is the translated file name as requested"）。
+	//   只认「> 4 倍且一个原名字母都碰不到」这一种极端形态，正常译名（「製品計画書」）
+	//   长度相当，永远不会走到这里。
+	if ob := []rune(o); len(ob) >= 3 && len([]rune(strings.TrimSpace(modelOut))) > 4*len(ob) && !sharesAnyLetter(o, modelOut) {
+		return true
+	}
+	return false
+}
+
+// sharesAnyLetter 两个串是否有共同的字母字符（任何文字系统都算）。
+// 只用来判「模型那句解释跟原名一点关系都没有」；数字/标点不参与，避免
+// 「v5.1」这类版本号把明显无关的长句判成有关。
+func sharesAnyLetter(a, b string) bool {
+	for _, r := range a {
+		if unicode.IsLetter(r) && strings.ContainsRune(b, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveTranslatedBaseName 纯函数：模型对文件名的原始返回 → 交付用 base（不可用则回落原名）。

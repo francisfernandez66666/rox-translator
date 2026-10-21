@@ -118,29 +118,107 @@ export async function asrTranscribe(blob: Blob, filename = 'mic.webm'): Promise<
 // 失败一律 throw **VoiceError**（带后端档位；后端同时给了可行动的人话句子，那条只进日志）。
 // ★ 为什么用裸 fetch 而不是 api/core 的 request：request 已经 json 化出参，
 //   音频是二进制流，套一层只会把 wav 字节当文本解析坏掉。
-export async function speakAloud(text: string, lang: string): Promise<Blob> {
-  const r = await fetch(`${API_BASE}/api/chat/tts`, {
-    method: 'POST',
-    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, lang }),
+//
+// ★ 2026-10-21 UAT 收口 M8：这条请求必须自带墙钟预算。
+//   服务端单次合成预算 60s（fileproc.ttsTimeout），但浏览器 fetch **默认没有超时**——
+//   旧写法一旦上游卡住（模型在 CPU 上加载权重、进程被 nice 降级、链路抖动），按钮就永远停在
+//   loading 态、用户只能刷新页面。75s 留出服务端 60s 预算 + 一次往返的余量；
+//   超时归到 `timeout` 档（与 failed 分开），界面按档提示"稍后重试"，不把一次慢合成说成"能力没有"。
+const TTS_FETCH_TIMEOUT_MS = 75_000
+// ★ 2026-10-21 M8：首字节探针。合成进程可能已经起来但上游卡在模型加载/排队，
+//   迟迟不吐第一个字节；用户此时看到的仍是 loading。5s 内没有首字节即判 timeout，
+//   中止请求并让按钮回到可重试态——不把整个 75s 都押在"也许马上就好"上。
+const TTS_FIRST_BYTE_TIMEOUT_MS = 5_000
+
+// readTtsBody 读取音频响应体，并给「首字节」单独一只 5s 秒表。
+// 为什么不用 r.blob()：它只会在**整段收完**后才 resolve，无法区分「还在下」与「上游没开始吐」；
+// 首字节探针必须直接读 stream。
+async function readTtsBody(r: Response, ctrl: AbortController): Promise<Blob> {
+  const type = r.headers.get('Content-Type') || 'audio/wav'
+  if (!r.body) return r.blob()
+  const reader = r.body.getReader()
+  const first = await new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      ctrl.abort()
+      reject(new VoiceError('tts-first-byte-timeout', 'timeout'))
+    }, TTS_FIRST_BYTE_TIMEOUT_MS)
+    reader.read().then(
+      (v) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
   })
-  const ct = r.headers.get('Content-Type') || ''
-  // ★ 为什么还要判 application/json：后端把「TTS 不可用」做成 HTTP 200 + error 体
-  //   （口径见 chat_audio.go：朗读写不出来不是协议错误，而是一次没有语音的结果），
-  //   只看 r.ok 会把错误体当成音频喂给 <audio>，播出来是解码错误、看不见人话。
-  if (!r.ok || ct.includes('application/json')) {
-    let msg = ''
-    let reason = ''
-    try {
-      const j = await r.json()
-      // message＝统一错误出口（s.writeError）的字段名，error＝"这一次没有语音"那两档的字段名；
-      // 两条都在这里收一次，调用方不必再关心后端走的是哪一条腿。
-      msg = (j && (j.error || j.message)) || ''
-      reason = (j && j.reason) || ''
-    } catch { /* 解析失败就退回状态码文案 */ }
-    throw new VoiceError(msg || 'tts-http-' + r.status, reason)
+  const chunks: Uint8Array[] = []
+  if (!first.done && first.value) chunks.push(first.value)
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (value) chunks.push(value)
   }
-  return r.blob()
+  return new Blob(chunks, { type })
+}
+
+/** speakAloud 请求服务端 TTS 并返回音频 Blob；首字节超时按 timeout 档抛 VoiceError，供界面出本地化文案。 */
+export async function speakAloud(text: string, lang: string): Promise<Blob> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), TTS_FETCH_TIMEOUT_MS)
+  try {
+    let r: Response
+    try {
+      r = await fetch(`${API_BASE}/api/chat/tts`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, lang }),
+        signal: ctrl.signal,
+      })
+    } catch (e) {
+      // AbortError 只可能来自上面那只总预算定时器（调用方目前不传外部 signal）：
+      // 明确成 timeout 档，别让它落进默认 failed 被读成"服务器坏了"。
+      if ((e as { name?: string } | null)?.name === 'AbortError') {
+        throw new VoiceError('tts-timeout', 'timeout')
+      }
+      throw e
+    }
+    const ct = r.headers.get('Content-Type') || ''
+    // ★ 为什么还要判 application/json：后端把「TTS 不可用」做成 HTTP 200 + error 体
+    //   （口径见 chat_audio.go：朗读写不出来不是协议错误，而是一次没有语音的结果），
+    //   只看 r.ok 会把错误体当成音频喂给 <audio>，播出来是解码错误、看不见人话。
+    if (!r.ok || ct.includes('application/json')) {
+      let msg = ''
+      let reason = ''
+      try {
+        const j = await r.json()
+        // message＝统一错误出口（s.writeError）的字段名，error＝"这一次没有语音"那两档的字段名；
+        // 两条都在这里收一次，调用方不必再关心后端走的是哪一条腿。
+        msg = (j && (j.error || j.message)) || ''
+        reason = (j && j.reason) || ''
+      } catch { /* 解析失败就退回状态码文案 */ }
+      throw new VoiceError(msg || 'tts-http-' + r.status, reason)
+    }
+    try {
+      return await readTtsBody(r, ctrl)
+    } catch (e) {
+      if (e instanceof VoiceError) throw e
+      if ((e as { name?: string } | null)?.name === 'AbortError') {
+        throw new VoiceError('tts-timeout', 'timeout')
+      }
+      throw e
+    }
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // releaseAudioUrl 释放 blob URL（不释放会让一段音频一直在内存里，点十次就十个副本）。

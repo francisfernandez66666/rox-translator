@@ -319,12 +319,7 @@ func SpeakToWav(ctx context.Context, text, lang, outPath string) error {
 	bin, args := wrapNice(pyBin(), argv)
 	_, stderr, err := runSubprocess(ctx, ttsTimeout(), bin, args, nil)
 	if err != nil {
-		// 脚本认得的 ERR:<Variant> 行＝有分档名可用（前端按档取 12 语种词典文案）；
-		// 认不出的一律 TtsReasonFailed（"可重试"那一档），**不许**升级成"能力缺失"去误导运维投放资产。
-		if variant := ttsErrVariant(string(stderr)); variant != "" {
-			return &TTLError{Reason: ttsReasonForVariant(variant), Message: friendlyTtsError(string(stderr)), Err: err}
-		}
-		return &TTLError{Reason: TtsReasonFailed, Message: fmt.Sprintf("TTS 合成失败: %v\n%s", err, truncateTail(stderr)), Err: err}
+		return ttsSubprocessError(ctx, err, string(stderr))
 	}
 	if info, serr := os.Stat(outPath); serr != nil || info.Size() == 0 {
 		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 产出了空音频（模型未产出有效采样）", Err: serr}
@@ -399,15 +394,29 @@ func SpeakLines(ctx context.Context, lines []string, lang, outPath string) error
 	bin, args := wrapNice(pyBin(), argv)
 	_, stderr, rerr := runSubprocess(ctx, ttsBatchTimeout(), bin, args, nil)
 	if rerr != nil {
-		if variant := ttsErrVariant(string(stderr)); variant != "" {
-			return &TTLError{Reason: ttsReasonForVariant(variant), Message: friendlyTtsError(string(stderr)), Err: rerr}
-		}
-		return &TTLError{Reason: TtsReasonFailed, Message: fmt.Sprintf("TTS 合成失败: %v\n%s", rerr, truncateTail(stderr)), Err: rerr}
+		return ttsSubprocessError(ctx, rerr, string(stderr))
 	}
 	if info, serr := os.Stat(outPath); serr != nil || info.Size() == 0 {
 		return &TTLError{Reason: TtsReasonFailed, Message: "TTS 产出了空音频（模型未产出有效采样）", Err: serr}
 	}
 	return nil
+}
+
+// ttsSubprocessError 把子进程失败统一映射成分档错误（单段与批量两条出口共用）。
+//
+//	① 脚本认得的 ERR:<Variant> 行优先——它有比流程状态更具体的病因；
+//	② 真 deadline ⇒ timeout（界面明说"超时，请稍后重试"，不许读成能力缺失）；
+//	③ 客户端断开（context.Canceled）仍归 failed：那是这次请求被放弃，不是合成器坏了。
+//
+// ★ M8：② 与 ③ 必须分开，否则客户端关页面后用户再点朗读看到的是"合成失败"而不是可重试的超时。
+func ttsSubprocessError(ctx context.Context, err error, stderr string) *TTLError {
+	if variant := ttsErrVariant(stderr); variant != "" {
+		return &TTLError{Reason: ttsReasonForVariant(variant), Message: friendlyTtsError(stderr), Err: err}
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &TTLError{Reason: TtsReasonTimeout, Message: "TTS 合成超时，请稍后重试", Err: err}
+	}
+	return &TTLError{Reason: TtsReasonFailed, Message: fmt.Sprintf("TTS 合成失败: %v\n%s", err, truncateTail([]byte(stderr))), Err: err}
 }
 
 // friendlyTtsError 解析 tts_speak.py stderr 的 ERR:<Variant>:<msg> 行 → 面向用户话术；
@@ -463,6 +472,8 @@ const (
 	TtsReasonUnsupportedLang = "unsupported_lang"
 	// TtsReasonFailed 其余合成失败（可重试；**不许**把它写成能力缺失去误导运维）。
 	TtsReasonFailed = "failed"
+	// TtsReasonTimeout 合成超过墙钟预算（客户动作：稍后重试；与 failed 分开，便于前端明说“超时”）。
+	TtsReasonTimeout = "timeout"
 )
 
 // DubContainerFor 配音产物的**容器**后缀（"译后音频回到原文件格式"口径，2026-10-16 用户令）。

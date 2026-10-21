@@ -163,9 +163,21 @@ T = {
 "图片不存在": "Image not found",
 "均摊系数不能小于 1.0": "Sharing factor must not be less than 1.0",
 "套餐不存在或已下架": "Plan not found or delisted",
-"如果账号存在且绑定了邮箱，验证码已发送": "If the account exists with a bound email, a code has been sent",
+"如果该账号存在且绑定了邮箱，验证码已发送。10 分钟内没收到请检查邮箱拼写与垃圾箱，或改用用户名找回": "If this account exists with a bound email, a code has been sent. If it does not arrive within 10 minutes, check the address and your spam folder, or try recovering by username",
 "存储未初始化": "Storage not initialized",
 "密码至少 6 位": "Password must be at least 6 characters",
+"密码未能写入，请稍后重试或联系管理员": "The password could not be saved; please retry later or contact an administrator",
+"口令未能写入，请重试": "The password could not be saved; please retry",
+"账号状态只能是 active、disabled 或 deactivating": "Account status must be one of active, disabled or deactivating",
+"账号不存在或已被删除，请重新登录后再试": "Account not found or already deleted; please sign in again and retry",
+# ★ 2026-10-21 IAM 重做批补录三条「邀请码」文案：它们此前**只存在于 catalog_en.go**、
+#   不在本生成器的 T 表里，于是本批跑 --apply 时把它们**静默抹掉**，
+#   由 TestAPICnMessageLiteralsCovered 当场抓出（词条覆盖棘轮）。
+#   教训写在这里给下一位：本文件的 T 与产物 catalog_en.go 必须互为真子集——
+#   手工往产物里加词条＝下一次 --apply 就丢；新增一律先加这张表。
+"邀请码不存在": "Invite code not found",
+"请提供邀请码 id 或 code": "Provide invite code id or code",
+"该邀请码已被使用，无法撤销": "This invite code was already used and cannot be revoked",
 "导入完成": "Import completed",
 "工作流未初始化": "Workflow not initialized",
 "工单不在待审批状态": "Ticket is not pending approval",
@@ -365,7 +377,8 @@ T = {
 "静态收款码未配置，请联系管理员在套餐中心上传收款图片": "Static payment QR not configured; ask an administrator to upload the payment image in the plan center",
 "非 mock 模式禁止模拟支付": "Mock payment is disabled outside mock mode",
 "首页背景保存失败: ": "Homepage background save failed: ",
-"验证码已发送到绑定邮箱": "Verification code sent to the bound email",
+"该企业账号已停用，请联系管理员": "This company account is disabled; please contact your administrator",
+"该企业服务已到期，请联系管理员续费": "This company's service has expired; please contact your administrator to renew",
 "验证码错误或已过期": "Verification code invalid or expired",
 "验证码错误次数过多，请重新获取": "Too many wrong code attempts; request a new code",
 "默认租户不可删除": "The default tenant cannot be deleted",
@@ -573,6 +586,16 @@ sys.path.insert(0, '/tmp')
 
 SPEC = re.compile(r'%[dsv]')
 
+# —— IAM 重做批（2026-10-21）：登出、强制改密闸、免费包重复领取拒绝三处新增文案。
+#   登出的两条是协议/凭证失败（405/401），强制改密是 428 的对外说明，
+#   免费包那条替代了旧「领取」语义——四句都由 TestAPICnMessageLiteralsCovered 当场报缺。
+T.update({
+"请使用 POST 请求": "Please use a POST request",
+"登录状态已失效，请重新登录": "Your session has expired; please sign in again",
+"账号处于首登强制改密状态：请先修改密码，再使用其他功能": "This account must change its password on first sign-in; change it before using other features",
+"免费体验额度已在新用户注册时自动发放，无需重复领取": "Free trial credit is granted automatically at sign-up; no need to claim it again",
+})
+
 exact = dict(T)
 pats = []
 for zh, en in DYN.items():
@@ -585,6 +608,7 @@ def q(s: str) -> str:
     # Go 双引号字面量：json.dumps 的转义集是 Go 的子集且对 ASCII 兼容
     import json
     return json.dumps(s, ensure_ascii=False)
+
 
 lines = []
 lines.append('// ============ 本文件职责中文说明 ============')

@@ -120,6 +120,17 @@ function MicGlyph({ active }: { active: boolean }) {
   )
 }
 
+// StopSquareGlyph 录音中的「停止」方块（★ 2026-10-21 UAT 收口 M7）。
+// 录音态必须换形而不只是换色：旧形态只把麦克风描边涂红，UAT 截图里"正在录音"和"没在录"
+// 几乎分不出来。方块＝停止是录音机/语音消息的通用语汇，颜色走父级 currentColor（语义红）。
+function StopSquareGlyph() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+    </svg>
+  )
+}
+
 // 收起图标（langcross 无等价，按组件库线性风格内联：向下的 V 形箭头，示意「缩下去」）
 function CollapseGlyph() {
   return (
@@ -418,6 +429,16 @@ export default function ChatWindow() {
   const micRef = useRef<AsrSession | null>(null)
   const [micOn, setMicOn] = useState(false)
   const [micBusy, setMicBusy] = useState(false)
+  // ★ 2026-10-21 UAT 收口 M7：录音计时读数（每 1000ms 涨一格）。
+  //   计时只在 micOn 为真时跑，停止/失败自动清 interval；重开从 0 起算。
+  //   它只服务界面读数，不进任何计费/请求参数——秒数不是音频时长的事实源。
+  const [micSec, setMicSec] = useState(0)
+  useEffect(() => {
+    if (!micOn) return
+    setMicSec(0)
+    const id = window.setInterval(() => setMicSec((s) => s + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [micOn])
 
   async function startMic() {
     if (!canMic || micBusy) return
@@ -429,16 +450,30 @@ export default function ChatWindow() {
       // 极端情况（localStorage 不可达等）退回服务端，不阻断录音入口
       engine = new ServerAsrEngine()
     }
+    // ★ M7：alive 与 onState 同一判据——引擎当场报失败后这个会话已不可用，不入 ref。
+    let alive = true
     const session = engine.start({
+      // ★ 2026-10-21 UAT 收口 M7：录音态以**引擎回报**为准，不再乐观置真。
+      //   旧写法在 start() 之后无条件 setMicOn(true)：真开麦失败（权限被拒/设备被占用）时，
+      //   屏幕上的按钮已经先变成"停止录音"，用户对着一个根本没在录的按钮说话（UAT 07M3 M3-2
+      //   实测 title=停止录音 而截图无任何形态差）。现在只有引擎真的报 'recording' 才进录音态。
       onState: (s) => {
+        if (s === 'recording') {
+          setMicOn(true)
+          return
+        }
         if (s === 'denied' || s === 'failed') {
+          // ★ alive 标记：服务端引擎在设备拿不到时**同步**回报 'failed'，而这一刻
+          //   micRef 还没被赋值（要走完 start() 才轮到下一行）。若只把 micOn 置假，
+          //   紧接着那行赋值会把一具"已死会话"塞进 micRef，下一次点停止会对着空气上报。
+          alive = false
           setMicOn(false)
           toast({ title: s === 'denied' ? t2('chat.micDenied') : t2('chat.micFailed'), tone: 'warn' })
         }
       },
     })
-    micRef.current = session
-    setMicOn(true)
+    // 会话只在"引擎没有当场报失败"时入 ref；死后不留引用（与上面 alive 同一判断）。
+    if (alive) micRef.current = session
   }
 
   async function stopMic() {
@@ -456,6 +491,14 @@ export default function ChatWindow() {
         //   发送前改。expandFromEntry 同时把焦点落到输入框，方便接着改。
         expandFromEntry()
         setInput(text.trim())
+        // ★ 2026-10-21 UAT 收口 M7：回填后必须出声。旧形态识别成功也只是往输入框塞了字，
+        //   用户（尤其移动端键盘未聚焦时）不知道发生了 3 秒识别，界面上"什么都没发生"。
+        toast({ title: t('chat.micFilled'), tone: 'success' })
+      } else {
+        // ★ 2026-10-21 UAT 收口 M7：空结果不再静默 return——按"没听到声音"提示（与
+        //   no_speech 同档文案）。旧写法只在 catch 分支说话，服务端空 blob 走的是 resolve('')
+        //   这一条，于是用户停掉录音后屏幕上一句话都没有（UAT 07M3 M3-2 第二条读数）。
+        toast({ title: t('chat.micNoSpeech'), tone: 'warn' })
       }
     } catch (e) {
       // ★ 界面这句必须来自词典（改造方案 §六 第 9 条）：服务端引擎抛的是 VoiceError，
@@ -760,15 +803,25 @@ export default function ChatWindow() {
                 </button>
               )}
               {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送，★ 2026-10-19 用户令恢复此口径），
-                  见上方 stopMic 注释。不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。 */}
+                  见上方 stopMic 注释。不支持录音的浏览器**整颗按钮不渲染**——留一个点了必报错的入口没有意义。
+                  ★ 2026-10-21 UAT 收口 M7：四态必须一眼可分——
+                    ① 静音：麦克风线条（灰）；② 录音中：方块＋语义红＋脉冲＋秒数读数；
+                    ③ 识别中：转圈（.cw-spin，与全站同源 keyframes）且按钮禁用；④ 回填/空结果各有 toast。
+                  aria-label 保持稳定的动作名（录/停/识别中）供读屏与既有测试取用，
+                  秒数读数走 title 模板与旁边的可见文字，不拿 aria-label 当时钟。 */}
               {canMic && (
-                <button type="button" className="cw-icon-btn" data-testid="mic-btn"
-                  title={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
-                  aria-label={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
-                  disabled={micBusy}
-                  onClick={() => { if (micOn) void stopMic(); else void startMic() }}>
-                  <MicGlyph active={micOn} />
-                </button>
+                <>
+                  {micOn && <span className="cw-mic-sec" data-testid="mic-elapsed">{micSec}s</span>}
+                  <button type="button"
+                    className={`cw-icon-btn${micOn ? ' cw-mic-rec' : ''}`}
+                    data-testid="mic-btn"
+                    title={micBusy ? t('chat.micWorking') : micOn ? tpl('chat.micRecording', { sec: micSec }) : t('chat.mic')}
+                    aria-label={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
+                    disabled={micBusy}
+                    onClick={() => { if (micOn) void stopMic(); else void startMic() }}>
+                    {micBusy ? <span className="cw-spin" aria-hidden="true" /> : micOn ? <StopSquareGlyph /> : <MicGlyph active={false} />}
+                  </button>
+                </>
               )}
               {chat.isLoading ? (
                 <Button className="cw-send" variant="primary" size="sm" icon={<StopGlyph />} onClick={handleStop}>{t2('chat.stop')}</Button>
@@ -866,6 +919,15 @@ const CW_CSS = `
   border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
 .cw-icon-btn:hover{color:var(--lc-text);border-color:var(--lc-border-done)}
 .cw-icon-btn:focus-visible{outline:2px solid var(--lc-border-strong);outline-offset:2px}
+/* ★ 2026-10-21 UAT 收口 M7：录音四态的视觉档（与既有 .cw-icon-btn 同尺寸同圆角，零新增色值）。
+   disabled 档只服务「识别中」那一跳：按钮此刻已交给引擎、再点没有语义，压暗并换回禁用光标。
+   录音档走语义红 --lc-danger（与全站危险/录音语义同源），描边与图标同色；
+   脉冲用 box-shadow 向外呼吸而**不动尺寸**（动 transform/宽高会把同排工具条挤得一跳一跳）。 */
+.cw-icon-btn:disabled{opacity:.55;cursor:not-allowed}
+.cw-icon-btn.cw-mic-rec{color:var(--lc-danger);border-color:var(--lc-danger);animation:cw-mic-pulse 1.2s ease-in-out infinite}
+@keyframes cw-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(229,72,77,.42)}50%{box-shadow:0 0 0 4px rgba(229,72,77,0)}}
+/* 录音计时读数：等宽数字（tabular-nums）防止每秒跳动时整行左右抖，字色与录音钮同档语义红。 */
+.cw-mic-sec{font-size:13px;color:var(--lc-danger);font-variant-numeric:tabular-nums;line-height:1}
 .cw-search-clear{display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0}
 .cw-search-clear:hover{color:var(--lc-text)}
 .cw-spin{display:inline-block;width:14px;height:14px;border:1.2px solid rgba(255,255,255,.25);border-top-color:var(--lc-text);border-radius:50%;animation:cw-spin .7s linear infinite}
@@ -896,6 +958,8 @@ const CW_CSS = `
 }
 @media (prefers-reduced-motion: reduce){
   .cw-spin{animation:none}
+  /* 录音钮的呼吸脉冲属装饰动效：降动效档一律停掉，状态仍由红色描边与方块图标表达（信息不丢）。 */
+  .cw-mic-rec{animation:none}
   .cw-dialog-body{scroll-behavior:auto}
 }
 `

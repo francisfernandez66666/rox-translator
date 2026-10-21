@@ -42,14 +42,18 @@ vi.mock('@/api/asrEngines', () => ({
   getAsrEngine: async () => ({
     kind: 'server',
     isAvailable: async () => true,
-    start: () => ({
-      final: new Promise<string>((_res, rej) => {
-        // 在 stop() 里 reject：与真实 ServerAsrEngine 的时序一致（stop 后才上传/识别）
-        ;(globalThis as any).__rejectMic = () => rej(mocks.rejectWith)
-      }),
-      stop() { (globalThis as any).__rejectMic?.() },
-      cancel() {},
-    }),
+    // ★ 2026-10-21 UAT 收口 M7：录音态改由引擎回报 'recording' 驱动（同 micFill 桩的理由）。
+    start: (h: { onState?: (s: string) => void }) => {
+      h.onState?.('recording')
+      return {
+        final: new Promise<string>((_res, rej) => {
+          // 在 stop() 里 reject：与真实 ServerAsrEngine 的时序一致（stop 后才上传/识别）
+          ;(globalThis as any).__rejectMic = () => rej(mocks.rejectWith)
+        }),
+        stop() { (globalThis as any).__rejectMic?.() },
+        cancel() {},
+      }
+    },
   }),
   ServerAsrEngine: class {},
 }))

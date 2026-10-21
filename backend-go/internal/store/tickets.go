@@ -7,8 +7,11 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
+	"strings"
 	"time"
 	"translator/internal/db"
 )
@@ -50,10 +53,17 @@ type Ticket struct {
 	QualityFlagged int `json:"quality_flagged"` // 0=正常 / 1=质检存疑（待人工复核）
 	// ★ 改造 5（2026-09-17）：确定性质检摘要（error/warning 计数），列表行徽标数据源。
 	//   同理由 runQA 落列，避免列表接口为渲染徽标解析整份 final_result payload。
-	QAErrors   int    `json:"qa_errors"`   // error 级问题数（已自动重译后仍存在）
-	QAWarnings int    `json:"qa_warnings"` // warning 级提示数
-	CreatedAt  string `json:"created_at"`  // 创建时间（RFC3339 字符串）
-	UpdatedAt  string `json:"updated_at"`  // 更新时间（RFC3339 字符串）
+	QAErrors   int `json:"qa_errors"`   // error 级问题数（已自动重译后仍存在）
+	QAWarnings int `json:"qa_warnings"` // warning 级提示数
+	// ★ 2026-10-21 UAT 收口 M2：交付注记（库内 JSON 数组串，出栈由 api.ticketJSON 归一成数组）。
+	//   加这两列的理由：引擎 res.Data.DegradedLangs／GateWarnings 过去只写站内信与日志，
+	//   工单详情面（客户屏幕上那张脸）永远读不到——前端早已在渲染 detail.ticket.degraded_langs，
+	//   Go 侧却从没出过这个键，「降级提示永不显示」就是这么长出来的。
+	//   口径：空串＝无注记；解码一律由 DecodeTicketNotes 负责（坏数据回空切片，永不回 null）。
+	DegradedLangsJSON string `json:"-"`          // 降级交付语言（版式还原失败改出 .md、配音缺失…），JSON 数组串
+	GateWarningsJSON  string `json:"-"`          // 交付质量闸门告警原文清单，JSON 数组串
+	CreatedAt         string `json:"created_at"` // 创建时间（RFC3339 字符串）
+	UpdatedAt         string `json:"updated_at"` // 更新时间（RFC3339 字符串）
 }
 
 // TicketState 工单状态轨迹（Projector 物化）
@@ -120,8 +130,8 @@ func (s *Store) CreateTicket(tid, userID int64, title, sourceText, filePath, tar
 // WHERE 带 tenant_id：跨租户取单在这里就等价于「不存在」，不给调用方区分二者的机会。
 func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 	var t Ticket
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
-		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.CreatedAt, &t.UpdatedAt)
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE id=? AND tenant_id=?", id, tid).
+		Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +142,7 @@ func (s *Store) GetTicket(id, tid int64) (*Ticket, error) {
 // 只允许在「已凭 ID 定位、且要做跨租户运维动作」的后台路径使用（入队/认领/收尾）；
 // 任何面向用户的接口都必须走带 tenant_id 的 GetTicket，否则会跨租户读单。
 func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
-	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE id=?", id)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE id=?", id)
 	return scanTicketFull(row)
 }
 
@@ -140,7 +150,7 @@ func (s *Store) GetTicketGlobal(id int64) (*Ticket, error) {
 // 同样不带租户过滤（只按 ticket_no 定位，查询时无法预知归属），
 // 调用方拿到结果后必须自行比对 tenant_id 再对外返回。
 func (s *Store) GetTicketByNo(no string) (*Ticket, error) {
-	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE ticket_no=?", no)
+	row := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE ticket_no=?", no)
 	return scanTicketFull(row)
 }
 
@@ -200,7 +210,7 @@ func rejectRemoteArtifactPath(path string) error {
 // 同时给租户隔离查询一个天然的响应体上界。
 // 单行 Scan 失败只跳过该行（整表不因一行坏数据而查询失败），但错误也不上报。
 func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error) {
-	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE tenant_id=?"
+	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE tenant_id=?"
 	args := []interface{}{tid}
 	if onlyMine {
 		q += " AND created_by=?" // 只看自己创建的
@@ -215,7 +225,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -226,7 +236,7 @@ func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error)
 // ListPendingApproval 待审批工单列表（供 approver/admin 审批台使用）。
 // 参数：tid=租户 ID；返回状态为 pending_approval/approved/rejected 的工单。
 func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +244,7 @@ func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
 	var out []*Ticket
 	for rows.Next() {
 		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.CreatedAt, &t.UpdatedAt); err != nil {
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &t)
@@ -369,6 +379,86 @@ func (s *Store) TicketRejectSourceMigrate() {
 	})
 }
 
+// TicketDeliveryNotesMigrate 为 tickets 增加交付注记列（★ 2026-10-21 UAT 收口 M2，幂等）：
+//   - degraded_langs：降级交付语言清单（JSON 数组串，如 ["en","ja"]）；
+//   - gate_warnings：交付质量闸门告警原文清单（JSON 数组串）。
+//
+// 为什么落列而不是每次解析 final_result：工单列表与详情都走 ticketJSON 这一个出参口，
+// 落列后列表徽标/详情横幅零成本可读；也避免"要看得见提示就得先解析整份 payload"。
+// 与 quality 三列同族：复用 db.EnsureColumns 双方言幂等补列（AGENTS §一·1 第 4 条）。
+// 存量历史工单不回溯（保持空串＝无注记）——没有那次交付的注记可补，凭空造一条才是假信息。
+func (s *Store) TicketDeliveryNotesMigrate() {
+	_ = db.EnsureColumns(s.db, db.CurrentDialect(), "tickets", map[string]string{
+		"degraded_langs": "TEXT NOT NULL DEFAULT ''",
+		"gate_warnings":  "TEXT NOT NULL DEFAULT ''",
+	})
+}
+
+// EncodeTicketNotes 把注记清单编码成落库形态（JSON 数组串；空清单存空串）。
+// 去首尾空白、丢空项、去重、排序：同一次交付里的语言/告警顺序不受并发文件完成先后影响，
+// 前端横幅不会因为哪个文件先跑完而每次刷新换一个顺序。
+func EncodeTicketNotes(list []string) string {
+	if len(list) == 0 {
+		return ""
+	}
+	seen := make(map[string]bool, len(list))
+	clean := make([]string, 0, len(list))
+	for _, v := range list {
+		v = strings.TrimSpace(v)
+		if v == "" || seen[v] {
+			continue
+		}
+		seen[v] = true
+		clean = append(clean, v)
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	sort.Strings(clean)
+	b, err := json.Marshal(clean)
+	if err != nil {
+		return "" // []string 序列化不会失败；真失败宁可当"无注记"，也不把坏串写进库
+	}
+	return string(b)
+}
+
+// DecodeTicketNotes 把注记列解成清单（★ 出栈口径：空值/坏数据一律回**非 nil 空切片**）。
+// 前端直接读 .length 渲染横幅，返回 nil 会被 JSON 序列化成 null 并把它打成白屏；
+// 这里一次收口，调用方不必各自判 nil（同 §一·12 列表空页归一成 [] 的口径）。
+func DecodeTicketNotes(raw string) []string {
+	out := []string{} // 刻意非 nil
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "null" {
+		return out
+	}
+	// JSON 数组形态按 JSON 解；解不开就是坏数据——直接判「无注记」，绝不再按逗号硬拆
+	// （否则 "[1,2]" 这种坏串会被拆成带方括号的假告警甩到客户屏幕上）。
+	if strings.HasPrefix(raw, "[") {
+		var list []string
+		if err := json.Unmarshal([]byte(raw), &list); err != nil || list == nil {
+			return out
+		}
+		return list
+	}
+	// 兼容"逗号分隔"的历史/手写形态
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// SetTicketDeliveryNotes 写入工单级交付注记（★ M2 唯一写点）。
+// 参数：id=工单 ID；degraded=降级交付语言；warnings=质量闸门告警原文。
+// 不改 updated_at：与 SetTicketQASummary 同口径（注记是终态元数据，不参与卡死巡检的陈旧判据）。
+func (s *Store) SetTicketDeliveryNotes(id int64, degraded, warnings []string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tickets SET degraded_langs=?, gate_warnings=? WHERE id=?",
+		EncodeTicketNotes(degraded), EncodeTicketNotes(warnings), id)
+	return err
+}
+
 // SetTicketQualityFlagged 标记工单「质检存疑」（★ 改造 4）。
 // 单向置 1，不回置 0——评估不达标是既成事实，不因同单其他语言达标而撤销人工复核提示。
 // 不改 updated_at：本字段为质检元数据，不参与保留期/排序口径。
@@ -411,7 +501,7 @@ func (s *Store) TicketStates(ticketID int64) ([]*TicketState, error) {
 // scanTicketFull 扫描全列工单行（GetTicketGlobal 专用，含 result_path）。
 func scanTicketFull(row *sql.Row) (*Ticket, error) {
 	var t Ticket
-	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.CreatedAt, &t.UpdatedAt)
+	err := row.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

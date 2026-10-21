@@ -56,7 +56,8 @@
    L33 图片回填：抹字底色**先认框内纯色块**（徽章/胶囊），杂色时仍退环带（★ 2026-10-19 缺陷②尾项）
    L34 图片回填：超长 token **先在分隔符后断**（`Yuan/`+`time`），无分隔符才按字符硬切、不丢字符（同批）
    L35 图片回填：有"不劈词也放得下"的字号就先降字号（1px 档），不把词劈开当第一选择（同批）
-   L36 图片回填：单字噪声（开关被读成 `の`）且交付原文时不重画，原件像素逐字节保住（同批）
+   L36 图片回填：非语言行（单字噪声/符号 `<`/图形 `⇅`）交付原文时不重画，原件像素逐字节保住；
+       图形行剔除计数进 INFO（同批；★ 2026-10-21 M9 由「单字非 ASCII」扩到「整行无字母」）
    L37 图片回填：译后图沿用**原字体色**——浅蓝徽章的白字仍白、白底黑字仍黑（★ 2026-10-19 用户令）
    L38 图片回填：字色取**墨迹核心**（前 FG_CORE_PCT%），抗锯齿过渡色不把估计拉向底色（同批）
    L39 图片回填：估不准（无墨/墨少/无底色）回落底色反差档，且渲染真调用了估计函数（同批）
@@ -691,13 +692,18 @@ def leg_l27_blank_box_identity_not_painted():
     现网单里 OCR 在控件边框/下拉箭头上误切出无墨框，被画成满格巨字的 `0`/`4` 与乱入的 `の`
     ——原图没字而我们造了字。两条腿一起判（只判"跳过"会让"整段漏绘"也一路绿）：
     同一无墨框换成**真译文**（≠ 原文）必须照旧绘制，否则「字号问题」会变成「漏译问题」。
+
+    ★ 2026-10-21 M9 夹具调整：源文改用**真单词**（`sync`）而不是 `0`。
+      `0` 现在会先被「无字母行」那一档（symbol_identity）跳过，于是本腿在 M9 反证里
+      被别人的判据掩护成恒绿（首跑实测：把 no_ink_identity 摘掉后 L27 仍然 OK）。
+      用带字母的词，「无墨框」这一条才有独立的射程；数字/符号那一档由 L36 单独守。
     """
     with tempfile.TemporaryDirectory() as d:
         src, out = Path(d) / "s.png", Path(d) / "o.png"
         _blank_png(src)
-        rc = _render(src, out, [{"text": "0", "box": [10, 10, 200, 80], "tran": "0"}])
+        rc = _render(src, out, [{"text": "sync", "box": [10, 10, 200, 80], "tran": "sync"}])
         assert rc != 0 and not out.exists(), "无墨框 + 原文交付不许造出幽灵内容（rc=%d，产物=%s）" % (rc, out.exists())
-        rc2 = _render(src, out, [{"text": "0", "box": [10, 10, 200, 80], "tran": "Zero"}])
+        rc2 = _render(src, out, [{"text": "sync", "box": [10, 10, 200, 80], "tran": "同步"}])
         assert rc2 == 0 and _ink_count(out) > 0, "真译文（≠ 原文）即便框内无墨也必须照旧绘制（rc=%d）" % rc2
 
 
@@ -915,43 +921,73 @@ def leg_l35_layout_shrinks_before_splitting_word():
 
 
 @leg("L36")
-def leg_l36_lone_nonascii_line_not_repainted():
-    """★ 2026-10-19 尾项：源文是**单个非 ASCII 字符**（OCR 把控件形状读成字）且本轮交付原文 ⇒ 不重画。
+def leg_l36_symbol_line_not_repainted():
+    """★ 2026-10-19 尾项＋2026-10-21 M9 扩形：源文**根本不是文字**（单字噪声/符号/箭头）且本轮交付原文 ⇒ 不重画。
 
-    现网实证＝一枚开着的绿色开关被 OCR 读成 `の`：旧形态把它整块涂绿再画一个白 `の`，
-    白色圆钮就此消失（客户看到的"原文里根本没有的一个大字盖住控件"）。
-    三条腿一起判（只判"不画"会让"整段漏绘"一路绿）：
-      ① 交付原文 ⇒ 那个框的像素**逐字节不动**（开关得保住）；
+    现网实证两代：
+      · 一枚开着的绿色开关被 OCR 读成 `の`：旧形态把它整块涂绿再画一个白 `の`，白色圆钮就此消失；
+      · 上下箭头图标被 OCR 读成 `1`/`<`：M9 之前只有「单字非 ASCII」那一档，`<` 被照原样画回图标上
+        （客户看到的仍是"原文里根本没有的一个字"）。
+    四条腿一起判（只判"不画"会让"整段漏绘"一路绿）：
+      ① 单字噪声（`の`）交付原文 ⇒ 那个框的像素**逐字节不动**（开关得保住）；
       ② 同一框换成**真译文** ⇒ 必须照旧绘制（否则"不造字"变成"漏译"）；
-      ③ 判据射程＝只认单个非 ASCII 字符：ASCII 短源文（`D`）与多字源文不许被误跳过。
+      ③ 符号行（`<`）交付原文 ⇒ 不重画；图形行（`⇅`）**不管译文是什么都不画**；
+         并且要先给这两个框**画上墨**——否则它们会走「空框不造字」那条腿，
+         本腿测的就成了别人的判据（绿得毫无射程）。
+      ④ 判据射程：`<`/`1`/`¥1003.00`/`⇅` 属「无字母行」，`D`/`Hello` 不是；
+         `⇅` 属图形档、`<` 不属；`¥1003.00` 属内容档；脚本自报的 `dropped` 必须数到 1。
     """
+    import contextlib
+    import io
     import numpy as np
     from PIL import Image
     with tempfile.TemporaryDirectory() as d:
         src, out, out2 = Path(d) / "s.png", Path(d) / "o.png", Path(d) / "o2.png"
-        arr = np.full((140, 260, 3), 255, dtype=np.uint8)
+        arr = np.full((250, 260, 3), 255, dtype=np.uint8)
         arr[30:70, 40:140, :] = (3, 167, 111)      # "开关"：绿色实心块（原图本来就有墨）
+        arr[90:120, 50:120, :] = (20, 20, 20)      # `<` 图标：先给墨，避免走"空框不造字"那条腿
+        arr[150:180, 50:120, :] = (20, 20, 20)     # `⇅` 图标：同上
         _rgb_image(arr).save(src)
-        box, box_b = [40, 30, 140, 70], [40, 90, 200, 130]
-        rc = _render(src, out, [
-            {"text": "の", "box": box, "tran": "の"},
-            {"text": "Hello", "box": box_b, "tran": "你好"},
-        ])
+        box, box_b = [40, 30, 140, 70], [150, 80, 250, 115]
+        box_c, box_d = [40, 90, 140, 120], [40, 150, 140, 180]
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            rc = _render(src, out, [
+                {"text": "の", "box": box, "tran": "の"},
+                {"text": "Hello", "box": box_b, "tran": "你好"},
+                {"text": "<", "box": box_c, "tran": "<"},
+                {"text": "⇅", "box": box_d, "tran": "⇅"},
+            ])
         assert rc == 0 and out.exists(), "整图渲染失败（rc=%d）" % rc
         got = np.asarray(Image.open(str(out)).convert("RGB"))
         before = arr[30:70, 40:140]
         assert np.array_equal(before, got[30:70, 40:140]), "单字噪声行的框被重画了（开关被涂改）"
+        assert np.array_equal(arr[90:120, 50:120], got[90:120, 50:120]), "符号行 `<` 交付原文却被重画（图标被盖）"
+        assert np.array_equal(arr[150:180, 50:120], got[150:180, 50:120]), "图形行 `⇅` 被重画（箭头被文字盖住）"
+        err = buf.getvalue()
+        assert "dropped=1" in err, "图形行剔除计数没进 INFO 行（排障读数丢了）：%r" % err
+        assert "blank_skipped=2" in err, "两条「原文交付不重画」没计进 blank_skipped：%r" % err
         # ② 真译文必须照旧绘制
         rc2 = _render(src, out2, [{"text": "の", "box": box, "tran": "of"}])
         assert rc2 == 0, "真译文渲染失败（rc=%d）" % rc2
         got2 = np.asarray(Image.open(str(out2)).convert("RGB"))
         assert not np.array_equal(before, got2[30:70, 40:140]), "单字噪声行收到真译文却没画（漏译）"
-        # ③ 判据射程
+        # ③ 判据射程（缺任何一条，上面两条"不重画"都可能只是别人的判据在挡）
         assert IMG._is_lone_nonascii("の") is True
         assert IMG._is_lone_nonascii(" の ") is True, "空白没被先剥掉"
         assert IMG._is_lone_nonascii("はの") is False, "两个字符＝可能是真词，不许跳"
-        assert IMG._is_lone_nonascii("D") is False, "ASCII 短源文不许被跳"
+        assert IMG._is_lone_nonascii("D") is False, "ASCII 短源文不许被单字噪声腿跳"
         assert IMG._is_lone_nonascii("") is False
+        assert IMG._is_symbol_only_line("<") is True, "OCR 折出来的 `<` 必须算无字母行"
+        assert IMG._is_symbol_only_line("1") is True, "OCR 折出来的 `1` 必须算无字母行"
+        assert IMG._is_symbol_only_line("¥1003.00") is True, "金额行必须算无字母行"
+        assert IMG._is_symbol_only_line("⇅") is True
+        assert IMG._is_symbol_only_line("D") is False, "真文字（单字母）不许被判成符号"
+        assert IMG._is_symbol_only_line("Hello") is False
+        assert IMG._is_symbol_only_line("") is False
+        assert IMG._is_graphic_only_line("⇅") is True and IMG._is_graphic_only_line("<") is False, "图形档射程错"
+        assert IMG._is_content_only_line("¥1003.00") is True, "内容档射程错（¥ 必须在白名单里）"
+        assert IMG._is_content_only_line("Hello") is False
 
 
 # ---------------------------------------------- 图片：原字体色还原（⭐ 2026-10-19 用户令）

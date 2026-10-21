@@ -348,8 +348,10 @@ func TestChatImageLegsFastPathSingleCall(t *testing.T) {
 }
 
 // TestChatImageLegsBlankLinesKeptAndSkipped 空行不送模型，但输出条数必须与 OCR 行等长（下标一一对应）。
+// ★ 夹具用**真单词**而不是 `a`/`b`：单个 ASCII 字母按 M9 的判据属「无字母行」（不需要翻译），
+// 会被 Go 侧预填、根本不送模型——那会让本用例测不到"空行跳过"这件事（夹具自己换了靶子）。
 func TestChatImageLegsBlankLinesKeptAndSkipped(t *testing.T) {
-	lines := []string{"a", "", "b"}
+	lines := []string{"alpha", "", "beta"}
 	var inputs []string
 	fake := func(text string) (string, int64, error) {
 		inputs = append(inputs, text)
@@ -366,24 +368,25 @@ func TestChatImageLegsBlankLinesKeptAndSkipped(t *testing.T) {
 	if len(got) != len(lines) || got[1] != "" {
 		t.Fatalf("输出必须与 OCR 行等长（空行占位）：%q", got)
 	}
-	if strings.Join(got, "|") != "a_en||b_en" {
+	if strings.Join(got, "|") != "alpha_en||beta_en" {
 		t.Fatalf("空行两侧的行错位: %q", got)
 	}
-	if len(inputs) != 1 || inputs[0] != "a\nb" {
+	if len(inputs) != 1 || inputs[0] != "alpha\nbeta" {
 		t.Fatalf("空行不该送模型：inputs=%q", inputs)
 	}
 }
 
 // TestChatImageLegsSplitsOnEmptyCell 行数对得上、但某一行译文为空时**不能采用**
 // （那一行会在图上消失），要继续二分；模型对单行正常时每一行都必须救回来。
+// ★ 夹具用真单词（单个 ASCII 字母属 M9 的「无字母行」，会被预填不送模型，见上一条）。
 func TestChatImageLegsSplitsOnEmptyCell(t *testing.T) {
-	lines := []string{"A", "B", "C", "D"}
+	lines := []string{"Alpha", "Beta", "Gamma", "Delta"}
 	fake := func(text string) (string, int64, error) {
 		parts := strings.Split(text, "\n")
 		out := make([]string, len(parts))
 		for i, p := range parts {
-			if p == "B" && len(parts) > 1 {
-				out[i] = "" // 整段时 B 这一行丢内容。
+			if p == "Beta" && len(parts) > 1 {
+				out[i] = "" // 整段时 Beta 这一行丢内容。
 			} else {
 				out[i] = p + "_en"
 			}
@@ -394,11 +397,11 @@ func TestChatImageLegsSplitsOnEmptyCell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("有空行时应继续二分而不是失败: %v", err)
 	}
-	if strings.Join(got, "|") != "A_en|B_en|C_en|D_en" {
+	if strings.Join(got, "|") != "Alpha_en|Beta_en|Gamma_en|Delta_en" {
 		t.Fatalf("空行没被救回（逐行结果错）: %q", got)
 	}
 	if points != 5 {
-		t.Fatalf("应恰好 5 枪（整段 1 + [A,B] 1 + 单句 2 + [C,D] 1）：points=%d", points)
+		t.Fatalf("应恰好 5 枪（整段 1 + [Alpha,Beta] 1 + 单句 2 + [Gamma,Delta] 1）：points=%d", points)
 	}
 }
 
@@ -568,5 +571,65 @@ func TestChatImageLegSplitWired(t *testing.T) {
 		if chatImageLegWired(bad) == nil {
 			t.Fatalf("反证 %d 失效：破坏接线后判据仍绿", i+1)
 		}
+	}
+}
+
+// ============ M9：非语言行（符号/箭头/数字）不送模型、交付原文 ============
+// 现网实证：上下箭头图标被 OCR 读成 `1`/`<`。旧形态把这两行也拨给模型，
+// 模型回 "and" 后行数照样对齐 ⇒ 「已对齐」快路径放行，英文单词盖住图标。
+// 修法两处：分腿时预填（根本不送模型）＋快路径逐行钉回原文（送过也不能采用噪声）。
+
+// TestChatImageLegsPrefillsSymbolLines ① 无字母行不进模型，译文位硬回原文；真文字照常送翻。
+func TestChatImageLegsPrefillsSymbolLines(t *testing.T) {
+	lines := []string{"⇅", "Hello", "¥1003.00", "1"}
+	var inputs []string
+	fake := func(text string) (string, int64, error) {
+		inputs = append(inputs, text)
+		return strings.ReplaceAll(text, "Hello", "你好"), 1, nil
+	}
+	got, points, err := chatImageLegs(lines, fake)
+	if err != nil {
+		t.Fatalf("预填场景失败: %v", err)
+	}
+	want := []string{"⇅", "你好", "¥1003.00", "1"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("符号行没被钉回原文：\n got=%q\nwant=%q", got, want)
+	}
+	if len(inputs) != 1 || inputs[0] != "Hello" {
+		t.Fatalf("无字母行竟被送进模型（只应送 Hello）：inputs=%q", inputs)
+	}
+	if points != 1 {
+		t.Fatalf("只为真文字那一腿付费，points=%d", points)
+	}
+}
+
+// TestAlignChatImagePinsIdentityOnFastPath ② 快路径（行数已对齐）也要钉：
+// 模型把 `<` 译成 "and"，行数 2 vs 2 完全对得上——旧形态原样放行，图标被英文单词盖掉。
+func TestAlignChatImagePinsIdentityOnFastPath(t *testing.T) {
+	lines := []string{"<", "Hello"}
+	calls := 0
+	translate := func(lang, text string) (string, int64, error) {
+		calls++
+		return "", 0, errors.New("快路径不该打上游")
+	}
+	out, split, points, err := alignChatImageTranslations(lines, []string{"en"},
+		map[string]string{"en": "and\nHi"}, translate)
+	if err != nil {
+		t.Fatalf("快路径失败: %v", err)
+	}
+	if out["en"] != "<\nHi" {
+		t.Fatalf("快路径没把符号行钉回原文：%q", out["en"])
+	}
+	if calls != 0 || len(split) != 0 || points != 0 {
+		t.Fatalf("快路径不许重译：calls=%d split=%v points=%d", calls, split, points)
+	}
+}
+
+// TestPinChatImageIdentityLinesKeepsMismatchUnchanged ③ 行数对不上时原样返回：
+// 对齐契约由 chatImageLinePairs 判，这里不替它"修好"——否则会把"对不上"悄悄改成"看起来对上了"。
+func TestPinChatImageIdentityLinesKeepsMismatchUnchanged(t *testing.T) {
+	in := "only one line"
+	if got := pinChatImageIdentityLines([]string{"<", "Hello"}, in); got != in {
+		t.Fatalf("行数不等时必须原样返回（由配对函数判失败），实际改写成 %q", got)
 	}
 }

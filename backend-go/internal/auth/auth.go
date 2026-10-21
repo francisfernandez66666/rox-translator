@@ -60,6 +60,28 @@ func CheckPassword(hash, password string) bool { return iam.CheckPassword(hash, 
 // NeedMigrateHash 判断哈希是否需透明升级为 bcrypt（委托 iam）。
 func NeedMigrateHash(hash string) bool { return iam.NeedMigrateHash(hash) }
 
+// ---- ★ 2026-10-21 IAM 重做 P0-1：账号归一化与口令强度的透传口 ----
+// 判据本体只在 internal/iam/account.go 一份；这一层透传只为让 api 调用方
+// 不必新增 import（本包已经是 api 的既有鉴权入口）。**禁止**在这里再造第二套判据。
+
+// PasswordMinLen 口令最小长度（委托 iam，唯一尺子）。
+const PasswordMinLen = iam.PasswordMinLen
+
+// PasswordTooShortMsg 口令不合格的对外文案（委托 iam，四写口逐字同一句）。
+const PasswordTooShortMsg = iam.PasswordTooShortMsg
+
+// ValidatePassword 口令强度唯一判据（委托 iam）。
+func ValidatePassword(p string) bool { return iam.ValidatePassword(p) }
+
+// LooksLikeEmail 判输入是不是邮箱形态（委托 iam，只用于选查询腿）。
+func LooksLikeEmail(s string) bool { return iam.LooksLikeEmail(s) }
+
+// NormalizeAccount 账号归一化唯一入口（委托 iam）：只 trim，邮箱额外小写；口令永远不经这里。
+func NormalizeAccount(s string) string { return iam.NormalizeAccount(s) }
+
+// NormalizeEmail 邮箱归一化（委托 iam）。
+func NormalizeEmail(s string) string { return iam.NormalizeEmail(s) }
+
 // EffectiveUserStatus 计算用户生效状态（注销宽限期次日起等效停用；委托 iam）。
 func EffectiveUserStatus(status, deactivatedAt string) string {
 	return iam.EffectiveUserStatus(status, deactivatedAt)
@@ -70,3 +92,8 @@ func PasswordHashLegacy(password string) string { return iam.PasswordHashLegacy(
 
 // BearerToken 从 Authorization 头提取 Bearer 令牌（委托 iam）。
 func BearerToken(r *http.Request) string { return iam.BearerToken(r) }
+
+// ClaimsOf 提取并校验请求的 JWT 载荷（委托 iam）。
+// ★ IAM P1（2026-10-21）：登出等「只要 claims 不要用户行」的 handler 统一走这一条，
+// 避免每个调用点各自拼一遍 BearerToken + Verify。
+func ClaimsOf(r *http.Request) (*Claims, error) { return iam.ClaimsOf(r) }

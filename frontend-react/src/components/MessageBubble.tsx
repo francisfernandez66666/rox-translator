@@ -60,7 +60,27 @@ function isImage(path: string): boolean {
 function SpeakButton({ text, lang }: { text: string; lang: string }) {
   const urlRef = useRef<string | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  // ★ 2026-10-21 UAT 收口 M8：本次会话内**最近一次成功合成**的音频（文本+语种 → blob URL）。
+  //   理由：浏览器对带声音的 play() 有"用户激活"要求，而合成要几秒——Safari 这类把手势窗口
+  //   卡得很死的浏览器会在 await 之后拒绝播放（NotAllowedError）。有了这份缓存，用户再点一次时
+  //   play() 落在**点击的同一拍**里，不再跨等待 ⇒ 第二次一定能响，而不是永远失败。
+  const cacheRef = useRef<{ key: string; url: string } | null>(null)
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle')
+
+  // ensureAudio 取（或建）本按钮唯一的那只 <audio>。
+  // ★ 必须是**同一个元素**：解锁播放权限靠的是"这个元素此前在用户手势里 play() 过"，
+  //   每次新建元素等于每次都从没被授权过（旧写法 `new Audio(url)` 正是这么丢的授权）。
+  function ensureAudio(): HTMLAudioElement {
+    if (!audioRef.current) {
+      const a = new Audio()
+      // 解码失败过去是静默回 idle（用户只看到按钮闪一下）：这与"没有声音"在屏幕上同形，
+      // 但成因完全不同（产物坏了 vs 服务器没合成），必须说出来。
+      a.onerror = () => { setState('idle'); toastWarn(t('chat.voiceUnavailable')) }
+      a.onended = () => setState('idle')
+      audioRef.current = a
+    }
+    return audioRef.current
+  }
 
   // 卸载时必须同时做两件事：暂停 + 释放 blob URL。只做前者会把整段音频留在内存里
   // （每个 blob URL 都持有一份引用，十条译文就是十个副本）。
@@ -68,7 +88,12 @@ function SpeakButton({ text, lang }: { text: string; lang: string }) {
     try { audioRef.current?.pause() } catch { /* 忽略 */ }
     if (urlRef.current) URL.revokeObjectURL(urlRef.current)
     urlRef.current = null
+    cacheRef.current = null
   }, [])
+
+  // ★ 2026-10-21 UAT 收口 M8：静音单样本 wav，只用于在**点击这一拍**里给 audio 元素"盖过章"。
+  //   它不出声（volume 归零后立刻恢复），也不落盘；真实音频到手后再换 src。
+  const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA='
 
   async function play() {
     if (!text) return
@@ -77,28 +102,57 @@ function SpeakButton({ text, lang }: { text: string; lang: string }) {
       setState('idle')
       return
     }
+    const audio = ensureAudio()
+    const key = `${lang}\u0000${text}`
+    // 命中缓存：play() 在点击的同一拍里调用 ⇒ 不再受"合成耗时跨过手势窗口"影响。
+    if (cacheRef.current?.key === key) {
+      audio.src = cacheRef.current.url
+      try {
+        await audio.play()
+        setState('playing')
+        return
+      } catch {
+        // 缓存件本身也放不出来（极少见）：清掉缓存走重新合成那条路
+        cacheRef.current = null
+      }
+    }
+    // 先解锁：这一步必须**同步**发生在点击处理器里（`SILENT_WAV` 有 44 字节，播放即结束）。
+    try {
+      audio.volume = 0
+      audio.src = SILENT_WAV
+      void audio.play().catch(() => { /* 解锁失败不报错，真正播放那条路还会再报一次 */ })
+      audio.volume = 1
+    } catch { /* 忽略：部分环境禁止 data URI 音频 */ }
     setState('loading')
     try {
       const blob = await speakAloud(text, lang)
+      if (!audioRef.current) return // 请求期间组件已卸载
       if (urlRef.current) URL.revokeObjectURL(urlRef.current)
       const url = URL.createObjectURL(blob)
       urlRef.current = url
-      const audio = new Audio(url)
-      audioRef.current = audio
-      audio.onended = () => setState('idle')
-      audio.onerror = () => setState('idle')
+      cacheRef.current = { key, url }
+      audio.src = url
       await audio.play()
       setState('playing')
     } catch (e) {
       setState('idle')
-      // ★ 界面上这句必须来自词典，不是后端那句中文话术（改造方案 §六 第 9 条）：
-      //   后端给的是分档名＋运维可读的一句话，访客要的是**自己那门语言**的一句人话。
-      //   「该语种没有语音」与「服务器读不出语音」必须分开说——前者译文照常，后者才可能稍后再试。
-      toastWarn(voiceFailText(e))
+      // ★ 手势被拒（NotAllowedError）与"合成失败"是两件事：前者让用户再点一次立刻就能响
+      //   （缓存已在手），后者才是服务器这次没给声音。混成一句会让用户反复点同一个"坏按钮"。
+      const name = (e as { name?: string } | null)?.name
+      if (name === 'NotAllowedError') {
+        toastWarn(t('chat.speakTapAgain'))
+      } else {
+        // ★ 界面上这句必须来自词典，不是后端那句中文话术（改造方案 §六 第 9 条）：
+        //   后端给的是分档名＋运维可读的一句话，访客要的是**自己那门语言**的一句人话。
+        //   「该语种没有语音」与「服务器读不出语音」必须分开说——前者译文照常，后者才可能稍后再试。
+        toastWarn(voiceFailText(e))
+      }
     }
   }
 
-  const label = state === 'playing' ? t('chat.speakStop') : state === 'loading' ? t('chat.micWorking') : t('chat.speak')
+  // ★ 2026-10-21 UAT 收口 M8：加载态文案过去复用「正在识别录音…」（chat.micWorking）——
+  //   用户在点"朗读"却看到"识别录音"，是明显的串档；现改为朗读专用键。
+  const label = state === 'playing' ? t('chat.speakStop') : state === 'loading' ? t('chat.speakLoading') : t('chat.speak')
   return (
     <button type="button" className="msg-act-btn" data-testid="speak-translation"
       aria-label={label} title={label} disabled={state === 'loading' || !text}

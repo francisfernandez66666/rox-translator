@@ -48,11 +48,13 @@ export function ApiKeysP() {
   }, [])
   useEffect(() => {
     void loadKeys()
-    // ★ 2026-10-16：这条预取是「有则填、无则静默」（非超管打这里恒 403），静默是设计；
-    //   但旧写法连 catch 都没有 ⇒ 403 会变成一条未处理 rejection（控制台红字）。
-    //   保留静默，只把异常收干净。
-    void (async () => { const d: Any = await getOpenAPIDocs(); if (d.success) { setDocsMDZh(d.md_zh || ''); setDocsMDEn(d.md_en || ''); setDocsDefaultBadge(!!d.default_zh && !!d.default_en) } })().catch(() => { /* 非超管/网络失败：静默（上方 docsCardOpen 时另有带提示的 loadDocs） */ })
-  }, [loadKeys])
+    // ★ 2026-10-21 UAT 收口 M6：文档预取加角色前置（与下方 docsCardOpen/:108、:174 同档）。
+    //   旧写法挂载即打 /api/admin/openapi/docs：非超管恒 403，面板上那张文档卡本来就只对超管渲染
+    //   ⇒ 这一次请求注定失败、必留一条 403 噪音，而它对非超管没有任何可用信息。
+    //   保留"有则填、无则静默"的原语义（超管档仍然预取），只把注定失败的那一档挡在门外。
+    if (!isSuper) return
+    void (async () => { const d: Any = await getOpenAPIDocs(); if (d.success) { setDocsMDZh(d.md_zh || ''); setDocsMDEn(d.md_en || ''); setDocsDefaultBadge(!!d.default_zh && !!d.default_en) } })().catch(() => { /* 超管档网络失败：静默（上方 docsCardOpen 时另有带提示的 loadDocs） */ })
+  }, [loadKeys, isSuper])
 
   async function copyNewKey() {
     try { await navigator.clipboard.writeText(newKey); setCopied(true); setTimeout(() => setCopied(false), 2000) }

@@ -46,10 +46,18 @@ export interface Ticket {
   qa_warnings?: number
   /**
    * ★ 2026-10-19 G2：退化交付的语言（版式还原失败、已以纯文案 .md 交付）。
-   * 与后端 `engine.DegradedLangs` 出栈字段同名；详情面据此在客户屏幕上"露出这张脸"。
-   * ⚠️ 字段名假设：Go 侧另一 agent 尚未定稿，按 `degraded_langs` 兼容读取（缺失即视为无退化）。
+   * ★ 2026-10-21 UAT 收口 M2：Go 侧已定稿并接上整条链——`tickets.degraded_langs` 列
+   *   → `api.ticketJSON` 出栈同名数组（空值出 `[]` 不出 `null`）→ 本类型 → 详情面横幅。
+   * 三面（Go 出栈键名／本类型／TicketsPage 渲染判据）逐字等值，漂移由
+   * `src/api/ticketsDegradedLock.test.ts` 当场判红。
    */
   degraded_langs?: string[]
+  /**
+   * ★ 2026-10-21 UAT 收口 M2：交付质量闸门告警原文（引擎 GateWarnings，如 `refusal_blocked=…`、
+   * `untranslated=…`、结构保真警告）。同批次落列并出栈，供排障面/后续横幅消费；
+   * 空值同样出 `[]`。键名与 `api.ticketJSON` 逐字相同（锁同上）。
+   */
+  gate_warnings?: string[]
   created_at: string
   updated_at: string
 }

@@ -68,6 +68,17 @@ type Claims struct {
 	// TokenVersion ★ B2 会话撤销：签发时用户的 token_version；authUser 每请求与库内比对，
 	// 改密/重置后不一致即拒绝。omitempty 兼容旧 token（缺字段解码为 0，与新列默认一致）。
 	TokenVersion int64 `json:"tv,omitempty"`
+	// JTI ★ IAM P0-10（2026-10-21）：本条 token 的唯一标识（16 字节随机 hex）。
+	// 登出把它写进撤销名单（Redis 优先、进程内兜底），TTL=剩余有效期；
+	// 与 token_version 的分工：jti 撤销**只作废这一条**（单设备登出不牵连其他设备），
+	// token_version 仍负责改密/重置时的**全端撤销**（语义不变）。
+	// omitempty 兼容旧 token：缺字段＝不可单条撤销，但不会影响既有校验链。
+	JTI string `json:"jti,omitempty"`
+	// MustChangePassword ★ IAM P0-9（2026-10-21）：签发时用户的 must_change_pwd 标记。
+	// 中间件只放行改密/登出/自身信息，其余接口回 428（ErrPasswordChangeRequired）。
+	// 放声明里而不是每请求查库：这是**签发那一刻**的事实，与 token_version 同族——
+	// 改密成功的响应会下发一条新 token（mcp=0），旧 token 因 token_version 递增同时失效。
+	MustChangePassword bool `json:"mcp,omitempty"`
 }
 
 // ctxUserKey context 键类型（私有，防跨包碰撞），承载当前登录用户。
@@ -95,6 +106,9 @@ func b64Decode(s string) ([]byte, error) {
 }
 
 // Sign 业务逻辑实现，详见函数体与调用处注释。
+// ★ IAM P0-9/P0-10（2026-10-21）：签发时一并写入 jti（单条撤销用）与 mcp（强制改密闸用）。
+// jti 随机源不可用时退化为「空 jti」而不是签发失败——empty jti 的意思是"这一条不可单条撤销"，
+// 仍能登录、仍受 token_version 全端撤销约束，属于可用性优先的诚实降级（同 vcode 的本地兜底口径）。
 func Sign(u *User, ttl time.Duration) (string, error) {
 	claims := Claims{
 		UserID:       u.ID,
@@ -103,6 +117,9 @@ func Sign(u *User, ttl time.Duration) (string, error) {
 		Role:         u.Role,
 		Exp:          time.Now().Add(ttl).Unix(),
 		TokenVersion: u.TokenVersion,
+		JTI:          newJTI(),
+		// mcp 只表达「登录时是否待改密」；改密成功后 handleChangePassword 会重签一条 mcp=0 的 token。
+		MustChangePassword: u.MustChangePwd > 0,
 	}
 	header := map[string]string{"alg": "HS256", "typ": "JWT"}
 	hb, _ := json.Marshal(header)
@@ -121,6 +138,16 @@ func signHS256(input, secret string) []byte {
 	m := hmac.New(sha256.New, []byte(secret))
 	m.Write([]byte(input))
 	return m.Sum(nil)
+}
+
+// newJTI 生成 16 字节随机 token 标识（32 位 hex）。
+// 随机源不可用返回空串——调用方把它理解为「这一条不可单条撤销」（见 Sign 注释）。
+func newJTI() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return hex.EncodeToString(b)
 }
 
 // Verify 校验 JWT：三段式结构→HMAC 签名比对（恒定时间）→载荷解析→过期检查；任一失败返回错误。
@@ -264,4 +291,16 @@ func BearerToken(r *http.Request) string {
 		return strings.TrimSpace(h[7:])
 	}
 	return ""
+}
+
+// ClaimsOf ★ IAM P1（2026-10-21）：从请求提取并校验后的 JWT 载荷。
+// 与 BearerToken/Verify 的组合完全等价，单独提出来是为了让「登出」这类
+// **只需要 claims、不需要用户行**的 handler 不再各自拼一遍两段调用
+// （AGENTS「同一口径只有一个出口」）。
+func ClaimsOf(r *http.Request) (*Claims, error) {
+	tok := BearerToken(r)
+	if tok == "" {
+		return nil, errors.New("未携带登录凭证")
+	}
+	return Verify(tok)
 }

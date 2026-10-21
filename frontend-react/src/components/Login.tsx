@@ -28,6 +28,8 @@ import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { useCountdown } from '@/lib/useCountdown' // ★ #42：验证码冷却收口（自带卸载清理 + 幂等重启）
+// ★ 2026-10-21 IAM 重做 P0-6：邮箱形状与口令长度走这一把共用尺子（只判形状，不判"注册过没有"）
+import { PWD_MIN_LEN, isEmailShape } from '@/lib/accountForm'
 import { loadTurnstile, renderTurnstile as mountTurnstileWidget, reexecTurnstile } from '@/lib/turnstile'
 import AiRegisterFlow from './AiRegisterFlow'
 
@@ -58,9 +60,18 @@ export default function Login({ mode, onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false) // 密码明文/密文切换（画布 57:8 的眼睛按钮）
-  // 只留 setter 不留值：迁移后 AuthCard 的通栏提交按钮不暴露 loading 属性，loading 不再参与渲染；
-  // 保留 setLoading 是为与各异步处理函数「前置位 / finally 复位」的原有时序完全一致
-  const [, setLoading] = useState(false)
+  // ★ 2026-10-21 IAM 重做 P1-3：注册屏与找回屏的新密码各配一枚眼睛。
+  //   登录屏早就有这枚按钮，而「注册时两次打错同一个字符」恰恰是最需要看得见的一次输入；
+  //   找回屏同理——验证码邮件里抄出来的口令看不见，用户只能盲输。
+  const [showRegPwd, setShowRegPwd] = useState(false)
+  const [showForgotPwd, setShowForgotPwd] = useState(false)
+  // ★ 2026-10-21 IAM 重做 P1-2：这一份读数**现在参与渲染**了。
+  //   旧注释写的是「迁移后 AuthCard 的通栏提交按钮不暴露 loading 属性，loading 不再参与渲染」——
+  //   那正是缺陷本体而不是设计：请求在飞的三秒里提交钮照常可点，
+  //   注册那一腿连点两下就是两次请求，第二次必吃「该租户下用户名已存在」，
+  //   用户看到的是"我点了注册，它报错"。现在 AuthCard 有 busy 档（复用交付档 .lc-btn:disabled，零新视觉）。
+  //   setter 的名字与时序一字不改（各异步函数仍是「前置位 / finally 复位」）。
+  const [loading, setLoading] = useState(false)
   // 登录 / 注册 / 找回 三类错误提示
   const [error, setError] = useState('')
   const [regMsg, setRegMsg] = useState('')
@@ -75,6 +86,10 @@ export default function Login({ mode, onLogin }: Props) {
   // 视图与注册接管阶段
   const [view, setView] = useState<'signin' | 'register' | 'forgot'>('signin')
   const [regPhase, setRegPhase] = useState<RegPhase>('form')
+  // ★ 2026-10-21 IAM 重做 P1-8：是否处于「减少动效」偏好。
+  //   旧形态在减少动效下直接 return，整段接管流程连入口一起消失——用户被永久钉在 9 项传统表单上，
+  //   交付稿里那个"聊两句就注册完"的流程对这批用户**根本不存在**。现在只停动画、保留入口按钮。
+  const [reducedMotion, setReducedMotion] = useState(false)
   const [typeChoice, setTypeChoice] = useState<'personal' | 'enterprise'>('personal')
   // 企业用户角色：admin=我是管理员（新建企业）；member=我是普通成员（须凭企业邀请码加入）
   const [roleChoice, setRoleChoice] = useState<'admin' | 'member'>('admin')
@@ -151,6 +166,10 @@ export default function Login({ mode, onLogin }: Props) {
     const reduced = typeof window !== 'undefined' && !!window.matchMedia
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     setRegPhase('form')
+    setReducedMotion(reduced)
+    // ★ P1-8：减少动效时**只停动画**，不再连入口一起砍——卡尾会多出一枚「AI 引导注册」按钮，
+    //   点它同样进 AI 面板（面板自己的入场动画也由组件按同一偏好关掉）。旧形态 `return` 之后
+    //   这批用户永远看不到 AI 流程，只能手填 9 项。
     if (reduced) return
     // 三段节拍对齐 demo-register-ai-motion.html：
     // 1300ms 让传统表单先站稳（观众得看清「原来要填 9 项」）→ 920ms 闪烁动画（= .auth-flash 时长）
@@ -191,32 +210,41 @@ export default function Login({ mode, onLogin }: Props) {
     reexecTurnstile(captchaIdRef.current)
   }
 
-  // ---- 登录：校验 → 调登录接口 → 后台角色校验 → brand_host SSO 跳转 → 写 token/租户 → 首登改密 / 回调 ----
+  // ---- 会话落地的唯一出口（★ 2026-10-21 IAM 重做 P0-4：登录响应与注册响应共用这一条后处理）----
+  // 旧形态注册成功后调 doLogin() 再补登一次，而 doLogin 的失败原因写进 `error` 槽，
+  // `error` 槽**只在登录屏渲染**（本文件登录卡那一段）⇒ 人还停在注册卡，什么提示都看不见，
+  // 观感就是"注册成功了，然后什么都没发生"（运营者报的第 1 条）。
+  // 现在失败文案按**发起那一屏**落位：登录屏写 error，注册屏写 regMsg。
+  async function settleSession(resp: Awaited<ReturnType<typeof login>>, fail: (msg: string) => void): Promise<void> {
+    if (!resp.success || !resp.token) { fail(resp.message || t('login.fail')); return }
+    // 后台入口二次把关：roleLevel <2（普通成员）即便拿到 token 也不放行，防止手输 /admin 越界
+    if (mode === 'admin' && roleLevel(resp.user?.role) < 2) { fail(t('login.noAdmin')); return }
+    // 品牌专属域名跳转：跨子域改带一次性 sso_code，落地后由 App 经 /api/auth/sso/exchange 兑换 JWT
+    if (resp.brand_host && resp.sso_code && resp.brand_host !== window.location.host) {
+      const target = window.location.protocol + '//' + resp.brand_host + '/?sso_code=' + encodeURIComponent(resp.sso_code)
+      window.location.replace(target) // replace 而非 assign：不留历史记录，后退不会再回到跳走前的登录页
+      return
+    }
+    setAuthToken(resp.token)
+    setActiveTenantId(0) // 先落在平台默认租户；进后台后由 stores/admin 的 switchTenant 改写 X-Tenant-ID
+    const u = resp.user!
+    // 首登强制改密（2026-09-02）：管理员批量导入的账号，初始密码可能进过导出文件，
+    // 必须先改掉才能进系统 —— 此处只弹窗、不回调 onLogin
+    if ((u as unknown as { must_change_pwd?: number }).must_change_pwd) {
+      setForcePending(u); setForceOld(''); setForceNew(''); setForceConfirm(''); setForceMsg('')
+      setForceOpen(true)
+      return
+    }
+    onLogin(u)
+  }
+
+  // ---- 登录：校验 → 调登录接口 → 交 settleSession（角色/跳转/写 token/首登改密/回调）----
   async function doLogin() {
     if (!username || !password) { setError(t('auth.needInput')); return }
     setLoading(true); setError('')
     try {
       const resp = await login(username, password)
-      if (!resp.success || !resp.token) { setError(resp.message || t('login.fail')); return }
-      // 后台入口二次把关：roleLevel <2（普通成员）即便拿到 token 也不放行，防止手输 /admin 越界
-      if (mode === 'admin' && roleLevel(resp.user?.role) < 2) { setError(t('login.noAdmin')); return }
-      // 品牌专属域名跳转：跨子域改带一次性 sso_code，落地后由 App 经 /api/auth/sso/exchange 兑换 JWT
-      if (resp.brand_host && resp.sso_code && resp.brand_host !== window.location.host) {
-        const target = window.location.protocol + '//' + resp.brand_host + '/?sso_code=' + encodeURIComponent(resp.sso_code)
-        window.location.replace(target) // replace 而非 assign：不留历史记录，后退不会再回到跳走前的登录页
-        return
-      }
-      setAuthToken(resp.token)
-      setActiveTenantId(0) // 先落在平台默认租户；进后台后由 stores/admin 的 switchTenant 改写 X-Tenant-ID
-      const u = resp.user!
-      // 首登强制改密（2026-09-02）：管理员批量导入的账号，初始密码可能进过导出文件，
-      // 必须先改掉才能进系统 —— 此处只弹窗、不回调 onLogin
-      if ((u as unknown as { must_change_pwd?: number }).must_change_pwd) {
-        setForcePending(u); setForceOld(''); setForceNew(''); setForceConfirm(''); setForceMsg('')
-        setForceOpen(true)
-        return
-      }
-      onLogin(u)
+      await settleSession(resp, setError)
     } catch (e: unknown) {
       // 凭证错误等会以 401 抛出：必须把后端 message 透出，否则用户只看到「点了没反应」
       setError((e as { message?: string }).message || t('login.fail'))
@@ -224,8 +252,10 @@ export default function Login({ mode, onLogin }: Props) {
   }
 
   // ---- 首登强制改密：校验新密码长度与一致 → changePassword → 成功 toast 并 onLogin ----
+  // ★ 2026-10-21 IAM 重做 P1-1：长度判据走 `PWD_MIN_LEN`（与注册/后端 ValidatePassword 同一把尺子）。
+  //   旧形态在这里写死 `< 6`，后端一旦调档（比如抬到 8）就会变成"前端放行、后端 400"的假失败。
   async function submitForcePwd() {
-    if (!forceOld || forceNew.length < 6) { setForceMsg(t('pwd.tooShort')); return }
+    if (!forceOld || forceNew.length < PWD_MIN_LEN) { setForceMsg(t('pwd.tooShort')); return }
     if (forceNew !== forceConfirm) { setForceMsg(t('pwd.mismatch')); return }
     setForceBusy(true); setForceMsg('')
     try {
@@ -233,7 +263,21 @@ export default function Login({ mode, onLogin }: Props) {
       if (!r.success) { setForceMsg(r.message || t('auth.forcePwdFail')); return }
       toast({ title: t('pwd.done'), tone: 'success' })
       setForceOpen(false)
-      if (forcePending) { onLogin(forcePending); setForcePending(null) }
+      // ★ 2026-10-21 IAM 重做 P0-9：改密成功会抬 token_version，服务端随响应重签一条新 token。
+      //   旧形态丢掉它、拿手里那条旧 token 直接 onLogin ⇒ 下一个请求就被判「会话已撤销」踢回登录页
+      //   （首登引导刚走完又要再登一次，用户报障第 3 条）。现在先落地新 token，再进工作台；
+      //   响应没带 token（重签失败那一档）就如实回落——清掉本地会话让用户重新登录，语义仍是正确的。
+      if (typeof r.token === 'string' && r.token) {
+        setAuthToken(r.token)
+        setActiveTenantId(0)
+        const u = (r.user && typeof r.user === 'object') ? (r.user as AuthUser) : forcePending
+        setForcePending(null)
+        if (u) onLogin(u)
+        return
+      }
+      setAuthToken('')
+      setForcePending(null)
+      setError(t('auth.sessionExpired'))
     } catch (e) { toast({ title: (e as Error).message || t('auth.forcePwdFail'), tone: 'error' }) }
     finally { setForceBusy(false) }
   }
@@ -241,6 +285,8 @@ export default function Login({ mode, onLogin }: Props) {
   // ---- 发送邮箱验证码：校验邮箱与人机验证 → 调接口 → 60s 倒计时冷却 ----
   async function doSendCode() {
     if (!form.email.trim()) { toast({ title: t('auth.emailRequired'), tone: 'warn' }); return }
+    // ★ P0-6：发码前先判形状——把码发到一串根本不是地址的东西上，等于替用户制造一次空等
+    if (!isEmailShape(form.email)) { toast({ title: t('auth.emailBad'), tone: 'warn' }); return }
     if (captchaOn && !captchaTokenRef.current) { toast({ title: t('auth.captchaRequired'), tone: 'warn' }); return }
     let r!: Awaited<ReturnType<typeof sendEmailCode>>
     try {
@@ -262,9 +308,11 @@ export default function Login({ mode, onLogin }: Props) {
   // 英文环境不再露出中文；校验按表单自上而下顺序、命中即返回，一次只提示一条。
   async function doRegister() {
     if (!username || !password) { setRegMsg(t('auth.needInput')); return }
-    if (password.length < 6) { setRegMsg(t('auth.pwdShort')); return }
+    if (password.length < PWD_MIN_LEN) { setRegMsg(t('auth.pwdShort')); return }
     if (!agreed) { setRegMsg(t('auth.needAgree')); return }
     if (!form.email.trim()) { setRegMsg(t('auth.emailRequired')); return }
+    // ★ P0-6：形状不对当场出声（旧形态只判非空，写漏 @ 要等"验证码错误"那一步才发现）
+    if (!isEmailShape(form.email)) { setRegMsg(t('auth.emailBad')); return }
     if (emailVerifyOn && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg(t('auth.codeRequired')); return }
     if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.code.trim()) { setRegMsg(t('auth.orgCodeRequired')); return }
     if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.name.trim()) { setRegMsg(t('auth.orgNameRequired')); return }
@@ -302,7 +350,16 @@ export default function Login({ mode, onLogin }: Props) {
       // 不重领的话，用户改完必填项再点提交必吃「人机验证失败」
       if (!r.success) { setRegMsg(r.message || t('register.fail')); if (captchaOn) refreshCaptcha(); return }
       clearUtm() // 归因只在首次注册消费，用完立即清掉，避免二次注册串号
-      await doLogin() // 注册成功自动登录（行为同 Vue 版）
+      // ★ 2026-10-21 IAM 重做 P0-4（注册即登录）：服务端现在随注册响应直接下发会话，
+      //   前端不再"拿明文账号密码回登一次"。旧补登有两处结构性失败：
+      //   ① 当时的登录只认用户名，而注册表单收的是邮箱；② 注册把口令 trim 过、登录不 trim。
+      //   兜档（服务端签发失败那一档，注册**仍算成功**）才回落到补登，
+      //   且失败原因经 settleSession 的 fail 口落到**注册屏**的 regMsg，不再写进看不见的 error 槽。
+      if (typeof r.token === 'string' && r.token) {
+        await settleSession(r as unknown as Awaited<ReturnType<typeof login>>, setRegMsg)
+        return
+      }
+      await doLogin()
     } catch (e) { setRegMsg(e instanceof Error ? e.message : String(t('register.fail'))); if (captchaOn) refreshCaptcha() } // E10：异常同样要落到卡内红字
     finally { setLoading(false) }
   }
@@ -311,12 +368,20 @@ export default function Login({ mode, onLogin }: Props) {
   // 提交找回：用户名或绑定邮箱二者其一即可（后端按绑定关系发码，不要求两个都填）
   async function doForgotSend() {
     if (!forgot.username.trim() && !forgot.email.trim()) { setForgotMsg(t('auth.forgotNeed')); return }
+    // ★ P0-6：走邮箱那一腿时先判形状。防枚举不回答"这个邮箱注册过没有"，
+    //   但"这串根本不是邮箱地址"是纯形状问题，必须当场说——旧形态连 type="email" 都没挂，
+    //   写错一个字母的人收到的是假成功，要空等十分钟。
+    if (!forgot.username.trim() && !isEmailShape(forgot.email)) { setForgotMsg(t('auth.emailBad')); return }
     setLoading(true); setForgotMsg('')
     try {
       const resp = await forgotPassword({ username: forgot.username.trim() || undefined, email: forgot.email.trim() || undefined })
       if (!resp.success) { setForgotMsg(resp.message || t('auth.sendFail')); return }
       setForgotSent(true)
-      setForgotMsg(t('auth.forgotSent'))
+      // ★ 2026-10-21 IAM 重做 P0-6（防枚举）：这里**透传后端那句恒真文案**，不再自带
+      //   「验证码已发送到绑定邮箱」——后端现在三条出口（不存在／未绑邮箱／已发码）逐字同句，
+      //   前端若继续用自己的那句"已发送"覆盖，等于把刚堵上的存在性回执又从界面上画回来。
+      //   新文案自带出路（检查拼写与垃圾箱／改用用户名找回），正是旧形态缺的那一句。
+      setForgotMsg(resp.message || t('auth.forgotSent'))
     } catch (e) { setForgotMsg((e as Error).message || t('auth.sendFail')) }
     finally { setLoading(false) }
   }
@@ -324,14 +389,20 @@ export default function Login({ mode, onLogin }: Props) {
   // 用验证码重置：成功后把用户名/新密码回填到登录表单再切回登录屏，
   // 用户不需要重新输入一遍（error 位显示「密码已重置」当作正向反馈复用同一条提示槽）
   async function doReset() {
-    if (!forgot.code.trim() || forgot.newPassword.length < 6) { setForgotMsg(t('auth.resetNeed')); return }
+    // ★ 2026-10-21 IAM 重做 P1-1：与注册/后端同一把长度尺子（旧写法写死 6，改档即前后端打架）
+    if (!forgot.code.trim() || forgot.newPassword.length < PWD_MIN_LEN) { setForgotMsg(t('auth.resetNeed')); return }
     setLoading(true); setForgotMsg('')
     try {
       // ★ 定位腿与发码腿同口径：用户名或绑定邮箱二者其一即可（只用邮箱找回的用户 username 为空，
       //   不把 email 一起带上，后端就无从定位账号 → 回「请求格式错误」）。
       const resp = await resetPassword({ username: forgot.username.trim() || undefined, email: forgot.email.trim() || undefined, code: forgot.code.trim(), new_password: forgot.newPassword })
       if (!resp.success) { setForgotMsg(resp.message || t('auth.resetFail')); return }
-      if (forgot.username.trim()) setUsername(forgot.username.trim()) // 登录只认用户名，邮箱档不回填（避免把邮箱灌进用户名字段误导下一次登录）
+      // ★ 2026-10-21 IAM 重做 P0-5：回填"刚刚用来定位这张码的那个标识"（服务端回显：
+      //   邮箱档回邮箱、用户名档回用户名）。旧形态只回填用户名、邮箱档什么都不回，
+      //   而登录当时只认用户名 ⇒ 用邮箱找回密码的人拿着新密码仍然登不进去（第 2 条报障本体）。
+      //   现在登录双入口（用户名或邮箱），把邮箱回填进同一个框就能直接进。
+      const issued = typeof resp.login_account === 'string' && resp.login_account ? resp.login_account : forgot.username.trim()
+      if (issued) setUsername(issued)
       setPassword(forgot.newPassword)
       closeForgot()
       setError(t('auth.successReset'))
@@ -362,6 +433,7 @@ export default function Login({ mode, onLogin }: Props) {
           desc={t('auth.loginDesc')}
           submitText={t('auth.signIn')}
           onSubmit={doLogin}
+          busy={loading}
           corner={langPill}
           foot={(
             <>
@@ -425,18 +497,25 @@ export default function Login({ mode, onLogin }: Props) {
         {/* 同一张卡承载两步：未发码=提交找回申请，已发码=提交重置（submitText 与 onSubmit 一起切），
             不做两个页面是为了让用户停在同一个视觉位置上读验证码邮件 */}
         <AuthCard
-          className="lc-auth-card--compact"
           title={t('auth.forgotTitle')}
           desc={t('auth.forgotDesc')}
           submitText={forgotSent ? t('auth.resetPassword') : t('auth.sendCode')}
           onSubmit={forgotSent ? doReset : doForgotSend}
+          busy={loading}
           corner={langPill}
+          foot={(
+            // ★ 2026-10-21 IAM 重做 P1-4：找回屏原先只能靠浏览器后退回登录——
+            //   从 /login 直接点到这一屏之后没有任何站内出路，移动端更是没有明显的后退键。
+            <button type="button" className="auth-link" onClick={closeForgot}>{t('auth.backToLogin')}</button>
+          )}
         >
           <Field>
             <Input aria-label={t('auth.username')} value={forgot.username} onChange={(e) => setForgot({ ...forgot, username: e.target.value })} placeholder={t('auth.username')} />
           </Field>
           <Field>
-            <Input aria-label={t('auth.boundEmail')} value={forgot.email} onChange={(e) => setForgot({ ...forgot, email: e.target.value })} placeholder={t('auth.boundEmail')} />
+            {/* 走邮箱找回的那条腿，输入形状必须当场校验：type=email 让移动端出 @ 键，
+                浏览器也顺带做一次基础形状检查（真正的判据仍在前端 isEmailShape 与后端） */}
+            <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" value={forgot.email} onChange={(e) => setForgot({ ...forgot, email: e.target.value })} placeholder={t('auth.boundEmail')} />
           </Field>
           {!!forgotMsg && <div className={forgotSent ? 'auth-ok' : 'auth-err'}>{forgotMsg}</div>}
           {forgotSent && (
@@ -445,7 +524,15 @@ export default function Login({ mode, onLogin }: Props) {
                 <Input aria-label={t('auth.fieldEmailCode')} value={forgot.code} onChange={(e) => setForgot({ ...forgot, code: e.target.value })} placeholder={t('auth.fieldEmailCode')} />
               </Field>
               <Field>
-                <Input aria-label={t('auth.newPassword')} type="password" value={forgot.newPassword} onChange={(e) => setForgot({ ...forgot, newPassword: e.target.value })} placeholder={t('auth.newPassword')} />
+                <Input
+                  aria-label={t('auth.newPassword')}
+                  type={showForgotPwd ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={forgot.newPassword}
+                  onChange={(e) => setForgot({ ...forgot, newPassword: e.target.value })}
+                  placeholder={t('auth.newPassword')}
+                  trailing={<PwdEye shown={showForgotPwd} onToggle={() => setShowForgotPwd((v) => !v)} />}
+                />
               </Field>
             </>
           )}
@@ -487,7 +574,20 @@ export default function Login({ mode, onLogin }: Props) {
         desc={desc}
         submitText={t('auth.registerAndLogin')}
         onSubmit={doRegister}
+        busy={loading}
         corner={langPill}
+        foot={(
+          <>
+            {/* ★ P1-8：减少动效档的 AI 入口（正常档由下方的自动接管流程负责，这里不重复出按钮） */}
+            {reducedMotion && (
+              <button type="button" className="auth-link" onClick={() => setRegPhase('ai')}>{t('auth.aiEntry')}</button>
+            )}
+            {/* ★ 2026-10-21 IAM 重做 P1-4：注册屏同样补一条站内出路（旧形态只能靠浏览器后退）。
+                点它回登录屏并把用户已经敲进去的用户名/密码原样留在表单里（不能顺手清空——
+                想"去登录试试"的人往往就是刚发现自己的账号已经存在）。 */}
+            <button type="button" className="auth-link" onClick={() => setView('signin')}>{t('auth.backToLogin')}</button>
+          </>
+        )}
       >
            {branding.dedicatedRegister ? (
           <Field label={t('auth.orgInvite')}>
@@ -540,7 +640,14 @@ export default function Login({ mode, onLogin }: Props) {
           <Input value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t('auth.fieldUsername')} />
         </Field>
         <Field label={t('auth.fieldPassword')}>
-          <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={t('auth.fieldPassword')} />
+          <Input
+            type={showRegPwd ? 'text' : 'password'}
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder={t('auth.fieldPassword')}
+            trailing={<PwdEye shown={showRegPwd} onToggle={() => setShowRegPwd((v) => !v)} />}
+          />
         </Field>
         <Field label={t('auth.fieldEmail')}>
           <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={t('auth.fieldEmail')} />
@@ -607,6 +714,23 @@ export default function Login({ mode, onLogin }: Props) {
   )
 }
 
+// ★ 2026-10-21 IAM 重做 P1-3：密码可见切换的唯一实现（登录/注册/找回/强制改密四处共用）。
+//   aria-label 走现成的 showPwd/hidePwd 两键——历史上一处写成了词典里不存在的键，
+//   屏幕阅读器会把键名字符串念出来；共用这一个组件就不再有"某处忘了改"的形态。
+function PwdEye({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      className="lc-input-affix auth-pwd-eye"
+      aria-pressed={shown}
+      aria-label={shown ? t('auth.hidePwd') : t('auth.showPwd')}
+      onClick={onToggle}
+    >
+      {shown ? <EyeOffIcon /> : <EyeIcon />}
+    </button>
+  )
+}
+
 // 首登强制改密弹窗（保留原逻辑，langcross Dialog 实现）
 // 三个认证屏共用同一个实例（每屏末尾各挂一处），props 全部由上层受控：
 // 这里不持有任何状态，改密成功/失败的反馈由 submitForcePwd 写回 forceMsg + toast。
@@ -617,16 +741,25 @@ function ForcePwdDialog(props: {
   onOld: (v: string) => void; onNew: (v: string) => void; onConfirmPwd: (v: string) => void
   onSubmit: () => void; onCancel: () => void
 }) {
+  // 三格共用一个可见档：同一屏里逐格各切一次只会让人以为切错了格（与移动端改密弹窗同形态）
+  const [show, setShow] = useState(false)
   return (
     <Dialog open={props.open} title={t('pwd.forceTitle')} confirmText={t('pwd.forceSubmit')}
             onConfirm={props.onSubmit} onCancel={props.onCancel} dismissOnOverlay={!props.busy}>
       <p style={{ fontSize: 15, color: 'var(--lc-text-3)', lineHeight: 1.7, margin: '0 0 14px' }}>{t('pwd.forceHint')}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <Field label={t('pwd.oldPassword')}><Input type="password" value={props.old} onChange={(e) => props.onOld(e.target.value)} /></Field>
+        <Field label={t('pwd.oldPassword')}>
+          <Input type={show ? 'text' : 'password'} value={props.old} onChange={(e) => props.onOld(e.target.value)}
+            trailing={<PwdEye shown={show} onToggle={() => setShow((v) => !v)} />} />
+        </Field>
         {/* 新密码/确认框标 new-password：否则浏览器密码管理器会把这次改密当成登录，
             自动回填初始密码，用户「改了」却没改 */}
-        <Field label={t('auth.newPassword')}><Input type="password" autoComplete="new-password" value={props.newP} onChange={(e) => props.onNew(e.target.value)} /></Field>
-        <Field label={t('pwd.confirmPlaceholder')}><Input type="password" autoComplete="new-password" value={props.confirm} onChange={(e) => props.onConfirmPwd(e.target.value)} /></Field>
+        <Field label={t('auth.newPassword')}>
+          <Input type={show ? 'text' : 'password'} autoComplete="new-password" value={props.newP} onChange={(e) => props.onNew(e.target.value)} />
+        </Field>
+        <Field label={t('pwd.confirmPlaceholder')}>
+          <Input type={show ? 'text' : 'password'} autoComplete="new-password" value={props.confirm} onChange={(e) => props.onConfirmPwd(e.target.value)} />
+        </Field>
         {!!props.msg && <div className="auth-err">{props.msg}</div>}
       </div>
     </Dialog>
@@ -634,9 +767,15 @@ function ForcePwdDialog(props: {
 }
 
 // ---------- 作用域样式（auth- 前缀，避免与组件库类名重名）----------
+// ★ 2026-10-21 IAM 重做 P1-2/P1-5 两条几何口径：
+//   ① 三张认证卡统一 400 宽（AuthCard 交付档）。旧形态给找回屏多挂了一个
+//      `.lc-auth-card--compact{max-width:360px}`，于是同一套流程里三屏三个宽度，
+//      从登录点进找回会看到卡片"缩了一下"——交付稿里并不存在这个窄档，已删。
+//   ② 移动档（≤640）：卡片改满宽、外边距收到 16；背板从 `align-items:center` 换成 `safe center`
+//      并允许纵向滚动。旧形态是固定 `center`＋不可滚动，屏幕比卡片矮时（小屏 + 键盘弹出 + 注册表单 9 项）
+//      卡片顶部会被裁到视口外且**无法滚回去**，用户看不到第一个输入框。
 const CSS_AUTH = `
-.lc-auth-bg{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;font-family:var(--lc-font);padding:24px;box-sizing:border-box;}
-.lc-auth-card--compact{max-width:360px;}
+.lc-auth-bg{position:fixed;inset:0;display:flex;align-items:center;align-items:safe center;justify-content:center;background:#000;font-family:var(--lc-font);padding:24px;box-sizing:border-box;overflow-y:auto;}
 .auth-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0;}
 .auth-link:hover{color:var(--lc-text);text-decoration:underline;}
 /* 卡右上角语言胶囊（31×19、面 #16181C、纯白、无描边、圆角全圆） */
@@ -671,5 +810,11 @@ const CSS_AUTH = `
 @media (prefers-reduced-motion: reduce){
   .auth-flash{animation:none!important;}
   .auth-pg-out{animation:none!important;transition:none!important;}
+}
+/* ★ 移动档（≤640）：卡片满宽、内垫收到 20、背板外边距收到 16。
+   桌面档几何一字不动（AuthCard 的 400 宽属于交付档，见 components.css）。 */
+@media (max-width: 640px){
+  .lc-auth-bg{padding:16px;}
+  .lc-auth-bg .lc-auth-card{width:100%;max-width:100%;padding:20px;}
 }
 `

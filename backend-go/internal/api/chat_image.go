@@ -359,9 +359,19 @@ func chatImageLegsWithin(lines []string, translate chatImageLegTranslate, budget
 	var points int64
 	idx := make([]int, 0, len(lines))
 	for i, ln := range lines {
-		if strings.TrimSpace(ln) != "" {
-			idx = append(idx, i)
+		if strings.TrimSpace(ln) == "" {
+			continue
 		}
+		// ★ 2026-10-21 UAT 收口 M9：非语言行（数字/金额/日期/符号/箭头）**根本不送模型**，
+		//   直接由 Go 侧回填原文。判据与文件主链同一个入口（engine.NeedsIdentityDelivery），
+		//   两处各写一份"什么算符号"正是本仓反复出事的形态。
+		//   不这么做的话，分腿重译会把 `<` 也拨一枪，模型换回 "and" 后行数照样对齐 ⇒
+		//   回填门拿到 text != 原文，图标就被一个英文单词盖掉。
+		if engine.NeedsIdentityDelivery(ln) {
+			out[i] = strings.TrimSpace(ln)
+			continue
+		}
+		idx = append(idx, i)
 	}
 	var solve func([]int) error
 	solve = func(idxs []int) error {
@@ -412,8 +422,40 @@ func chatImageLegsWithin(lines []string, translate chatImageLegTranslate, budget
 	return out, points, nil
 }
 
+// pinChatImageIdentityLines 把「非语言行」（数字/金额/日期/符号/箭头）的译位硬钉回原文。
+//
+// ★ 2026-10-21 UAT 收口 M9：快路径（整段那一枪就对齐了行数）**不等于**每一行都对——
+// 模型完全可能把 `<` 译成 "and"、把 `⇅` 译成一句话，而行数照样等于 len(lines)，
+// 于是「已对齐」这一档一路放行，英文单词盖住图标。三条口径：
+//
+//	① 判据与文件主链同一个入口（engine.NeedsIdentityDelivery），不许在这里另写一份"什么算符号"；
+//	② 只改这些位置——模型对无字母行的输出只可能是噪声，原文才是唯一正确交付；
+//	③ 行数对不上时**原样返回**：对齐本身由 chatImageLinePairs 判（它才是行数契约的守卫），
+//	   这里不替它做决定，免得把"对不上"悄悄修成"看起来对上了"。
+func pinChatImageIdentityLines(lines []string, translated string) string {
+	tr := chatImageLinesOf(translated)
+	if len(tr) != len(lines) {
+		return translated
+	}
+	changed := false
+	for i, ln := range lines {
+		if !engine.NeedsIdentityDelivery(ln) {
+			continue
+		}
+		want := strings.TrimSpace(ln)
+		if tr[i] != want {
+			tr[i] = want
+			changed = true
+		}
+	}
+	if !changed {
+		return translated
+	}
+	return strings.Join(tr, "\n")
+}
+
 // alignChatImageTranslations 把每个目标语种的译文对齐到 OCR 行：
-// 已对齐的语种原样保留（零额外调用）；对不上的语种走 chatImageLegs 重译。
+// 已对齐的语种原样保留（零额外调用，但非语言行仍要钉回原文）；对不上的语种走 chatImageLegs 重译。
 // translate(lang, text) 由调用方注入（生产＝Engine.HandleText，测试＝假函数）。
 // 返回对齐后的新 map、发生重译的语种、附加积分、首个错误（某语种失败不拖累其他语种）。
 func alignChatImageTranslations(lines []string, targets []string, got map[string]string,
@@ -428,6 +470,9 @@ func alignChatImageTranslations(lines []string, targets []string, got map[string
 	var firstErr error
 	for _, lang := range targets {
 		if strings.TrimSpace(out[lang]) != "" && len(chatImageLinesOf(out[lang])) == len(lines) {
+			// ★ 快路径也要过一遍「非语言行钉回原文」：行数对齐不等于逐行正确，
+			//   模型对 `<`/`1` 的输出只可能是噪声（详见 pinChatImageIdentityLines）。
+			out[lang] = pinChatImageIdentityLines(lines, out[lang])
 			continue
 		}
 		legs, p, err := chatImageLegsWithin(lines, func(text string) (string, int64, error) {

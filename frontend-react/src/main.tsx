@@ -54,6 +54,10 @@ import { ToastProvider } from './ui/langcross/src'
 import ToastBridge from './components/ToastBridge'
 // DialogHost：confirmDialog / promptText 等命令式弹窗的挂载点（取代 TDesign Dialog 调用）
 import { DialogHost } from './components/uiDialogs'
+// ★ 2026-10-21 IAM 重做 P0-8：全局强制改密闸门（监听 api/core 派发的 lc:force-password）。
+// 必须挂在 ToastProvider 内（要用 toast），且与 App/PublicRoot 的选路无关——
+// 428 可能发生在任何一条已登录路径上，改密框不能只在登录屏存在。
+import ForcePasswordGate from './components/ForcePasswordGate'
 // ★ 2026-10-13 链路批④（#29）：懒加载分片取不到时的「自动补一次整页重载」恢复腿。
 // 必须在 createRoot **之前**装：它监听的是 Vite 的 window 事件，与 React 挂载无关，
 // 而 CSS 预载失败那一族根本不会走到渲染期（只有这个事件看得见）。
@@ -168,6 +172,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       <ToastProvider>
         <ToastBridge />
         <DialogHost />
+        <ForcePasswordGate />
         {/* Suspense 只等**入口分片**（PublicRoot 或 App）：它的 fallback 与 index.html 的
             首屏骨架同貌，且必须非空——见 BootLoading 文件头（哨兵判据）。 */}
         <React.Suspense fallback={<BootLoading />}>

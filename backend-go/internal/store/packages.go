@@ -398,9 +398,10 @@ func saveTenantPermsTx(tx *sql.Tx, tid int64, perms *tenant.Perms) error {
 //   - paid（付费包）：设置订阅包编码/到期时间（DurationDays>0 时计算 PackageExpires），并发放包内含句数
 //   - increment（增量包）：在现有句数余额上追加包内含句数（不改订阅状态与到期）
 //
-// ★ Token 计费主线：发放句数的同时，按换算率（estimate_tokens_per_sentence，默认 500）
-// 折算为等值 token 充入租户余额账户——余额与扣费的唯一底层单位是 token，
-// 句数字段仅作订阅身份与展示镜像。
+// ★ Token 计费主线：发放的同时按**目录承诺**（PackageTokenAmount）折算为等值 token
+// 充入租户余额账户——余额与扣费的唯一底层单位是 token，句数字段仅作订阅身份与展示镜像。
+// ★ 2026-10-21 M3：折算口径与下单口径（CreatePackageOrder）共用 PackageTokenAmount 一个出口；
+// 别再按 pkg.Sentences×折算率在这里手算（那是「目录承诺 1000 积分、实发 0」的根因）。
 //
 // 参数：tid=租户 ID，pkg=商业包对象；返回发放后的句数余额（镜像值）。
 //
@@ -436,27 +437,13 @@ func (s *Store) GrantPackageSentences(tid int64, pkg *Package) (int64, error) {
 	if err := saveTenantPermsTx(tx, tid, perms); err != nil {
 		return 0, err
 	}
-	// ★ 句数折算 token 入账（句包外壳→token 底层的唯一兑换点）
-	if granted > 0 {
-		rate := s.TokenSentenceRate()
-		// ★ 与扣费侧同单位：句数×折算率×成本均摊系数 markup（billing.go:611 同口径），
-		// 否则免费/体验包 token 入账不含 markup，破坏「1 入账=1 扣费」一致性。
-		if tokens := int64(float64(granted*rate) * s.MarkupMultiplier()); tokens > 0 {
-			// 事务内先确保余额账户行存在（等价 Charge 的 EnsureBalance 语义），
-			// 再原子累加——避免账户行缺失时 UPDATE 影响 0 行导致 token 静默丢失。
-			if _, err := db.Exec(tx, db.CurrentDialect(),
-				"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
-				tid, time.Now().Format(time.RFC3339)); err != nil {
-				return 0, err
-			}
-			if _, err := db.Exec(tx, db.CurrentDialect(),
-				"UPDATE balance_accounts SET balance=balance+?, updated_at=? WHERE tenant_id=?",
-				tokens, time.Now().Format(time.RFC3339), tid); err != nil {
-				return 0, err
-			}
-			// ★ P1 多实例闭环：包折算 token 入账通知影子失效
-			notifyTenantBalanceChanged(tid)
-		}
+	// ★ 2026-10-21 UAT 收口 M3：入账口径改「目录承诺」唯一事实源（PackageTokenAmount）：
+	//   积分包（points>0）= 积分×汇率；存量句数包 = 句数×折算率×markup。
+	//   旧实现按 granted（=pkg.Sentences）×折算率×markup 二次折算，于是 points>0 而
+	//   sentences=0 的免费体验包会「领取成功、到账 0 积分」——目录承诺与实发两把尺子（UAT 24B3）。
+	//   入账动作收在 creditTokensTx 单点，凡是「按包发放」都走它，禁止再各自手算换算。
+	if err := s.creditTokensTx(tx, tid, s.PackageTokenAmount(pkg)); err != nil {
+		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, err

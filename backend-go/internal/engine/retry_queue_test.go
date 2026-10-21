@@ -1,7 +1,7 @@
 // translateLangsConcurrent 轮次化重试队列测试（2026-09-09 可靠性改造回归）：
 //   - 失败语言排队尾重试、最多尝试 maxAttempts 次
 //   - 成功语言只调用一次
-//   - 3 次仍失败则输出置空（由上层漏译率硬闸兜底）
+//   - 默认 5 次仍失败则输出置空（由上层漏译率硬闸兜底）
 //   - 上下文取消立即退出、不再重试
 package engine
 
@@ -127,5 +127,31 @@ func TestTranslateRetryQueueSkipsExistingOut(t *testing.T) {
 	}
 	if out["ru"] != "已有译文" {
 		t.Fatalf("已翻译语言输出不应被覆盖，实际 %q", out["ru"])
+	}
+}
+
+// TestTranslateRetryQueueDefaultAttemptsFive 生产默认档必须重试 5 次
+// （★ 2026-10-21 用户令：所有翻译统一重试 5 次）。
+func TestTranslateRetryQueueDefaultAttemptsFive(t *testing.T) {
+	calls := 0
+	var mu sync.Mutex
+	e := &Engine{
+		singleLangFn: func(_ context.Context, _ string, _ string, _ []*kb.Row, _, _ string) (string, error) {
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			return "", errors.New("boom")
+		},
+		retrySleep: time.Millisecond,
+	}
+	out := map[string]string{}
+	e.translateLangsConcurrent(context.Background(), "你好", []string{"ar"}, nil, out, "zh", "ai_initial")
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 5 {
+		t.Fatalf("生产默认档应尝试 5 次，实际 %d", calls)
+	}
+	if out["ar"] != "" {
+		t.Fatalf("5 次失败后输出应为空，实际 %q", out["ar"])
 	}
 }

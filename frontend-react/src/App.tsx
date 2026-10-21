@@ -31,6 +31,8 @@ applyTheme()
 // useBranding 已随左栏/移动顶栏迁进 components/frontshell（品牌位是那两件在读）
 import { BrandingProvider } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
+// ★ 2026-10-21 IAM P1-7：登录面收成唯一调用点（PublicRoot 那一棵树用同一个组件，见其文件头口径①）
+import { LoginFace } from './components/LoginFace'
 // ★ 2026-10-17 批 B：把 react-router 的 location/navigate 灌进 NavCtx（公开面走 PublicRoot 不挂 router，
 //   那些共用组件改读 NavCtx，见 lib/nav.ts）。本文件是**唯一**允许引 navRouter 的地方。
 import { RouterNavBridge } from './lib/navRouter'
@@ -78,7 +80,7 @@ import { intlLocale } from './lib/format'
 })()
 
 // ---- 懒加载页面组件（路由级代码分割） ----
-const Login = lazy(() => import('./components/Login'))
+// 登录屏不在这里懒加载：它已收进 components/LoginFace（与 PublicRoot 共用同一份分片）
 // ★ S5 官网落地页（未登录 /）
 const Landing = lazy(() => import('./components/Landing'))
 // 公开定价页（/pricing，设计图 05；营销门面，未登录可直达）
@@ -451,7 +453,8 @@ function FrontShell() {
 // 三棵互斥子树），路由表只存在于 FrontShell 内部。因此本组件每次渲染都重新读 location 判定，
 // 各分支自带 Suspense，缺一条路由不会 404，只会落到下面的兜底分支。
 function Root() {
-  const { user, restoring, onLogin } = useAuth()
+  // onLogin 已随登录面收进 LoginFace（本组件不再直接消费它）
+  const { user, restoring } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
   const path = location.pathname
@@ -533,18 +536,10 @@ function Root() {
       )
     }
     // 未登录兜底：非营销路径一律出登录页。/admin 前缀以 admin 态出——Login 内部会拦掉
-    // 非租管账号，并关掉注册等前台专属流程；onLogin 再补一次角色校验，不够格立即弹回工作台
-    return (
-      <PublicShell auth>
-        <RouteBoundary>
-          <Suspense fallback={<PageLoading />}>
-            <Login mode={path.startsWith('/admin') ? 'admin' : 'home'} onLogin={(u) => { onLogin(u); if (path.startsWith('/admin') && roleLevelSafe(u.role) < 2) navigate('/') }} />
-            {/* ★ autosales：挂件内部对 /login、/register 自隐藏，其余未登录路径仍可接待 */}
-            <AiAssist />
-          </Suspense>
-        </RouteBoundary>
-      </PublicShell>
-    )
+    // 非租管账号，并关掉注册等前台专属流程；onLogin 再补一次角色校验，不够格立即弹回工作台。
+    // ★ 2026-10-21 IAM P1-7：整块收进 LoginFace（PublicRoot 那棵树用同一个组件），
+    //   两处不再各写一份 mode/onLogin/挂件——改登录面只有这一个落点。
+    return <LoginFace path={path} fallback={<PageLoading />} />
   }
   // 后台路由守卫：/admin 只对租管及以上（roleLevelSafe>=2）开放，AdminDashboard 自身不再判权；
   // 不够格的登录用户走 else 分支——不渲染任何后台数据，只给一个返回首页的出口（Button 现为 LangCross 件）

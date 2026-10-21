@@ -260,12 +260,31 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	return out, nil
 }
 
-// ResetPassword 重置密码哈希。
-func (s *Store) ResetPassword(id, tid int64, passHash string) error {
+// ResetPassword 写口令并递增 token_version（★ B2 会话撤销：该用户全部已签发 JWT 立即失效）。
+//
+// ★ 2026-10-21 IAM 重做 P0-2：返回值从 `error` 改成 `(int64 受影响行数, error)`。
+//
+//	旧形态把 `UPDATE` 的结果整个丢掉，于是"一行都没改到"（id 与 tenant_id 不同源、
+//	账号已被删、平台上下文打租户行）在调用方眼里与"改成功了"完全同形，
+//	handler 照回 `{"success":true}` —— 用户看到"密码已重置"，下一次登录却吃 401。
+//	这正是 AGENTS §一·8② 点名的形态（0 行影响不是错误，所以必须由显式判据出）。
+//	⇒ 调用方**必须**两件事都做：写之前用 GetUser 做存在性前置（查不到 ⇒ 404，
+//	  租户隔离下不返 403、不泄露他租户存在性），写之后把 0 行判成失败。
+//	⚠️ 不许把"0 行"写进注释当契约（那等于把缺陷登记成设计）。
+func (s *Store) ResetPassword(id, tid int64, passHash string) (int64, error) {
 	now := time.Now().Format(time.RFC3339)
 	// ★ B2：改密同时递增 token_version——该用户全部已签发 JWT 立即失效（会话撤销）
-	_, err := s.execW("UPDATE users SET password_hash=?, token_version=token_version+1, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
-	return err
+	res, err := s.execW("UPDATE users SET password_hash=?, token_version=token_version+1, updated_at=? WHERE id=? AND tenant_id=?", passHash, now, id, tid)
+	if err != nil {
+		return 0, err
+	}
+	n, nerr := res.RowsAffected()
+	if nerr != nil {
+		// 驱动不回行数（个别方言/桩）时按"改到了"处理但把错误原样带出去，
+		// 由调用方的存在性前置那一腿保证不会把"没改到"写成成功。
+		return -1, nerr
+	}
+	return n, nil
 }
 
 // TouchLogin 记录最近登录时间（失败静默）。

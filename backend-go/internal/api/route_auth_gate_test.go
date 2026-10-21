@@ -53,6 +53,10 @@ var authGateHelpers = map[string]bool{
 	"scimGuard":              true, // SCIM v2：Bearer Token → 租户配置（未过即 401 并返回 nil）
 	"caddyAskAuthorized":     true, // Caddy on_demand ask：回环/CIDR 白名单，越权直接 403
 	"constantTimeTokenEqual": true, // 仓库内**唯一**的凭证常量时间比较原语（支付回调、告警入口内联验凭证）
+	// ★ IAM P0-10（2026-10-21）：跨包凭证校验。登出只需要 claims、不需要用户行，
+	// 因此走 iam.ClaimsOf（BearerToken+Verify 的唯一组合出口），而不是 s.authUser。
+	// 扫描器把跨包选择子记成 "包名.函数名"，这条只认那一个字面组合，不认任何同名本地函数。
+	"auth.ClaimsOf": true,
 }
 
 // authGateHardGuards 是 authGateHelpers 的子集：**调用即代表这条请求会被中断**（401/403 或返回错误）
@@ -303,8 +307,14 @@ func scanAuthGatePackage(dir string) ([]authGateRoute, map[string]map[string]boo
 					}
 					switch fn := ce.Fun.(type) {
 					case *ast.SelectorExpr: // s.foo(...) / pkg.Foo(...)
-						if sel, ok2 := fn.X.(*ast.Ident); ok2 && isServerReceiver(sel.Name) {
-							calls[fn.Sel.Name] = true
+						if sel, ok2 := fn.X.(*ast.Ident); ok2 {
+							if isServerReceiver(sel.Name) {
+								calls[fn.Sel.Name] = true
+							} else {
+								// 跨包凭证校验（如 auth.ClaimsOf）必须保留包名，
+								// 否则与包内同名函数混成一条，闸门要么误放行要么误判。
+								calls[sel.Name+"."+fn.Sel.Name] = true
+							}
 						}
 					case *ast.Ident: // 包内裸函数调用
 						calls[fn.Name] = true

@@ -26,6 +26,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/billing"
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -106,26 +107,33 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
 		return
 	}
-	// 字段去首尾空白
-	req.Username = strings.TrimSpace(req.Username)
-	req.Password = strings.TrimSpace(req.Password)
+	// 字段归一化（★ 2026-10-21 IAM 重做 P0-1：账号与邮箱只走 auth 那一把尺子）
+	// ⚠️ **口令刻意不再 trim**：旧形态这里把密码 TrimSpace 后入库，而登录原样比对
+	//   （auth.go:79 的解码不改内容）⇒ "带首尾空格的密码注册进得去、登录登不进"，
+	//   正是运营者报的第 1 条的一半根因。空格是口令的一部分，两个口子不许各削一刀。
+	//   存量影响＝零：老账号存的是 trim 后的值，用户平时输入的也是 trim 后的值。
+	req.Username = auth.NormalizeAccount(req.Username)
+	// 邮箱归一化必须在"必填 / 一次性域名黑名单 / 全局唯一 / 验码"这四腿**之前**做完，
+	// 否则四腿各读一份原值，`Foo@X.com` 与 `foo@x.com` 会在不同腿上给出不同答案。
+	req.Email = auth.NormalizeEmail(req.Email)
+	req.EmailCode = strings.TrimSpace(req.EmailCode)
 	req.Code = strings.TrimSpace(req.Code)
 	req.Name = strings.TrimSpace(req.Name)
 	req.BrandName = strings.TrimSpace(req.BrandName)
 	req.BrandNameEn = strings.TrimSpace(req.BrandNameEn)
 	// 基础校验：用户名密码必填
 	if req.Username == "" || req.Password == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户名和密码不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户名和密码不能为空"))
 		return
 	}
-	// 密码强度：至少 6 位
-	if len(req.Password) < 6 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "密码至少 6 位"})
+	// 密码强度：走 iam 那把唯一尺子（★ P0-3；文案逐字沿用「密码至少 6 位」，catalog_en 词条已在位）
+	if !auth.ValidatePassword(req.Password) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
 		return
 	}
 	// 协议同意校验：注册必须勾选同意《用户协议》与《隐私协议》
 	if !req.Agreed {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请阅读并同意《用户协议》与《隐私协议》"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请阅读并同意《用户协议》与《隐私协议》"))
 		return
 	}
 
@@ -133,7 +141,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   旧键 trial_tokens / trial_sentences 已完全移除；句数镜像由 token÷折算率换算。
 	defaultKey := "" // 新租户默认 API Key（明文，仅注册响应返回一次）
 	// ★ C6（2026-09-12）：默认值单一来源（ops.DefaultEffective），读取点收敛到 trialConfig
-	trialTokens, trialDays := s.trialConfig()
+	// ★ 2026-10-21 M3：发放天数由 autoGrantUserTrial 内部再取同一口径，这里只用于句数镜像。
+	trialTokens, _ := s.trialConfig()
 	// 体验额度句数镜像（展示用）：token ÷ 句↔token 折算率
 	trialSentences := int64(0)
 	if rate := s.Store.TokenSentenceRate(); rate > 0 {
@@ -152,17 +161,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱为必填项"})
 		return
 	}
-	// 邮箱全局唯一（他人已绑定则拒绝）
-	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与换绑邮箱那两处
-	//   （handleSendEmailCode / handleUpdateEmail 回 409 CONFLICT）**同一句文案两个码**——
-	//   前端/SDK 按 code 分支时，同一种失败要写两条判断，且日志聚合会把它们当成两类问题。
-	//   语义上这是「与库里既有记录撞车」而不是「请求写错了」（载荷完全合法，换个邮箱就好），
-	//   故统一成 409。状态码从 400 换 409 不改变前端行为：两个码都是非 2xx，
-	//   request() 一律抛 ApiError 并把 body.message 落到红字（Login.tsx 的 catch 分支）。
-	if other, oerr := s.Store.GetUserByEmail(strings.TrimSpace(req.Email)); oerr == nil && other != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
-		return
-	}
+	// 邮箱全局唯一（他人已绑定则拒绝）——★ 2026-10-21 P0-9：这一腿**已挪到"验码＋人机"之后**，
+	// 判据本体见下方 `该邮箱已被其他账号绑定` 那一段的注释（防枚举：先证明邮箱归你，才告诉你它被占用）。
 	// 邮箱验证开关（email_verify_enabled=1）：自助注册必须先验证邮箱归属（受邀加入不受影响）
 	verifyOn := false
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
@@ -182,6 +182,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
 		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
 		s.writeAuthzError(w, r, err)
+		return
+	}
+	// 邮箱全局唯一（他人已绑定则拒绝）
+	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与换绑邮箱那两处
+	//   （handleSendEmailCode / handleUpdateEmail 回 409 CONFLICT）**同一句文案两个码**——
+	//   前端/SDK 按 code 分支时，同一种失败要写两条判断，且日志聚合会把它们当成两类问题。
+	//   语义上这是「与库里既有记录撞车」而不是「请求写错了」（载荷完全合法，换个邮箱就好），
+	//   故统一成 409。状态码从 400 换 409 不改变前端行为：两个码都是非 2xx，
+	//   request() 一律抛 ApiError 并把 body.message 落到红字（Login.tsx 的 catch 分支）。
+	// ★ 2026-10-21 IAM 重做 P0-9（防枚举）：这一腿**从"必填邮箱"处挪到了"验码＋人机"之后**。
+	//   旧顺序让任何人**不带任何凭证**打一次注册就能读出"这个邮箱是不是我们的客户"，
+	//   而找回密码那条链为此刻意做了恒真文案——两条链一把防枚举一把裸奔，等于没有。
+	//   现在要先证明邮箱归你（收件箱里那条码）并过人机，才知道它被占用；
+	//   代价是"邮箱已被占用"的人白等一封验证码邮件（可接受：他本来就要去登录或换邮箱）。
+	//   ⚠️ 残余风险要如实说：`email_verify_enabled=0` 且 `captcha_provider=none` 时这一腿仍然可被枚举
+	//   ——那是**部署档位**的取舍（《部署指南》§生产档位明写生产应开邮箱验证），不在代码里替他兜。
+	if other, oerr := s.Store.GetUserByEmail(req.Email); oerr == nil && other != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
 		return
 	}
 	// ★ 注册类型（个人用户 / 企业用户）：
@@ -384,15 +402,6 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			_ = s.Ten.SetIndustry(inviteTenantID, industryPkg.Code)
 		}
 		_ = s.Store.EnsureBalance(inviteTenantID)
-		if trialTokens > 0 {
-			if gerr := s.Store.CreateQuotaGrant(inviteTenantID, "trial", trialTokens, time.Now().Add(time.Duration(trialDays)*24*time.Hour), "register", 0); gerr != nil {
-				_ = s.Store.Charge(inviteTenantID, trialTokens) // 台账失败兜底旧通道
-			}
-		}
-		// ★ F-81 坐实点：额度已经真发出去了，这一格从此不再退（defer 的 release 变空转）。
-		// 为什么在这里而不是等 HTTP 200：被薅的是额度——账号写入那一步若失败而租户与额度已建好，
-		// 这一笔照样要算数，否则「每次失败就重新领一份」正是刷号脚本的形态。
-		regTicket.markSpent()
 	} else {
 		// 受邀加入已有租户：返回被加入租户信息
 		if t, err := s.Ten.GetByID(inviteTenantID); err == nil {
@@ -432,6 +441,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
 	}
+	// ★ F-81 坐实点：账号已经建成，这一格从此不再退（额度发放失败由登录路径补发）。
+	if regTicket != nil {
+		regTicket.markSpent()
+	}
+	// ★ 2026-10-21 M3：账号级体验额度自动发放（一个账号仅一次；受邀加入的成员也算新账号）。
+	s.autoGrantUserTrial(r.Context(), nu)
 	// 记录协议签署时间（注册勾选即视为同意《用户协议》与《隐私协议》，给后台超管「协议签署」tab 留痕）
 	if req.Agreed {
 		now := time.Now().Format(time.RFC3339)
@@ -588,6 +603,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 新租户默认 API Key：明文仅此一次随注册响应返回（受邀加入为空串）
 	if defaultKey != "" {
 		regResp["api_key"] = defaultKey
+	}
+	// ★ 2026-10-21 IAM 重做 P0-4（注册即登录）：注册成功后**由服务端直接签发会话**，
+	//   与登录走同一个 auth.Sign（同一把尺子：24 h、同一 claims 形状、同一 token_version 语义）。
+	//   旧形态注册只回 success，前端再拿刚填的账号密码回 `/api/auth/login` 补登一次（Login.tsx:305），
+	//   而那次补登当时**只认用户名**、注册填的却是邮箱 ⇒ 结构上必失败；失败原因又写在
+	//   另一屏的报错位上（error 槽只在登录屏渲染）⇒ 用户只看到"注册成功，然后什么都没发生"。
+	// ⚠️ 签发失败**不许把注册判成失败**：账号已建、额度已发，回一个 5xx 会把"注册成功"
+	//   抹成"注册失败"，用户再点一次就撞"该租户下用户名已存在"（register.go:328 那条闸）。
+	//   所以这里只出一行 WARN、少发一个字段，前端自然回落到"请你去登录"。
+	if tok, serr := auth.Sign(nu, 24*time.Hour); serr == nil {
+		regResp["token"] = tok
+	} else {
+		observability.Warn(r.Context(), "注册成功但会话签发失败（用户需自行登录）", "uid", nu.ID, "err", serr.Error())
 	}
 	writeJSON(w, 200, regResp)
 }

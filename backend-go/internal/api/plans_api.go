@@ -234,16 +234,13 @@ func (s *Server) handlePackageSubscribe(w http.ResponseWriter, r *http.Request) 
 		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "套餐不存在或已下架"))
 		return
 	}
-	// 免费体验包不走支付：直接发放
+	// 免费体验包不走支付：额度由注册/首登自动发放，手动领取入口一律拒绝。
+	// ★ 2026-10-21 M3 用户令：所有新用户自动获取，一个账号仅一次，不需要手动领。
+	//   旧形态（本条上一批）在领取时实发 1000 积分，反而让同一账号可反复领取；
+	//   现在这里只回 409，余额与订阅身份一分不动。
 	if pkg.PType == store.PackageFree {
-		if _, err := s.Store.GrantPackageSentences(tid, pkg); err != nil {
-			observability.Error(r.Context(), "免费包发放失败", "code", pkg.Code, "err", err)
-			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：发放失败是本进程存储故障
-			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, store.DebriefDBError(err)))
-			return
-		}
-		s.Store.LogAudit(tid, u.ID, "package_free_claim", "packages", pkg.Code)
-		writeJSON(w, 200, map[string]interface{}{"success": true, "message": "免费体验句数已发放"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict,
+			"免费体验额度已在新用户注册时自动发放，无需重复领取"))
 		return
 	}
 	// 付费包/增量包：创建订单（含 package_id 与售价），按支付模式走不同渠道

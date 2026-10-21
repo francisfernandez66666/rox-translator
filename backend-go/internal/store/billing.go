@@ -1456,7 +1456,6 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		orderID, tid).Scan(&tokens, &pkgID, &createdBy, &money, &upgradeFrom); err != nil {
 		return &errTxt{"订单不存在"}
 	}
-	sentenceRate := s.TokenSentenceRate()
 	pkgTokens := int64(0)
 	pType := ""
 	pkgSentences := int64(0)
@@ -1471,12 +1470,13 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		pkgSentences = p.Sentences
 		pkgCode = p.Code
 		pkgDays = p.DurationDays
-		// ★ token 口径：实际入账 token 数一律以订单 amount_tokens（下单时由句数一次性折算/迁移回填）为准，
-		// 不再以 pkgSentences*sentenceRate 在发放路径二次折算。句数仅用于 SentenceBalance 展示镜像。
+		// ★ token 口径：实际入账 token 数一律以订单 amount_tokens（下单时由 PackageTokenAmount 折算）为准，
+		// 不在发放路径二次折算。句数仅用于 SentenceBalance 展示镜像。
 		pkgTokens = tokens
 		if pkgTokens == 0 {
-			// 兜底：存量未回填订单，按句数×折算率×均摊系数（与新建订单一致口径）发放
-			pkgTokens = int64(float64(pkgSentences*s.TokenSentenceRate()) * s.MarkupMultiplier())
+			// 兜底：存量未回填订单，按**目录承诺**（积分包 points×汇率 / 句数包 sentences×率×markup）
+			// 发放——与 CreatePackageOrder 同一个出口（★ 2026-10-21 M3）。
+			pkgTokens = s.PackageTokenAmount(p)
 		}
 	}
 	// 应收金额转分：套餐单取包售价，纯充值单按尺子价（分/百万 token）兜底
@@ -1643,11 +1643,9 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 		// ★ C9（2026-09-12）：入账一律取订单 amount_tokens（下单为唯一事实源，
 		//   与「token 口径」整改一致）；旧实现 pkgSentences×rate 二次折算，
 		//   无 markup、与前端展示的下单量脱钩，造成账实不符。
-		cashTokens := pkgTokens
-		if cashTokens == 0 {
-			cashTokens = pkgSentences * sentenceRate // 存量未回填订单兜底（与订阅分支同口径）
-		}
-		if cerr := chargePermanentTx(tx, tid, cashTokens); cerr != nil {
+		// ★ 2026-10-21 M3：未回填订单的兜底已前移到预读段（PackageTokenAmount），
+		//   这里不再手算第二份——否则 points>0 的免费/体验包又会落到「句数×率」那把旧尺子上。
+		if cerr := chargePermanentTx(tx, tid, pkgTokens); cerr != nil {
 			return cerr
 		}
 	}

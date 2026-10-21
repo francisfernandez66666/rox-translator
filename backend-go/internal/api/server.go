@@ -305,6 +305,8 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/reset-password", s.handleResetPassword)
 	s.mux.HandleFunc("/api/auth/email-code", s.handleEmailCode)
 	s.mux.HandleFunc("/api/auth/register-config", s.handleRegisterConfig)
+	// ★ IAM P0-10（2026-10-21）：登出真撤销（jti 名单，见 auth_logout.go）
+	s.mux.HandleFunc("/api/auth/logout", s.handleLogout)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)
@@ -581,8 +583,13 @@ func (s *Server) routesOpenAPI() {
 // ★ withAuthMemo 在 withLang 之外侧：ctx 只能由内向外传，放最外层保证内层每一层
 //
 //	（require* → authUser）都摸得到同一份请求级缓存（★ 2026-10-11 慢 SQL 批 P1①）。
+//
+// ★ withPasswordGate（IAM P0-9）包在 mux 之外、其余中间件之内：它必须是**唯一**
+//
+//	覆盖全路由的强制改密闸（见 auth_password_gate.go 文件头"为什么不在 authUser 里判"），
+//	同时又要排在 CORS 预检、体限、访问日志之后，428 才与普通业务响应同形可筛。
 func (s *Server) Handler() http.Handler {
-	return s.withAuthMemo(s.withLang(s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.mux)))))))))
+	return s.withAuthMemo(s.withLang(s.withAPIVersion(s.withTraceID(s.withMetrics(s.withTenant(s.withCORS(s.withBodyLimit(s.withAccessLog(s.withPasswordGate(s.mux))))))))))
 }
 
 // apiVersionKey ctx 存取键：当前请求命中的 API 版本（默认 v1）。
@@ -843,6 +850,12 @@ func (s *Server) authUserUncached(r *http.Request) *store.User {
 	}
 	// ★ B2 会话撤销：JWT 携带的版本号与库内不一致（改密/重置后已递增）→ 旧 token 作废
 	if claims.TokenVersion != u.TokenVersion {
+		return nil
+	}
+	// ★ IAM P0-10（2026-10-21）单条撤销：登出把 jti 写进名单（TTL=剩余有效期）。
+	// 与上面那条 token_version 的分工：这一条只作废被登出的**那一条** token，
+	// 同一账号在别的设备上的会话不受影响；改密/重置仍走 token_version 全端撤销。
+	if jwtRevoked(claims.JTI) {
 		return nil
 	}
 	return u

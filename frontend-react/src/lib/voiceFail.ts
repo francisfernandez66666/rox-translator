@@ -25,6 +25,7 @@ import { VoiceError } from '@/api/chatVoice'
 export const VOICE_FAIL_KEYS = [
   'chat.voiceLangUnavailable',
   'chat.voiceTooLong',
+  'chat.voiceTimeout',
   'chat.voiceUnavailable',
 ] as const
 
@@ -45,6 +46,9 @@ export function voiceFailText(err: unknown): string {
     // 译文超过单次朗读上限：可行动作是「分段」，与「服务器暂时用不了」是两件事。
     case 'too_long':
       return t('chat.voiceTooLong')
+    // 合成超时：客户动作是「稍后重试」，与「服务器没这项能力」必须分开说。
+    case 'timeout':
+      return t('chat.voiceTimeout')
     // capability_missing（服务器未装依赖/未投放模型）／empty／failed／拿不到档位：
     // 一律归到「暂时用不了」——这三档的共同点是**客户自己做不了什么**，
     // 所以文案只许是"没有声音"这一件事，不许出现堆栈、路径、依赖名。

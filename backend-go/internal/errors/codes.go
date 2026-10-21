@@ -61,6 +61,12 @@ const (
 	// 报 500 会让客户以为「我这次充值是不是失败了、要不要再按一次」——那是重单风险的来源。
 	// 为什么不是 400：载荷没错，错在平台收款能力当前不可用。
 	ErrPayChannelUnavailable ErrorCode = "PAY_CHANNEL_UNAVAILABLE"
+	// ErrPasswordChangeRequired ★ IAM P0-9（2026-10-21）：账号处于「首登强制改密」状态
+	// （users.must_change_pwd=1，Excel 批量导入号即由此产生），除改密/登出/自身信息外
+	// 的接口一律拒绝。映射 428 Precondition Required：请求本身合法、凭证也有效，
+	// 但**调用时机的前置条件没满足**——用 401 会被前端当成"登录过期"清态回登录页，
+	// 用 403 会被读成"没权限"（客户随后去找管理员要权限），两者都把客户带向错误动作。
+	ErrPasswordChangeRequired ErrorCode = "PASSWORD_CHANGE_REQUIRED"
 )
 
 // 业务级错误码
@@ -261,6 +267,12 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusServiceUnavailable
 	case ErrInsufficientBalance:
 		return http.StatusPaymentRequired
+	case ErrPasswordChangeRequired:
+		// ★ IAM P0-9（2026-10-21）：428 Precondition Required。
+		// 唯一不选 401/403 的理由是前端的既有分诊：401 会触发 core.ts 的"登录过期"清态
+		// （把客户直接踢回登录页，而他刚刚才登录成功），403 会被读成权限不足。
+		// 428 在业务语义上正是「凭证有效、但必须先完成改密这一前置动作」。
+		return http.StatusPreconditionRequired
 	case ErrInternal, ErrTranslationFailed, ErrModelUnreachable, ErrCircuitBreakerOpen, ErrQuotaReserved:
 		return http.StatusInternalServerError
 	default:

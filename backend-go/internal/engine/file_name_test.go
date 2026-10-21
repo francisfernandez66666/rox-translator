@@ -125,6 +125,10 @@ func TestResolveTranslatedBaseNameBlocksPromptResidue(t *testing.T) {
 		{"单行但原样含整个原名", "产品方案书_v5.1", "TranslatedEN(产品方案书_v5.1)"},
 		{"原样含原名且有尾随说明", "产品方案书_v5.1", "产品方案书_v5.1 （如需改请联系管理员）"},
 		{"回车符同样拦", "报告Q3", "a\r\nb"},
+		// ★ 2026-10-21（UAT 收口 M1）：模型回绝整句被当成文件名（现网五件交付物同名）
+		{"拒译话术当名字", "产品方案书_v5.1", "I am unable to provide the translation you requested"},
+		{"拒译话术（中文）", "报价单", "抱歉，我无法提供您要求的翻译"},
+		{"长度异常且与原名零交集", "报价单", "Here is the translated file name exactly as you requested, sir"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

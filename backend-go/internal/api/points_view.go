@@ -110,6 +110,12 @@ func (s *Server) ticketJSON(t *store.Ticket) map[string]interface{} {
 	}
 	delete(m, "tokens_billed")
 	m["points_billed"] = s.Store.PointsFromTokens(t.TokensBilled)
+	// ★ 2026-10-21 UAT 收口 M2：交付注记出栈（唯一出参口，详情/列表/审批台共用这一个 map）。
+	//   空值必须出 [] 不出 null——前端直接读 .length 渲染横幅，null 会把它打成白屏；
+	//   键名 `degraded_langs` 与引擎结果字段、TS 类型、渲染判据三面逐字相同（锁见
+	//   frontend-react/src/api/ticketsDegradedLock.test.ts）。
+	m["degraded_langs"] = store.DecodeTicketNotes(t.DegradedLangsJSON)
+	m["gate_warnings"] = store.DecodeTicketNotes(t.GateWarningsJSON)
 	return m
 }
 

@@ -29,7 +29,7 @@ const translationFailureMark = "[翻译失败]"
 
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。
 // 参数 src: 送翻的源文段；out: 候选译文（KB 命中值或模型返回，未经判定前的原始候选）。
-// 判不可用的八类，任一命中即 false：
+// 判不可用的九类，任一命中即 false：
 //  1. 空串 / 纯空白 —— 没有内容可言交付；
 //  2. 批量失败占位 [翻译失败] —— 上游明确报错的槽位；
 //  3. 与源文同文（去空白后逐字相等）—— 模型或 KB 原样回显 = 根本没翻（含 "#"/"1"/"•"
@@ -43,6 +43,8 @@ const translationFailureMark = "[翻译失败]"
 //     —— 见 nonLinguisticMustStayVerbatim（工单 T20261017234421W7H：整排 "and"）；
 //  7. ★ 同批：源段是实义词，译文却整体退化成一个孤立功能词 —— 见 degenerateToFunctionWord；
 //  8. ★ 同批：译文把源段逐字引号引用再另起一句解释 —— 见 quotedVerbatimSourceExplained。
+//  9. ★ 2026-10-21（UAT M1）：模型整段回绝/答非所问（"I am unable to provide the translation
+//     you requested"）—— 见 refusalResidue。命中后该段回落原文交付并出声（GateWarnings）。
 //
 // ★ 不能只判非空：这是本文件存在的理由，任何新增写入点都必须先过本函数。
 func IsTranslationUsable(src, out string) bool {
@@ -64,6 +66,12 @@ func IsTranslationUsable(src, out string) bool {
 		return !sourceHasTranslatableLetters(src)
 	}
 	if hasInstructionEcho(src, out) {
+		return false
+	}
+	// ★ 判据 9（2026-10-21 UAT 收口 M1）：模型「拒译/答非所问」——
+	//   现网五件交付物全叫 "I am unable to provide the translation you requested"，
+	//   旧八类判据逐条放行（详见本文件下方 refusalResidue 的注释）。
+	if refusalResidue(src, out) {
 		return false
 	}
 	if hasLengthExplosion(src, out) {
@@ -252,6 +260,17 @@ func missingSegments(texts []string, tr map[string]string) []string {
 //
 //	与文件主链的预填交付（NeedsIdentityDelivery，让这些段根本不进上游）。
 func segmentNeedsTranslation(src string) bool {
+	// ★ 2026-10-21 UAT 收口 M9：先把「整行根本不是文字」这一档显式挡掉，判据收在
+	//   `symbol_lines.go` 的唯一一把尺子上（IsSymbolOnlyLine：任何书写体系的字母都没有）。
+	//   与下面按字符类别扫的结果等价（无字母 ⇒ 不会命中任何一个 true 分支），这样写是为了：
+	//     ① 让共享常量表（graphicSymbolRunes/contentSymbolRunes）有一个真正的消费点，
+	//        Python 侧的回填门与它同源，而不是各写一份「什么算符号」；
+	//     ② 给未来加「图形符号整行剔除」的调用方一个可读的入口，不必再自己数码位。
+	//   反证：把这一行改成 `if false` 必须**没有**任何既有断言变红（行为等价），
+	//   而新增的符号表等值锁与回填门静态锁仍各自红在它该红的地方。
+	if IsSymbolOnlyLine(src) {
+		return false
+	}
 	asciiRun := 0
 	for _, r := range strings.TrimSpace(src) {
 		switch {
@@ -398,6 +417,148 @@ func letterishCount(s string) int {
 		}
 	}
 	return n
+}
+
+// ============ 2026-10-21（UAT 收口 M1）：拒译/答非所问的判据 ============
+// 现网实证（发布前 E2E UAT 20261020，工单 07M5/07M4）：模型对整份文件只回一句
+// "I am unable to provide the translation you requested"，旧八类判据逐条放行
+// （非空、与源文不同文、不含凭空尖括号、长度不爆炸、源文是语言段、译文不是功能词、
+// 也没有引号引用源文）⇒ 这句回绝同时进了**译文正文**与**产物文件名**（五件交付物同名）。
+//
+// 判据取向与 hasInstructionEcho 一致：**结构不变量优先，词表只作第一道快筛**——合法译文
+// 不会在源文完全没有"翻译"字样的情况下，同时出现【回绝措辞】与【翻译二字】。
+//
+//	① paired 结构：译文含回绝措辞 且 含"翻译/translat" 且 **源文两者都没有**；
+//	② n-gram 兜底：译文很短（≤260 rune）且 ≥60% 的 4-gram 落在回绝语料里，
+//	   专治回绝话术换措辞（"I'm sorry, but I can't help with that translation"）。
+//
+// ★ 反向保护（防误杀正译）：源文自己就含回绝措辞或"翻译"字样时一律不判——本仓自己的
+// 产品文档（"翻译服务不可用时…"）会被译成含 translat 的正常句子，不能当回绝拦掉。
+var refusalPhrases = []string{
+	// 英语：回绝某件事的固定说法（不收单独的 "sorry"——正常译文里出现它太常见）
+	"unable to provide", "cannot provide", "can't provide", "not able to provide",
+	"unable to translate", "cannot translate", "can't translate", "not able to translate",
+	"unable to assist", "cannot assist", "can't assist", "not able to assist",
+	"unable to comply", "cannot comply", "can't comply",
+	"as an ai language model", "as a language model",
+	"i'm sorry, but", "i am sorry, but", "i apologize, but",
+	// 中文：回绝/推脱的成对说法（不收裸"无法/抱歉"——它们在正常正文里太常见）
+	"无法提供", "不能提供", "无法翻译", "不能翻译", "无法完成", "不能完成",
+	"无法协助", "不能协助", "抱歉，", "很抱歉，", "对不起，",
+}
+
+// refusalTaskWords 判定"这段文本在谈翻译这件事"的词根。用词根而不是整词，
+// 让 translate/translation/translating/translations 只需要一条。
+var refusalTaskWords = []string{"translat", "翻译", "翻訳", "번역", "перевод", "traducc", "traduc", "übersetz", "ترجم"}
+
+// refusalCanonicalCorpus 回绝话术的**极窄**语料（只用来算字符 4-gram 覆盖率，
+// 不做逐句匹配）。每条都是现网/常见模型真实回绝的形态，改动这一份要同步看
+// TestIsTranslationUsableRejectsRefusalResidue 的正反腿。
+var refusalCanonicalCorpus = []string{
+	"i am unable to provide the translation you requested",
+	"i am unable to provide a translation for this content",
+	"i cannot provide a translation of this content",
+	"i cannot translate this text",
+	"i can't translate this text",
+	"i'm sorry, but i cannot help with that translation",
+	"i'm sorry, but i can't help with that translation",
+	"as an ai language model, i cannot translate this content",
+	"抱歉，我无法提供您要求的翻译",
+	"很抱歉，我无法完成这个翻译",
+	"无法提供这段文字的翻译",
+}
+
+// refusalGramSet 回绝语料的字符 4-gram 集合（包级初始化一次；语料是常量，无并发写）。
+var refusalGramSet = buildRefusalGramSet()
+
+// buildRefusalGramSet 把回绝语料拆成 4-gram 集合。用 rune 而不是 byte：
+// 中文一字 3 字节，按字节切片会把一个汉字劈成两半，覆盖率读数失去意义。
+func buildRefusalGramSet() map[string]bool {
+	set := map[string]bool{}
+	for _, line := range refusalCanonicalCorpus {
+		r := []rune(strings.ToLower(normalizeForCompare(line)))
+		for i := 0; i+refusalGramN <= len(r); i++ {
+			set[string(r[i:i+refusalGramN])] = true
+		}
+	}
+	return set
+}
+
+// refusalGramN 字符 n-gram 的长度。取 4：比 3 少误伤、比 5 更耐措辞微调。
+const refusalGramN = 4
+
+// refusalResidue 判据 9：候选译文是模型「拒译/答非所问」的一段话。
+func refusalResidue(src, out string) bool {
+	o := strings.ToLower(normalizeForCompare(out))
+	if o == "" {
+		return false
+	}
+	s := strings.ToLower(normalizeForCompare(src))
+	// ★ 源文自身就含回绝措辞或"翻译"词根 ⇒ 整条判据豁免（两条腿都豁免）：
+	//   合法译文完全可能照译一句"不能提供该服务"、也完全可能谈"翻译服务维护中"。
+	if sourceExemptFromRefusal(s) {
+		return false
+	}
+	if refusalPairedStructure(o) {
+		return true
+	}
+	return refusalNGramCovered(o)
+}
+
+// sourceExemptFromRefusal 源文本身是否谈到了「回绝」或「翻译」。
+// 两者任一出现 ⇒ 候选译文里的相关字样都是**照译**而不是回绝，必须放行。
+func sourceExemptFromRefusal(srcLower string) bool {
+	for _, w := range refusalTaskWords {
+		if strings.Contains(srcLower, w) {
+			return true
+		}
+	}
+	for _, p := range refusalPhrases {
+		if strings.Contains(srcLower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// refusalPairedStructure 判据 9①：回绝措辞 + "翻译"词根同时出现。
+// 参数 outLower 是**已小写、已折叠空白**的译文（源文豁免由 refusalResidue 先做）。
+func refusalPairedStructure(outLower string) bool {
+	hasTask := false
+	for _, w := range refusalTaskWords {
+		if strings.Contains(outLower, w) {
+			hasTask = true
+			break
+		}
+	}
+	if !hasTask {
+		return false
+	}
+	for _, p := range refusalPhrases {
+		if strings.Contains(outLower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// refusalNGramCovered 判据 9②：短译文里 ≥60% 的 4-gram 落在回绝语料里。
+// 长度上限 260 rune：回绝都是一两句话；放开上限会让一段很长、恰好谈"无法提供"的
+// 正常译文被覆盖率误判（长文里零星命中几个 gram 就会被稀释，反而不会误判，但上限
+// 同时也挡住了"拿一段长文包住回绝句"的逃逸，两个方向都更稳）。
+func refusalNGramCovered(outLower string) bool {
+	r := []rune(outLower)
+	if len(r) < 8 || len(r) > 260 {
+		return false
+	}
+	hits, total := 0, 0
+	for i := 0; i+refusalGramN <= len(r); i++ {
+		total++
+		if refusalGramSet[string(r[i:i+refusalGramN])] {
+			hits++
+		}
+	}
+	return total > 0 && float64(hits)/float64(total) >= 0.6
 }
 
 // identityDelivery 「无需翻译」段的交付值＝原文本身。

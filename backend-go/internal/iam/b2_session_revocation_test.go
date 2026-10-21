@@ -64,8 +64,10 @@ func TestResetPasswordBumpsTokenVersion(t *testing.T) {
 		t.Fatalf("旧 token tv 应为 0: %+v %v", c, err)
 	}
 	// 改密：库内版本递增；重签 token 携带新版本，旧 token 与库比对必然失配
-	if err := st.ResetPassword(u.ID, 5, "newhash"); err != nil {
-		t.Fatal(err)
+	// ★ 2026-10-21 P0-2：ResetPassword 现在出行数，这条锁顺手把它钉成"恰好改到 1 行"
+	//   （0 行必须红——那正是"回 success 而库里一字未动"的缺陷形态）
+	if n, err := st.ResetPassword(u.ID, 5, "newhash"); err != nil || n != 1 {
+		t.Fatalf("ResetPassword 应改到 1 行且无错，实得 rows=%d err=%v", n, err)
 	}
 	got, err := st.GetUser(u.ID, 5)
 	if err != nil {

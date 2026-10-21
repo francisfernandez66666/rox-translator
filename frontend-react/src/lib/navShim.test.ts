@@ -218,29 +218,55 @@ function bridgeFailures(files: Map<string, string>): string[] {
 }
 
 // ------------------------------------------------------------- D 两支等值
-/** 两棵树必须逐支等值的锚点（每一条都要在 App 的未登录区与 PublicRoot 里各出现一次） */
+const LOGIN_FACE = SRC + 'components/LoginFace.tsx'
+const AUTH_STORE = SRC + 'stores/auth.tsx'
+/** 两棵树必须逐支等值的锚点（每一条都要在 App 的未登录区与 PublicRoot 里各出现一次）。
+ *  ★ 2026-10-21 IAM P1-7：登录面本身已从两棵树里抽出去，收成 `components/LoginFace` 一处调用——
+ *    所以「登录壳 / 挂件 / admin 形态 / 登录后弹回」这四条不再是"两处各出现一次"，而是
+ *    "两棵树都只调 LoginFace、且 LoginFace 里有这四条"。改判据的理由：
+ *    两处各写一份时，下一批把两处同时改成另一个不同的值照样"相等地错"；
+ *    收敛成唯一调用点之后，射程应该问"有没有第二份登录面"，而不是"两份写得像不像"。 */
 const GUEST_MARKERS: Array<[string, RegExp]> = [
   ['定价页分支', /path === '\/pricing'/],
   ['比价页分支', /path === '\/compare'/],
   ['首页分支', /path === '\/'/],
   ['门面开关判定', /!landingEnabledForGuest\(\)/],
   ['营销壳（不带 auth 档）', /<PublicShell>/],
+]
+/** 登录面唯一调用点内部必须有的口径（两棵树共用，所以只查一次） */
+const FACE_MARKERS: Array<[string, RegExp]> = [
   ['登录壳（带 auth 档）', /<PublicShell auth>/],
   ['挂件常驻', /<AiAssist \/>/],
   ['admin 登录形态', /startsWith\('\/admin'\) \? 'admin' : 'home'/],
-  ['非租管登录后弹回', /roleLevelSafe\(u\.role\) < 2/],
+  ['登录成功后处理', /applyLogin\(u, onLogin, path, navigate\)/],
 ]
-/** D 判据：锚点两处都在；且"门面关闭"那一支两侧语义等值（换地址 + 不压历史栈） */
+/** D 判据：未登录分诊锚点两处都在；登录面恰一处实现且两棵树都只调它；
+ *  且"门面关闭"那一支两侧语义等值（换地址 + 不压历史栈）。 */
 function parityFailures(files: Map<string, string>): string[] {
   const bad: string[] = []
   const app = files.get(APP)
   const pub = files.get(PUBLIC_ROOT)
+  const face = files.get(LOGIN_FACE)
+  const auth = files.get(AUTH_STORE)
   if (app === undefined || pub === undefined) return ['读不到 App.tsx 或 PublicRoot.tsx']
+  if (face === undefined) return ['读不到 components/LoginFace.tsx（登录面的唯一调用点没了）']
   const guest = guestRegion(app)
   if (!guest) return ['读不到 App.tsx 的未登录分诊区（锚点漂了）']
   for (const [name, re] of GUEST_MARKERS) {
     if (!re.test(guest)) bad.push(`App.tsx 的未登录分诊区缺「${name}」（判据或实现其一漂了）`)
     if (!re.test(pub)) bad.push(`PublicRoot.tsx 缺「${name}」（与 App 的两支不等值）`)
+  }
+  for (const [name, re] of FACE_MARKERS) {
+    if (!re.test(face)) bad.push(`LoginFace.tsx 缺「${name}」（登录面的口径漂了）`)
+  }
+  // 唯一调用点：两棵树各恰一次，且**不许**再直接渲染 `<Login`（第二份登录面＝改一面留一面）
+  const calls = (src: string) => (src.match(/<LoginFace\b/g) || []).length
+  if (calls(guest) !== 1) bad.push(`App.tsx 未登录区必须恰有一处 <LoginFace>，实测 ${calls(guest)}`)
+  if (calls(pub) !== 1) bad.push(`PublicRoot.tsx 必须恰有一处 <LoginFace>，实测 ${calls(pub)}`)
+  if (/<Login\b/.test(guest) || /<Login\b/.test(pub)) bad.push('两棵树里又直接渲染了 <Login>（登录面出现第二份实现）')
+  // 弹回首页那一腿的判定落在 stores/auth.tsx 的 applyLogin 里（Login 内部拦一次 + 这里补第二道）
+  if (auth === undefined || !/pathname\.startsWith\('\/admin'\) && roleLevel\(u\.role\) < 2\) navigate\('\/'\)/.test(auth)) {
+    bad.push('stores/auth.tsx 的 applyLogin 缺「admin 档非租管弹回首页」那一腿')
   }
   if (!/<Navigate to="\/login" replace \/>/.test(guest)) bad.push('App.tsx 门面关闭分支的写法变了（本锁认 <Navigate to="/login" replace />）')
   if (!/navigate\('\/login', \{ replace: true \}\)/.test(pub)) bad.push('PublicRoot 门面关闭分支必须换地址且不压历史栈（replace: true）')

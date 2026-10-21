@@ -29,6 +29,19 @@ const (
 	loginCooldownSec   = 300 // 冷却期：5 分钟
 )
 
+// ★ IAM P0-6（2026-10-21）：按**账号**并行的失败锁定（与按 IP 的那一档各记一本账）。
+// 存在的理由：IP 档只能治"同一来源打得凶"，而分布式/代理池爆破每个 IP 只打两三次就换，
+// 每条腿都在阈值以内——真正被打的是一个账号名。账号档与 IP 档**并行**（任一触发即拒），
+// 但不互相顶替：只按账号锁会让"一个公共出口 NAT 后面多人同时输错"误伤同办公室的人，
+// 只按 IP 锁则挡不住换 IP 的定向爆破。
+const loginAcctScope = "login_acct"
+
+// loginIPScope 按 IP 那一档的 scope 名（rate_limits.scope 列；内存回退的 map 键前缀同源）。
+// ★ 2026-10-21：单独提成常量而不是散在 fail/clear/retryAfterSec 里各写一遍字面量——
+// 内存回退的键形是 `scope + "|" + key`，一旦三处里有任何一处拼错，冷却项就记在另一个键上，
+// 表现是「锁不住」而日志全绿。夹具要伪造冷却时刻时也按这个键取（见 login_f47_ratelimit_test.go）。
+const loginIPScope = "login_fail"
+
 // loginAttempt 单 IP 的失败计数与冷却状态（内存回退用）
 type loginAttempt struct {
 	count       int       // 窗口内失败次数
@@ -61,21 +74,36 @@ func (l *loginLimiter) blocked(ip string) bool {
 // （并把 5 分钟失败窗口一路往后推，用户越试越久），猜长了真人白等。
 // 持久化后端与内存回退两条路都要给同一个口径，故与 blocked 共用本函数。
 func (l *loginLimiter) retryAfterSec(ip string) int {
+	return l.retryAfterSecIn(loginIPScope, ip)
+}
+
+// retryAfterSecIn 按 scope+key 取冷却剩余秒数（★ IAM P0-6：IP 档与账号档共用这一条实现）。
+// 两档各占一张账（rate_limits 的 scope 列），调用方只决定用哪个 scope，
+// 冷却时长与「至少 1 秒」的口径不再各写一遍。
+func (l *loginLimiter) retryAfterSecIn(scope, key string) int {
 	if l.st != nil {
-		st, _ := l.st.RateLoad("login_fail", ip)
+		st, _ := l.st.RateLoad(scope, key)
 		return secsUntilUnix(st.LockUntil)
 	}
+	mk := scope + "|" + key
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	a, ok := l.data[ip]
+	a, ok := l.data[mk]
 	if !ok || a.lockedUntil.IsZero() {
 		return 0
 	}
 	remain := secsUntilUnix(a.lockedUntil.Unix())
 	if remain == 0 {
-		delete(l.data, ip) // 冷却已届满顺手清内存项（沿用旧 blocked 的清理时机，防无界增长）
+		delete(l.data, mk) // 冷却已届满顺手清内存项（沿用旧 blocked 的清理时机，防无界增长）
 	}
 	return remain
+}
+
+// acctRetryAfterSec 返回该账号登录冷却的剩余秒数（0＝当前不受限）。
+// account 必须是已归一化的账号（调用方用 auth.NormalizeAccount），
+// 否则 "Alice" 与 "alice" 会各记一本账，爆破者只换大小写就绕过账号档。
+func (l *loginLimiter) acctRetryAfterSec(account string) int {
+	return l.retryAfterSecIn(loginAcctScope, account)
 }
 
 // secsUntilUnix Unix 秒级截止时刻距今的剩余秒数：已过期/零值回 0，未来时刻至少回 1。
@@ -95,19 +123,30 @@ func secsUntilUnix(until int64) int {
 // fail 记录一次登录失败；达到阈值则进入冷却期。
 // 参数 ip: 客户端 IP。
 func (l *loginLimiter) fail(ip string) {
+	l.failIn(loginIPScope, ip)
+}
+
+// acctFail 记录一次**按账号**的登录失败（阈值与冷却同 IP 档）。
+func (l *loginLimiter) acctFail(account string) {
+	l.failIn(loginAcctScope, account)
+}
+
+// failIn 按 scope+key 记一次失败并在达阈值时上锁（★ IAM P0-6：IP 档与账号档共用）。
+func (l *loginLimiter) failIn(scope, key string) {
 	if l.st != nil {
-		st, _ := l.st.RateRecord("login_fail", ip, loginWindowSec)
+		st, _ := l.st.RateRecord(scope, key, loginWindowSec)
 		if st.Count >= loginFailThreshold {
-			l.st.RateSetLock("login_fail", ip, time.Now().Unix()+loginCooldownSec)
+			l.st.RateSetLock(scope, key, time.Now().Unix()+loginCooldownSec)
 		}
 		return
 	}
+	mk := scope + "|" + key
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
-	a, ok := l.data[ip]
+	a, ok := l.data[mk]
 	if !ok {
-		l.data[ip] = &loginAttempt{count: 1, firstAt: now}
+		l.data[mk] = &loginAttempt{count: 1, firstAt: now}
 		return
 	}
 	if now.Sub(a.firstAt) > loginWindowSec*time.Second {
@@ -123,13 +162,26 @@ func (l *loginLimiter) fail(ip string) {
 // clear 登录成功时清零该 IP 的失败记录。
 // 参数 ip: 客户端 IP。
 func (l *loginLimiter) clear(ip string) {
+	l.clearIn(loginIPScope, ip)
+}
+
+// acctClear 登录成功时清零该账号的失败记录。
+func (l *loginLimiter) acctClear(account string) {
+	l.clearIn(loginAcctScope, account)
+}
+
+// clearIn 按 scope+key 清零失败记录（★ IAM P0-6）。
+// 只在**登录成功那一刻**调用：清早了等于把"试错"变成免费重试；
+// 两档各清各的，谁成功都不替另一档背书（IP 档清的是这台机器，账号档清的是这个号）。
+func (l *loginLimiter) clearIn(scope, key string) {
 	if l.st != nil {
-		l.st.RateReset("login_fail", ip)
+		l.st.RateReset(scope, key)
 		return
 	}
+	mk := scope + "|" + key
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.data, ip)
+	delete(l.data, mk)
 }
 
 // trustProxyXFF 是否信任反向代理注入的 X-Forwarded-For（env TRUST_PROXY_XFF=1）。
