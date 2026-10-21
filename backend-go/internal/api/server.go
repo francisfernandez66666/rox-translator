@@ -301,8 +301,11 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/register", s.handleRegister)
 	s.mux.HandleFunc("/api/auth/me", s.handleMe)
 	s.mux.HandleFunc("/api/auth/change-password", s.handleChangePassword)
-	s.mux.HandleFunc("/api/auth/forgot-password", s.handleForgotPassword)
-	s.mux.HandleFunc("/api/auth/reset-password", s.handleResetPassword)
+	// ★ 2026-10-21 IAM 重做：公开找回/重置下线（410），统一改走「邮箱验证码登录后改密」。
+	//   保留路径与 410 语义（不是 404）——老缓存包/收藏夹打到这里时要看到可行动提示。
+	s.mux.HandleFunc("/api/auth/forgot-password", s.handlePasswordRecoveryGone)
+	s.mux.HandleFunc("/api/auth/reset-password", s.handlePasswordRecoveryGone)
+	s.mux.HandleFunc("/api/auth/profile-setup", s.handleProfileSetup)
 	s.mux.HandleFunc("/api/auth/email-code", s.handleEmailCode)
 	s.mux.HandleFunc("/api/auth/register-config", s.handleRegisterConfig)
 	// ★ IAM P0-10（2026-10-21）：登出真撤销（jti 名单，见 auth_logout.go）

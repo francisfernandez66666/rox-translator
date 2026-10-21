@@ -99,7 +99,7 @@ const isTestFile = (name: string) => name.includes('.test.')
 const LEGACY_UNWRAPPED: Record<string, string[]> = {
   'admin.ts': ['userBulkImport', 'mailTemplatesGet', 'mailTemplatesSave', 'meContext'],
   'apikeys.ts': ['getOpenAPIDocs', 'previewOpenAPIDocs'],
-  'auth.ts': ['login', 'ssoProviders', 'authMe', 'authRegister', 'sendEmailCode', 'registerConfig', 'forgotPassword', 'registerIndustries', 'deactivateAccount'],
+  'auth.ts': ['login', 'ssoProviders', 'authMe', 'authRegister', 'sendEmailCode', 'registerConfig', 'registerIndustries', 'deactivateAccount'],
   'billing.ts': ['usageMe', 'usageOrg', 'usageCost', 'billingOrders', 'billingConfigSave', 'billingQuota', 'billingInvoices', 'manualConfirmOrders', 'plans', 'myPackage', 'autoRenewGet', 'adminPackageSettings', 'adminPayChannels', 'adminQuoteCurrency'],
   'coupons.ts': ['adminCoupons', 'adminCouponRedemptions'],
   'flow.ts': ['flowConfig'],

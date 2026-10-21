@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "อัปเดตแพ็กคลังความรู้",
   "audit.action.logout": "ออกจากระบบ",
   "audit.action.login": "เข้าสู่ระบบ",
+  "audit.action.profile_setup": "กรอกโปรไฟล์แล้ว",
   "audit.action.login_sso": "เข้าสู่ระบบ SSO",
   "audit.action.model_routes_save": "บันทึกเส้นทางโมเดล",
   "audit.action.model_save": "บันทึกการตั้งค่าโมเดล",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "เซสชันหมดอายุแล้ว กรุณาเข้าสู่ระบบอีกครั้งด้วยรหัสผ่านใหม่",
   "auth.regOkLoginFail": "สร้างบัญชีสำเร็จ แต่เข้าสู่ระบบอัตโนมัติไม่สำเร็จ กรุณากลับไปที่หน้าเข้าสู่ระบบและเข้าสู่ระบบด้วยบัญชีใหม่",
   "pwd.oldRequired": "กรุณากรอกรหัสผ่านปัจจุบันก่อน",
+  "auth.otpDesc": "กรอกอีเมลและรหัสใช้ครั้งเดียวเพื่อเข้าสู่ระบบ อีเมลที่ยังไม่ลงทะเบียนจะสร้างบัญชีว่างโดยอัตโนมัติ",
+  "auth.usePassword": "เข้าสู่ระบบด้วยรหัสผ่าน",
+  "auth.useCode": "ใช้รหัสทางอีเมลแทน",
+  "auth.profileTitle": "ทำให้โปรไฟล์สมบูรณ์",
+  "auth.profileDesc": "เลือกชื่อผู้ใช้ให้ทีมรู้จักคุณ คุณสามารถตั้งรหัสผ่านตอนนี้หรือใช้รหัสทางอีเมลต่อไปอย่างเดียว",
+  "auth.profileDone": "บันทึกและดำเนินการต่อ",
+  "auth.passwordOptional": "รหัสผ่าน (ไม่บังคับ เว้นว่างเพื่อใช้รหัสทางอีเมลเท่านั้น)",
+  "auth.skipForNow": "ข้ามไปก่อน",
+
 }

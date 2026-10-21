@@ -30,9 +30,39 @@ import (
 // emailCode 单邮箱的验证码状态
 type emailCode struct {
 	Code      string    // 6 位数字码
+	Purpose   string    // 用途：register/login/password/email_change（★ 2026-10-21 IAM 重做新增）
 	ExpiresAt time.Time // 过期时间（10 分钟）
 	Attempts  int       // 已错误尝试次数（≥5 作废防爆破）
 	SentAt    time.Time // 发送时间（冷却判断）
+}
+
+// 邮箱验证码用途白名单。★ 用途必须隔离：登录码不能拿去改密、注册码不能拿去登录——
+// 旧实现只有「一个邮箱一个码」，谁先发谁覆盖，用户在两个页面同时操作时会互相烧码。
+// 新增用途必须同时进白名单，否则 handleEmailCode 直接 400（不给未知字符串拼进缓存键）。
+const (
+	emailPurposeRegister    = "register"
+	emailPurposeLogin       = "login"
+	emailPurposePassword    = "password"
+	emailPurposeEmailChange = "email_change"
+)
+
+// emailCodeKey 把（邮箱,用途）折成存储键。register 沿用历史裸邮箱键，
+// 保证老测试/老 Redis 行仍可读；其余用途用 "<purpose>|<邮箱>" 前缀隔离。
+func emailCodeKey(email, purpose string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	if purpose == "" || purpose == emailPurposeRegister {
+		return email
+	}
+	return purpose + "|" + email
+}
+
+// validEmailPurpose 校验用途是否在白名单内（空串等价 register，兼容老客户端）。
+func validEmailPurpose(p string) bool {
+	switch p {
+	case "", emailPurposeRegister, emailPurposeLogin, emailPurposePassword, emailPurposeEmailChange:
+		return true
+	}
+	return false
 }
 
 // emailVerifyStore 邮箱验证码存储（★ 2026-09-09 技术债①P1：底层改用 emailCodeStore——
@@ -42,7 +72,7 @@ type emailVerifyStore struct {
 	codes map[string]*emailCode // key: 小写邮箱（本地镜像；跨实例一致由 emailCodeStore 保证）
 }
 
-// 全局单例：与 resetCodes 同生命周期（进程内存镜像 + Redis 共享）
+// 全局单例：与进程内 Redis 镜像层同生命周期（进程内存 + Redis 共享）
 var emailCodes = &emailVerifyStore{codes: map[string]*emailCode{}}
 
 // 邮箱格式宽松校验（本地@域名，不做 TLD 强校验）
@@ -60,8 +90,15 @@ const (
 // 参数：s=服务（用于 mailer 与 IP 日上限）；ip=请求方 IP；email=目标邮箱；
 // lang=收件界面语种（★ F-17 批E：12 码白名单，空=中文链路；验证码模版非中文回落英文稿）。
 func (s *Server) sendEmailCode(ip, email, lang string) (bool, string, bool) {
-	// 邮箱地址归一化为小写
-	key := strings.ToLower(strings.TrimSpace(email))
+	return s.sendEmailCodeFor(ip, email, lang, emailPurposeRegister)
+}
+
+// sendEmailCodeFor 是带用途的发码实现；sendEmailCode 保留为注册用途的薄包装。
+func (s *Server) sendEmailCodeFor(ip, email, lang, purpose string) (bool, string, bool) {
+	if purpose == "" {
+		purpose = emailPurposeRegister
+	}
+	key := emailCodeKey(email, purpose)
 	now := time.Now()
 	// ★ 2026-09-09 技术债①：冷却判断/写入经 vcodeGet/vcodeSet（Redis 优先，本地 map 镜像）
 	ekey := vcodeEmailKey(key)
@@ -97,8 +134,10 @@ func (s *Server) sendEmailCode(ip, email, lang string) (bool, string, bool) {
 
 	// 判断是否为 Noop 模式（测试环境）
 	_, isNoop := s.mailer().(*mail.NoopSender)
-	// 发送邮件：使用注册验证码模板
-	err = s.sendTemplatedMail(key, "register_code", lang, map[string]string{"code": code})
+	// 发送邮件：使用注册验证码模板。
+	// ★ 收件人必须传真实 email 而非存储键 key——key 在 register 以外用途带
+	//   "password|<邮箱>" 前缀，传 key 会把验证码寄给一个不存在地址（IAM 重做批发现）。
+	err = s.sendTemplatedMail(email, "register_code", lang, map[string]string{"code": code})
 	if err != nil {
 		return false, "邮件发送失败，请稍后重试", isNoop
 	}
@@ -110,7 +149,15 @@ func (s *Server) sendEmailCode(ip, email, lang string) (bool, string, bool) {
 
 // verifyEmailCode 校验并一次性消费验证码；错误尝试超限作废。
 func verifyEmailCode(email, code string) bool {
-	key := strings.ToLower(strings.TrimSpace(email))
+	return verifyEmailCodeFor(email, code, emailPurposeRegister)
+}
+
+// verifyEmailCodeFor 按用途校验并一次性消费验证码；用途不同互不覆盖。
+func verifyEmailCodeFor(email, code, purpose string) bool {
+	if purpose == "" {
+		purpose = emailPurposeRegister
+	}
+	key := emailCodeKey(email, purpose)
 	// ★ P1-12 修复（2026-09-14）：per-key 互斥锁串行化「读→判→比→错计/消费」，
 	//   消除分段锁 + Redis 弱一致下的并发穷举窗口（与 handleResetPassword 同口径）。
 	unlock := vcodeLockOf("email:" + key)
@@ -157,6 +204,7 @@ func verifyEmailCode(email, code string) bool {
 func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email        string `json:"email"`
+		Purpose      string `json:"purpose"`       // 用途：register/login/password/email_change（空=register，兼容老客户端）
 		CaptchaToken string `json:"captcha_token"` // 人机验证 token（启用 turnstile 时必填）
 		AppLang      string `json:"app_lang"`      // ★ F-17（批E）：发送界面语种（可空；回落 X-App-Lang 头）
 	}
@@ -169,16 +217,48 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
 		return
 	}
-	// ★ S3 防薅：一次性邮箱不发码
-	if msg := s.disposableEmailRejected(email); msg != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+	if !validEmailPurpose(req.Purpose) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码用途无效"))
 		return
 	}
-	// 人机验证：防脚本刷短信/邮件接口
-	if err := s.verifyCaptcha(r, req.CaptchaToken); err != nil {
-		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
-		s.writeAuthzError(w, r, err)
+	if req.Purpose == "" {
+		req.Purpose = emailPurposeRegister
+	}
+	// 改密/换绑邮箱的验证码只发给**已登录的本人**：不允许匿名给任意邮箱发"改密码"。
+	if req.Purpose == emailPurposePassword || req.Purpose == emailPurposeEmailChange {
+		u := s.authUser(r)
+		if u == nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "请先登录"))
+			return
+		}
+		if req.Purpose == emailPurposePassword {
+			req.Email = u.Email
+		}
+	}
+	// ★ 密码用途的收件人取自本人账号，必须**在鉴权分支之后**重新取一次；
+	//   沿用函数开头那个 `email` 会把"改密验证码"发到请求体里任意填的地址（自伤式放行）。
+	email = strings.TrimSpace(req.Email)
+	if !emailRe.MatchString(email) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
 		return
+	}
+	// ★ S3 防薅：一次性邮箱不发码。登录用途例外——已有账号可能历史绑定了一次性域名，
+	// 不能因为域名规则把人锁在门外；自动建号分支在创建前会再走一次黑名单。
+	if req.Purpose != emailPurposeLogin {
+		if msg := s.disposableEmailRejected(email); msg != "" {
+			writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+			return
+		}
+	}
+	// 人机验证：防脚本刷短信/邮件接口。
+	// ★ 2026-10-21 IAM 重做：改密验证码不走人机验证——这一档只允许**当前已登录会话**给本人
+	//   绑定邮箱发码，不是匿名开放的发码面；沿用改密口「刻意不做人机验证」的既有口径。
+	if req.Purpose != emailPurposePassword {
+		if err := s.verifyCaptcha(r, req.CaptchaToken); err != nil {
+			// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
+			s.writeAuthzError(w, r, err)
+			return
+		}
 	}
 	// 单 IP 每日发码上限（复用注册护栏的窗口逻辑，独立计数键）
 	ip := clientIP(r)
@@ -187,7 +267,7 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "发送过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
 	}
-	ok, msg, noop := s.sendEmailCode(ip, email, requestMailLang(r, req.AppLang))
+	ok, msg, noop := s.sendEmailCodeFor(ip, email, requestMailLang(r, req.AppLang), req.Purpose)
 	if ok {
 		s.regGuard.record("email-code:" + ip)
 	}

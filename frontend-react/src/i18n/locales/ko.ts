@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "지식베이스 패키지 업데이트",
   "audit.action.logout": "로그아웃",
   "audit.action.login": "로그인",
+  "audit.action.profile_setup": "프로필 완료",
   "audit.action.login_sso": "SSO 로그인",
   "audit.action.model_routes_save": "모델 라우팅 저장",
   "audit.action.model_save": "모델 설정 저장",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "세션이 만료되었습니다. 새 비밀번호로 다시 로그인하세요",
   "auth.regOkLoginFail": "계정은 생성되었지만 자동 로그인이 완료되지 않았습니다. 로그인 페이지로 돌아가 새 계정으로 로그인하세요",
   "pwd.oldRequired": "먼저 현재 비밀번호를 입력하세요",
+  "auth.otpDesc": "이메일과 일회용 코드를 입력해 로그인하세요. 등록되지 않은 이메일은 빈 계정을 자동으로 만듭니다.",
+  "auth.usePassword": "비밀번호로 로그인",
+  "auth.useCode": "대신 이메일 코드 사용",
+  "auth.profileTitle": "프로필 완성",
+  "auth.profileDesc": "팀이 알아볼 수 있도록 사용자 이름을 설정하세요. 지금 비밀번호를 설정하거나 이메일 코드만으로 계속 로그인할 수 있습니다.",
+  "auth.profileDone": "저장하고 계속",
+  "auth.passwordOptional": "비밀번호(선택 사항, 비워 두면 이메일 코드만 사용)",
+  "auth.skipForNow": "나중에 건너뛰기",
+
 }

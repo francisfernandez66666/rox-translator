@@ -22,10 +22,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
-	"translator/internal/config"
 
 	"translator/internal/auth"
 	apierrors "translator/internal/errors"
@@ -35,25 +33,6 @@ import (
 )
 
 // ============ 认证 ============
-
-// 忘记密码验证码存储（★ 2026-09-09 技术债①P1：Redis 键值 + 内存兜底，跨实例共享；
-// 历史为纯内存 map，重启/多实例失效——迁移到 vcodeStore 后任意实例生成的码其他实例可校验）。
-// 键：用户 ID（vcode:reset:<uid>）；值：验证码、过期时间与已错误尝试次数。获取验证码时自动清理过期项。
-var resetCodes = struct {
-	sync.Mutex
-	m map[int64]resetCode // 用户 ID → 验证码信息（兼容历史直接访问；读写经 resetCodeStore 兜底同步）
-}{m: map[int64]resetCode{}}
-
-// resetCodeMaxTries 单个重置码的最大错误尝试次数（≥5 作废防爆破；对齐 email_verify 口径）。
-// 2026-08-26 P0-3 止血：此前无尝试上限，6 位码可在 10 分钟窗口内被脚本穷举 → 任意账号接管。
-const resetCodeMaxTries = 5
-
-// resetCode 验证码信息。
-type resetCode struct {
-	Code      string    // 6 位数字验证码
-	ExpiresAt time.Time // 过期时间（10 分钟）
-	Attempts  int       // 已错误尝试次数（≥resetCodeMaxTries 作废该码，2026-08-26 补充）
-}
 
 // handleLogin 登录接口：校验用户名密码并签发 JWT，返回 token + 用户信息。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, password}）。
@@ -77,12 +56,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
-	var req struct {
-		Username string `json:"username"` // 登录账号：用户名**或**邮箱（★ P0-4 双入口；字段名沿用 username，对外契约不变）
-		Password string `json:"password"` // 登录密码（明文，内部比对哈希）
-	}
+	var req loginEmailReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
+		return
+	}
+	// ★ 2026-10-21 IAM 重做：邮箱验证码登录是主流程；未注册邮箱在主站自动建空白个人号。
+	if isEmailLogin(&req) {
+		s.handleEmailCodeLogin(w, r, &req)
 		return
 	}
 	// ★ 2026-10-21 IAM 重做 P0-6：按**账号**并行的失败锁定（与上面 IP 档各记一本账）。
@@ -90,7 +71,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	//   两档各治一半，任缺一档都留一条直路。文案与 IP 档逐字相同（429＋同一句话）：
 	//   若账号档单独说"这个账号被锁了"，等于给攻击者一条**账号是否存在**的免费回执，
 	//   与全链防枚举口径自相矛盾；而持有正确口令的真人看到的也只是"稍后 5 分钟再来"，可行动。
-	acctKey := loginAccountKey(req.Username)
+	accountInput := strings.TrimSpace(req.Email)
+	if accountInput == "" {
+		accountInput = req.Username // 兼容无邮箱存量/UAT：仅当请求未带 email 时才回落到用户名
+	}
+	acctKey := loginAccountKey(accountInput)
 	if wait := s.loginAcctCooldownSec(acctKey); wait > 0 {
 		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试").WithRetryAfter(wait))
 		return
@@ -100,37 +85,52 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	//   旧形态只按用户名精确查 ⇒ ①注册时填邮箱的人"注册成功却登不进去"（前端那次自动补登结构上必失败），
 	//   ②用户名大小写敏感而邮箱口一直做 lower（同一个人两面两个账号）。
 	tid := s.currentTenant(r)
-	candidates, _, _ := s.Store.FindAccountForLogin(tid, req.Username)
-	// 裁决与改造前逐字同构：平台超管（tenant_id=0）优先 → 唯一命中直接用 → 多租户重名要求走租户入口
 	var u *store.User
-	switch len(candidates) {
-	case 0:
-		// ★ P0-6 补腿：**查不到账号也要记账**。旧形态只在口令错时记一次失败，于是
-		//   「连打 5 次不存在的账号」永远不锁、「连打 5 次存在的账号」必锁 ⇒ 拿第 6 次的
-		//   429/401 一比对就读出账号存不存在，防枚举在响应面省下的信息又从限流面漏回去。
-		//   两档一起记：IP 档防止一张嘴扫一片用户名（也顺带把 rate_limits 的行数增长钉在 5/窗口），
-		//   账号档在同一 IP 的不同来源之间仍然成立。
-		s.recordLoginFail(r)
-		s.recordLoginAcctFail(acctKey)
-		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名或密码错误"))
-		return
-	case 1:
-		u = candidates[0]
-	default:
-		for _, m := range candidates {
-			if m.TenantID == 0 {
-				u = m
-				break
-			}
+	if strings.TrimSpace(req.Email) != "" {
+		// ★ 新契约：带 email 字段时只认邮箱（大小写不敏感），不再让用户名参与定位。
+		if got, err := s.Store.GetUserByEmail(req.Email); err == nil {
+			u = got
 		}
-		// 用户名在多个租户重复且非超管：拒绝登录，要求通过租户专属入口登录
-		if u == nil {
-			// 同上：这是"没定到人"的一档，与口令错同属凭证/身份失败，一并记账（文案不点名账号）
+	} else {
+		candidates, _, _ := s.Store.FindAccountForLogin(tid, accountInput)
+		// 旧契约兜底（无 email 字段）：平台超管优先 → 唯一命中 → 多租户重名拒绝。
+		switch len(candidates) {
+		case 0:
+			// ★ P0-6 补腿：**查不到账号也要记账**，否则第 6 次的 429/401 差异就是账号存在性回执。
 			s.recordLoginFail(r)
 			s.recordLoginAcctFail(acctKey)
-			s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名在多个租户重复，请通过租户入口登录"))
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号或密码错误"))
 			return
+		case 1:
+			u = candidates[0]
+		default:
+			for _, m := range candidates {
+				if m.TenantID == 0 {
+					u = m
+					break
+				}
+			}
+			if u == nil {
+				s.recordLoginFail(r)
+				s.recordLoginAcctFail(acctKey)
+				s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号或密码错误"))
+				return
+			}
 		}
+	}
+	if u == nil {
+		s.recordLoginFail(r)
+		s.recordLoginAcctFail(acctKey)
+		// ★ 用户令：邮箱不存在/密码错统一 404「账号或密码错误」，不泄露账号是否存在。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号或密码错误"))
+		return
+	}
+	// ★ 密码校验必须在状态判定之前：仅持正确口令的人才配看到"账号停用/已注销"。
+	if !auth.CheckPassword(u.PasswordHash, req.Password) {
+		s.recordLoginFail(r)
+		s.recordLoginAcctFail(acctKey)
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号或密码错误"))
+		return
 	}
 	// 账号状态校验：停用账号禁止登录；注销宽限期内（deactivating 当日）仍可登录，
 	// 次日起惰性落停用态并拒绝（2026-08-26 自助注销需求）
@@ -142,14 +142,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "账号已停用"))
-		return
-	}
-	// 密码校验：比对存储的 bcrypt 哈希（兼容历史 SHA-256）
-	if !auth.CheckPassword(u.PasswordHash, req.Password) {
-		// 暴力破解防护：两本账各记一次（IP 档治"一台机器打一片账号"，账号档治"一片机器打一个账号"）
-		s.recordLoginFail(r)
-		s.recordLoginAcctFail(acctKey)
-		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "用户名或密码错误"))
 		return
 	}
 	// ★ 2026-10-21 IAM 重做 P0-11：租户停用/到期**在口令校验之后**才判（顺序即判据）。
@@ -233,7 +225,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"user": map[string]interface{}{
 				"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 				"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-				"must_change_pwd": u.MustChangePwd,
+				"must_change_pwd": u.MustChangePwd, "profile_setup_required": u.ProfileSetupRequired,
 			},
 		})
 		return
@@ -244,9 +236,15 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
 			// ★ 首登强制改密（2026-09-02 功能）：1=登录后必须先改密，前端弹窗引导
-			"must_change_pwd": u.MustChangePwd,
+			"must_change_pwd": u.MustChangePwd, "profile_setup_required": u.ProfileSetupRequired,
 		},
 	})
+}
+
+// handlePasswordRecoveryGone 公开找回/重置密码下线后的统一出口（410 Gone）。
+// 口径：不泄露账号是否存在；明确告诉调用方替代路径（邮箱验证码登录后改密）。
+func (s *Server) handlePasswordRecoveryGone(w http.ResponseWriter, r *http.Request) {
+	s.writeError(w, r, apierrors.New(apierrors.ErrGone, "密码找回已下线，请使用邮箱验证码登录后在账号设置中修改密码"))
 }
 
 // loginCooldownSec 返回当前请求 IP 的登录冷却剩余秒数（0＝不受限）。
@@ -402,8 +400,9 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		OldPassword string `json:"old_password"` // 原密码（用于校验身份）
+		OldPassword string `json:"old_password"` // 原密码（有密码账号必填）
 		NewPassword string `json:"new_password"` // 新密码（存储前转为哈希）
+		EmailCode   string `json:"email_code"`   // 无密码/忘记密码：邮箱验证码（purpose=password）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewPassword == "" {
 		// ★ 2026-10-21 P0-13：内联 writeJSON(400) 收口到统一出口（状态码不变，补 code/trace_id）
@@ -415,8 +414,19 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
 		return
 	}
-	// 校验原密码是否正确
-	if !auth.CheckPassword(u.PasswordHash, req.OldPassword) {
+	// ★ 2026-10-21 IAM 重做：邮箱是账号归属的最终凭证；改密时验证码与原密码二选一。
+	//   公开找回/重置已下线后，已登录用户仍可凭绑定邮箱的验证码改密，避免仅持 OTP 会话
+	//   而无原密码的账号被锁在改密入口外。发码口已强制校验当前会话，验证码只能发给本人邮箱。
+	emailCodeProvided := strings.TrimSpace(req.EmailCode) != ""
+	if emailCodeProvided {
+		if strings.TrimSpace(u.Email) == "" || !verifyEmailCodeFor(u.Email, req.EmailCode, emailPurposePassword) {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱验证码错误或已过期"))
+			return
+		}
+	} else if strings.TrimSpace(u.PasswordHash) == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请先获取邮箱验证码"))
+		return
+	} else if !auth.CheckPassword(u.PasswordHash, req.OldPassword) {
 		// F-64②：原密码错误＝提交的载荷不对 → 400 VALIDATION_ERROR。
 		// ★ 这里严禁取 ErrUnauthorized(401)：本接口是**已登录态**动作，而前端 core.ts 的 request()
 		//   一见 401 就清 token 并踢回登录页（只对 /api/auth/login、/api/auth/register 豁免），
@@ -470,222 +480,9 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		"user": map[string]interface{}{
 			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
 			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-			"must_change_pwd": 0,
+			"must_change_pwd": 0, "profile_setup_required": u.ProfileSetupRequired,
 		},
 	})
-}
-
-// ============ 忘记密码（验证码方式） ============
-
-// forgotSentMsg 找回密码发码成功的对外文案。
-// ★ 2026-10-21 用户后令（覆盖当日早先的 P0-6 防枚举取舍）：找回/重置改为**只按注册邮箱**定位，
-//
-//	发码前先查库；邮箱不存在直接 404 EMAIL_NOT_REGISTERED（前端显示「该邮箱未注册」），
-//	不再回恒真成功。理由：用户实测「输错邮箱也提示已发送」只会让人空等，且重置链路没有用户名入口，
-//	继续防枚举会把可用性押进去。登录口仍保留「用户名或密码错误」的统一文案，不随之放宽。
-const forgotSentMsg = "验证码已发送至该邮箱，10 分钟内有效，请检查收件箱与垃圾箱"
-
-// handleForgotPassword 忘记密码接口：按注册邮箱定位用户，生成验证码并发送。
-// 定位口径（2026-10-21 用户后令）：只认 email，不再接受 username；邮箱不在库即拦截。
-func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
-	// ★ IP 限流（2026-08-26 P0-3 止血）：复用注册护栏窗口逻辑，独立计数键。
-	//   日上限 10 次 + 最小间隔 30s——防止「无限发码骚扰 + 配合爆破」的组合滥用。
-	// ★ IAM P0-6（2026-10-21）：reserve＝放行即占格，额度只表达请求次数。
-	//   即使现在会明确回「邮箱未注册」，限流仍按请求计，避免"不存在"那一档额外得到免费重试。
-	ip := clientIP(r)
-	if ok, wait := s.regGuard.reserve("pwd-forgot:"+ip, 10, 30); !ok {
-		// ★ F-47（批 I-7）：内联 writeJSON(429) 改走统一出口——状态码不变（仍 429），
-		// 但补齐 {code:"RATE_LIMITED", retry_after} 与 trace_id：同仓两类限流响应口径就此合流。
-		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
-		return
-	}
-	var req struct {
-		Email string `json:"email"` // 注册邮箱（唯一入口）
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
-		return
-	}
-	// 与注册/登录/重置同一把归一化尺子（只 trim、邮箱小写）。
-	req.Email = auth.NormalizeEmail(req.Email)
-	if req.Email == "" {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请输入注册邮箱"))
-		return
-	}
-	if !auth.LooksLikeEmail(req.Email) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
-		return
-	}
-	// ★ 用户后令：发码前先查库，不在库当场拦截（不再生成码、不再发信）。
-	u, err := s.Store.GetUserByEmail(req.Email)
-	if err != nil || u == nil || u.Email == "" {
-		s.writeError(w, r, apierrors.New(apierrors.ErrEmailNotRegistered, "该邮箱未注册，请确认邮箱或先注册账号"))
-		return
-	}
-	// 校验账号状态：停用账号不发送（注销宽限期内仍可发送——找回密码链路保持可用）
-	if iamEffectiveStatus(u) != store.UserActive {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "该邮箱对应账号当前不可用，请联系管理员"))
-		return
-	}
-	// 生成 6 位数字验证码
-	code, err := genResetCode()
-	if err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成验证码失败"))
-		return
-	}
-	// 存储验证码（覆盖旧码，10 分钟有效；★ Redis 镜像 + 本地 map 双写，跨实例共享）
-	rc := resetCode{Code: code, ExpiresAt: time.Now().Add(10 * time.Minute)}
-	resetCodes.Lock()
-	resetCodes.m[u.ID] = rc
-	resetCodes.Unlock()
-	if b, e := json.Marshal(rc); e == nil {
-		vcodeSet(vcodeResetKey(u.ID), b, 10*time.Minute)
-	}
-	// 发送邮件（改为异步入队：SMTP 失败由队列重试/死信吸收，不阻塞用户）
-	// ★ F-17（批E）语种跟随：取该账号注册时落库的 preferred_lang（查无/缺列回空=中文链路）
-	resetLang, lerr := s.Store.GetPreferredLang(u.ID)
-	if lerr != nil {
-		resetLang = ""
-	}
-	if serr := s.sendTemplatedMail(u.Email, "reset_code", normalizeMailLang(resetLang), map[string]string{"code": code}); serr != nil {
-		log.Printf("[mail] 密码重置验证码入队失败 to=%s err=%v", config.MaskEmail(u.Email), serr)
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "邮件发送失败，请稍后重试或联系管理员"))
-		return
-	}
-	// 限流已在入口 reserve 占格，这里不得再 record（会变成一次请求占两格）。
-	s.Store.LogAudit(u.TenantID, u.ID, "forgot_password", "auth", "请求重置密码验证码")
-	writeJSON(w, 200, map[string]interface{}{"success": true, "message": forgotSentMsg})
-}
-
-// handleResetPassword 重置密码接口：校验验证码后更新密码。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, code, new_password}）。
-// 返回: success=true 表示重置成功；
-// ★ 观察2②（2026-09-25 UAT 修复批G）：验证码错误/用户不存在/已过期/错次超限/一次性码失配
-//
-//	验证码类失败族由「HTTP 200 + success:false」统一收口为 HTTP 400 + 统一错误码
-//	VALIDATION_ERROR（s.writeError，与 F-21③ 同向）；邮箱不在库走 404 EMAIL_NOT_REGISTERED
-//	（前端按稳定码显示本地化文案）。前端 request() 对 4xx 会归一解析 body.message，
-//	登录页失败提示链路不变。
-func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
-	// ★ IP 限流（2026-08-26 P0-3 止血）：验证码校验接口的爆破主战场，
-	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
-	// ★ IAM P0-6（2026-10-21）：与 forgot 同步改成 reserve（放行即占格），
-	//   使"当日额度"只表达请求次数，不随请求成败变化。
-	ip := clientIP(r)
-	if ok, wait := s.regGuard.reserve("pwd-reset:"+ip, 20, 10); !ok {
-		// ★ F-47（批 I-7）：与 forgot 同口径走统一出口（429 + RATE_LIMITED + retry_after）
-		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "请求过于频繁，请稍后再试").WithRetryAfter(wait))
-		return
-	}
-	var req struct {
-		Email       string `json:"email"`        // 注册邮箱（唯一入口）
-		Code        string `json:"code"`         // 6 位验证码
-		NewPassword string `json:"new_password"` // 新密码
-	}
-	// ★ 2026-10-21 用户后令：重置只按注册邮箱定位，不再接受用户名。
-	//   旧形态「用户名或邮箱二选一」导致界面上一半人把邮箱填进用户名框，后端按用户名查不到，
-	//   回「请求格式错误」——用户看到的就是"重置不了"。
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Code == "" || req.NewPassword == "" {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
-		return
-	}
-	// ★ 2026-10-21 IAM 重做 P0-3：新密码强度走**唯一那把尺子**。
-	//   旧形态这里只判非空 ⇒ 一位密码在服务端合法（6 位那条限制只存在于前端硬编码），
-	//   而重置又是匿名可达端点，等于给"把别人账号改成 a"留了门。
-	if !auth.ValidatePassword(req.NewPassword) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
-		return
-	}
-	// 与发码腿同一把归一化尺子（只 trim、邮箱小写）。
-	req.Email = auth.NormalizeEmail(req.Email)
-	if !auth.LooksLikeEmail(req.Email) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
-		return
-	}
-	// ★ 用户后令：邮箱不在库当场拦截（与 forgot 同码同文案，前端可本地化）。
-	u, err := s.Store.GetUserByEmail(req.Email)
-	if err != nil || u == nil || u.Email == "" {
-		s.writeError(w, r, apierrors.New(apierrors.ErrEmailNotRegistered, "该邮箱未注册，请确认邮箱或先注册账号"))
-		return
-	}
-	// 校验验证码（一次性 + 防爆破，2026-08-26 P0-3 止血）：
-	//   ① 单次加锁内完成「读码→比对→错计/销毁」，消除旧实现两次 Lock 分离的竞态窗口；
-	//   ② 错误尝试 ≥resetCodeMaxTries(5) 即作废该码——6 位数字码若无次数限制，
-	//      攻击者可在 10 分钟有效期内脚本穷举（10^6 空间）→ 任意账号接管。
-	//   ★ 2026-09-09 技术债①：读取优先 Redis（跨实例共享），未命中回退本地 map；
-	//     写入/删除双端同步，保证多实例下任意实例生成的码可被其他实例校验。
-	rkey := vcodeResetKey(u.ID)
-	// ★ P1-12 修复（2026-09-14）：per-key 互斥锁串行化「读→判→比→错计/消费」全流程。
-	//   上方注释宣称的「单次加锁」实为分段锁 + Redis Get/Set 弱一致（vcode.go 自认），
-	//   并发请求可全部读到 attempts=0，一次并发脉冲即近似穷举 6 位码空间。
-	unlockRC := vcodeLockOf("reset:" + rkey)
-	defer unlockRC()
-	// 读：Redis 优先（反序列化失败/未命中回退本地 map）
-	var rc resetCode
-	found := false
-	if b, ok := vcodeGet(rkey); ok && json.Unmarshal(b, &rc) == nil {
-		found = true
-	} else {
-		resetCodes.Lock()
-		rc, ok = resetCodes.m[u.ID]
-		resetCodes.Unlock()
-		found = ok
-	}
-	// ★ 观察2②（批G）失败族②「验证码缺失或已过期」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
-	if !found || time.Now().After(rc.ExpiresAt) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
-		return
-	}
-	if rc.Attempts >= resetCodeMaxTries {
-		// 超限作废：直接删除该码，即使后续答对也不放行
-		resetCodes.Lock()
-		delete(resetCodes.m, u.ID)
-		resetCodes.Unlock()
-		vcodeDel(rkey)
-		// ★ 观察2②（批G）失败族③「错误尝试超限」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误次数过多，请重新获取"))
-		return
-	}
-	if rc.Code != req.Code {
-		rc.Attempts++
-		resetCodes.Lock()
-		resetCodes.m[u.ID] = rc // 回写累计错误次数
-		resetCodes.Unlock()
-		if b, e := json.Marshal(rc); e == nil {
-			vcodeSet(rkey, b, 10*time.Minute)
-		}
-		// ★ 观察2②（批G）失败族④「一次性码失配」：改走 writeError → 400 + VALIDATION_ERROR（文案逐字不变）。
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
-		return
-	}
-	// ★ 2026-10-21 IAM 重做 P0-14：顺序翻转——**先改密成功、后作废验证码**。
-	//   旧形态先删码再写库：写库一失败，用户手里那张码已经烧了（必须重新收一封邮件），
-	//   而界面上"改密失败"与"码被烧"两件事完全同形。
-	// ★ P0-2：ResetPassword 现在出**受影响行数**，0 行必须显式判失败
-	//   （AGENTS §一·8②：0 行影响不是错误，所以"没改到任何东西"只能由显式判据出）。
-	n, perr := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword))
-	if perr != nil {
-		// F-64②：验证码已核对通过、写库却失败，这是服务端故障 → 500 INTERNAL_ERROR。
-		// ★ 匿名链路（忘记密码）同样严禁 401：request() 的 401 拦截器只豁免
-		//   /api/auth/login 与 /api/auth/register，重置密码页吃一个 401 会把用户刚填的
-		//   验证码/新密码连同会话一起抹掉，回到「什么都没做」的登录页。
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), perr)))
-		return
-	}
-	if n == 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "密码未能写入，请稍后重试或联系管理员"))
-		return
-	}
-	resetCodes.Lock()
-	delete(resetCodes.m, u.ID)
-	resetCodes.Unlock()
-	vcodeDel(rkey)
-	// ★ IAM P0-6（2026-10-21）：入口 reserve 已占格，这里不再 record
-	//   （否则一次请求占两格，正常重试的人会比预想更早撞限流）。
-	s.Store.LogAudit(u.TenantID, u.ID, "reset_password", "auth", "通过验证码重置密码")
-	// ★ P0-5：出参回"刚刚用来定位这张码的那个邮箱"，前端据此回填登录框并自动登录。
-	//   旧形态只回填用户名、邮箱档什么都不回 ⇒ "重置完还是进不去"。
-	writeJSON(w, 200, map[string]interface{}{"success": true, "login_account": req.Email})
 }
 
 // genResetCode 生成 6 位数字验证码（密码学安全随机）。
@@ -695,14 +492,6 @@ func genResetCode() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%06d", n.Int64()), nil
-}
-
-// iamEffectiveStatus 计算用户生效状态（注销宽限期次日起等效停用）。
-func iamEffectiveStatus(u *store.User) string {
-	if u == nil {
-		return store.UserDisabled
-	}
-	return auth.EffectiveUserStatus(u.Status, u.DeactivatedAt)
 }
 
 // handleDeactivateAccount 自助注销接口（POST /api/me/deactivate，2026-08-26 需求）：
@@ -837,7 +626,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username    string `json:"username"`     // 用户名（租户内唯一）
+		Username    string `json:"username"`     // 用户名（展示/检索用，同租户可重名；登录标识是邮箱）
 		Password    string `json:"password"`     // 初始密码（存储前转哈希）
 		DisplayName string `json:"display_name"` // 显示名称
 		Role        string `json:"role"`         // 角色：user/tenant_admin/super_admin/approver/admin
@@ -919,7 +708,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 邮箱唯一预检（oneid 账户体系）：管理员建号此前绕过全局判重——补齐。
 	//   目标邮箱正被其他账号持有则拒绝创建（避免建出无邮箱残号）。
-	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与下面「用户名已存在」的 409 是同一次
+	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与下面邮箱撞库的 409 是同一次
 	//   提交里的两条撞库守卫，却取了两个码；也与自助注册/换绑邮箱的口径不一致（统一 409）。
 	//   邮箱被他人持有＝与库里既有记录冲突，管理员可修的动作是「换一个邮箱」而非「改请求格式」，
 	//   故取 409 CONFLICT。严禁 401：管理员此刻是登录态，401 会被 core.ts 清 token 踢回登录页。
@@ -933,11 +722,11 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG 泄漏约束名/SQLSTATE，双方言文案漂移）
 		if store.IsUniqueViolation(err) {
-			// F-64②：用户名撞了租户内唯一约束＝状态冲突 → 409 CONFLICT。
-			// 不取 400：这不是「请求写错了」，而是「与库里既有记录撞车」，前端据此才能
-			// 把提示停在「换个用户名」这条分支上；也不取 401——管理员此刻是登录态，
-			// request() 的 401 拦截（豁免名单只有 login/register）会把他踢出管理台。
-			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "创建失败：用户名已存在"))
+			// ★ 2026-10-21 IAM 重做：用户名不再唯一，这里只剩邮箱/历史约束的兜底。
+			// 不取 400：这不是「请求写错了」，而是「与库里既有记录撞车」，管理员可修的动作是
+			// 换邮箱/刷新列表；也不取 401——管理员此刻是登录态，request() 的 401 拦截
+			// （豁免名单只有 login/register）会把他踢出管理台。
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "创建失败：该邮箱已被其他账号绑定"))
 			return
 		}
 		log.Printf("[admin] 建号失败 username=%s: %v", req.Username, err)

@@ -177,6 +177,14 @@ export const zh: Record<string, string> = {
   'auth.newPassword': '新密码（至少 6 位）',
   'auth.resetPassword': '重置密码',
   'auth.forgotSent': '验证码已发送至该邮箱',
+  'auth.otpDesc': '输入邮箱，获取一次性验证码即可登录；未注册的邮箱会自动创建空白账号。',
+  'auth.usePassword': '使用密码登录',
+  'auth.useCode': '改用邮箱验证码登录',
+  'auth.profileTitle': '完善你的资料',
+  'auth.profileDesc': '设置一个用户名，便于团队识别；也可以现在设置密码，或继续只用邮箱验证码登录。',
+  'auth.profileDone': '保存并进入',
+  'auth.passwordOptional': '设置密码（可选，留空则只用邮箱验证码登录）',
+  'auth.skipForNow': '暂时跳过',
   'auth.successReset': '密码已重置，请使用新密码登录',
 }
 
@@ -350,4 +358,13 @@ export const en: Record<string, string> = {
   'auth.resetPassword': 'Reset password',
   'auth.forgotSent': 'The code was sent to that email',
   'auth.successReset': 'Password reset — please sign in with the new password',
+  'auth.otpDesc': 'Enter your email and a one-time code to sign in. An unregistered email creates a blank account automatically.',
+  'auth.usePassword': 'Sign in with password',
+  'auth.useCode': 'Use email code instead',
+  'auth.profileTitle': 'Complete your profile',
+  'auth.profileDesc': 'Choose a username so teammates can recognize you. You can set a password now, or keep signing in with email codes only.',
+  'auth.profileDone': 'Save and continue',
+  'auth.passwordOptional': 'Password (optional; leave blank to use email codes only)',
+  'auth.skipForNow': 'Skip for now',
+
 }

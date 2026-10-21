@@ -265,6 +265,7 @@ export const baseZh: Record<string,string> = {
   'audit.action.task_reset_consumption': '重置任务进度',
   'audit.action.logout': '登出',
   'audit.action.login': '登录',
+  'audit.action.profile_setup': '完善个人资料',
   'audit.action.register': '注册',
   'audit.action.user_create': '创建用户',
   'audit.action.user_update': '更新用户',

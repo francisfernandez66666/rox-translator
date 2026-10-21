@@ -18,7 +18,7 @@ import (
 
 // userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at/job_role 为老库可空列，COALESCE 兜底）。
 // ★ 补列必须同步全部 Scan 目标（行式 Scan 有 4 处复制此清单，漏改会静默吞行——2026-08-26 事故口径）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0), COALESCE(job_role,'')"
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0), COALESCE(job_role,''), COALESCE(profile_setup_required,0)"
 
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
@@ -87,7 +87,7 @@ func NewStore(db *sql.DB) *Store {
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
 	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole)
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired)
 	if err != nil {
 		return nil, err
 	}
@@ -103,10 +103,54 @@ func (s *Store) CreateUser(tid int64, username, passHash, displayName, role stri
 		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
 	if err != nil {
-		// 同租户用户名唯一索引命中：返回可读错误（idx_users_tid_username）
-		if strings.Contains(err.Error(), "idx_users_tid_username") || strings.Contains(err.Error(), "UNIQUE constraint failed: users.tenant_id, users.username") {
-			return nil, fmt.Errorf("同租户下用户名已存在: %s", username)
+		// ★ 2026-10-21 IAM 重做：用户名不再是登录标识，也不再要求同租户唯一。
+		//   这里不再把唯一索引错误翻译成「用户名已存在」——那是旧语义的残留；
+		//   撞车只可能来自尚未迁移完的历史库，交给迁移闸门报警，不在这里替它猜。
+		return nil, err
+	}
+	return s.GetUser(id, tid)
+}
+
+// CreateUserWithEmail 在**一个事务里**创建用户并绑定邮箱/协议/首登资料标记。
+//
+// 为什么必须是一个入口：旧注册链先 CreateUser 再 SetUserEmail，第二步失败被 `_ =` 吞掉，
+// 于是"账号建成了、邮箱没绑上"既回 success 又让人永远收不到验证码（AGENTS §一·8② 同族）。
+// 本函数把两件事放在同一事务里：邮箱被占用则整笔回滚，不会留下半个人。
+//
+// 参数约定：
+//   - email 只接受已归一化的小写值；空串表示暂不绑定（管理台/SSO 兼容路径）。
+//   - agreedAt 为空表示未签协议；自动建号必须传真实时间，禁止静默置真。
+//   - profileSetupRequired=1 时登录响应会提醒补全资料（可跳过，不阻断）。
+func (s *Store) CreateUserWithEmail(tid int64, username, passHash, displayName, role string, createdBy, orgID int64, email, agreedAt string, profileSetupRequired int) (*User, error) {
+	now := time.Now().Format(time.RFC3339)
+	email = strings.ToLower(strings.TrimSpace(email))
+	var id int64
+	var err error
+	s.withWriteMu(func() {
+		tx, txErr := s.db.Begin()
+		if txErr != nil {
+			err = txErr
+			return
 		}
+		defer func() { _ = tx.Rollback() }()
+		if email != "" {
+			var owner int64
+			if qerr := db.QueryRow(tx, db.CurrentDialect(),
+				"SELECT id FROM users WHERE lower(trim(email))=? AND status IN (?,?) LIMIT 1",
+				email, UserActive, UserDeactivating).Scan(&owner); qerr == nil && owner > 0 {
+				err = fmt.Errorf("该邮箱已被其他账号绑定")
+				return
+			}
+		}
+		id, err = db.InsertID(tx, db.CurrentDialect(), "id",
+			"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, email, agreed_at, profile_setup_required, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			tid, username, passHash, displayName, role, UserActive, createdBy, orgID, email, agreedAt, profileSetupRequired, now, now)
+		if err != nil {
+			return
+		}
+		err = tx.Commit()
+	})
+	if err != nil {
 		return nil, err
 	}
 	return s.GetUser(id, tid)
@@ -124,7 +168,12 @@ func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
 
 // GetUserByEmail 跨租户按邮箱查询（找回密码用；邮箱小写归一化）。
 func (s *Store) GetUserByEmail(email string) (*User, error) {
-	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE lower(email)=? ORDER BY tenant_id LIMIT 1", strings.ToLower(strings.TrimSpace(email))))
+	// ★ 2026-10-21 IAM 重做：邮箱是登录外部标识，**只认当前仍占用它的账号**
+	// （active/deactivating）。停用/已注销的旧账号不再是占用方，其邮箱可被新空白账号复用；
+	// 这里若把 disabled 行也返回，验证码登录会把「邮箱可复用」判成「账号已停用」而永久挡住新号。
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT "+userCols+" FROM users WHERE lower(trim(email))=? AND status IN (?,?) ORDER BY CASE WHEN status=? THEN 0 ELSE 1 END, tenant_id, id LIMIT 1",
+		strings.ToLower(strings.TrimSpace(email)), UserActive, UserDeactivating, UserActive))
 }
 
 // DeactivateSelf 自助注销：仅普通用户且 active 可发起；置 deactivating + 请求日期。
@@ -158,7 +207,9 @@ func (s *Store) SetUserEmail(id, tid int64, email string) error {
 		return err
 	}
 	var owner int64
-	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT id FROM users WHERE email=?", email).Scan(&owner); err == nil && owner != id {
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT id FROM users WHERE lower(trim(email))=? AND status IN (?,?) AND id<>? LIMIT 1",
+		email, UserActive, UserDeactivating, id).Scan(&owner); err == nil && owner != id {
 		return fmt.Errorf("该邮箱已被其他账号绑定")
 	}
 	_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
@@ -181,7 +232,7 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
 			continue
 		}
 		out = append(out, &u)
@@ -200,7 +251,7 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -251,7 +302,7 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
 			continue
 		}
 		u.PasswordHash = ""
@@ -307,6 +358,30 @@ func (s *Store) SetMustChangePwd(id, tid int64, flag int) error {
 
 // SetJobRole 更新用户职业角色编码（2026-09-19 需求；code=角色包 persona code，空串=清除）。
 // 角色仅绑定用户层级（users.job_role），不随企业归属变化——退出企业仍存在，可自行维护（转岗语义）。
+// SetUsername 更新用户名与展示名（首登资料初始化用）。用户名已不要求唯一，
+// 因此这里不做撞重翻译；空值由调用方拦截。
+func (s *Store) SetUsername(id, tid int64, username string) error {
+	_, err := s.execW("UPDATE users SET username=?, display_name=?, updated_at=? WHERE id=? AND tenant_id=?",
+		username, username, time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// SetProfileSetupRequired 设置/清除首登资料提醒标记（1=下次登录继续提醒；0=资料已完成）。
+// ★ 只动 profile_setup_required，不碰 must_change_pwd——两者一个是可跳过提醒、一个是 428 强制闸。
+func (s *Store) SetProfileSetupRequired(id, tid int64, flag int) error {
+	_, err := s.execW("UPDATE users SET profile_setup_required=?, updated_at=? WHERE id=? AND tenant_id=?",
+		flag, time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// ClearUserPassword 清空密码哈希（自动建号尚未设置密码时使用；OTP 仍可登录）。
+func (s *Store) ClearUserPassword(id, tid int64) error {
+	_, err := s.execW("UPDATE users SET password_hash='', token_version=token_version+1, updated_at=? WHERE id=? AND tenant_id=?",
+		time.Now().Format(time.RFC3339), id, tid)
+	return err
+}
+
+// SetJobRole 更新用户职业角色编码（code 为空表示清除；租户隔离，不跨租户写）。
 func (s *Store) SetJobRole(id, tid int64, code string) error {
 	_, err := s.execW("UPDATE users SET job_role=?, updated_at=? WHERE id=? AND tenant_id=?", code, time.Now().Format(time.RFC3339), id, tid)
 	return err
@@ -333,9 +408,11 @@ func (s *Store) GetPreferredLang(id int64) (string, error) {
 // EnsureAdmin 确保平台超管初始账号存在（幂等；已存在同名普通账号则提升为超管）。
 // 若 email 非空，则确保该账号绑定了对应邮箱（新建时写入；已存在时更新）。
 func (s *Store) EnsureAdmin(tid int64, username, passHash, displayName, email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
 	if su, err := s.GetSuperAdminByUsername(username); err == nil && su != nil {
 		if email != "" {
-			_, _ = s.execW("UPDATE users SET email=? WHERE username=? AND tenant_id=?", email, username, tid)
+			// ★ 用户名已可重名，写路径只能按不可变主键定位；按 username 更新会一次改到多行。
+			_, _ = s.execW("UPDATE users SET email=? WHERE id=?", email, su.ID)
 		}
 		return nil
 	}
@@ -630,7 +707,7 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
 			continue
 		}
 		u.PasswordHash = ""

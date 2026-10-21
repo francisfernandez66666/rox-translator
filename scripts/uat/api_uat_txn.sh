@@ -405,14 +405,12 @@ ck T6-restore-login '"success":true' "$(curl -s $B/api/auth/login -H "$J" -d '{"
 # ★ B2：两次改密已使开场签发的 H1 失效；后续套件（T9/T10/T12/T14）复用 H1，重新登录刷新
 T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 [ ${#T1} -lt 10 ] && { echo "FATAL|T6 后刷新 uatuser_a token 失败"; exit 1; }
-# ★ 2026-10-21 用户后令：发码前先查库，未注册邮箱必须 404 + EMAIL_NOT_REGISTERED（不再假成功）
-ck T6-forgot-guard '"code":"EMAIL_NOT_REGISTERED"' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"nonexist@test.com"}')"
-# ★ F-20 后端半（2026-09-25 批G）：重置密码四类失败（码错/过期/用户缺/已占用之外的校验族）
-#   已收敛为 writeError + 稳定码 VALIDATION_ERROR + 文案「验证码错误或已过期」——
-#   旧断言只吃中文文案，文案一 i18n 就失明；这里补 code 字段等值锁，前端按码分支才有依据。
+# ★ 2026-10-21 IAM 重做：公开找回/重置已整体下线（410 GONE），发码与重置两条出口都必须诚实报下线，
+#   不许再接受参数、更不许假成功（前端已无入口，但旧缓存包/脚本仍会打进来）。
+ck T6-forgot-gone '"code":"GONE"' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"nonexist@test.com"}')"
 R6B=$(curl -s $B/api/auth/reset-password -H "$J" -d '{"email":"uat_a@test.com","code":"000000","new_password":"hacked999"}')
-ck T6-reset-badcode '验证码|无效|expired|不正确' "$R6B"
-ck T6-reset-badcode-code '"code":"VALIDATION_ERROR"' "$R6B"
+ck T6-reset-gone 410 "$(curl -s -o /dev/null -w '%{http_code}' $B/api/auth/reset-password -H "$J" -d '{"email":"uat_a@test.com","code":"000000","new_password":"hacked999"}')"
+ck T6-reset-gone-code '"code":"GONE"' "$R6B"
 
 # ---------- T7 OpenAPI 余额硬闸（清零租户 uatuser_b） ----------
 AKB=$(curl -s $B/api/apikeys/create -H "$H2" -H "$J" -d '{"name":"b-key"}' | pv '.get("api_key","")')
@@ -505,12 +503,13 @@ R=$(curl -s $B/status)
 ck T15-status-dbok '"db_ok":true' "$R"
 ck T15-status-degraded '"degraded":(true|false)' "$R"
 
-# ② 驱动错误脱敏：重复用户名/重复租户码不得泄漏 pq:/JSON1/约束名等内部细节
-#   注意：用户名唯一约束是「租户内」维度——必须同租户判重才触发约束（跨租户建号是合法操作）
+# ② 驱动错误脱敏：重复邮箱/重复租户码不得泄漏 pq:/JSON1/约束名等内部细节
+#   ★ 2026-10-21 IAM 重做后用户名可重名，故脱敏靶子改用**仍唯一**的邮箱（uat_a@test.com 已被占用），
+#   用户名这一维另在 A3-dup-username-allowed 里按新方案判「允许」。
 UA_TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND tenant_id>0 LIMIT 1")
-DUPU=$(post "$AH" "{\"username\":\"uatuser_a\",\"password\":\"x\",\"name\":\"d\",\"email\":\"dup15@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
+DUPU=$(post "$AH" "{\"username\":\"uat_dup_t15\",\"password\":\"x\",\"name\":\"d\",\"email\":\"uat_a@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
 ckn T15-sanitize-user 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq|json_extract' "$DUPU"
-ck T15-sanitize-user-msg '已存在|失败' "$DUPU"
+ck T15-sanitize-user-msg '"code":"CONFLICT"|绑定|已存在' "$DUPU"
 DUPC=$(post "$AH" "{\"code\":\"$(dbq "SELECT code FROM tenants LIMIT 1")\",\"name\":\"d\"}" /api/tenant/create)
 ckn T15-sanitize-tenant 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq' "$DUPC"
 
@@ -1527,44 +1526,14 @@ if grep -q 'backup_remote_cmd' "$ROOT44/backend-go/internal/api/admin_packages.g
 else PASS=$((PASS+1)); echo "PASS|T44-backup-cmd-no-whitelist"; fi
 ck T44-csp-header 'Content-Security-Policy' "$(grep -m1 'Content-Security-Policy' "$ROOT44/deploy/caddy/translator.conf" || echo NONE)"
 
-# ---------- T45 密码找回全链路（2026-09-16 测试盲区补全） ----------
-# 此前 T6 只测了未注册邮箱拦截与错误重置码拒绝，完整闭环（发码→取码→重置→新密登录→还原）无覆盖。
-# ★ 2026-10-21 起找回/重置只按注册邮箱定位（用户后令），故本段报文全部用 uat_a@test.com。
-# 原理：UAT 环境 MAIL_ENABLED 未配置 → NoopSender；run_uat.sh 注入 MAIL_NOOP_PRINT_BODY=1
-#   使验证码正文随服务日志可见（仅测试环境），T45 从 UAT_SERVER_LOG 增量读取 6 位码完成闭环。
-echo "--- T45 密码找回全链路（发码→日志取码→重置→新密登录→还原）---"
-if [ -n "${UAT_SERVER_LOG:-}" ] && [ -f "$UAT_SERVER_LOG" ]; then
-  MARK45=$(wc -l < "$UAT_SERVER_LOG" | tr -d '[:space:]')
-  ck T45-forgot-accept '"success":true' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"uat_a@test.com"}')"
-  RCODE=""
-  for i in $(seq 1 15); do   # 邮件异步入队 → 轮询日志增量取码
-    # ★ python3 提取（2026-09-16 修复）：grep -oE 中文 pattern 在 ck 的 $(...) 命令替换 +
-    #   bash 3.2 管道组合下实测偶发取不到（手动同管线可取），python3 对编码/转义免疫
-    RCODE=$(tail -n +"$MARK45" "$UAT_SERVER_LOG" 2>/dev/null | python3 -c '
-import sys, re
-m = ""
-for line in sys.stdin:
-    for x in re.findall(r"验证码是[:：]\s*(\d{6})", line):
-        m = x
-print(m)' 2>/dev/null)
-    [ -n "$RCODE" ] && break
-    sleep 2
-  done
-  [ -n "$RCODE" ] && { PASS=$((PASS+1)); echo "PASS|T45-code-from-log($RCODE)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T45-code-from-log|mark=$MARK45 增量行数=$(wc -l < "$UAT_SERVER_LOG" | tr -d '[:space:]') 日志尾=$(tail -1 "$UAT_SERVER_LOG" | head -c 120)"; }
-  if [ -n "$RCODE" ]; then
-    R45BODY="{\"email\":\"uat_a@test.com\",\"code\":\"$RCODE\",\"new_password\":\"UatReset@45x\"}"
-    ck T45-reset-ok '"success":true' "$(curl -s $B/api/auth/reset-password -H "$J" -d "$R45BODY")"
-    T45T=$(tok uatuser_a UatReset@45x)
-    [ ${#T45T} -gt 30 ] && { PASS=$((PASS+1)); echo "PASS|T45-login-new-pwd"; } || { FAIL=$((FAIL+1)); echo "FAIL|T45-login-new-pwd"; }
-    ck T45-old-pwd-dead '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"uatpass123"}')"
-    # 还原密码（改密接口：旧码已被消费，用新密会话改回；B2 语义下旧 token 已失效，用 T45 新 token）
-    H45="Authorization: Bearer $T45T"
-    ck T45-restore '"success":true' "$(post "$H45" '{"old_password":"UatReset@45x","new_password":"uatpass123"}' /api/auth/change-password)"
-    ck T45-restore-login '"success":true' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"uatpass123"}')"
-  fi
-else
-  PASS=$((PASS+1)); echo "PASS|T45-log-skip(未提供 UAT_SERVER_LOG，仅 run_uat 全流程可检)"
-fi
+# ---------- T45 公开找回/重置下线（2026-10-21 IAM 重做） ----------
+# 旧链路（发码→日志取码→重置→新密登录→还原）已整体退役；改密唯一入口是登录后
+# `/api/auth/change-password`（或邮箱验证码 purpose=password）。这里锁两条对外契约：
+# 410 + GONE，且旧口令不受影响（不许出现"半下线"——接口说下线了却悄悄改了密码）。
+echo "--- T45 公开找回/重置下线 ---"
+ck T45-forgot-gone '"code":"GONE"' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"uat_a@test.com"}')"
+ck T45-reset-gone 410 "$(curl -s -o /dev/null -w '%{http_code}' $B/api/auth/reset-password -H "$J" -d '{"email":"uat_a@test.com","code":"123456","new_password":"UatReset@45x"}')"
+ck T45-old-pwd-alive '"success":true' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"uatpass123"}')"
 
 # ---------- T46（改造 4/5，2026-09-17）质检闭环 API 透出 ----------
 # 改造 5：工单详情接口新增 quality 视图（qa_report / eval_scores / review_eval_scores / quality_flagged_langs），

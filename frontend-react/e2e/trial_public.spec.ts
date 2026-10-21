@@ -62,7 +62,7 @@ test('免登录试用真链路：访客在首页翻出一句真译文，全程�
 
   // —— 全程没有登录墙：URL 停在 `/`，密码框计数为 0 ——
   expect(page.url(), '⇒ 试用过程把访客弹去了登录页').toMatch(new RegExp(`^${BASE}/(\\?.*)?$`))
-  expect(await page.locator('input[type="password"]').count(), '⇒ 试用链路上出现了登录表单').toBe(0)
+  expect(await page.locator('.lc-auth-card').count(), '⇒ 试用链路上出现了登录表单').toBe(0)
 
   await page.screenshot({ path: 'artifacts/trial_public_success.png', fullPage: true })
 })

@@ -23,7 +23,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { setLang, t } from '@/i18n'
-import { ApiError } from '@/api/core'
 import { ToastProvider } from '@/ui/langcross/src'
 import Login from './Login'
 // ★ 2026-10-13 用户后令：触发钮可见文字固定英文，判据从组件取同一常量（不在此重写字面量）
@@ -37,11 +36,11 @@ vi.mock('./AiRegisterFlow', () => ({ default: () => null }))
 vi.mock('@/api', () => ({
   getAuthToken: vi.fn(() => null),
   login: vi.fn(async () => ({ success: false, message:'mock'})),
+  loginWithEmail: vi.fn(async () => ({ success: false, message: 'mock' })),
+  profileSetup: vi.fn(),
   authRegister: vi.fn(),
   sendEmailCode: vi.fn(),
   registerConfig: vi.fn(async () => ({ success: false })),
-  forgotPassword: vi.fn(),
-  resetPassword: vi.fn(),
   changePassword: vi.fn(),
   setAuthToken: vi.fn(),
   setActiveTenantId: vi.fn(),
@@ -89,14 +88,16 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     expect(labels).not.toContain('自助注册试用')
   })
 
-  it('③ 底部是两行链接，文案与顺序与画布一致', () => {
+  it('③ 底部不再有找回密码入口：验证码主登录 + 密码备用 + 注册', () => {
     renderLogin()
     expect(footButtons().map((b) => b.textContent?.trim()))
-      .toEqual(['忘记密码？', '没有账号？自助注册试用'])
+      .toEqual(['使用密码登录', '没有账号？自助注册试用'])
+    expect(card().textContent).not.toContain('忘记密码')
   })
 
-  it('④ 密码框眼睛按钮可切换明文/密文', () => {
+  it('④ 密码备用档的眼睛按钮可切换明文/密文', () => {
     renderLogin()
+    fireEvent.click(footButtons().find((b) => b.textContent?.includes(t('auth.usePassword')))!)
     const pwd = card().querySelector('input[placeholder="密码"]') as HTMLInputElement
     const eye = card().querySelector('.lc-input-affix') as HTMLButtonElement
     expect(pwd.type).toBe('password')
@@ -136,11 +137,11 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     setLang('zh') // 复位，别把英文态漏给后续用例
   })
 
-  it('⑥ 字段没有可见 label，但仍保留可访问名', () => {
+  it('⑥ 字段没有可见 label，但仍保留可访问名（验证码主档）', () => {
     renderLogin()
     expect(card().querySelectorAll('.lc-field__label').length).toBe(0)
-    expect(card().querySelector('input[aria-label="用户名"]')).toBeTruthy()
-    expect(card().querySelector('input[aria-label="密码"]')).toBeTruthy()
+    expect(card().querySelector('input[aria-label="' + t('auth.boundEmail') + '"]')).toBeTruthy()
+    expect(card().querySelector('input[aria-label="' + t('auth.fieldEmailCode') + '"]')).toBeTruthy()
   })
 })
 
@@ -187,47 +188,52 @@ describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）'
 
 
 // ============================================================================
-// ★ 2026-10-21 用户后令：找回/重置只按注册邮箱，且邮箱不在库必须当场拦截。
-// 注册屏、登录屏与找回屏此前三处都出现过 username；这里把它钉成"只有 email 一个入口"。
+// ★ 2026-10-21 IAM 重做：邮箱验证码成为主登录入口，找回密码公开入口下线。
+// 守护点：① 默认就是验证码档，发码必须带 purpose=login；
+//   ② 提交走 loginWithEmail（不是旧 login），成功后进 onLogin；
+//   ③ 首登资料提醒可跳过，跳过也必须重签 token 并进入工作台。
 // ============================================================================
-describe('找回密码 · 邮箱唯一入口与明确拦截', () => {
-  const openForgot = () => {
-    renderLogin()
-    fireEvent.click(footButtons().find((b) => b.textContent?.includes('忘记密码'))!)
-  }
+const { loginWithEmail, profileSetup } = await import('@/api')
 
-  it('⑪ 找回屏只有注册邮箱输入框，没有用户名输入框', () => {
-    openForgot()
-    expect(card().querySelector('input[aria-label="用户名"]')).toBeNull()
-    expect(card().querySelector('input[aria-label="注册邮箱"]')).toBeTruthy()
-  })
+describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () => {
+  const email = 'otp@example.com'
 
-  it('⑫ 邮箱不在库：显示本地化「该邮箱未注册」，不显示假成功', async () => {
-    vi.mocked(forgotPassword).mockRejectedValueOnce(new ApiError('该邮箱未注册，请确认邮箱或先注册账号', 404, 'EMAIL_NOT_REGISTERED'))
-    openForgot()
-    fireEvent.change(card().querySelector('input[aria-label="注册邮箱"]')!, { target: { value: 'ghost@example.com' } })
-    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
-    await waitFor(() => expect(card().textContent).toContain(t('auth.emailNotRegistered')))
-    expect(card().textContent).not.toContain(t('auth.forgotSent'))
-    expect(vi.mocked(forgotPassword).mock.calls.at(-1)?.[0]).toEqual({ email: 'ghost@example.com' })
-  })
-
-  it('⑬ 重置成功后用邮箱+新密码自动登录（不再停在登录页让用户重输）', async () => {
+  it('⑪ 默认验证码档：填邮箱+验证码+协议即可登录，发码走 purpose=login', async () => {
     const onLogin = vi.fn()
-    vi.mocked(forgotPassword).mockResolvedValueOnce({ success: true, message: '验证码已发送至该邮箱' })
-    vi.mocked(resetPassword).mockResolvedValueOnce({ success: true, login_account: 'me@example.com' })
-    vi.mocked(login).mockResolvedValueOnce({ success: true, token: 'tok', user: { id: 1, username: 'me', role: 'user', tenant_id: 0 } } as never)
+    const send = vi.mocked((await import('@/api')).sendEmailCode)
+    send.mockResolvedValueOnce({ success: true } as never)
+    vi.mocked(loginWithEmail).mockResolvedValueOnce({
+      success: true, token: 'tok', user: { id: 1, username: 'otp', role: 'user', tenant_id: 0 },
+    } as never)
     render(<ToastProvider><Login mode="home" onLogin={onLogin} /></ToastProvider>)
-    fireEvent.click(footButtons().find((b) => b.textContent?.includes('忘记密码'))!)
-    fireEvent.change(card().querySelector('input[aria-label="注册邮箱"]')!, { target: { value: 'me@example.com' } })
-    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
-    await waitFor(() => expect(card().querySelector(`input[aria-label="${t('auth.newPassword')}"]`)).toBeTruthy())
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`)!, { target: { value: email } })
+    fireEvent.click([...card().querySelectorAll('button')].find((b) => b.textContent?.includes(t('auth.sendCode')))!)
+    await waitFor(() => expect(send).toHaveBeenCalledWith(email, undefined, 'login'))
     fireEvent.change(card().querySelector(`input[aria-label="${t('auth.fieldEmailCode')}"]`)!, { target: { value: '123456' } })
-    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.newPassword')}"]`)!, { target: { value: 'newpass123' } })
+    fireEvent.click(card().querySelector('input[type="checkbox"]') as HTMLElement)
     fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
-    await waitFor(() => expect(login).toHaveBeenCalledWith('me@example.com', 'newpass123'))
+    await waitFor(() => expect(loginWithEmail).toHaveBeenCalledWith(email, '123456', expect.objectContaining({ agreed: true })))
     await waitFor(() => expect(onLogin).toHaveBeenCalled())
-    expect(vi.mocked(resetPassword).mock.calls.at(-1)?.[0]).toEqual({ email: 'me@example.com', code: '123456', new_password: 'newpass123' })
+  })
+
+  it('⑫ 首登资料提醒：暂时跳过只结束本轮，标记仍在（下次登录继续提醒）', async () => {
+    const onLogin = vi.fn()
+    vi.mocked(loginWithEmail).mockResolvedValueOnce({
+      success: true, token: 'tok', user: { id: 1, username: 'newbie', role: 'user', tenant_id: 7, profile_setup_required: 1 },
+    } as never)
+    vi.mocked(profileSetup).mockResolvedValueOnce({
+      success: true, token: 'tok2', user: { id: 1, username: 'newbie', role: 'user', tenant_id: 7, profile_setup_required: 1 },
+    } as never)
+    render(<ToastProvider><Login mode="home" onLogin={onLogin} /></ToastProvider>)
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`)!, { target: { value: email } })
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.fieldEmailCode')}"]`)!, { target: { value: '123456' } })
+    fireEvent.click(card().querySelector('input[type="checkbox"]') as HTMLElement)
+    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
+    await waitFor(() => expect(document.body.textContent).toContain(t('auth.profileTitle')))
+    expect(onLogin).not.toHaveBeenCalled()
+    fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === t('auth.skipForNow'))!)
+    await waitFor(() => expect(profileSetup).toHaveBeenCalledWith(expect.objectContaining({ skip: true })))
+    await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ profile_setup_required: 1 })))
   })
 })
 
@@ -239,7 +245,7 @@ describe('找回密码 · 邮箱唯一入口与明确拦截', () => {
 //   ② 启用时按 display_name 出入口；③ 入口必须是 <a href="/api/sso/login?provider=…">，
 //      用 fetch 走接口会把 302 到 IdP 的重定向链连同 state cookie 一起丢掉。
 // ============================================================================
-const { ssoProviders, forgotPassword, resetPassword, login } = await import('@/api')
+const { ssoProviders } = await import('@/api')
 
 describe('登录屏 · SSO 身份源入口（#38）', () => {
   beforeEach(() => { vi.mocked(ssoProviders).mockReset() })

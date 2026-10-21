@@ -58,6 +58,9 @@ import { DialogHost } from './components/uiDialogs'
 // 必须挂在 ToastProvider 内（要用 toast），且与 App/PublicRoot 的选路无关——
 // 428 可能发生在任何一条已登录路径上，改密框不能只在登录屏存在。
 import ForcePasswordGate from './components/ForcePasswordGate'
+// ★ 2026-10-21 IAM 重做：会话恢复后的资料补全提醒。懒加载保持入口包不背这块面板；
+// 登录后 AuthProvider 会刷新 user，本闸门随之出现（同 ForcePasswordGate 的「全局一闸」口径）。
+const ProfileSetupGate = React.lazy(() => import('./components/ProfileSetupGate'))
 // ★ 2026-10-13 链路批④（#29）：懒加载分片取不到时的「自动补一次整页重载」恢复腿。
 // 必须在 createRoot **之前**装：它监听的是 Vite 的 window 事件，与 React 挂载无关，
 // 而 CSS 预载失败那一族根本不会走到渲染期（只有这个事件看得见）。
@@ -173,6 +176,9 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <ToastBridge />
         <DialogHost />
         <ForcePasswordGate />
+        <React.Suspense fallback={null}>
+          <ProfileSetupGate />
+        </React.Suspense>
         {/* Suspense 只等**入口分片**（PublicRoot 或 App）：它的 fallback 与 index.html 的
             首屏骨架同貌，且必须非空——见 BootLoading 文件头（哨兵判据）。 */}
         <React.Suspense fallback={<BootLoading />}>

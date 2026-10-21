@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "Обновление пакета базы знаний",
   "audit.action.logout": "Выход",
   "audit.action.login": "Вход",
+  "audit.action.profile_setup": "Профиль заполнен",
   "audit.action.login_sso": "Вход через SSO",
   "audit.action.model_routes_save": "Сохранение маршрутизации моделей",
   "audit.action.model_save": "Сохранение конфигурации моделей",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "Сеанс истёк. Войдите снова с новым паролем",
   "auth.regOkLoginFail": "Аккаунт создан, но автоматический вход не выполнен. Вернитесь на страницу входа и войдите с новым аккаунтом",
   "pwd.oldRequired": "Сначала введите текущий пароль",
+  "auth.otpDesc": "Введите почту и одноразовый код для входа. Незарегистрированная почта автоматически создаст пустой аккаунт.",
+  "auth.usePassword": "Войти с паролем",
+  "auth.useCode": "Использовать код из письма",
+  "auth.profileTitle": "Заполните профиль",
+  "auth.profileDesc": "Выберите имя пользователя, чтобы коллеги могли вас узнать. Можно задать пароль сейчас или продолжать входить только по кодам из письма.",
+  "auth.profileDone": "Сохранить и продолжить",
+  "auth.passwordOptional": "Пароль (необязательно; оставьте пустым, чтобы входить только по кодам)",
+  "auth.skipForNow": "Пропустить сейчас",
+
 }

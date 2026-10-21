@@ -21,10 +21,17 @@ async function login(page: import('@playwright/test').Page, mode: 'admin' | 'hom
   //   明暗切换眼睛键，button.first 会点错（点击后仅切换可见性，表单永不提交 → 静默超时）。
   await page.goto(`${BASE}/${mode === 'admin' ? 'admin' : 'login'}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.lc-auth-card', { timeout: 30000 });
+  // ★ 2026-10-21 IAM 重做：登录卡默认是邮箱验证码档，密码是备用入口——
+  //   直接 fill(input[type=password]) 会因该输入框根本未渲染而超时。
+  //   这里显式点「用密码登录」再填（toggle 是卡内第一颗 button.auth-link）。
+  const pwd = page.locator('.lc-auth-card input[type="password"]').first();
+  if (await pwd.count() === 0) {
+    await page.locator('.lc-auth-card button.auth-link').first().click();
+  }
   // 账号 + 密码输入框（注册表单亦有同类输入框，登录卡先渲染）
   const inputs = page.locator('.lc-auth-card input').first();
   await inputs.fill(user);
-  await page.locator('.lc-auth-card input[type="password"]').first().fill(pass);
+  await pwd.fill(pass);
   await page.locator('.lc-auth-card__submit').click();
   await page.waitForLoadState('networkidle');
 }

@@ -211,13 +211,15 @@ T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 ck A3-register-B '"success":true' "$(reg uatuser_b uatpass123 uatcorpB UAT公司B uat_b@test.com)"
 T2=$(tok uatuser_b uatpass123); H2="Authorization: Bearer $T2"
 # 唯一性分两条测：注册接口这条带重复的「用户名 + 租户码」，期望词把两种拦截形态都兜住
-# （租户创建失败 / UNIQUE / 已存在）；只想单看「用户名占用」这一条约束，必须绕开注册流程
-# 从管理端直插同一个租户（A3-dup-username），否则结果由先到那道校验决定、指不到具体列。
+# （租户创建失败 / UNIQUE / 已存在）；用户名这条按 2026-10-21 新方案**必须允许同租户重名**
+# （用户名不再是登录标识），故用一对专用名字验证两次创建都成功。
 # AID 现查自库：租户 id 取决于建号顺序，写死会在种子数据变化后打到错的租户上（那就成了插新号）。
 ck A3-dup-tenantcode '租户创建失败|UNIQUE|已存在' "$(reg uatuser_a uatpass123 uatcorpA 重复 uat_dup@test.com)"
 AID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
-DUP_PAYLOAD="{\"username\":\"uatuser_a\",\"password\":\"uatpass123\",\"display_name\":\"重复\",\"role\":\"user\",\"tenant_id\":$AID}"
-ck A3-dup-username '已存在|占用|exists' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD")"
+DUP_PAYLOAD="{\"username\":\"uat_dup_name\",\"password\":\"uatpass123\",\"display_name\":\"重名甲\",\"role\":\"user\",\"tenant_id\":$AID}"
+ck A3-dup-username-first '"success":true' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD")"
+DUP_PAYLOAD2="{\"username\":\"uat_dup_name\",\"password\":\"uatpass123\",\"display_name\":\"重名乙\",\"role\":\"user\",\"tenant_id\":$AID}"
+ck A3-dup-username-allowed '"success":true' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD2")"
 ck A3-bad-login '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"wrongpass"}')"
 ck A3-no-agree '同意|协议' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_x","password":"uatpass123","code":"uatcorpD","name":"X","email":"uat_x@test.com"}')"
 

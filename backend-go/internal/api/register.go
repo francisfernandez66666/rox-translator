@@ -9,7 +9,7 @@ package api
 //   - 体验额度：新租户自动发放 free_trial_tokens（system_config 可配置，出厂档 1,000 积分折 400000 token/14 天，★ F-78 汇率 1:400）并写入每日字符上限权限
 //   - 注册开关：system_config registration_enabled=0 时关闭注册
 //   - 邀请码管理（super_admin）：列表 / 创建 / 撤销（handleInviteCodes / handleInviteCodeCreate / handleInviteCodeRevoke）
-// 安全要点：邀请码一次性使用（used=1 即失效）；受邀加入前校验该租户用户名唯一。
+// 安全要点：邀请码一次性使用（used=1 即失效）；受邀加入前校验邮箱未被占用（用户名同租户可重名）。
 // ★ G9（2026-10-19）：撤销是状态位（revoked=1）而非删行，保留 used_by/used_at 追溯；撤销后注册口拒收且不烧码。
 
 import (
@@ -324,13 +324,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		inviteTenantID = inv.TenantID
-		// 绑定租户的邀请码：先校验该租户下用户名是否已存在（防重复）
-		if inviteTenantID > 0 {
-			if _, err := s.Store.GetUserByUsername(inviteTenantID, req.Username); err == nil {
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该租户下用户名已存在"})
-				return
-			}
-		}
+		// ★ 2026-10-21 IAM 重做：用户名不是登录标识，同租户重名合法，
+		//   这里不再用「该租户下用户名已存在」拦注册（否则邀约成员仍被旧唯一语义卡住）。
 		// 标记邀请码已使用（一次性；★ 整改 A4：抢占失败=被并发请求抢先，拒绝本次注册）
 		if claimed, merr := s.Store.MarkInviteCodeUsed(inv.ID, req.Username); merr != nil || !claimed {
 			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效或已使用"})
@@ -436,7 +431,14 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			inviteOrgID = inv.OrgID
 		}
 	}
-	nu, err := s.Store.CreateUser(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, inviteOrgID)
+	regAgreedAt := ""
+	if req.Agreed {
+		regAgreedAt = time.Now().Format(time.RFC3339)
+	}
+	// ★ 2026-10-21 IAM 重做：建号 + 绑邮箱 + 协议时间同一事务。
+	// 旧形态先 CreateUser 再 `_ = SetUserEmail`，第二步失败被吞 ⇒ 回 success 但用户永远收不到验证码。
+	nu, err := s.Store.CreateUserWithEmail(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, inviteOrgID,
+		strings.ToLower(strings.TrimSpace(req.Email)), regAgreedAt, 0)
 	if err != nil {
 		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
 		return
@@ -449,9 +451,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	s.autoGrantUserTrial(r.Context(), nu)
 	// 记录协议签署时间（注册勾选即视为同意《用户协议》与《隐私协议》，给后台超管「协议签署」tab 留痕）
 	if req.Agreed {
-		now := time.Now().Format(time.RFC3339)
-		_ = s.Store.SetUserAgreed(nu.ID, inviteTenantID, now)
-		nu.AgreedAt = now
+		nu.AgreedAt = regAgreedAt // 已在建号事务里落库
 	}
 	// ★ 角色功能（2026-09-19）：注册时选择的职业角色落库（所有注册分支统一在此写入——
 	//   个人/企业管理员/受邀成员/专属域名共用同一账号创建点）。job_role 仅绑用户层级：
@@ -472,8 +472,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// 绑定联系邮箱（用于找回密码）
 	if req.Email != "" {
-		_ = s.Store.SetUserEmail(nu.ID, inviteTenantID, strings.TrimSpace(req.Email))
-		nu.Email = strings.TrimSpace(req.Email)
+		// 邮箱已在建号事务里绑定（nu.Email 已由 CreateUserWithEmail 返回）。
 		// ★ S4 归因快照：注册主链路成功后落库（失败不阻断）
 		_ = s.Store.InsertRegAttribution(&store.RegAttribution{
 			UserID: nu.ID, TenantID: nu.TenantID,
@@ -610,7 +609,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   而那次补登当时**只认用户名**、注册填的却是邮箱 ⇒ 结构上必失败；失败原因又写在
 	//   另一屏的报错位上（error 槽只在登录屏渲染）⇒ 用户只看到"注册成功，然后什么都没发生"。
 	// ⚠️ 签发失败**不许把注册判成失败**：账号已建、额度已发，回一个 5xx 会把"注册成功"
-	//   抹成"注册失败"，用户再点一次就撞"该租户下用户名已存在"（register.go:328 那条闸）。
+	//   抹成"注册失败"，用户再点一次只会再建一个同邮箱账号而被邮箱唯一索引拦下。
 	//   所以这里只出一行 WARN、少发一个字段，前端自然回落到"请你去登录"。
 	if tok, serr := auth.Sign(nu, 24*time.Hour); serr == nil {
 		regResp["token"] = tok

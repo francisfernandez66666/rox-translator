@@ -33,7 +33,7 @@ import (
 
 // importUserRow Excel 一行待导入用户（解析后标准化）。
 type importUserRow struct {
-	Username    string // 登录用户名（必填，租户内唯一）
+	Username    string // 登录用户名（必填；展示/检索用，同租户可重名）
 	DisplayName string // 显示名称（缺省回退用户名）
 	OrgName     string // 部门/组织名称（缺省挂根组织）
 	Role        string // 角色（管理员/普通用户 等中英文）
@@ -104,7 +104,7 @@ func buildUserImportTemplate() *excelize.File {
 	_ = f.SetCellStr(sheet, "D2", "普通用户")
 	_ = f.SetCellStr(sheet, "E2", "sample@example.invalid")
 	// 填写说明（★ F-23② 挪出表头行，挂示例行 F2；解析器只认 A-E 五列，不会读到它）
-	_ = f.SetCellStr(sheet, "F2", "填写说明：第 2 行是示例行，提交前请删除或整行替换为真实信息；用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知，必须是可以收信的真实邮箱（example.com／*.invalid 等示例保留域会被拒收）")
+	_ = f.SetCellStr(sheet, "F2", "填写说明：第 2 行是示例行，提交前请删除或整行替换为真实信息；用户名称必填（同租户可重名，邮箱是登录标识）；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知，必须是可以收信的真实邮箱（example.com／*.invalid 等示例保留域会被拒收）")
 	// 表头浅灰填充 + 加粗，示例行便于识别
 	if style, e := f.NewStyle(&excelize.Style{Fill: excelize.Fill{Type: "pattern", Color: []string{"F2F2F2"}, Pattern: 1}, Font: &excelize.Font{Bold: true}}); e == nil {
 		_ = f.SetCellStyle(sheet, "A1", "E1", style)
@@ -172,7 +172,7 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	created := 0
 	for _, row := range rows {
 		rr := rowResult{Username: row.Username}
-		// 用户名必填且租户内唯一（CreateUser 内唯一索引兜底）
+		// 用户名必填（同租户可重名；CreateUser 不再按用户名唯一索引兜底）
 		if strings.TrimSpace(row.Username) == "" {
 			rr.Message = "用户名称不能为空"
 			results = append(results, rr)

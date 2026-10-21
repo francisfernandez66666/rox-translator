@@ -17,7 +17,7 @@ export interface AuthCardProps {
   /**
    * busy=true ⇒ 提交钮禁用并标 aria-busy（★ 2026-10-21 IAM 重做 P1-2）。
    * 旧形态这里**没有**禁用档：登录/注册/找回三张面的提交钮在请求飞行中照样可点，
-   * 于是"连点两下"会真的发两次请求——注册那一腿第二次必吃「该租户下用户名已存在」，
+   * 于是"连点两下"会真的发两次请求——注册那一腿第二次必吃「该邮箱已被其他账号绑定」，
    * 用户看到的是"我点了注册它报错"。
    * ⚠️ 刻意**不加新视觉**：禁用态直接复用交付档 `.lc-btn:disabled`
    *   （background=--lc-raised / color=--lc-disabled / border=--lc-border-faint，

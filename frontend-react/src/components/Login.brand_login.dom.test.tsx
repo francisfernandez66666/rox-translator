@@ -39,8 +39,6 @@ vi.mock('@/api', () => ({
   authRegister: vi.fn(),
   sendEmailCode: vi.fn(),
   registerConfig: vi.fn(async () => ({ success: false })),
-  forgotPassword: vi.fn(),
-  resetPassword: vi.fn(),
   changePassword: vi.fn(),
   setAuthToken: vi.fn(),
   setActiveTenantId: vi.fn(),

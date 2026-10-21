@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "تحديث حزمة قاعدة المعرفة",
   "audit.action.logout": "تسجيل الخروج",
   "audit.action.login": "تسجيل الدخول",
+  "audit.action.profile_setup": "إكمال الملف الشخصي",
   "audit.action.login_sso": "تسجيل الدخول عبر SSO",
   "audit.action.model_routes_save": "حفظ مسارات النماذج",
   "audit.action.model_save": "حفظ إعداد النموذج",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "انتهت الجلسة. سجّل الدخول مرة أخرى باستخدام كلمة المرور الجديدة",
   "auth.regOkLoginFail": "تم إنشاء الحساب بنجاح، لكن تسجيل الدخول التلقائي لم يكتمل. ارجع إلى صفحة تسجيل الدخول وسجّل الدخول بالحساب الجديد",
   "pwd.oldRequired": "أدخل كلمة المرور الحالية أولاً",
+  "auth.otpDesc": "أدخل بريدك الإلكتروني ثم رمزًا لمرة واحدة لتسجيل الدخول. البريد غير المسجل ينشئ حسابًا فارغًا تلقائيًا.",
+  "auth.usePassword": "تسجيل الدخول بكلمة المرور",
+  "auth.useCode": "استخدام رمز البريد بدلًا من ذلك",
+  "auth.profileTitle": "أكمل ملفك الشخصي",
+  "auth.profileDesc": "اختر اسم مستخدم ليتعرف عليك زملاؤك. يمكنك تعيين كلمة مرور الآن أو الاستمرار برموز البريد فقط.",
+  "auth.profileDone": "حفظ ومتابعة",
+  "auth.passwordOptional": "كلمة المرور (اختياري؛ اتركها فارغة لاستخدام رموز البريد فقط)",
+  "auth.skipForNow": "تخطٍ الآن",
+
 }

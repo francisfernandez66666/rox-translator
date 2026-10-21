@@ -93,7 +93,7 @@ test.describe('官网首页快速算价卡（访客可见·与后端同源·详�
     await openCalcCard(page)
     const card = page.locator('.lc-qc')
     // 登录页特征件必须为 0：这一条才真正区分「放行的公开页」与「兜底送进来的登录页」
-    expect(await page.locator('input[type="password"]').count(), '⇒ 访客被兜底送进了登录页').toBe(0)
+    expect(await page.locator('.lc-auth-card').count(), '⇒ 访客被兜底送进了登录页').toBe(0)
 
     // 等值锁：默认预置量 80,000 源字符 × 1 语种 × 专业档
     // （与 src/lib/priceCalc.ts 的 EXAMPLE_CHARS/EXAMPLE_LANGS 同口径，也是 /compare 页初值）

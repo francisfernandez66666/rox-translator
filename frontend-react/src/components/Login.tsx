@@ -16,13 +16,12 @@ import {
 } from '@/ui/langcross/src'
 import { readUtm, clearUtm } from '@/utils/utm'
 import {
-  login, authRegister, sendEmailCode, registerConfig,
-  forgotPassword, resetPassword, changePassword,
+  login, loginWithEmail, profileSetup, authRegister, sendEmailCode, registerConfig,
+  changePassword,
   setAuthToken, setActiveTenantId,
   ssoProviders, ssoLoginUrl, type AuthUser, type SSOProvider,
 } from '@/api'
 import { t, useT } from '@/i18n'
-import { ApiError } from '@/api/core'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
 import { useBranding, BrandLoginShell, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
@@ -60,16 +59,27 @@ export default function Login({ mode, onLogin }: Props) {
   const ref = new URLSearchParams(window.location.search).get('ref') || ''
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  // ★ 2026-10-21 IAM 重做：邮箱验证码登录是主流程；密码降为备用登录方式。
+  const [loginMode, setLoginMode] = useState<'otp' | 'password'>('otp')
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginCode, setLoginCode] = useState('')
+  const [loginAgreed, setLoginAgreed] = useState(false)
+  const [loginCaptchaToken, setLoginCaptchaToken] = useState('')
+  // 首登资料提醒（可跳过；完成/跳过后才 onLogin 进工作台）
+  const [setupUser, setSetupUser] = useState<AuthUser | null>(null)
+  const [setupName, setSetupName] = useState('')
+  const [setupPwd, setSetupPwd] = useState('')
+  const [setupBusy, setSetupBusy] = useState(false)
+  const [setupMsg, setSetupMsg] = useState('')
   const [showPwd, setShowPwd] = useState(false) // 密码明文/密文切换（画布 57:8 的眼睛按钮）
   // ★ 2026-10-21 IAM 重做 P1-3：注册屏与找回屏的新密码各配一枚眼睛。
   //   登录屏早就有这枚按钮，而「注册时两次打错同一个字符」恰恰是最需要看得见的一次输入；
   //   找回屏同理——验证码邮件里抄出来的口令看不见，用户只能盲输。
   const [showRegPwd, setShowRegPwd] = useState(false)
-  const [showForgotPwd, setShowForgotPwd] = useState(false)
   // ★ 2026-10-21 IAM 重做 P1-2：这一份读数**现在参与渲染**了。
   //   旧注释写的是「迁移后 AuthCard 的通栏提交按钮不暴露 loading 属性，loading 不再参与渲染」——
   //   那正是缺陷本体而不是设计：请求在飞的三秒里提交钮照常可点，
-  //   注册那一腿连点两下就是两次请求，第二次必吃「该租户下用户名已存在」，
+  //   注册那一腿连点两下就是两次请求，第二次必吃「该邮箱已被其他账号绑定」，
   //   用户看到的是"我点了注册，它报错"。现在 AuthCard 有 busy 档（复用交付档 .lc-btn:disabled，零新视觉）。
   //   setter 的名字与时序一字不改（各异步函数仍是「前置位 / finally 复位」）。
   const [loading, setLoading] = useState(false)
@@ -85,7 +95,7 @@ export default function Login({ mode, onLogin }: Props) {
   const [forceMsg, setForceMsg] = useState('')
   const [forceBusy, setForceBusy] = useState(false)
   // 视图与注册接管阶段
-  const [view, setView] = useState<'signin' | 'register' | 'forgot'>('signin')
+  const [view, setView] = useState<'signin' | 'register'>('signin')
   const [regPhase, setRegPhase] = useState<RegPhase>('form')
   // ★ 2026-10-21 IAM 重做 P1-8：是否处于「减少动效」偏好。
   //   旧形态在减少动效下直接 return，整段接管流程连入口一起消失——用户被永久钉在 9 项传统表单上，
@@ -112,13 +122,12 @@ export default function Login({ mode, onLogin }: Props) {
   const captchaBoxRef = useRef<HTMLDivElement>(null) // Turnstile 挂载容器（脚本会往里塞 iframe）
   const captchaTokenRef = useRef('') // token 用 ref 而非 state：回调写入时不需要触发重渲染
   const captchaIdRef = useRef<string | number | null>(null) // widget id：token 消费后 reexec 领新码要用
+  const loginCaptchaBoxRef = useRef<HTMLDivElement>(null)
+  const loginCaptchaIdRef = useRef<string | number | null>(null)
   // ★ 2026-09-24：siteKey 存 state——AI 注册面板（接管注册的传统表单替代者）要拿同一份配置
   //   挂自己的验证组件，旧写法只活在注册期局部变量里，面板无从获得
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
   // 忘记密码
-  const [forgotMsg, setForgotMsg] = useState('')
-  const [forgotSent, setForgotSent] = useState(false) // 已发码 → 同一张卡切换成「填码 + 新密码」形态
-  const [forgot, setForgot] = useState({ email: '', code: '', newPassword: '' })
   // ★ #38（2026-09-21）：已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
   const [ssoList, setSsoList] = useState<SSOProvider[]>([])
 
@@ -194,6 +203,14 @@ export default function Login({ mode, onLogin }: Props) {
     mountCaptcha(captchaSiteKey)
   }, [regPhase, view, mode, captchaOn, captchaSiteKey])
 
+  useEffect(() => {
+    if (mode !== 'home' || view !== 'signin') return
+    if (!captchaOn || !captchaSiteKey) return
+    const el = loginCaptchaBoxRef.current
+    if (!el || el.querySelector('iframe')) return
+    mountLoginCaptcha(captchaSiteKey)
+  }, [view, mode, captchaOn, captchaSiteKey])
+
   // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
   function mountCaptcha(siteKey: string) {
     loadTurnstile(() => {
@@ -203,6 +220,16 @@ export default function Login({ mode, onLogin }: Props) {
       if (el.querySelector('iframe')) return
       const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk })
       if (id !== null) captchaIdRef.current = id
+    })
+  }
+
+  // 登录屏的人机验证挂件与注册屏**各挂各的容器**：共用一个容器会在切视图时把 token 串到另一条链路。
+  function mountLoginCaptcha(siteKey: string) {
+    loadTurnstile(() => {
+      const el = loginCaptchaBoxRef.current
+      if (!el || el.querySelector('iframe')) return
+      const id = mountTurnstileWidget(el, siteKey, (tk) => { setLoginCaptchaToken(tk) })
+      if (id !== null) loginCaptchaIdRef.current = id
     })
   }
   // token 一次一用：任一请求（发码/注册提交）把它送出去后即作废，清空并强制重新挑战领新码
@@ -236,20 +263,81 @@ export default function Login({ mode, onLogin }: Props) {
       setForceOpen(true)
       return
     }
+    // ★ 首登资料提醒：只提醒、不阻断——用户可跳过，下次登录仍会提醒（profile_setup_required 不动）。
+    if ((u as unknown as { profile_setup_required?: number }).profile_setup_required) {
+      setSetupUser(u); setSetupName(''); setSetupPwd(''); setSetupMsg('')
+      return
+    }
     onLogin(u)
   }
 
   // ---- 登录：校验 → 调登录接口 → 交 settleSession（角色/跳转/写 token/首登改密/回调）----
   async function doLogin() {
+    setError('')
+    if (loginMode === 'otp') {
+      if (!loginEmail.trim()) { setError(t('auth.emailRequired')); return }
+      if (!isEmailShape(loginEmail)) { setError(t('auth.emailBad')); return }
+      if (!loginCode.trim()) { setError(t('auth.codeRequired')); return }
+      if (!loginAgreed) { setError(t('auth.needAgree')); return }
+      if (captchaOn && !loginCaptchaToken) { setError(t('auth.captchaRequired')); return }
+      setLoading(true)
+      try {
+        const resp = await loginWithEmail(loginEmail.trim(), loginCode.trim(), { agreed: loginAgreed, captchaToken: loginCaptchaToken })
+        await settleSession(resp, setError)
+      } catch (e: unknown) {
+        setError((e as { message?: string }).message || t('login.fail'))
+      } finally { setLoading(false) }
+      return
+    }
     if (!username || !password) { setError(t('auth.needInput')); return }
-    setLoading(true); setError('')
+    setLoading(true)
     try {
       const resp = await login(username, password)
       await settleSession(resp, setError)
     } catch (e: unknown) {
-      // 凭证错误等会以 401 抛出：必须把后端 message 透出，否则用户只看到「点了没反应」
+      // 凭证错误等会以 401/404 抛出：必须把后端 message 透出，否则用户只看到「点了没反应」
       setError((e as { message?: string }).message || t('login.fail'))
     } finally { setLoading(false) }
+  }
+
+  // 登录验证码：用途必须与登录同档（purpose=login），否则会和注册码互相覆盖。
+  async function doSendLoginCode() {
+    if (!loginEmail.trim()) { setError(t('auth.emailRequired')); return }
+    if (!isEmailShape(loginEmail)) { setError(t('auth.emailBad')); return }
+    if (captchaOn && !loginCaptchaToken) { setError(t('auth.captchaRequired')); return }
+    setLoading(true); setError('')
+    try {
+      const r = await sendEmailCode(loginEmail.trim(), loginCaptchaToken || undefined, 'login')
+      if (r.success) {
+        toast({ title: r.noop ? t('pwd.codeNoop') : t('pwd.codeSent'), tone: 'success' })
+        codeCd.start()
+      } else setError(r.message || t('pwd.sendFail'))
+    } catch (e) {
+      setError((e as Error).message || t('pwd.sendFail'))
+    } finally {
+      if (captchaOn) { setLoginCaptchaToken(''); reexecTurnstile(loginCaptchaIdRef.current) }
+      setLoading(false)
+    }
+  }
+
+  // 首登资料：完成或跳过都重签 token，然后才进工作台。
+  async function finishSetup(skip: boolean) {
+    if (!setupUser) return
+    if (!skip) {
+      if (!setupName.trim()) { setSetupMsg(t('auth.username')); return }
+      if (setupPwd && setupPwd.length < PWD_MIN_LEN) { setSetupMsg(t('pwd.tooShort')); return }
+    }
+    setSetupBusy(true); setSetupMsg('')
+    try {
+      const r = await profileSetup({ skip, username: skip ? undefined : setupName.trim(), password: skip ? undefined : (setupPwd || undefined) })
+      if (!r.success) { setSetupMsg(r.message || t('login.fail')); return }
+      if (typeof r.token === 'string' && r.token) setAuthToken(r.token)
+      const u = (r.user && typeof r.user === 'object') ? (r.user as AuthUser) : { ...setupUser, profile_setup_required: 0 }
+      setSetupUser(null)
+      onLogin(u)
+    } catch (e) {
+      setSetupMsg((e as Error).message || t('login.fail'))
+    } finally { setSetupBusy(false) }
   }
 
   // ---- 首登强制改密：校验新密码长度与一致 → changePassword → 成功 toast 并 onLogin ----
@@ -365,63 +453,6 @@ export default function Login({ mode, onLogin }: Props) {
     finally { setLoading(false) }
   }
 
-  // ---- 忘记密码：发验证码 → 校验验证码重置新密码 ----
-  // 提交找回：只认**注册邮箱**（2026-10-21 用户后令；后端发码前先查库，未注册即 404）。
-  async function doForgotSend() {
-    if (!forgot.email.trim()) { setForgotMsg(t('auth.forgotNeed')); return }
-    if (!isEmailShape(forgot.email)) { setForgotMsg(t('auth.emailBad')); return }
-    setLoading(true); setForgotMsg('')
-    try {
-      const resp = await forgotPassword({ email: forgot.email.trim() })
-      if (!resp.success) { setForgotMsg(resp.message || t('auth.sendFail')); return }
-      setForgotSent(true)
-      codeCd.start() // ★ IAM P1-4：找回屏与注册屏同档 60s 冷却，成功后立即启动
-      setForgotMsg(resp.message || t('auth.forgotSent'))
-    } catch (e) {
-      // ★ 2026-10-21 用户后令：邮箱不在库是明确拦截（404 EMAIL_NOT_REGISTERED），
-      //   按稳定码显示本地化文案，不把后端中文原样丢给十二语种访客。
-      if (e instanceof ApiError && e.code === 'EMAIL_NOT_REGISTERED') setForgotMsg(t('auth.emailNotRegistered'))
-      else setForgotMsg((e as Error).message || t('auth.sendFail'))
-    }
-    finally { setLoading(false) }
-  }
-
-  // 用验证码重置：成功后把邮箱/新密码回填到登录表单并**自动登录**，
-  // 用户不需要重新输入一遍；自动登录失败才回登录屏并提示「密码已重置」。
-  async function doReset() {
-    // ★ 2026-10-21 IAM 重做 P1-1：与注册/后端同一把长度尺子（旧写法写死 6，改档即前后端打架）
-    if (!forgot.code.trim() || forgot.newPassword.length < PWD_MIN_LEN) { setForgotMsg(t('auth.resetNeed')); return }
-    setLoading(true); setForgotMsg('')
-    try {
-      // ★ 2026-10-21 用户后令：重置只按注册邮箱定位，报文里不再出现 username。
-      const resp = await resetPassword({ email: forgot.email.trim(), code: forgot.code.trim(), new_password: forgot.newPassword })
-      if (!resp.success) { setForgotMsg(resp.message || t('auth.resetFail')); return }
-      const account = typeof resp.login_account === 'string' && resp.login_account ? resp.login_account : forgot.email.trim()
-      const newPwd = forgot.newPassword
-      // 先回填登录表单，再尝试自动登录：自动登录失败也不会把人留在一张空表单上。
-      setUsername(account)
-      setPassword(newPwd)
-      closeForgot()
-      setError('')
-      try {
-        const lr = await login(account, newPwd)
-        if (lr.success) { await settleSession(lr, setError); return }
-      } catch { /* 自动登录失败不覆盖"已重置成功"这条事实 */ }
-      setError(t('auth.successReset'))
-    } catch (e) {
-      if (e instanceof ApiError && e.code === 'EMAIL_NOT_REGISTERED') setForgotMsg(t('auth.emailNotRegistered'))
-      else setForgotMsg((e as Error).message || t('auth.resetFail'))
-    }
-    finally { setLoading(false) }
-  }
-
-  // 关闭找回屏：视图与整张找回表单一起重置 —— 否则下次进来还会看到上一次的验证码/新密码残值
-  function closeForgot() {
-    setView('signin')
-    setForgotSent(false)
-    setForgot({ email: '', code: '', newPassword: '' })
-  }
-
   // ====================== 渲染 ======================
   // 登录卡标题渲染品牌名而不是「登录」（画布 57:4 实测；Login.auth.dom.test ① 守这条）
   const brandName = branding.brandName || DEFAULT_BRAND_NAME
@@ -442,36 +473,67 @@ export default function Login({ mode, onLogin }: Props) {
           corner={langPill}
           foot={(
             <>
-              <button type="button" className="auth-link" onClick={() => setView('forgot')}>{t('auth.forgot')}</button>
+              {/* ★ 2026-10-21 IAM 重做：公开找回已下线，密码降为备用；主流程是邮箱验证码。 */}
+              <button type="button" className="auth-link" onClick={() => { setLoginMode(loginMode === 'otp' ? 'password' : 'otp'); setError('') }}>
+                {loginMode === 'otp' ? t('auth.usePassword') : t('auth.useCode')}
+              </button>
               {/* login.selfRegister 已是「没有账号？自助注册试用」整句（中英齐备），不再用 auth.noAccount + auth.freeRegister 拼 */}
               <button type="button" className="auth-link" onClick={() => setView('register')}>{t('login.selfRegister')}</button>
             </>
           )}
         >
-          {/* 设计稿登录卡内只有 placeholder、没有字段标签；可访问名由 aria-label 承担 */}
-          <Field>
-            <Input aria-label={t('auth.username')} value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t('auth.username')} autoComplete="username" />
-          </Field>
-          {/* 密码框：AuthCard 的提交键是普通 button（没有 form），迁移前 TDesign Input 自带的
-              onEnter 提交能力必须在这里手动接回来，否则密码框回车不再登录 */}
-          <Field>
-            <Input
-              aria-label={t('auth.password')}
-              type={showPwd ? 'text' : 'password'}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t('auth.password')}
-              autoComplete="current-password"
-              onKeyDown={(e) => { if (e.key === 'Enter') doLogin() }}
-              trailing={(
-                // aria-label 用现成的 showPwd/hidePwd 两键：原写法引用了词典里不存在的 auth.togglePwd，
-                // 屏幕阅读器会念出键名字符串（★ #38 顺带修，属 a11y 缺陷）
-                <button type="button" className="lc-input-affix auth-pwd-eye" aria-pressed={showPwd} onClick={() => setShowPwd((v) => !v)} aria-label={showPwd ? t('auth.hidePwd') : t('auth.showPwd')}>
-                  {showPwd ? <EyeOffIcon /> : <EyeIcon />}
-                </button>
-              )}
-            />
-          </Field>
+          {loginMode === 'otp' ? (
+            <>
+              <p className="auth-note" style={{ margin: '0 0 10px' }}>{t('auth.otpDesc')}</p>
+              <Field>
+                <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" autoComplete="email"
+                  value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder={t('auth.boundEmail')} />
+              </Field>
+              <Field>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Input style={{ flex: 1 }} aria-label={t('auth.fieldEmailCode')} inputMode="numeric"
+                    value={loginCode} onChange={(e) => setLoginCode(e.target.value)} placeholder={t('auth.fieldEmailCode')}
+                    onKeyDown={(e) => { if (e.key === 'Enter') doLogin() }} />
+                  <Button variant="secondary" disabled={codeCd.left > 0 || loading} onClick={doSendLoginCode}>
+                    {codeCd.left > 0 ? tplF('auth.codeResend', { n: codeCd.left }) : t('auth.sendCode')}
+                  </Button>
+                </div>
+              </Field>
+              {captchaOn && <div ref={loginCaptchaBoxRef} id="__ts_login_widget__" />}
+              <Checkbox checked={loginAgreed} onChange={(e) => setLoginAgreed(!!e.target.checked)}
+                label={(
+                  <>
+                    {t('auth.agreeTerms')}{''}
+                    <a href="/docs/terms" target="_blank" rel="noreferrer" className="auth-link">{t('auth.userAgreement')}</a>
+                    {' & '}
+                    <a href="/docs/privacy" target="_blank" rel="noreferrer" className="auth-link">{t('auth.privacyPolicy')}</a>
+                  </>
+                )} />
+            </>
+          ) : (
+            <>
+              {/* 备用密码登录：仅用于已设置密码的存量账号与导入账号。 */}
+              <Field>
+                <Input aria-label={t('auth.username')} value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t('auth.username')} autoComplete="username" />
+              </Field>
+              <Field>
+                <Input
+                  aria-label={t('auth.password')}
+                  type={showPwd ? 'text' : 'password'}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={t('auth.password')}
+                  autoComplete="current-password"
+                  onKeyDown={(e) => { if (e.key === 'Enter') doLogin() }}
+                  trailing={(
+                    <button type="button" className="lc-input-affix auth-pwd-eye" aria-pressed={showPwd} onClick={() => setShowPwd((v) => !v)} aria-label={showPwd ? t('auth.hidePwd') : t('auth.showPwd')}>
+                      {showPwd ? <EyeOffIcon /> : <EyeIcon />}
+                    </button>
+                  )}
+                />
+              </Field>
+            </>
+          )}
           {!!error && <div className="auth-err">{error}</div>}
           {/* ★ #38：第三方身份源登录入口。用 <a href> 而非按钮 + location.assign——
               /api/sso/login 回 302 到 IdP 且要下发 state cookie，fetch 会把整条重定向链吃掉；
@@ -490,63 +552,21 @@ export default function Login({ mode, onLogin }: Props) {
         <ForcePwdDialog open={forceOpen} msg={forceMsg} busy={forceBusy} old={forceOld} newP={forceNew} confirm={forceConfirm}
           onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
           onCancel={() => { if (!forceBusy) setForceOpen(false) }} />
-        <style>{CSS_AUTH}</style>
-      </BrandLoginShell>
-    )
-  }
-
-  // 忘记密码屏（标题 20/Bold、两个输入框只带 placeholder、底部仅一行居中链接）
-  if (view === 'forgot') {
-    return (
-      <BrandLoginShell>
-        {/* 同一张卡承载两步：未发码=提交找回申请，已发码=提交重置（submitText 与 onSubmit 一起切），
-            不做两个页面是为了让用户停在同一个视觉位置上读验证码邮件 */}
-        <AuthCard
-          title={t('auth.forgotTitle')}
-          desc={t('auth.forgotDesc')}
-          submitText={forgotSent ? t('auth.resetPassword') : t('auth.sendCode')}
-          onSubmit={forgotSent ? doReset : doForgotSend}
-          busy={loading}
-          corner={langPill}
-          foot={(
-            // ★ 2026-10-21 IAM 重做 P1-4：找回屏原先只能靠浏览器后退回登录——
-            //   从 /login 直接点到这一屏之后没有任何站内出路，移动端更是没有明显的后退键。
-            <button type="button" className="auth-link" onClick={closeForgot}>{t('auth.backToLogin')}</button>
-          )}
-        >
-          <Field>
-            {/* ★ 2026-10-21 用户后令：找回/重置只认注册邮箱，界面上不再出现用户名输入框。
-                type=email 让移动端出 @ 键；真正的形状判据仍在前端 isEmailShape 与后端。 */}
-            <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" autoComplete="email" value={forgot.email} onChange={(e) => setForgot({ ...forgot, email: e.target.value })} placeholder={t('auth.boundEmail')} />
-          </Field>
-          {!!forgotMsg && <div className={forgotSent ? 'auth-ok' : 'auth-err'}>{forgotMsg}</div>}
-          {forgotSent && (
-            <>
-              <Field>
-                <Input aria-label={t('auth.fieldEmailCode')} value={forgot.code} onChange={(e) => setForgot({ ...forgot, code: e.target.value })} placeholder={t('auth.fieldEmailCode')} />
-              </Field>
-              <Field>
-                <Input
-                  aria-label={t('auth.newPassword')}
-                  type={showForgotPwd ? 'text' : 'password'}
-                  autoComplete="new-password"
-                  value={forgot.newPassword}
-                  onChange={(e) => setForgot({ ...forgot, newPassword: e.target.value })}
-                  placeholder={t('auth.newPassword')}
-                  trailing={<PwdEye shown={showForgotPwd} onToggle={() => setShowForgotPwd((v) => !v)} />}
-                />
-              </Field>
-              <div className="auth-resend">
-                <button type="button" className="auth-link" disabled={codeCd.left > 0} onClick={doForgotSend}>
-                  {codeCd.left > 0 ? tplF('auth.codeResend', { n: codeCd.left }) : t('auth.sendCode')}
-                </button>
-              </div>
-            </>
-          )}
-        </AuthCard>
-        <ForcePwdDialog open={forceOpen} msg={forceMsg} busy={forceBusy} old={forceOld} newP={forceNew} confirm={forceConfirm}
-          onOld={setForceOld} onNew={setForceNew} onConfirmPwd={setForceConfirm} onSubmit={submitForcePwd}
-          onCancel={() => { if (!forceBusy) setForceOpen(false) }} />
+        {/* ★ 首登资料提醒：可跳过，不是强制闸。取消＝跳过（下次登录继续提醒）。 */}
+        <Dialog open={!!setupUser} title={t('auth.profileTitle')} confirmText={t('auth.profileDone')}
+          onConfirm={() => void finishSetup(false)} onCancel={() => void finishSetup(true)} dismissOnOverlay={!setupBusy}>
+          <p style={{ fontSize: 15, color: 'var(--lc-text-3)', lineHeight: 1.7, margin: '0 0 14px' }}>{t('auth.profileDesc')}</p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <Field label={t('auth.username')}>
+              <Input value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder={t('auth.username')} autoComplete="username" />
+            </Field>
+            <Field label={t('auth.passwordOptional')}>
+              <Input type="password" autoComplete="new-password" value={setupPwd} onChange={(e) => setSetupPwd(e.target.value)} placeholder={t('auth.passwordOptional')} />
+            </Field>
+            {!!setupMsg && <div className="auth-err">{setupMsg}</div>}
+            <button type="button" className="auth-link" onClick={() => void finishSetup(true)}>{t('auth.skipForNow')}</button>
+          </div>
+        </Dialog>
         <style>{CSS_AUTH}</style>
       </BrandLoginShell>
     )

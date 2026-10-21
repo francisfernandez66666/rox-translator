@@ -131,7 +131,7 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
     if (newPwd !== confirmPwd) { setMsgOk(false); setMsg(t('pwd.mismatch')); return }
     setSubmitting(true)
     try {
-      const r = await submitNewPassword({ email, code: code.trim(), new_password: newPwd })
+      const r = await submitNewPassword({ code: code.trim(), new_password: newPwd })
       if (!r.success) { setMsgOk(false); setMsg(r.message || t('pwd.codeBad')); return }
       setMsgOk(true)
       toast({ title: t('pwd.done'), tone: 'success' })

@@ -163,71 +163,107 @@ func TestIAMRedoP0_03_LoginAcceptsEmailCaseAndSpacedPassword(t *testing.T) {
 	}
 }
 
-// P0-6（2026-10-21 用户后令覆盖当日早先的防枚举取舍）：
-// 找回密码只按注册邮箱定位，发码前先查库；邮箱不在库必须明确拦截。
-// 登录口仍保留统一文案，不在本锁射程内。
-func TestIAMRedoP0_06_ForgotRequiresRegisteredEmail(t *testing.T) {
+// P0-6（2026-10-21 IAM 重做后）：公开找回/重置端点必须整体下线，不能退成"可路由但无 UI"。
+func TestIAMRedoP0_06_PublicPasswordRecoveryIsGone(t *testing.T) {
 	fx := f77Fixture(t)
 	s := fx.srv
-	s.Cfg = config.C
-	if _, m := p0Register(t, s, "p0_reg_d", "p0pass789", "p0_d@example.com"); m["success"] != true {
-		t.Fatalf("预置账号失败: %v", m)
-	}
-	exists := f20CallForgot(t, s, "203.0.113.11", map[string]string{"email": "p0_d@example.com"})
-	if exists.Code != 200 || !strings.Contains(exists.Body.String(), forgotSentMsg) {
-		t.Fatalf("已注册邮箱应 200+发码文案，实得 code=%d body=%s", exists.Code, exists.Body.String())
-	}
-	ghost := f20CallForgot(t, s, "203.0.113.12", map[string]string{"email": "p0_ghost_never_registered@example.com"})
-	if ghost.Code != http.StatusNotFound || !strings.Contains(ghost.Body.String(), "EMAIL_NOT_REGISTERED") {
-		t.Fatalf("未注册邮箱应 404+EMAIL_NOT_REGISTERED，实得 code=%d body=%s", ghost.Code, ghost.Body.String())
-	}
-	// 用户名入口必须关闭：只带 username 的报文不得发码。
-	byName := f20CallForgot(t, s, "203.0.113.13", map[string]string{"username": "p0_reg_d"})
-	if byName.Code != http.StatusBadRequest {
-		t.Fatalf("只带用户名应 400（邮箱为唯一入口），实得 code=%d body=%s", byName.Code, byName.Body.String())
+	for _, path := range []string{"/api/auth/forgot-password", "/api/auth/reset-password"} {
+		r := httptest.NewRequest(http.MethodPost, path, nil)
+		w := httptest.NewRecorder()
+		s.handlePasswordRecoveryGone(w, r)
+		if w.Code != http.StatusGone {
+			t.Fatalf("%s 必须返回 410，实得 code=%d body=%s", path, w.Code, w.Body.String())
+		}
 	}
 }
 
-// P0-3：重置链的新密码强度必须在**服务端**判（旧形态只判非空，6 位那条只存在于前端硬编码）。
-func TestIAMRedoP0_05_ResetRejectsWeakPasswordServerSide(t *testing.T) {
-	f20ClearCode(0) // 冷启动：本文件与 f20 那批共用同一个包级 map
-	s := f20ResetServer(t)
-	u, err := s.Store.CreateUser(7, "p0_reset_weak", auth.PasswordHash("origpass1"), "弱口令靶子", "user", 0, 0)
+// P0-3：改密链的新密码强度必须在**服务端**判；验证码可替代原密码，让仅持 OTP 的账号也能自助设置。
+func TestIAMRedoP0_05_ChangePasswordUsesVerifiedEmailCode(t *testing.T) {
+	fx := f77Fixture(t)
+	s := fx.srv
+	s.Cfg = config.C
+	const email = "p0_change_password@example.com"
+	if _, m := p0Register(t, s, "p0_change_pwd", "oldpass123", email); m["success"] != true {
+		t.Fatalf("预置账号失败: %v", m)
+	}
+	u, err := s.Store.GetUserByEmail(email)
+	if err != nil || u == nil {
+		t.Fatalf("读账号失败: %v", err)
+	}
+	tok, err := auth.Sign(u, time.Hour)
 	if err != nil {
-		t.Fatalf("预置账号失败: %v", err)
+		t.Fatalf("签发改密会话失败: %v", err)
 	}
-	const weakMail = "p0_reset_weak@example.com"
-	if err := s.Store.SetUserEmail(u.ID, u.TenantID, weakMail); err != nil {
-		t.Fatalf("绑定邮箱失败: %v", err)
+
+	// 反证：未登录不得借 email-code 接口向任意邮箱发"改密码"。
+	anonBody, _ := json.Marshal(map[string]string{"email": "victim@example.com", "purpose": emailPurposePassword})
+	anonReq := httptest.NewRequest(http.MethodPost, "/api/auth/email-code", bytes.NewReader(anonBody))
+	anonReq.RemoteAddr = "203.0.113.31:54321"
+	anonW := httptest.NewRecorder()
+	s.handleEmailCode(anonW, anonReq)
+	if anonW.Code != http.StatusUnauthorized {
+		t.Fatalf("匿名发改密码必须 401，实得 code=%d body=%s", anonW.Code, anonW.Body.String())
 	}
-	f20SeedCode(t, u.ID, resetCode{Code: "123456", ExpiresAt: time.Now().Add(10 * time.Minute)})
-	body, _ := json.Marshal(map[string]string{"email": weakMail, "code": "123456", "new_password": "123"})
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(body))
+
+	// 已登录：请求体里的邮箱不是收件地址，服务端必须改发当前账号绑定邮箱。
+	sendBody, _ := json.Marshal(map[string]string{"email": "attacker@example.com", "purpose": emailPurposePassword})
+	sendReq := httptest.NewRequest(http.MethodPost, "/api/auth/email-code", bytes.NewReader(sendBody))
+	sendReq.Header.Set("Authorization", "Bearer "+tok)
+	sendReq.RemoteAddr = "203.0.113.32:54321"
+	sendW := httptest.NewRecorder()
+	s.handleEmailCode(sendW, sendReq)
+	if sendW.Code != http.StatusOK {
+		t.Fatalf("已登录发改密码应成功，实得 code=%d body=%s", sendW.Code, sendW.Body.String())
+	}
+	emailCodes.mu.Lock()
+	sent := emailCodes.codes[emailCodeKey(email, emailPurposePassword)]
+	var sentCode string
+	if sent != nil {
+		sentCode = sent.Code
+	}
+	emailCodes.mu.Unlock()
+	if sentCode == "" {
+		t.Fatalf("改密码未写入当前账号邮箱（请求体邮箱不得决定收件地址）")
+	}
+
+	callChangePassword := func(body map[string]string) (int, string) {
+		t.Helper()
+		payload, _ := json.Marshal(body)
+		r := httptest.NewRequest(http.MethodPost, "/api/auth/change-password", bytes.NewReader(payload))
+		r.Header.Set("Authorization", "Bearer "+tok)
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		s.handleChangePassword(w, r)
+		return w.Code, w.Body.String()
+	}
+	if code, body := callChangePassword(map[string]string{"new_password": "123", "email_code": sentCode}); code != http.StatusBadRequest || !strings.Contains(body, auth.PasswordTooShortMsg) {
+		t.Fatalf("弱口令必须被服务端拒掉，实得 code=%d body=%s", code, body)
+	}
+	// 原密码为空时，刚验过的邮箱码必须可替代原密码；同时旧密码仍不得继续有效。
+	if code, body := callChangePassword(map[string]string{"new_password": "newpass123", "email_code": sentCode}); code != http.StatusOK || !strings.Contains(body, `"success":true`) {
+		t.Fatalf("有效邮箱码改密应成功，实得 code=%d body=%s", code, body)
+	}
+	if code, m := p0Login(t, s, email, "oldpass123"); code == http.StatusOK {
+		t.Fatalf("旧密码仍有效: code=%d body=%v", code, m)
+	}
+	if code, m := p0Login(t, s, email, "newpass123"); code != http.StatusOK {
+		t.Fatalf("新密码应可登录: code=%d body=%v", code, m)
+	}
+
+	// 反向对照：没有验证码且原密码错误时，不能把"已登录"当成绕过原口令的许可。
+	reloaded, err := s.Store.GetUserByEmail(email)
+	if err != nil || reloaded == nil {
+		t.Fatalf("读改密后账号失败: %v", err)
+	}
+	freshTok, _ := auth.Sign(reloaded, time.Hour)
+	payload, _ := json.Marshal(map[string]string{"old_password": "wrongpass123", "new_password": "malicious123"})
+	r := httptest.NewRequest(http.MethodPost, "/api/auth/change-password", bytes.NewReader(payload))
+	r.Header.Set("Authorization", "Bearer "+freshTok)
 	r.Header.Set("Content-Type", "application/json")
-	// ★ 两次调用各占一个来源 IP：reset 口是「20 次/日 + 10 秒间隔」的放行即占格，
-	//   同一测试 IP 连打两枪时第二枪必 429，会把「弱口令被拒」这条判据换成限流闸的判据（假红）。
-	r.RemoteAddr = "203.0.113.201:54321"
 	w := httptest.NewRecorder()
-	s.handleResetPassword(w, r)
-	if w.Code != 400 || !strings.Contains(w.Body.String(), "VALIDATION_ERROR") {
-		t.Fatalf("弱口令必须被服务端拒掉 400+VALIDATION_ERROR，实得 code=%d body=%s", w.Code, w.Body.String())
-	}
-	if !strings.Contains(w.Body.String(), auth.PasswordTooShortMsg) {
-		t.Fatalf("拒绝理由必须是那把唯一尺子的文案，body=%s", w.Body.String())
-	}
-	// 反向对照：同一张码喂合格口令必须改得动（否则上面那条红只是"码本身无效"的假红）
-	good, _ := json.Marshal(map[string]string{"email": weakMail, "code": "123456", "new_password": "goodpass1"})
-	r2 := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(good))
-	r2.Header.Set("Content-Type", "application/json")
-	r2.RemoteAddr = "203.0.113.202:54321" // 同上：与第一枪换一个来源 IP，否则撞 10 秒最小间隔
-	w2 := httptest.NewRecorder()
-	s.handleResetPassword(w2, r2)
-	if w2.Code != 200 || !strings.Contains(w2.Body.String(), `"success":true`) {
-		t.Fatalf("合格口令的重置应成功，实得 code=%d body=%s", w2.Code, w2.Body.String())
-	}
-	// P0-5：出参要回"可用来登录的那个标识"（邮箱档找回的人靠它回填，报障②的前端半边）
-	if !strings.Contains(w2.Body.String(), "login_account") {
-		t.Fatalf("reset 出参缺 login_account（前端无从回填登录标识）：%s", w2.Body.String())
+	s.handleChangePassword(w, r)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "原密码错误") {
+		t.Fatalf("无验证码时原密码错误必须拒绝，实得 code=%d body=%s", w.Code, w.Body.String())
 	}
 }
 
@@ -267,7 +303,7 @@ func TestIAMRedoP0_11_TenantStatusBlocksLogin(t *testing.T) {
 		t.Fatalf("停用租户的成员必须 403「该企业账号已停用」，实得 code=%d body=%v", code, m)
 	}
 	// ③ 顺序锁：口令都不对时只许回通用凭证错，不许泄露租户状态
-	if code, m := p0Login(t, s, "p0_tenant_a", "wrongpass"); code != http.StatusUnauthorized || strings.Contains(mustJSON(m), "该企业") {
+	if code, m := p0Login(t, s, "p0_tenant_a", "wrongpass"); code != http.StatusNotFound || strings.Contains(mustJSON(m), "该企业") {
 		t.Fatalf("租户判定跑到了口令校验之前（错误口令也应只回 401 通用文案）：code=%d body=%v", code, m)
 	}
 	// ④ 到期 → 403 且理由点到「服务已到期」（把 expires_at 改成过去，状态由 effectiveStatus 现算）

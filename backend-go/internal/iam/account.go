@@ -113,7 +113,7 @@ const (
 // ⚠️ 本函数**不判状态、不判密码、不签发任何东西**——那些仍留在登录 handler 的既有闸上，
 //
 //	免得把"找到谁"和"能不能进"再一次混成一把尺子。
-func (s *Store) FindAccountForLogin(tid int64, account string) ([]*User, string, error) {
+func (s *Store) FindAccountForLogin(_ int64, account string) ([]*User, string, error) {
 	account = NormalizeAccount(account)
 	if account == "" {
 		return nil, AccountByNothing, nil
@@ -125,10 +125,9 @@ func (s *Store) FindAccountForLogin(tid int64, account string) ([]*User, string,
 		}
 		return nil, AccountByNothing, nil
 	}
-	// 腿 1：用户名精确等值——本租户命中即唯一
-	if u, err := s.GetUserByUsername(tid, account); err == nil && u != nil {
-		return []*User{u}, AccountByExact, nil
-	}
+	// 腿 1：用户名精确等值——★ 用户名已不唯一，必须先把**全部**同名候选交回调用方；
+	// 旧写法先按 (tenant_id,username) 取一行，同租户重名时会静默选中其中任意一个，
+	// 于是"用用户名登录"仍能登进某个账号（用户名不是登录标识，这条腿只作存量兼容）。
 	if us, err := s.GetUserByUsernameGlobal(account); err == nil && len(us) > 0 {
 		return us, AccountByExact, nil
 	}
@@ -159,7 +158,7 @@ func (s *Store) GetUserByUsernameGlobalCI(username string) ([]*User, error) {
 	for rows.Next() {
 		var u User
 		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole); err != nil {
+			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
 			continue
 		}
 		out = append(out, &u)

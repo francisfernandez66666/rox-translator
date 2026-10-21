@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "Actualizar paquete de base de conocimiento",
   "audit.action.logout": "Cierre de sesión",
   "audit.action.login": "Inicio de sesión",
+  "audit.action.profile_setup": "Perfil completado",
   "audit.action.login_sso": "Inicio de sesión SSO",
   "audit.action.model_routes_save": "Guardar enrutamiento de modelos",
   "audit.action.model_save": "Guardar configuración de modelos",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "La sesión ha caducado. Inicia sesión de nuevo con la nueva contraseña",
   "auth.regOkLoginFail": "La cuenta se creó correctamente, pero el inicio de sesión automático no se completó. Vuelve a la página de inicio de sesión e inicia sesión con la nueva cuenta",
   "pwd.oldRequired": "Introduce primero la contraseña actual",
+  "auth.otpDesc": "Introduce tu correo y un código de un solo uso para entrar. Un correo no registrado crea una cuenta vacía automáticamente.",
+  "auth.usePassword": "Entrar con contraseña",
+  "auth.useCode": "Usar código de correo",
+  "auth.profileTitle": "Completa tu perfil",
+  "auth.profileDesc": "Elige un nombre de usuario para que tu equipo te reconozca. Puedes establecer una contraseña ahora o seguir usando solo códigos de correo.",
+  "auth.profileDone": "Guardar y continuar",
+  "auth.passwordOptional": "Contraseña (opcional; déjala vacía para usar solo códigos de correo)",
+  "auth.skipForNow": "Omitir por ahora",
+
 }

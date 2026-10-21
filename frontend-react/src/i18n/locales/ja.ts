@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "ナレッジベースパッケージの更新",
   "audit.action.logout": "ログアウト",
   "audit.action.login": "ログイン",
+  "audit.action.profile_setup": "プロフィール完了",
   "audit.action.login_sso": "SSO サインイン",
   "audit.action.model_routes_save": "モデルルーティングの保存",
   "audit.action.model_save": "モデル設定の保存",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "セッションが切れました。新しいパスワードで再度ログインしてください",
   "auth.regOkLoginFail": "アカウントは作成されましたが、自動ログインが完了しませんでした。ログインページに戻り、新しいアカウントでログインしてください",
   "pwd.oldRequired": "先に現在のパスワードを入力してください",
+  "auth.otpDesc": "メールアドレスとワンタイムコードを入力してログインします。未登録のメールは空のアカウントを自動作成します。",
+  "auth.usePassword": "パスワードでログイン",
+  "auth.useCode": "メールコードに切り替える",
+  "auth.profileTitle": "プロフィールを完成させる",
+  "auth.profileDesc": "チームが識別できるユーザー名を設定してください。今パスワードを設定するか、メールコードのみでログインを続けられます。",
+  "auth.profileDone": "保存して続行",
+  "auth.passwordOptional": "パスワード（任意。空欄ならメールコードのみでログイン）",
+  "auth.skipForNow": "今はスキップ",
+
 }

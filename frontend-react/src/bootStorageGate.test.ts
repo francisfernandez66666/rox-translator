@@ -391,20 +391,36 @@ describe('启动链锁 C：main.tsx 的渲染期兜底在位', () => {
   // ★ 入口分片的 Suspense fallback **必须非空**（且与首屏骨架同貌）：哨兵判「界面起没起来」的
   //   依据是 `#root` 有没有子节点，fallback 给 null 时懒加载分片下载期间 `#root` 恒空
   //   ⇒ 哨兵在截止时刻会把"正在正常下载"误判成「页面没能加载起来」盖全屏（见 BootLoading.tsx 文件头）。
+  // ★ 2026-10-21 IAM 重做：ProfileSetupGate 也包了一层 Suspense，但它的 null fallback 是**刻意**的——
+  //   该闸门在会话恢复后才出现（彼时入口已渲染完，`#root` 早非空，哨兵不会误判），
+  //   懒加载期间留空是正确行为。所以判据收窄为「**入口** Suspense 必须 BootLoading」，
+  //   允许的 null-fallback Suspense 只能紧包 ProfileSetupGate（反证 6b 钉住这条边）。
   it('入口 Suspense 的 fallback 是 BootLoading（不能是 null）', () => {
     expect(main).toMatch(/<React\.Suspense fallback=\{<BootLoading \/>\}>/)
-    expect(main).not.toMatch(/<React\.Suspense fallback=\{null\}>/)
+    expect(main).not.toMatch(/<React\.Suspense fallback=\{null\}>[\s\S]{0,120}\{React\.createElement\(pickEntry\(\)\)\}/)
   })
 
   // 反证 6：把包裹层摘掉（回到旧形态）判据必须失效
   it('反证 6：拆掉包裹层后「入口在 boundary 内」这条判不到', () => {
     const naked = main.replace('<BootErrorBoundary>', '').replace('</BootErrorBoundary>', '')
     expect(naked).not.toMatch(wrapped)
-    // 第二条腿的反证：把 fallback 换成 null（"省一个组件"式改动）必须当场判红
+    // 第二条腿的反证：把入口 fallback 换成 null（"省一个组件"式改动）必须当场判红
     const nullFallback = main.replace('<React.Suspense fallback={<BootLoading />}>', '<React.Suspense fallback={null}>')
     expect(nullFallback).not.toBe(main)
     expect(nullFallback).not.toMatch(/<React\.Suspense fallback=\{<BootLoading \/>\}>/)
-    expect(nullFallback).toMatch(/<React\.Suspense fallback=\{null\}>/)
+    expect(nullFallback).toMatch(/<React\.Suspense fallback=\{null\}>[\s\S]{0,120}\{React\.createElement\(pickEntry\(\)\)\}/)
+  })
+
+  // 反证 6b：ProfileSetupGate 的 null fallback 是唯一边——把它的 null 改回 BootLoading
+  // 或给别处加一个 null-fallback Suspense 都必须被入口判据抓到（它只能包 ProfileSetupGate）。
+  it('反证 6b：null-fallback Suspense 只许包 ProfileSetupGate', () => {
+    expect(main).toMatch(/<React\.Suspense fallback=\{null\}>\s*<ProfileSetupGate \/>/)
+    const extraNull = main.replace(
+      '<React.Suspense fallback={<BootLoading />}>',
+      '<React.Suspense fallback={null}>\n<React.Suspense fallback={<BootLoading />}>',
+    )
+    expect(extraNull).not.toBe(main)
+    expect(extraNull).toMatch(/<React\.Suspense fallback=\{null\}>[\s\S]{0,120}\{React\.createElement\(pickEntry\(\)\)\}/)
   })
 
   it('兜底文案是人话且不含堆栈／内部路径（只把详情留在控制台）', () => {

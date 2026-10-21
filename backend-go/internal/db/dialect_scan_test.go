@@ -85,6 +85,7 @@ var dialectScanExempt = map[string]int{
 	// ⚠️ 本表的等值锁同时是**复查提醒**：这些函数一旦被人挪出方言分支（PG 也会跑到），
 	//   命中数会从 0 变成非 0 或键名变化，闸门立刻红灯，届时必须改走 db.HasColumn/db.UniqueColumnSets。
 	"internal/store/packages.go#PRAGMA":       3, // PackagesTenantMigrate：PG 段（DROP CONSTRAINT/CREATE UNIQUE INDEX）已 return，此处仅 SQLite 探测列与索引
+	"internal/store/users_migrate.go#PRAGMA":  4, // migrateUsernameNotUnique：PG 分支（DROP CONSTRAINT/INDEX）提前 return，PRAGMA 只服务 SQLite 12-step 重建（foreign_keys 开关 + table_info 取列）
 	"internal/store/artifacts.go#PRAGMA":      2, // ArtifactsMigrate 的 `if d == DialectSQLite {` 块内：index_list/index_info 探测
 	"internal/kb/db.go#PRAGMA":                7, // ensurePackScopeUnique / rebuildTableWithTripleUnique / rebuildUniqueIndex / isSingleUniqueOnZhHash：均在 PG 早退之后的 SQLite 重建路径
 	"cmd/migrate-sqlite-to-pg/main.go#PRAGMA": 1, // 一次性搬迁工具：源端**只读 SQLite**，用 PRAGMA 取列名是它的本职

@@ -54,7 +54,7 @@ vi.mock('@/api', () => ({
   registerConfig: vi.fn(async () => ({
     success: true, captcha_enabled: true, captcha_site_key: 'k-test', email_verify_enabled: false,
   })),
-  forgotPassword: vi.fn(), resetPassword: vi.fn(), changePassword: vi.fn(),
+  changePassword: vi.fn(),
   setAuthToken: vi.fn(), setActiveTenantId: vi.fn(),
   ssoProviders: vi.fn(async () => ({ enabled: false, providers: [] })),
   ssoLoginUrl: (p: string) => `/api/sso/login?provider=${encodeURIComponent(p)}`,

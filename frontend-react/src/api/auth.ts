@@ -27,6 +27,10 @@ export interface AuthUser {
   display_name: string
   role: string
   tenant_id: number
+  email?: string
+  must_change_pwd?: number
+  /** 首登资料提醒（可跳过；与 must_change_pwd 的 428 强制闸分离） */
+  profile_setup_required?: number
   [key: string]: unknown
 }
 
@@ -43,9 +47,30 @@ export interface LoginResp {
 }
 
 /** 账号密码登录，成功返回 JWT token 与用户信息 */
-/** 登录：用户名+密码，返回会话 token 与用户/组织上下文 */
+/** 登录：用户名+密码（兼容无邮箱存量/UAT），返回会话 token 与用户/组织上下文 */
 export async function login(username: string, password: string): Promise<LoginResp> {
   return request('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) })
+}
+
+/**
+ * 邮箱验证码登录（主流程）。未注册邮箱在主站会自动创建空白个人账号，
+ * 因此自动建号分支必须带 agreed/device_id/captcha（与注册同一套防薅口径）。
+ */
+export async function loginWithEmail(email: string, code: string, opts?: { agreed?: boolean; captchaToken?: string }): Promise<LoginResp> {
+  return bizResp(() => request('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({
+      email, code,
+      agreed: !!opts?.agreed,
+      device_id: trialDeviceID(),
+      captcha_token: opts?.captchaToken,
+    }),
+  }))
+}
+
+/** 首登资料初始化：skip=true 只关本次弹窗（服务端仍保留提醒，下次登录再来）。 */
+export async function profileSetup(payload: { username?: string; password?: string; job_role?: string; skip?: boolean }): Promise<LoginResp> {
+  return bizResp(() => request('/api/auth/profile-setup', { method: 'POST', headers: authHeaders(), body: JSON.stringify(payload) }))
 }
 
 /** SSOProvider 已接入的身份源（IdP）：name 回传后端，display_name 用于按钮文案 */
@@ -71,8 +96,8 @@ export function ssoLoginUrl(provider: string): string {
 
 /** 登录后自助修改密码（校验原密码）。首登强制改密（must_change_pwd=1）时用于设置新密码 */
 /** 修改密码（校验旧密码） */
-export async function changePassword(old_password: string, new_password: string): Promise<AdminResp> {
-  return bizResp(() => request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password }) }))
+export async function changePassword(old_password: string, new_password: string, email_code?: string): Promise<AdminResp> {
+  return bizResp(() => request('/api/auth/change-password', { method: 'POST', headers: authHeaders(), body: JSON.stringify({ old_password, new_password, email_code }) }))
 }
 
 /** 校验当前 token 对应的用户信息（用于会话恢复；出参积分口径，前端零换算） */
@@ -97,24 +122,14 @@ export async function authRegister(data: { username: string; password: string; t
 
 /** 发送注册邮箱验证码（noop=true 表示服务端邮件未配置，验证码打印在服务端日志） */
 /** 注册邮箱验证码（开启 Turnstile 时须带人机 token）；★ F-17：app_lang 随界面语种上报，验证码邮件按语种取稿 */
-export async function sendEmailCode(email: string, captchaToken?: string): Promise<AdminResp & { noop?: boolean }> {
-  return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, captcha_token: captchaToken, app_lang: currentUiLang() || undefined }) })
+export async function sendEmailCode(email: string, captchaToken?: string, purpose?: 'register' | 'login' | 'password' | 'email_change'): Promise<AdminResp & { noop?: boolean }> {
+  return request('/api/auth/email-code', { method: 'POST', body: JSON.stringify({ email, purpose, captcha_token: captchaToken, app_lang: currentUiLang() || undefined }) })
 }
 
 /** 获取公开注册配置（email_verify_enabled，前端据以显隐验证码输入） */
 /** 注册页公开配置（邮箱验证/人机验证开关等） */
 export async function registerConfig(): Promise<AdminResp & { email_verify_enabled?: boolean }> {
   return request('/api/auth/register-config')
-}
-
-/** 忘记密码：向注册邮箱发送重置验证码（2026-10-21 用户后令：只按邮箱定位） */
-export async function forgotPassword(data: { email: string }): Promise<AdminResp> {
-  return request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify(data) })
-}
-
-/** 重置密码：注册邮箱 + 验证码 + 新密码（后端先查邮箱是否已注册，未注册回 EMAIL_NOT_REGISTERED） */
-export async function resetPassword(data: { email: string; code: string; new_password: string }): Promise<AdminResp> {
-  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) }))
 }
 
 /** 获取注册行业列表（无需登录，来自超管维护的行业包） */
@@ -124,17 +139,19 @@ export async function registerIndustries(): Promise<AdminResp> {
 }
 
 // ============================================================================
-// 自助修改密码（邮箱校验流程，复用找回密码通道）
+// 已登录用户自助修改密码（邮箱验证码通道）
+// ★ 2026-10-21 IAM 重做：公开找回/重置端点已下线，这里改走登录态的 /email-code
+//   （purpose=password，收件地址由服务端取当前账号，不接受客户端任意指定）与 change-password。
 // ============================================================================
 
-/** sendPwdCode 向账号绑定邮箱发送改密验证码（只按邮箱定位）。 */
+/** sendPwdCode 向当前账号绑定邮箱发送改密验证码；入参 email 仅作界面回显，服务端以登录态为准。 */
 export async function sendPwdCode(data: { email: string }): Promise<AdminResp> {
-  return forgotPassword(data)
+  return sendEmailCode(data.email, undefined, 'password')
 }
 
-/** submitNewPassword 校验验证码并设置新密码。 */
-export async function submitNewPassword(data: { email: string; code: string; new_password: string }): Promise<AdminResp> {
-  return resetPassword(data)
+/** submitNewPassword 校验当前账号邮箱验证码后设置新密码。 */
+export async function submitNewPassword(data: { code: string; new_password: string }): Promise<AdminResp> {
+  return changePassword('', data.new_password, data.code)
 }
 
 /** meEmailCode 向新邮箱发送变更验证码（需登录） */

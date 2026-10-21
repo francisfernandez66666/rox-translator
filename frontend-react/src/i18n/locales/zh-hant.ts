@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "更新知識庫包",
   "audit.action.logout": "登出",
   "audit.action.login": "登入",
+  "audit.action.profile_setup": "完善個人資料",
   "audit.action.login_sso": "SSO 單點登入",
   "audit.action.model_routes_save": "儲存模型路由",
   "audit.action.model_save": "儲存模型設定",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "工作階段已失效，請用新密碼重新登入",
   "auth.regOkLoginFail": "帳號已建立成功，但自動登入未完成，請返回登入頁用新帳號登入",
   "pwd.oldRequired": "請先輸入目前密碼",
+  "auth.otpDesc": "輸入電子郵件，取得一次性驗證碼即可登入；未註冊的電子郵件會自動建立空白帳號。",
+  "auth.usePassword": "使用密碼登入",
+  "auth.useCode": "改用電子郵件驗證碼登入",
+  "auth.profileTitle": "完善你的資料",
+  "auth.profileDesc": "設定一個使用者名稱，方便團隊辨識；也可以現在設定密碼，或繼續只用電子郵件驗證碼登入。",
+  "auth.profileDone": "儲存並進入",
+  "auth.passwordOptional": "設定密碼（選填，留空則只用電子郵件驗證碼登入）",
+  "auth.skipForNow": "暫時跳過",
+
 }

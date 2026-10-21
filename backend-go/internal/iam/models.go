@@ -17,7 +17,7 @@ import (
 type User struct {
 	ID           int64  `json:"id"`            // 用户主键 ID
 	TenantID     int64  `json:"tenant_id"`     // 所属租户 ID（0=平台级账号，仅超级管理员）
-	Username     string `json:"username"`      // 登录用户名（同租户内唯一）
+	Username     string `json:"username"`      // 用户名（展示/检索用，同租户可重名；登录标识是邮箱）
 	PasswordHash string `json:"-"`             // 密码哈希（bcrypt，序列化时隐藏）
 	DisplayName  string `json:"display_name"`  // 显示名称（界面展示用）
 	Role         string `json:"role"`          // 角色：user/dept_admin/tenant_admin/super_admin（兼容 approver/admin）
@@ -40,6 +40,10 @@ type User struct {
 	// MustChangePwd 首次登录强制改密标记（1=登录后必须先改密，改密成功后自动清零）。
 	// ★ 租户 Excel 批量导入用户（2026-09-02 功能）创建账号时置 1。
 	MustChangePwd int `json:"must_change_pwd"`
+	// ProfileSetupRequired 首次登录资料初始化提醒标记（1=下次登录仍提示补全用户名/密码；0=已完成）。
+	// 用户点「暂时跳过」只关本轮弹窗，标记保持 1——跳过不等于完成，下次登录继续提醒。
+	// ★ 2026-10-21 IAM 重做：与 MustChangePwd 严格分离——后者是强制改密闸（428），本字段只驱动可跳过的提醒。
+	ProfileSetupRequired int `json:"profile_setup_required"`
 	// JobRole 职业角色编码（2026-09-19 需求）：fullstack/frontend/backend/pm/pj/uiux/ops/sales 等，
 	// 取值 = 平台角色包（kb_packages.pack_type='persona'）的 code；空=未选角色。
 	// ★ 仅绑定用户层级，不与企业耦合：退出企业仍存在，个人用户可自行维护（转岗/转行语义）。

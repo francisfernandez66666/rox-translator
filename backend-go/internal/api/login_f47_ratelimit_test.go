@@ -9,15 +9,15 @@
 //
 // 本文件锁的是**整链**（errors 包映射见 internal/errors/codes_f47_test.go）：
 //
-//	A. 前 loginFailThreshold 次失败仍是 401（凭证错就是凭证错，不许提前伪装成限流）；
+//	A. 前 loginFailThreshold 次失败仍是 404（凭证错就是凭证错，不许提前伪装成限流）；
 //	B. 撞阈值后的请求＝429 + Retry-After 头 + 体 retry_after 字段 + code=RATE_LIMITED，
 //	   三处时长必须来自同一个判据（不许头 300 / 字段 299）；
-//	C. 锁定期内的请求**不再**走密码校验（不产生新 401，也就不会把冷却窗口一路往后推）；
-//	D. 冷却届满即恢复 401 口径（闸门不是永久封禁）；
-//	E. 状态码与「用户名不存在」的 401 可区分，但**文案仍不泄露账号存在性**
+//	C. 锁定期内的请求**不再**走密码校验（不产生新 404，也就不会把冷却窗口一路往后推）；
+//	D. 冷却届满即恢复 404 口径（闸门不是永久封禁）；
+//	E. 状态码与「用户名不存在」的 404 **不可区分**，文案也不泄露账号存在性
 //	   （防枚举口径是 F-47 的约束条件，不是它可以被绕过的理由）。
 //	F. ★ P0-6（2026-10-21）：按**账号**并行的锁定跨 IP 成立、不连坐别的账号，且不存在的账号
-//	   同样记账（否则 429/401 的差别本身就是账号存在性回执）。
+//	   同样记账（否则 429/404 的差别本身就是账号存在性回执）。
 //
 // 方言：自钉 SQLite 内存库（AGENTS.md §一·4），不依赖 DB_DRIVER 环境变量。
 // 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/api/ -run TestF47
@@ -98,14 +98,14 @@ func f47Body(t *testing.T, w *httptest.ResponseRecorder) map[string]interface{} 
 	return out
 }
 
-// A＋B 段：阈值前 401、阈值后 429，且时长三处一致。
+// A＋B 段：阈值前 404、阈值后 429，且时长三处一致。
 func TestF47_LoginLockReturns429WithRetryAfter(t *testing.T) {
 	s := newF47LoginProbe(t)
 
 	for i := 1; i <= loginFailThreshold; i++ {
 		w := postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
-		if w.Code != http.StatusUnauthorized {
-			t.Fatalf("第 %d 次失败应仍为 401（凭证错不得提前伪装成限流），实际 %d body=%s",
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("第 %d 次失败应仍为 404（凭证错不得提前伪装成限流），实际 %d body=%s",
 				i, w.Code, w.Body.String())
 		}
 		if h := w.Header().Get("Retry-After"); h != "" {
@@ -195,10 +195,10 @@ func TestF47_LockedAttemptsDoNotExtendWindow(t *testing.T) {
 	_ = h1
 }
 
-// D 段：冷却届满自动恢复（闸门不是永久封禁），恢复后回到 401 口径。
+// D 段：冷却届满自动恢复（闸门不是永久封禁），恢复后回到 404 口径。
 // ★ P0-6 起要**两本账一起**拨到过去：IP 档闸门先于账号档拦人，只到期一本仍会 429，
 // 那读起来像"冷却不恢复"，实际是另一本账还在（判据要跟着行为一起更新，不能只改期望值）。
-func TestF47_CooldownExpiryRestores401(t *testing.T) {
+func TestF47_CooldownExpiryRestores404(t *testing.T) {
 	s := newF47LoginProbe(t)
 	for i := 0; i < loginFailThreshold; i++ {
 		postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
@@ -217,8 +217,8 @@ func TestF47_CooldownExpiryRestores401(t *testing.T) {
 	s.loginLimit.mu.Unlock()
 
 	w := postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("冷却届满后应回到 401 凭证错误口径，实际 %d body=%s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("冷却届满后应回到 404 凭证错误口径，实际 %d body=%s", w.Code, w.Body.String())
 	}
 	if h := w.Header().Get("Retry-After"); h != "" {
 		t.Errorf("已解除锁定仍带 Retry-After: %s", h)
@@ -237,21 +237,21 @@ func TestF47_LockIsPerIP(t *testing.T) {
 	for i := 0; i < loginFailThreshold; i++ {
 		postLogin(t, s, f47ProbeIP, "f47_user", "wrong-password")
 	}
-	if w := postLogin(t, s, otherIP, "f47_other", "wrong-password"); w.Code != http.StatusUnauthorized {
-		t.Errorf("另一 IP 上另一账号应为 401，实际 %d：限流键归属错会全站误伤（同 F-30 XFF 口径）", w.Code)
+	if w := postLogin(t, s, otherIP, "f47_other", "wrong-password"); w.Code != http.StatusNotFound {
+		t.Errorf("另一 IP 上另一账号应为 404，实际 %d：限流键归属错会全站误伤（同 F-30 XFF 口径）", w.Code)
 	}
 }
 
 // F 段（★ P0-6 新增）：按账号的锁定与按 IP 的锁定**并行**，且账号档跨 IP 成立。
 // 判据形态：每次失败换一个来源 IP（不碰 IP 档），第 loginFailThreshold 次之后，
-// 从**又一个全新 IP** 用同一个账号再打，必须是 429 而不是 401——否则"分布式换 IP 打同一个账号"
+// 从**又一个全新 IP** 用同一个账号再打，必须是 429 而不是 404——否则"分布式换 IP 打同一个账号"
 // 这条直路还开着（那正是本档存在的理由）。
 func TestF47_AccountLockIsCrossIP(t *testing.T) {
 	s := newF47LoginProbe(t)
 	for i := 0; i < loginFailThreshold; i++ {
 		ip := "198.51.100." + strconv.Itoa(10+i) + ":50000"
-		if w := postLogin(t, s, ip, "f47_user", "wrong-password"); w.Code != http.StatusUnauthorized {
-			t.Fatalf("第 %d 次（来源 %s）应是 401 凭证错，实际 %d body=%s", i+1, ip, w.Code, w.Body.String())
+		if w := postLogin(t, s, ip, "f47_user", "wrong-password"); w.Code != http.StatusNotFound {
+			t.Fatalf("第 %d 次（来源 %s）应是 404 凭证错，实际 %d body=%s", i+1, ip, w.Code, w.Body.String())
 		}
 	}
 	w := postLogin(t, s, "198.51.100.200:50000", "f47_user", "right-password-123")
@@ -261,20 +261,20 @@ func TestF47_AccountLockIsCrossIP(t *testing.T) {
 	if h := w.Header().Get("Retry-After"); h == "" {
 		t.Fatal("账号档 429 缺 Retry-After：客户端无从退避")
 	}
-	// 反向对照：同一次分布式打击不连坐别的人——另一个账号从最新 IP 打，必须回到 401。
-	if w := postLogin(t, s, "198.51.100.200:50000", "f47_other", "wrong-password"); w.Code != http.StatusUnauthorized {
-		t.Errorf("账号档连坐了别的账号：f47_other 应 401，实际 %d", w.Code)
+	// 反向对照：同一次分布式打击不连坐别的人——另一个账号从最新 IP 打，必须回到 404。
+	if w := postLogin(t, s, "198.51.100.200:50000", "f47_other", "wrong-password"); w.Code != http.StatusNotFound {
+		t.Errorf("账号档连坐了别的账号：f47_other 应 404，实际 %d", w.Code)
 	}
 	// 反向对照②：**不存在的账号**同样要被记账，否则"打 5 次存在账号被锁、打 5 次不存在不锁"
 	// 本身就是一条账号存在性回执（防枚举在限流面漏回来）。用全新 IP 隔离 IP 档。
 	for i := 0; i < loginFailThreshold; i++ {
 		ip := "198.51.100." + strconv.Itoa(50+i) + ":50000"
-		if w := postLogin(t, s, ip, "f47_ghost", "whatever"); w.Code != http.StatusUnauthorized {
-			t.Fatalf("第 %d 次不存在的账号应仍是 401（不许提前伪装成限流），实际 %d", i+1, w.Code)
+		if w := postLogin(t, s, ip, "f47_ghost", "whatever"); w.Code != http.StatusNotFound {
+			t.Fatalf("第 %d 次不存在的账号应仍是 404（不许提前伪装成限流），实际 %d", i+1, w.Code)
 		}
 	}
 	if w := postLogin(t, s, "198.51.100.250:50000", "f47_ghost", "whatever"); w.Code != http.StatusTooManyRequests {
-		t.Errorf("不存在的账号未被记账：第 6 次仍 %d ⇒ 攻方可据 429/401 的差别枚举账号是否存在", w.Code)
+		t.Errorf("不存在的账号未被记账：第 6 次仍 %d ⇒ 攻方可据 429/404 的差别枚举账号是否存在", w.Code)
 	}
 }
 

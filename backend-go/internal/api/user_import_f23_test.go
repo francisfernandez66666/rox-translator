@@ -114,7 +114,7 @@ func TestUATBatchF_ImportTemplateRoundTrip(t *testing.T) {
 // 数据行 F 列为空 → 用户名判空全部跳过 → 「无有效数据行」。
 // 首中即停修复后：五列索引钉死在各自首次命中列，示例行照常读出。
 func TestUATBatchF_HeaderHijackNegativeLock(t *testing.T) {
-	longNote := "填写说明：用户名称必填且租户内唯一；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知"
+	longNote := "填写说明：用户名称必填（同租户可重名，邮箱是登录标识）；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知"
 	all := [][]string{
 		{"用户名称", "姓名", "部门", "角色", "邮箱", longNote},
 		{"lisi", "李四", "研发部", "管理员", "lisi@example.com", ""},

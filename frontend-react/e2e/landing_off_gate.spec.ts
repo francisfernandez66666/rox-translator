@@ -35,7 +35,8 @@ test.describe('门面开关：演示站首页直落登录注册页', () => {
     // ① URL 判据：等值而不是「包含」——停在 /?xxx 或 /login?redirect=/ 都算没满足「地址栏跟着变」
     await expect(page).toHaveURL(/\/login$/)
     // ② 登录页特征件真的在场（只判 URL 会被「导航过去了但渲染空白」骗过）
-    await expect(page.locator('input[type="password"]'), '⇒ 到了 /login 却没有登录表单').toBeVisible()
+    await expect(page.locator('.lc-auth-card'), '⇒ 到了 /login 却没有登录表单').toBeVisible()
+    await expect(page.locator('.lc-auth-card input[type="email"]'), '⇒ 登录卡没渲染邮箱验证码主档').toBeVisible()
     // ③ 落地页特征件必须为 0：这一条才区分「重定向」与「登录页浮在首页之上」
     expect(await page.locator('.lc-nav-cta').count(), '⇒ 首页 CTA 仍在渲染＝没真跳走').toBe(0)
     expect(await page.locator('.lc-hero-h1').count(), '⇒ 落地页 hero 仍在渲染').toBe(0)
@@ -50,7 +51,7 @@ test.describe('门面开关：演示站首页直落登录注册页', () => {
     await expect(page.locator('.lc-hero-h1'), '⇒ 默认档下主页被收掉了（读不到标记应按「开放」处理）')
       .toBeVisible()
     await expect(page).toHaveURL(`${BASE}/`)
-    expect(await page.locator('input[type="password"]').count(), '⇒ 主站首页直落了登录表单').toBe(0)
+    expect(await page.locator('.lc-auth-card').count(), '⇒ 主站首页直落了登录表单').toBe(0)
   })
 
   test('G3 标记被污染（"false" 字符串／null／缺 landing 键）一律按缺省处理，不许误关主页', async ({ page }) => {
@@ -73,11 +74,11 @@ test.describe('门面开关：演示站首页直落登录注册页', () => {
     await expect(page.locator('.lc-cmp-title'), '⇒ /compare 被门面开关一起收掉了（应只管首页）')
       .toBeVisible({ timeout: 30000 })
     await expect(page).toHaveURL(/\/compare$/)
-    expect(await page.locator('input[type="password"]').count(), '⇒ 访客在 /compare 撞见登录墙').toBe(0)
+    expect(await page.locator('.lc-auth-card').count(), '⇒ 访客在 /compare 撞见登录墙').toBe(0)
 
     await page.goto(`${BASE}/pricing`)
     await expect(page).toHaveURL(/\/pricing$/)
-    expect(await page.locator('input[type="password"]').count(), '⇒ 访客在 /pricing 撞见登录墙').toBe(0)
+    expect(await page.locator('.lc-auth-card').count(), '⇒ 访客在 /pricing 撞见登录墙').toBe(0)
     // 落地页特有的 hero 也不该出现在这两页上（串页了说明分支写在了外层而不是 `/` 那一支）
     expect(await page.locator('.lc-hero-h1').count()).toBe(0)
   })

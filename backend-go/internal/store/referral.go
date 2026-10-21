@@ -12,6 +12,7 @@
 package store
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"translator/internal/db"
+	"translator/internal/observability"
 	"translator/internal/ops"
 )
 
@@ -443,18 +445,36 @@ func (s *Store) ReferralPaidReward(inviteeUID int64) error {
 //   - 部分唯一索引 idx_users_email：仅约束非空邮箱——「同一时刻一个邮箱至多归属一个账号」，
 //     本人换绑不受影响（新旧双验证流程不变）。这是账户层外键唯一的最终兜底。
 func (s *Store) OneidMigrate() {
-	res, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE users SET email='' WHERE COALESCE(email,'')<>'' AND id IN (
+	// ★ 2026-10-21 IAM 重做：邮箱占用只在「active/deactivating」范围内互斥。
+	//   已停用/已注销账号的邮箱必须可被新空白账号占用（用户令：旧账号数据保留、邮箱解绑）；
+	//   因此存量治理也只清理仍占用的重复行，不再把所有历史行一律抹成空。
+	// 先归一化：历史行可能带首尾空白/大写，若不先 trim+lower，「同一邮箱两种写法」会绕过
+	// lower(trim(email)) 唯一索引（登录/RBAC 仍按归一后的串读，最终变成两个可登录账号）。
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
+		`UPDATE users SET email=lower(trim(email)) WHERE email<>lower(trim(email))`); err != nil {
+		observability.Warn(context.Background(), "users.email 归一化失败（后续唯一索引可能撞重复）", "err", err.Error())
+	}
+	res, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE users SET email='' WHERE trim(email)<>'' AND status IN ('active','deactivating') AND id IN (
 		SELECT id FROM (
-			SELECT u.id, ROW_NUMBER() OVER (PARTITION BY lower(u.email) ORDER BY u.id) rn
-			FROM users u WHERE COALESCE(u.email,'')<>''
+			SELECT u.id, ROW_NUMBER() OVER (PARTITION BY lower(trim(u.email)) ORDER BY u.id) rn
+			FROM users u WHERE trim(u.email)<>'' AND u.status IN ('active','deactivating')
 		) t WHERE t.rn > 1)`)
 	if err == nil {
 		if n, _ := res.RowsAffected(); n > 0 {
-			log.Printf("[migrate] oneid: 已解绑 %d 个重复绑定邮箱的账号（保留最早账号持有）", n)
+			log.Printf("[migrate] oneid: 已解绑 %d 个重复占用邮箱的账号（保留最早账号持有）", n)
 		}
 	}
-	if _, err := db.Exec(s.db, db.CurrentDialect(), "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email<>''"); err != nil {
-		log.Printf("[migrate] users.email 唯一索引创建失败（存在大小写/空白变体重复，请人工清理后重启）: %v", err)
+	// 旧索引建在原始 email 上，大小写变体不受约束；先摘掉再建表达式部分唯一索引。
+	if _, err := db.Exec(s.db, db.CurrentDialect(), "DROP INDEX IF EXISTS idx_users_email"); err != nil {
+		log.Printf("[migrate] 旧 users.email 唯一索引删除失败: %v", err)
+	}
+	// 表达式必须与读路径同源（lower(trim(email))），否则「库里有空格」与「登录时 trim」两把尺子。
+	if _, err := db.Exec(s.db, db.CurrentDialect(), `DROP INDEX IF EXISTS idx_users_email_lower_active`); err != nil {
+		log.Printf("[migrate] 旧 users.lower(trim(email)) 唯一索引删除失败: %v", err)
+	}
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
+		"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower_active ON users(lower(trim(email))) WHERE trim(email)<>'' AND status IN ('active','deactivating')"); err != nil {
+		log.Printf("[migrate] users.lower(trim(email)) 唯一索引创建失败（存在大小写/空白变体重复，请人工清理后重启）: %v", err)
 	}
 }
 

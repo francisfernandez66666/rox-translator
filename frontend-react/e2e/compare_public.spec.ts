@@ -118,7 +118,7 @@ test.describe('官网比价与算价页 /compare（访客可达·报价与后端
     //   （访客被兜底送进登录页时，若那一拍登录件尚未挂载，这一锁会照样绿）。
     //   现在页面已证明「金额卡算完并挂着」，再数负向才等于「稳定态下确实没有」。
     // 登录页特征件必须为 0：这一条才真正区分「放行的公开页」与「兜底送进来的登录页」
-    expect(await page.locator('input[type="password"]').count(), '⇒ 访客被兜底送进了登录页').toBe(0)
+    expect(await page.locator('.lc-auth-card').count(), '⇒ 访客被兜底送进了登录页').toBe(0)
     // 兜底空态不许出现：探针已在上面拿到系数，这里还显示「取不到」就是前端接线断了
     expect(await page.locator('.lc-cmp-warn').count(), '⇒ 系数已取得却仍渲染不可用态').toBe(0)
 

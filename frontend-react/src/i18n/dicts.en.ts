@@ -363,6 +363,7 @@ export const baseEn: Record<string,string> = {
   'audit.action.task_reset_consumption': 'Task progress reset',
   'audit.action.logout': 'Logout',
   'audit.action.login': 'Login',
+  'audit.action.profile_setup': 'Profile completed',
   'audit.action.register': 'Register',
   'audit.action.user_create': 'Create user',
   'audit.action.user_update': 'Update user',

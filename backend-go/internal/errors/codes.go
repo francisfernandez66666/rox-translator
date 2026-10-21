@@ -36,7 +36,9 @@ const (
 	ErrForbidden    ErrorCode = "FORBIDDEN"
 	ErrNotFound     ErrorCode = "NOT_FOUND"
 	ErrConflict     ErrorCode = "CONFLICT"
-	ErrRateLimited  ErrorCode = "RATE_LIMITED"
+	// ErrGone 表示接口已下线（HTTP 410）：与 404 区分——路径还在、语义已退役，调用方应改走替代链路。
+	ErrGone        ErrorCode = "GONE"
+	ErrRateLimited ErrorCode = "RATE_LIMITED"
 	// ErrMethodNotAllowed 路径存在但方法不在允许集合内（405）。
 	// 此前本包只有 4xx 的 400/401/403/404/409，代理类 handler 只能内联手搓 405，
 	// 补进枚举是为了让「统一错误出口」真的覆盖到传输层状态（见 api 包错误写法棘轮）。
@@ -261,6 +263,8 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusTooManyRequests
 	case ErrNotFound, ErrTicketNotFound, ErrKBNotFound:
 		return http.StatusNotFound
+	case ErrGone:
+		return http.StatusGone
 	case ErrConflict:
 		return http.StatusConflict
 	case ErrMethodNotAllowed:

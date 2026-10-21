@@ -37,6 +37,27 @@ func (s *Store) CreateUser(tid int64, username, passHash, displayName, role stri
 	return s.iam.CreateUser(tid, username, passHash, displayName, role, createdBy, orgID)
 }
 
+// CreateUserWithEmail 委托 iam.Store：在一个事务里建号并绑定邮箱/协议时间/首登资料标记。
+// ★ 2026-10-21 IAM 重做：自动建号唯一入口，禁止调用方再拆成 CreateUser + SetUserEmail（后者失败会被吞）。
+func (s *Store) CreateUserWithEmail(tid int64, username, passHash, displayName, role string, createdBy, orgID int64, email, agreedAt string, profileSetupRequired int) (*User, error) {
+	return s.iam.CreateUserWithEmail(tid, username, passHash, displayName, role, createdBy, orgID, email, agreedAt, profileSetupRequired)
+}
+
+// SetUsername 委托 iam.Store：更新用户名与展示名（首登资料初始化）。
+func (s *Store) SetUsername(id, tid int64, username string) error {
+	return s.iam.SetUsername(id, tid, username)
+}
+
+// SetProfileSetupRequired 委托 iam.Store：首登资料提醒标记（可跳过；与 must_change_pwd 分离）。
+func (s *Store) SetProfileSetupRequired(id, tid int64, flag int) error {
+	return s.iam.SetProfileSetupRequired(id, tid, flag)
+}
+
+// ClearUserPassword 委托 iam.Store：清空密码（仅 OTP 登录）。
+func (s *Store) ClearUserPassword(id, tid int64) error {
+	return s.iam.ClearUserPassword(id, tid)
+}
+
 // GetUser 委托 iam.Store
 func (s *Store) GetUser(id, tid int64) (*User, error) {
 	return s.iam.GetUser(id, tid)

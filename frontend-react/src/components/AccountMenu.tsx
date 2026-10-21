@@ -144,8 +144,15 @@ export default function AccountMenu({ showAdminConsole, onGotoAdmin, showWorkben
     // ★ 2026-10-15 用户令：我的账号（侧栏那一项已删）——落 /my（账号设置 + 职业角色）。
     //   selfNav 已含 nav-my（移动档无侧栏），两者同时传会撞出两个同名项，故只在没走 selfNav 时补。
     ...(onGotoMy && !selfNav ? [{ content: <><Icon n="gear" style={MI} />{t('app.navMy')}</>, value: 'my', onClick: () => onGotoMy() }] : []),
-    // 修改密码：打开邮箱验证码 + 新密码弹窗
-    { content: <><Icon n="lock" style={MI} />{t('pwd.title')}</>, value: 'pwd', onClick: () => setOpenPwd(true) },
+    // 修改密码：打开邮箱验证码 + 新密码弹窗；无邮箱先引导绑定，避免弹窗发码必失败
+    {
+      content: <><Icon n="lock" style={MI} />{t('pwd.title')}</>,
+      value: 'pwd',
+      onClick: () => {
+        if (curEmail) setOpenPwd(true)
+        else setOpenBind(true)
+      },
+    },
     // 换绑邮箱：打开绑定/换绑邮箱弹窗
     { content: <><Icon n="mail" style={MI} />{t('menu.changeEmail')}</>, value: 'email', onClick: () => setOpenBind(true) },
     // 职业角色维护（2026-09-19）：角色只绑用户不绑企业，转岗/转行随时切换

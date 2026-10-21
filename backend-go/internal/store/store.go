@@ -145,6 +145,10 @@ func (s *Store) RepairAutoincrementSeqs() {
 func (s *Store) migrate() error {
 	stmts := []string{
 		// ---------- users 用户体系 ----------
+		// ★ 2026-10-21 IAM 重做后的 users 唯一事实源：
+		//   用户名只是资料字段（同租户可重名，**无任何唯一约束**），邮箱才是登录外部标识；
+		//   邮箱互斥由 idx_users_email_lower_active 承担（仅 active/deactivating 占用，见 OneidMigrate）。
+		//   每列都写进建表语句，不再依赖「新库靠补列迁移长出来」——补列清单只服务存量库。
 		`CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			tenant_id INTEGER NOT NULL DEFAULT 1,
@@ -152,12 +156,23 @@ func (s *Store) migrate() error {
 			password_hash TEXT NOT NULL,
 			display_name TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'user',            -- user / approver / admin
-			status TEXT NOT NULL DEFAULT 'active',        -- active / disabled
+			status TEXT NOT NULL DEFAULT 'active',        -- active / disabled / deactivating
 			created_by INTEGER NOT NULL DEFAULT 0,
 			last_login_at TEXT NOT NULL DEFAULT '',
+			org_id INTEGER NOT NULL DEFAULT 0,
+			email TEXT NOT NULL DEFAULT '',
+			agreed_at TEXT NOT NULL DEFAULT '',
+			must_change_pwd INTEGER NOT NULL DEFAULT 0,
+			token_version INTEGER NOT NULL DEFAULT 0,
+			job_role TEXT NOT NULL DEFAULT '',
+			preferred_lang TEXT NOT NULL DEFAULT '',
+			ref_code TEXT DEFAULT '',
+			referred_by INTEGER DEFAULT 0,
+			scim_external_id TEXT NOT NULL DEFAULT '',
+			deactivate_at TEXT NOT NULL DEFAULT '',
+			profile_setup_required INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT,
-			updated_at TEXT,
-			UNIQUE(username, tenant_id)
+			updated_at TEXT
 		)`,
 		// ---------- tickets 工单 ----------
 		`CREATE TABLE IF NOT EXISTS tickets (
@@ -625,10 +640,12 @@ func (s *Store) migrate() error {
 	if _, err := db.Exec(s.db, db.CurrentDialect(), `UPDATE users SET tenant_id=0 WHERE role IN ('admin','super_admin')`); err != nil {
 		return err
 	}
-	// 约束：同租户下用户名唯一（三期）。容错执行——存量库若已有重名数据，
-	// 建索引失败仅记日志不阻断启动；清理重名后重启自动补建。
-	if _, err := db.Exec(s.db, db.CurrentDialect(), `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_tid_username ON users(tenant_id, username)`); err != nil {
-		log.Printf("[migrate] 同租户用户名唯一索引创建失败（存在重名数据，请清理后重启）: %v", err)
+	// ★ 2026-10-21 IAM 重做：用户名不再是登录标识，同租户重名必须合法。
+	// 旧版本在这里建 idx_users_tid_username，新库已从建表语句里删掉 UNIQUE；
+	// 存量库由 users_migrate.go 摘约束：PG 直接 DROP，SQLite 按 12-step 重建表
+	// （列/行/索引/触发器/自增序列都原样搬过去，不再只告警）。
+	if err := s.migrateUsernameNotUnique(); err != nil {
+		log.Printf("[migrate] 用户名唯一约束迁移失败（不阻断启动，但重名仍会被旧约束拒绝）: %v", err)
 	}
 	// ★ 〇-AM：主后台工作台 SSE 翻译对话持久化表（chat_conversations + chat_messages）
 	if err := s.initChatTables(); err != nil {
@@ -732,6 +749,8 @@ var columnAdditions = []colDef{
 	{"users", "agreed_at", "ALTER TABLE users ADD COLUMN agreed_at TEXT NOT NULL DEFAULT ''"},
 	// ★ 首登强制改密（2026-09-02 功能）：Excel 批量导入用户置 1，首次登录需先改密
 	{"users", "must_change_pwd", "ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 0"},
+	// ★ 2026-10-21 IAM 重做：首登资料提醒（可跳过），与 must_change_pwd 强制闸分离
+	{"users", "profile_setup_required", "ALTER TABLE users ADD COLUMN profile_setup_required INTEGER NOT NULL DEFAULT 0"},
 	// ★ C2（2026-09-12）：payments 金额列单位归一——历史 amount_money 实为「分」
 	//   （与 orders.amount_money「元」同名不同单位，勾稽必错）。新增 amount_fen 语义列，
 	//   启动一次性回填旧行，写入点全部改投 amount_fen；amount_money 保留只读兼容。

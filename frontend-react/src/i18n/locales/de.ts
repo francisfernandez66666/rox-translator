@@ -307,6 +307,7 @@ export const dict: Record<string, string> = {
   "audit.action.kb_package_update": "Wissensdatenbank-Paket aktualisieren",
   "audit.action.logout": "Abmeldung",
   "audit.action.login": "Anmeldung",
+  "audit.action.profile_setup": "Profil vervollständigt",
   "audit.action.login_sso": "SSO-Anmeldung",
   "audit.action.model_routes_save": "Modellrouting speichern",
   "audit.action.model_save": "Modellkonfiguration speichern",
@@ -3108,4 +3109,13 @@ export const dict: Record<string, string> = {
   "auth.sessionExpired": "Sitzung abgelaufen. Melden Sie sich mit dem neuen Passwort erneut an",
   "auth.regOkLoginFail": "Konto erstellt, aber die automatische Anmeldung ist fehlgeschlagen. Gehen Sie zurück zur Anmeldeseite und melden Sie sich mit dem neuen Konto an",
   "pwd.oldRequired": "Bitte zuerst das aktuelle Passwort eingeben",
+  "auth.otpDesc": "Gib deine E-Mail und einen Einmalcode ein. Eine nicht registrierte E-Mail erstellt automatisch ein leeres Konto.",
+  "auth.usePassword": "Mit Passwort anmelden",
+  "auth.useCode": "Stattdessen E-Mail-Code verwenden",
+  "auth.profileTitle": "Profil vervollständigen",
+  "auth.profileDesc": "Wähle einen Benutzernamen, damit dich Teammitglieder erkennen. Du kannst jetzt ein Passwort setzen oder weiter nur E-Mail-Codes verwenden.",
+  "auth.profileDone": "Speichern und fortfahren",
+  "auth.passwordOptional": "Passwort (optional; leer lassen, um nur E-Mail-Codes zu verwenden)",
+  "auth.skipForNow": "Jetzt überspringen",
+
 }
