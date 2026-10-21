@@ -1,5 +1,7 @@
 // ============================================================================
-// components/Login.tsx — 登录 / 自助注册 / 忘记密码（LangCross 纯黑组件库实现）
+// components/Login.tsx — 登录 / 自助注册（LangCross 纯黑组件库实现）。
+// ★ 2026-10-21 IAM 重做：公共找回/重置已下线（410 GONE），本文件不再有找回屏；
+//   「忘记密码」不再是站内出路，改由 OTP/口令切换（usePassword/useCode）承担。
 // 设计：认证卡用 AuthCard（400 宽、内边距 32、圆角 14、外层 .lc-auth-bg）。
 // 几何口径来自画布 57:3（登录）/ 57:117（找回密码）实测；三屏标题字号见 components.css 注释。
 // 注册交互：点「免费注册」→ 传统表单卡闪烁三次 → 整页 120ms 退出 → AI 助理面板接管
@@ -43,10 +45,12 @@ interface Props {
 type RegPhase = 'form' | 'flashing' | 'exiting' | 'ai'
 
 /**
- * 登录 / 自助注册 / 忘记密码 三屏合一页（等价 Vue 版 Login.vue）。
+ * 登录 / 自助注册 两屏合一页（等价 Vue 版 Login.vue）。
  * 2026-09-18 改造：整层皮肤从 TDesign 迁到 LangCross 组件库（AuthCard/Field/Input/useToast），
- * 鉴权链路（登录、注册、邮箱码、找回密码、首登强制改密、Turnstile、UTM 归因）原样保留。
- * 三屏各按 view 提前 return 渲染各自的卡，不复用同一张：设计稿里三屏的卡宽、标题字号、
+ * 鉴权链路（登录、注册、邮箱码、首登强制改密、Turnstile、UTM 归因）原样保留。
+ * ★ 2026-10-21 IAM 重做：找回/重置屏随公开找回下线删除（410 GONE），密碼降为备用登录方式，
+ * 主入口是邮箱验证码（登录卡内 usePassword/useCode 切换）；「忘记密码」不再是站内出路。
+ * 各屏按 view 提前 return 渲染各自的卡，不复用同一张：设计稿里两屏的卡宽、标题字号、
  * 底部链接行数都不同，共用一张只会把样式分支写成嵌套三元。
  */
 export default function Login({ mode, onLogin }: Props) {
@@ -127,8 +131,7 @@ export default function Login({ mode, onLogin }: Props) {
   // ★ 2026-09-24：siteKey 存 state——AI 注册面板（接管注册的传统表单替代者）要拿同一份配置
   //   挂自己的验证组件，旧写法只活在注册期局部变量里，面板无从获得
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
-  // 忘记密码
-  // ★ #38（2026-09-21）：已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
+  // 已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
   const [ssoList, setSsoList] = useState<SSOProvider[]>([])
 
   // 拉取 SSO 身份源：仅前台登录卡展示（回调固定落 SSO_FRONTEND_URL 根路径，后台卡跳过去会回不到 /admin）
