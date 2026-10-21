@@ -24,7 +24,7 @@ import { PWD_MIN_LEN } from '@/lib/accountForm'
 import { useCountdown } from '@/lib/useCountdown' // ★ F-03（2026-09-25 批G）：发码失败 60s 冷却，复用 #42 收口的倒计时钩子
 import { loadTurnstile, renderTurnstile, reexecTurnstile } from '@/lib/turnstile'
 import { useT, getLang, tpl } from '@/i18n'
-import { EyeIcon, EyeOffIcon } from '@/ui/langcross/src'
+import { EyeIcon, EyeOffIcon, Checkbox } from '@/ui/langcross/src'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
 import { useBranding } from '@/branding'
 
@@ -126,7 +126,11 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   // AI 流程内的账号信息表单（与传统注册表单字段有意不共用：这里只有 4~6 项）
   const [aiForm, setAiForm] = useState({
     username: prefillUsername, password: '', email: '', emailCode: '', orgCode: '', orgCn: '', orgEn: '',
+    agreed: false,
   })
+  // ★ 2026-10-21 IAM 重做 P1-4：AI 流不再硬编码 agreed:true——把协议勾选收进表单，
+  //   与登录/传统注册两处同形（同款 Checkbox＋同款链接文案）。旧形态"问答流程没有勾选步骤
+  //   提交即视为已同意"绕过了同意闸，且与传统表单形态不一致（三处三套口径）。
   // 登录页带没带用户名：只决定提示文案（「已带入，可修改」），不锁字段
   const usernameBrought = prefillUsername.trim().length > 0
   // F-02（2026-09-25 批G）：已发码标记由 ref 改 useState。旧实现用 ref 是想避开整条聊天流
@@ -454,6 +458,9 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     if (aiForm.password.length < PWD_MIN_LEN) { setBusy(false); return }
     if (!aiForm.email.trim()) { setBusy(false); return }
     if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
+    // ★ 2026-10-21 IAM 重做 P1-4：协议勾选从"提交即视为同意"改成表单内显式勾选，
+    //   未勾选直接拦下（与传统表单 doRegister 的 needAgree 同一把判据）。
+    if (!aiForm.agreed) { setBusy(false); toastError(t('auth.needAgree')); return }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
     if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
@@ -481,7 +488,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
         invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
         code: kind ==='admin'? (aiForm.orgCode.trim() || undefined) : undefined, // F-06：管理员=新建租户，租户编码经组织编码字段下发（后端 register.go 无邀请绑定时必填）
-        agreed: true, // 问答流程里没有单独的协议勾选步骤（只有传统表单有），提交即视为已同意
+        agreed: aiForm.agreed,
       })
       // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
       // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
@@ -690,7 +697,7 @@ function AccountFormBlock({
   kind, form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t,
 }: {
   kind:'personal'|'staff'|'admin'
-  form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string }
+  form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string; agreed: boolean }
   setForm: (f: typeof form) => void
   /** 用户名是否由登录页带入（仅影响提示文案，字段本身始终可编辑） */
   brought: boolean
@@ -801,6 +808,21 @@ function AccountFormBlock({
           </div>
         </>
       )}
+      {/* ★ 2026-10-21 IAM 重做 P1-4：协议勾选与传统表单同形——同一款 Checkbox＋同一组
+          条款链接文案（12 语种词典已有 agreeTerms/userAgreement/privacyPolicy，零新增键）。
+          旧形态这里没有勾选、提交硬编码 agreed:true，等于把"我同意"替用户点了。 */}
+      <Checkbox
+        checked={form.agreed}
+        onChange={(e) => setForm({ ...form, agreed: e.target.checked })}
+        label={(
+          <>
+            {t('auth.agreeTerms')}{''}
+            <a href="/docs/terms" target="_blank" rel="noreferrer" className="ar-link">{t('auth.userAgreement')}</a>
+            {' & '}
+            <a href="/docs/privacy" target="_blank" rel="noreferrer" className="ar-link">{t('auth.privacyPolicy')}</a>
+          </>
+        )}
+      />
       {/* 提交期间禁用并转圈：注册是「有副作用的一次性动作」，重复点击会再发一次注册请求 */}
       <button className={'lc-btn lc-btn--primary lc-btn--block'+ (busy ?'ar-busy':'')} type="button"disabled={busy}
               onClick={onSubmit}>
@@ -880,6 +902,9 @@ const CSS_AR = `
 .ar-ts{display:flex;justify-content:center;min-height:65px;}
 .ar-flabel{font-size:14px;color:var(--lc-text-3);}
 .ar-flabel i{font-style:normal;color:var(--lc-text-4);font-size:13px;}
+/* ★ 2026-10-21 IAM 重做 P1-4：协议勾选链接与登录/传统注册卡的 .auth-link 同档（次级文字色、悬停下划线） */
+.ar-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);text-decoration:none;}
+.ar-link:hover{color:var(--lc-text);text-decoration:underline;}
 .ar-otp-row{display:flex;gap:8px;align-items:center;min-width:0;}
 .ar-otp-cells{display:flex;gap:7px;flex:1;min-width:0;}
 /* ★ min-width:0 必须给：<input> 的默认尺寸（size≈20 字符 ≈170px）来自内容，

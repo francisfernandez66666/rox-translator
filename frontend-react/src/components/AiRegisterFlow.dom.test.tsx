@@ -238,6 +238,12 @@ describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
     const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
       .find((b) => (b.textContent || '').includes('注册并登录'))!
     // 第一轮：组织编码留空 → 必被拦下（旧实现此时会把无 code 的报文发出去吃 400）
+    // ⚠️ 本测试是"缺组织编码"的用例，不关心协议勾选（P1-4 另有专门用例）；
+    // 但 agreed 守卫（2026-10-21 IAM 重做 P1-4）排在 orgCode 之前，若连协议都未勾
+    // 会把"缺编码"混成"未同意"。所以两轮都先把协议勾上，让本用例只测编码这一维。
+    const cb = container.querySelector<HTMLInputElement>('.ar-form input.lc-checkbox')!
+    expect(cb, 'AI 表单必须渲染协议勾选（P1-4）').not.toBeNull()
+    fireEvent.click(cb)
     fireEvent.click(submit)
     await new Promise((r) => setTimeout(r, 100))
     expect(authRegister, '缺组织编码不得发出注册请求').not.toHaveBeenCalled()
@@ -249,6 +255,60 @@ describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
       expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({
         type: 'enterprise', role_choice: 'admin', code: 'uatorg01',
       }))
+    }, { timeout: 3000 })
+  })
+})
+
+// ============================================================================
+// ★ 2026-10-21 IAM 重做 P1-4：AI 注册流的协议勾选（旧形态硬编码 agreed:true，
+//   把"我同意"替用户点了，且三处表单三套口径）。本 describe 固化同形：
+//   ① 表单必须渲染协议勾选（lc-checkbox）；
+//   ② 未勾选点提交 → 前端拦截、authRegister 不出网、toast 提示需要同意；
+//   ③ 勾选后提交体 agreed 字段必须随勾选态传（不再恒 true）。
+// ============================================================================
+describe('AiRegisterFlow P1-4 · 协议勾选', () => {
+  it('账号表单渲染协议勾选，且未勾选点提交被拦、不发注册请求并提示', async () => {
+    vi.mocked(authRegister).mockClear()
+    vi.mocked(toastError).mockClear()
+    const { container } = mount('')
+    await reachForm(container) // 个人版账号表单
+    const cb = container.querySelector<HTMLInputElement>('.ar-form input.lc-checkbox')
+    expect(cb, 'AI 表单必须渲染协议勾选').not.toBeNull()
+    // 填齐必填（用户名/密码/邮箱/6 位验证码）但**不勾协议**
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    fireEvent.change(inputs[0], { target: { value: 'p1_4_user' } })
+    const pwd = container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!
+    fireEvent.change(pwd, { target: { value: 'P14Pass2026!' } })
+    fireEvent.change(inputs[2], { target: { value: 'p1_4@example.com' } })
+    const cells = container.querySelectorAll<HTMLInputElement>('.ar-otp')
+    '654321'.split('').forEach((d, i) => fireEvent.change(cells[i], { target: { value: d } }))
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
+      .find((b) => (b.textContent || '').includes('注册并登录'))!
+    fireEvent.click(submit)
+    await waitFor(() => { expect(toastError).toHaveBeenCalledWith('请阅读并同意《用户协议》与《隐私协议》') })
+    expect(authRegister, '未勾协议不得发出注册请求').not.toHaveBeenCalled()
+    expect(cb!.checked, '未勾选时原生 checked 必须是 false（提交体才拿得到假）').toBe(false)
+  })
+
+  it('勾选协议后提交体 agreed 随勾选态传 true（不再硬编码恒真）', async () => {
+    vi.mocked(authRegister).mockClear()
+    const { container } = mount('')
+    await reachForm(container)
+    const cb = container.querySelector<HTMLInputElement>('.ar-form input.lc-checkbox')!
+    fireEvent.click(cb)
+    expect(cb.checked).toBe(true)
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    fireEvent.change(inputs[0], { target: { value: 'p1_4b_user' } })
+    const pwd = container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!
+    fireEvent.change(pwd, { target: { value: 'P14Pass2026!' } })
+    fireEvent.change(inputs[2], { target: { value: 'p1_4b@example.com' } })
+    const cells = container.querySelectorAll<HTMLInputElement>('.ar-otp')
+    '123456'.split('').forEach((d, i) => fireEvent.change(cells[i], { target: { value: d } }))
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
+      .find((b) => (b.textContent || '').includes('注册并登录'))!
+    fireEvent.click(submit)
+    await waitFor(() => {
+      expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({ agreed: true }))
     }, { timeout: 3000 })
   })
 })
