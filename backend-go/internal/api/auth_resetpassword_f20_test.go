@@ -1,15 +1,14 @@
 // ============================================================================
 // api/auth_resetpassword_f20_test.go — 观察2②（2026-09-25 UAT 修复批G）后端半断言
-// handleResetPassword 四类失败族（用户不存在 / 验证码缺失或已过期 / 错次超限作废 /
-// 一次性码失配）已从「HTTP 200 + success:false」内联 writeJSON 收口为
+// handleResetPassword 的验证码失败族（验证码缺失或已过期 / 错次超限作废 / 一次性码失配）
+// 已从「HTTP 200 + success:false」内联 writeJSON 收口为
 // s.writeError(ErrValidation) → **HTTP 400 + 统一错误码 VALIDATION_ERROR**。
-// 本测锁两层：
+// 本测锁三层：
 //
 //	① 错码→400+code 双锁：每个失败族 HTTP 状态恰为 400，且响应体含
-//	  success:false、code:"VALIDATION_ERROR"、message 逐字等于原文案
-//	  （文案是 i18n catalog 的匹配锚点，改一个字都会红灯——这里等值钉死）；
-//	② 正向防枚举锁：不存在的账号走 forgot（发码）链路仍回 200 + success:true
-//	  + 恒真文案——失败收口 400 不得把枚举 oracle 从 reset 侧漏回 forgot 侧。
+//	  success:false、code:"VALIDATION_ERROR"、message 逐字等于原文案；
+//	② 邮箱不在库→404 + EMAIL_NOT_REGISTERED（2026-10-21 用户后令：发码/重置前先查库）；
+//	③ 找回密码只认邮箱：只带 username 的报文必须 400，不得悄悄按用户名发码。
 //
 // 方言：自钉内存 SQLite（AGENTS.md §一·4，经 pinSqliteDialect 统一钉法）。
 // 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/api/ -run 'TestUATBatchG_'
@@ -21,6 +20,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,9 +72,9 @@ func f20SeedCode(t *testing.T, uid int64, rc resetCode) {
 }
 
 // f20CallReset 直调 handleResetPassword，返回录得的响应（来源 IP 用 httptest 默认值）。
-func f20CallReset(t *testing.T, s *Server, username, code, newPwd string) *httptest.ResponseRecorder {
+func f20CallReset(t *testing.T, s *Server, email, code, newPwd string) *httptest.ResponseRecorder {
 	t.Helper()
-	return f20CallResetFrom(t, s, "", username, code, newPwd)
+	return f20CallResetFrom(t, s, "", email, code, newPwd)
 }
 
 // f20CallResetFrom 同 f20CallReset，但可指定来源 IP。
@@ -84,9 +84,9 @@ func f20CallReset(t *testing.T, s *Server, username, code, newPwd string) *httpt
 // 落在 10s 内就会被 429。那是**接口既有的限流行为、不是本族要验的东西**——本族问的是
 // "验证码失败族有没有回到 400 + 统一码 + 原文案"。所以每次换一个来源 IP，让判据只对准失败族；
 // 同一 IP 的 10s 拦截另由 TestResetPasswordSameIPMinInterval 正向钉住，两边各管各的。
-func f20CallResetFrom(t *testing.T, s *Server, ip, username, code, newPwd string) *httptest.ResponseRecorder {
+func f20CallResetFrom(t *testing.T, s *Server, ip, email, code, newPwd string) *httptest.ResponseRecorder {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]string{"username": username, "code": code, "new_password": newPwd})
+	raw, _ := json.Marshal(map[string]string{"email": email, "code": code, "new_password": newPwd})
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
 	if ip != "" {
@@ -125,24 +125,30 @@ func TestUATBatchG_ResetPasswordFailFamily400(t *testing.T) {
 	if err != nil {
 		t.Fatalf("预置用户失败: %v", err)
 	}
+	const mail = "f20-reset-family@example.com"
+	if err := s.Store.SetUserEmail(u.ID, u.TenantID, mail); err != nil {
+		t.Fatalf("绑定邮箱失败: %v", err)
+	}
 
-	// 失败族①：用户名查无此人（跨租户匹配 0 条）→ 与验证码错误同文案，防枚举语义不变
+	// 失败族①：邮箱不在库 → 明确拦截（2026-10-21 用户后令，不再回恒真的验证码错误）
 	f20ClearCode(u.ID)
-	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.11", "f20_ghost_not_exists", "123456", "newpass123"),
-		"验证码错误或已过期", "失败族①用户不存在")
+	ghostW := f20CallResetFrom(t, s, "198.51.100.11", "f20_ghost_not_exists@example.com", "123456", "newpass123")
+	if ghostW.Code != http.StatusNotFound || !strings.Contains(ghostW.Body.String(), "EMAIL_NOT_REGISTERED") {
+		t.Fatalf("失败族①邮箱不存在：应回 404+EMAIL_NOT_REGISTERED，实际 code=%d body=%s", ghostW.Code, ghostW.Body.String())
+	}
 
 	// 失败族①补锁：真实用户但从未发码（同样落 u!=nil→无码路径的「验证码缺失」形态）
-	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.12", "f20_reset_user", "123456", "newpass123"),
+	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.12", mail, "123456", "newpass123"),
 		"验证码错误或已过期", "失败族①b无码用户")
 
 	// 失败族②：验证码已过期（ExpiresAt 在过去）
 	f20SeedCode(t, u.ID, resetCode{Code: "654321", ExpiresAt: time.Now().Add(-time.Minute)})
-	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.13", "f20_reset_user", "654321", "newpass123"),
+	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.13", mail, "654321", "newpass123"),
 		"验证码错误或已过期", "失败族②已过期")
 
 	// 失败族③：错误尝试超限作废（Attempts ≥ resetCodeMaxTries，即使答对也不放行）
 	f20SeedCode(t, u.ID, resetCode{Code: "111222", ExpiresAt: time.Now().Add(10 * time.Minute), Attempts: resetCodeMaxTries})
-	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.14", "f20_reset_user", "111222", "newpass123"),
+	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.14", mail, "111222", "newpass123"),
 		"验证码错误次数过多，请重新获取", "失败族③超限作废")
 	// 超限分支应已销毁该码：双端（降级存储 + 本地 map）都不应再残留
 	if _, ok := vcodeGet(vcodeResetKey(u.ID)); ok {
@@ -157,7 +163,7 @@ func TestUATBatchG_ResetPasswordFailFamily400(t *testing.T) {
 
 	// 失败族④：一次性码失配（正确码在场、提交错码）→ 400 + 错计 +1 的旧语义不回退
 	f20SeedCode(t, u.ID, resetCode{Code: "334455", ExpiresAt: time.Now().Add(10 * time.Minute)})
-	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.15", "f20_reset_user", "000000", "newpass123"),
+	f20AssertValidation400(t, f20CallResetFrom(t, s, "198.51.100.15", mail, "000000", "newpass123"),
 		"验证码错误或已过期", "失败族④码失配")
 	if b, ok := vcodeGet(vcodeResetKey(u.ID)); ok {
 		var rc resetCode
@@ -169,7 +175,7 @@ func TestUATBatchG_ResetPasswordFailFamily400(t *testing.T) {
 	}
 }
 
-// f20CallResetEmail 只按「用户名或绑定邮箱二者其一」里的邮箱腿发报文（username 留空）。
+// f20CallResetEmail 按邮箱唯一入口发重置报文（2026-10-21 起不再接受 username）。
 func f20CallResetEmail(t *testing.T, s *Server, email, code, newPwd string) *httptest.ResponseRecorder {
 	t.Helper()
 	return f20CallResetEmailFrom(t, s, "", email, code, newPwd)
@@ -178,7 +184,7 @@ func f20CallResetEmail(t *testing.T, s *Server, email, code, newPwd string) *htt
 // f20CallResetEmailFrom 同 f20CallResetEmail，可指定来源 IP（理由见 f20CallResetFrom）。
 func f20CallResetEmailFrom(t *testing.T, s *Server, ip, email, code, newPwd string) *httptest.ResponseRecorder {
 	t.Helper()
-	raw, _ := json.Marshal(map[string]string{"username": "", "email": email, "code": code, "new_password": newPwd})
+	raw, _ := json.Marshal(map[string]string{"email": email, "code": code, "new_password": newPwd})
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
 	if ip != "" {
@@ -192,7 +198,7 @@ func f20CallResetEmailFrom(t *testing.T, s *Server, ip, email, code, newPwd stri
 // TestResetPasswordByEmailLocatesAccount 只用绑定邮箱找回的用户必须能重置。
 // 复现的缺陷：handleResetPassword 旧形态只认 username，邮箱档报文 username 为空
 // ⇒ 直接落「请求格式错误」分支，用户刚收到验证码却重置不了（现网报障原始报文）。
-// 本测同时反向钉住「username 与 email 都空才判格式错误」，防止把必填校验一起放宽。
+// 本测同时反向钉住「email 为空必须判格式错误」，防止把必填校验一起放宽。
 func TestResetPasswordByEmailLocatesAccount(t *testing.T) {
 	s := f20ResetServer(t)
 	u, err := s.Store.CreateUser(1, "f20_email_user", auth.PasswordHash("pw123456"), "邮箱找回账号", store.RoleUser, 0, 0)
@@ -204,7 +210,7 @@ func TestResetPasswordByEmailLocatesAccount(t *testing.T) {
 		t.Fatalf("绑定邮箱失败: %v", err)
 	}
 
-	// 反向对照：两条定位腿都空 ⇒ 仍必须是格式错误
+	// 反向对照：email 为空 ⇒ 仍必须是格式错误
 	raw, _ := json.Marshal(map[string]string{"username": "", "email": "", "code": "123456", "new_password": "newpass123"})
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(raw))
 	r.Header.Set("Content-Type", "application/json")
@@ -230,35 +236,44 @@ func TestResetPasswordByEmailLocatesAccount(t *testing.T) {
 	}
 }
 
-// TestUATBatchG_ForgotAntiEnumeration 正向防枚举恒真锁（批G处方第②条）：
-// 不存在的账号走 forgot（发码）链路必须仍回 HTTP 200 + success:true + 恒真文案——
-// reset 侧收口 400 不得反向把「账号是否存在」的探测面从 forgot 漏出去。
-// ★ 2026-10-21 IAM 重做 P0-6 改了这条锁的**期望值**（方向一字未动，仍是"不许泄露存在性"）：
-//
-//	① 文案换成带出路的新一句（旧那句让"邮箱写错"的人对着假成功空等十分钟，零提示）；
-//	② 更关键的是**发成功那一腿现在也回同一句**——旧实现"存在→另一句文案"，
-//	   两条答案一比就读出账号是否存在，本锁此前只钉住了"不存在"那一侧，
-//	   对"存在那一侧回了什么"完全无感（判据级断言代替不了守卫级，AGENTS §三）。
-//	⇒ 同批新增一条对照锁：存在与不存在两次请求的**响应体必须逐字相同**。
-func TestUATBatchG_ForgotAntiEnumeration(t *testing.T) {
+// TestUATBatchG_ForgotRequiresRegisteredEmail ★ 2026-10-21 用户后令：
+// 找回密码只按注册邮箱定位，发码前必须先查库；邮箱不在库必须明确拦截，不能回假成功。
+// 反证：把 handleForgotPassword 里的 GetUserByEmail 判空摘掉，本锁第一段立刻红。
+func TestUATBatchG_ForgotRequiresRegisteredEmail(t *testing.T) {
 	s := f20ResetServer(t)
-	raw, _ := json.Marshal(map[string]string{"username": "f20_ghost_never_registered"})
-	r := httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password", bytes.NewReader(raw))
-	r.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
-	s.handleForgotPassword(w, r)
-	if w.Code != 200 {
-		t.Fatalf("防枚举锁：不存在账号的 forgot 应回 HTTP 200，实际 %d（body=%s）", w.Code, w.Body.String())
+	u, err := s.Store.CreateUser(1, "f20_forgot_user", auth.PasswordHash("pw123456"), "找回邮箱账号", store.RoleUser, 0, 0)
+	if err != nil {
+		t.Fatalf("预置用户失败: %v", err)
+	}
+	const mail = "f20-forgot@example.com"
+	if err := s.Store.SetUserEmail(u.ID, u.TenantID, mail); err != nil {
+		t.Fatalf("绑定邮箱失败: %v", err)
+	}
+
+	ghost := f20CallForgot(t, s, "203.0.113.111", map[string]string{"email": "f20-ghost@example.com"})
+	if ghost.Code != http.StatusNotFound {
+		t.Fatalf("未注册邮箱应回 404，实际 %d（body=%s）", ghost.Code, ghost.Body.String())
 	}
 	var out map[string]interface{}
-	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
-		t.Fatalf("forgot 响应非 JSON: %s", w.Body.String())
+	if err := json.Unmarshal(ghost.Body.Bytes(), &out); err != nil {
+		t.Fatalf("forgot 响应非 JSON: %s", ghost.Body.String())
 	}
-	if out["success"] != true {
-		t.Fatalf("防枚举锁：success 应为 true，实际 %v", out["success"])
+	if out["code"] != "EMAIL_NOT_REGISTERED" {
+		t.Fatalf("未注册邮箱应带 EMAIL_NOT_REGISTERED，实际 %v", out["code"])
 	}
-	if out["message"] != forgotAlwaysMsg {
-		t.Fatalf("防枚举锁：恒真文案被改动，期望逐字 %q 实际 %q", forgotAlwaysMsg, out["message"])
+
+	ok := f20CallForgot(t, s, "203.0.113.112", map[string]string{"email": mail})
+	if ok.Code != 200 {
+		t.Fatalf("已注册邮箱应回 200，实际 %d（body=%s）", ok.Code, ok.Body.String())
+	}
+	if err := json.Unmarshal(ok.Body.Bytes(), &out); err != nil || out["message"] != forgotSentMsg {
+		t.Fatalf("已注册邮箱文案必须逐字为 forgotSentMsg，body=%s err=%v", ok.Body.String(), err)
+	}
+
+	// 用户名入口已关闭：只带 username 的报文必须被判格式错误，而不是悄悄查用户名发码。
+	byName := f20CallForgot(t, s, "203.0.113.113", map[string]string{"username": "f20_forgot_user"})
+	if byName.Code != 400 {
+		t.Fatalf("只带用户名应回 400（邮箱为唯一入口），实际 %d（body=%s）", byName.Code, byName.Body.String())
 	}
 }
 
@@ -278,42 +293,13 @@ func f20CallForgot(t *testing.T, s *Server, ip string, body map[string]string) *
 	return w
 }
 
-// TestUATBatchG_ForgotAntiEnumerationParity ★ IAM P0-6（2026-10-21）：
-// 上面那条锁只钉住了「不存在」那一侧回什么；本锁补上**存在那一侧**——
-// 两条路径的响应体必须**逐字相同**（状态码、success、message 三件一起比）。
-// 理由：旧实现"存在且发码成功"回的是另一句文案，两条答案一比对就读出账号是否存在，
-// 只钉单侧等于给缺陷发证件（AGENTS §三「判据级断言代替不了守卫级」）。
-// 两枪各用一个来源 IP：forgot 的 30s 最小间隔是限流预算，不参与本族判据。
-func TestUATBatchG_ForgotAntiEnumerationParity(t *testing.T) {
-	s := f20ResetServer(t)
-	u, err := s.Store.CreateUser(1, "f20_parity_user", auth.PasswordHash("pw123456"), "防枚举对照账号", store.RoleUser, 0, 0)
-	if err != nil {
-		t.Fatalf("预置用户失败: %v", err)
-	}
-	const mail = "f20-parity@example.com"
-	if err := s.Store.SetUserEmail(u.ID, u.TenantID, mail); err != nil {
-		t.Fatalf("绑定邮箱失败: %v", err)
-	}
-	wExist := f20CallForgot(t, s, "203.0.113.101", map[string]string{"username": "f20_parity_user"})
-	wGhost := f20CallForgot(t, s, "203.0.113.102", map[string]string{"username": "f20_ghost_never_registered"})
-	if wExist.Code != 200 || wGhost.Code != 200 {
-		t.Fatalf("两条腿都应回 200，实际 存在=%d 不存在=%d（body=%s / %s）",
-			wExist.Code, wGhost.Code, wExist.Body.String(), wGhost.Body.String())
-	}
-	if wExist.Body.String() != wGhost.Body.String() {
-		t.Fatalf("防枚举被击穿：存在与不存在的响应体不一致\n存在  : %s\n不存在: %s",
-			wExist.Body.String(), wGhost.Body.String())
-	}
-}
-
 // TestResetPasswordSameIPMinInterval ★ IAM P0-6「限流占格时机」的正向锁（2026-10-21）：
 // reserve 把「占格」前移到**放行那一刻**，于是即便上一条请求因验证码错误回了 400，
 // 它也已经占掉当日一格、并推进了最小间隔。本锁钉住三件事：
 //
 //	① 同一 IP 10s 内的第二枪 = 429 + retry_after ∈ (0,10]（最小间隔仍在，且时长诚实）；
 //	② 换一个 IP 仍放行（限流是**按 IP** 的，不是全站一刀切）；
-//	③ 打**不存在的账号**同样占格（这条才是防枚举的落点：旧实现"发码成功才计数"，
-//	   于是"额度先耗尽的那批"就是账号存在的回执——判据直接读库里那一格，不看响应体）。
+//	③ 打**不存在的邮箱**同样占格（额度只表达请求次数，判据直接读库里那一格，不看响应体）。
 //
 // 反证：把 handleResetPassword 的 reserve 换回 allow+record（只在成功腿计数），③ 立刻红；
 // 摘掉最小间隔判断，① 立刻红。
@@ -321,12 +307,12 @@ func TestResetPasswordSameIPMinInterval(t *testing.T) {
 	s := f20ResetServer(t)
 	const ip = "203.0.113.61"
 
-	first := f20CallResetFrom(t, s, ip, "f20_ghost_quota", "000000", "newpass123")
-	if first.Code != 400 {
-		t.Fatalf("第一枪（不存在的账号 + 错码）应回 400，实际 %d（body=%s）", first.Code, first.Body.String())
+	first := f20CallResetFrom(t, s, ip, "f20_ghost_quota@example.com", "000000", "newpass123")
+	if first.Code != http.StatusNotFound {
+		t.Fatalf("第一枪（不存在的邮箱 + 错码）应回 404，实际 %d（body=%s）", first.Code, first.Body.String())
 	}
 
-	second := f20CallResetFrom(t, s, ip, "f20_ghost_quota", "000000", "newpass123")
+	second := f20CallResetFrom(t, s, ip, "f20_ghost_quota@example.com", "000000", "newpass123")
 	if second.Code != http.StatusTooManyRequests {
 		t.Fatalf("同 IP 10s 内第二枪应被 429 拦下（最小间隔 10s），实际 %d（body=%s）", second.Code, second.Body.String())
 	}
@@ -343,12 +329,12 @@ func TestResetPasswordSameIPMinInterval(t *testing.T) {
 	}
 
 	// ② 换 IP 放行：证明上面那 429 是"这个 IP 太密"，不是"接口坏了"。
-	third := f20CallResetFrom(t, s, "203.0.113.62", "f20_ghost_quota", "000000", "newpass123")
-	if third.Code != 400 {
-		t.Fatalf("换一个 IP 应回到业务分支（400 验证码错误），实际 %d（body=%s）", third.Code, third.Body.String())
+	third := f20CallResetFrom(t, s, "203.0.113.62", "f20_ghost_quota@example.com", "000000", "newpass123")
+	if third.Code != http.StatusNotFound {
+		t.Fatalf("换一个 IP 应回到业务分支（404 邮箱不存在），实际 %d（body=%s）", third.Code, third.Body.String())
 	}
 
-	// ③ 占格与账号是否存在无关：第一枪打的账号根本不存在，但那一格必须已经记在库里。
+	// ③ 占格与邮箱是否存在无关：第一枪打的邮箱根本不存在，但那一格必须已经记在库里。
 	// ⚠️ 库里的键是**调用方传进来的整串**（`"pwd-reset:"+ip`，见 handleResetPassword），
 	//    不是裸 IP——拿裸 IP 读会得到 count=0，那读起来像"没占格"，实际是查错了那一行
 	//    （同 AGENTS §一·3「探针写的键必须先问产品读哪一把」）。

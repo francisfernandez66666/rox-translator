@@ -5,9 +5,9 @@
 //
 //	① 注册成功后登不进去   ← 注册不发会话 + 登录只认用户名 + 注册 trim 口令而登录不 trim
 //	                         + 失败原因写在另一屏的报错位上
-//	② 重置密码后登不进去   ← 邮箱档不回填标识，而登录不认邮箱
-//	③ 重置不校验邮箱对不对 ← 防枚举刻意不回答"注册过没有"，但"形状不对"必须当场说，
-//	                         且三条出口必须**逐字同句**（旧实现发成功那一腿回另一句，等于没防）
+//	② 重置密码后登不进去   ← 邮箱档不回填标识，而登录不认邮箱（现走邮箱重置+自动登录）
+//	③ 重置不校验邮箱对不对 ← 2026-10-21 用户后令：找回/重置只按注册邮箱，发码前先查库，
+//	                         邮箱不在库明确拦截；登录口仍保留统一文案。
 //
 // 方言：自钉内存 SQLite（AGENTS §一·4，经 f77Fixture / pinSqliteDialect 统一钉法）。
 // 运行：go test -count=1 ./internal/api/ -run 'TestIAMRedoP0'
@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -164,49 +163,28 @@ func TestIAMRedoP0_03_LoginAcceptsEmailCaseAndSpacedPassword(t *testing.T) {
 	}
 }
 
-// forgotSeq 给同一条判据里的每次 forgot 换一个来源 IP（限流按 IP 计，见调用点注释）。
-var forgotSeq int
-
-// P0-6：防枚举要**三条出口逐字同句**才算成立。
-// 旧实现只在"不存在"那一档回恒真句，"存在且已发码"回另一句 ⇒ 拿两次响应一比就读出了存在性。
-func TestIAMRedoP0_06_ForgotAnswersAreIdentical(t *testing.T) {
+// P0-6（2026-10-21 用户后令覆盖当日早先的防枚举取舍）：
+// 找回密码只按注册邮箱定位，发码前先查库；邮箱不在库必须明确拦截。
+// 登录口仍保留统一文案，不在本锁射程内。
+func TestIAMRedoP0_06_ForgotRequiresRegisteredEmail(t *testing.T) {
 	fx := f77Fixture(t)
 	s := fx.srv
 	s.Cfg = config.C
 	if _, m := p0Register(t, s, "p0_reg_d", "p0pass789", "p0_d@example.com"); m["success"] != true {
 		t.Fatalf("预置账号失败: %v", m)
 	}
-	call := func(body map[string]any) string {
-		b, _ := json.Marshal(body)
-		r := httptest.NewRequest(http.MethodPost, "/api/auth/forgot-password", bytes.NewReader(b))
-		r.Header.Set("Content-Type", "application/json")
-		// 每条判据各占一个来源 IP：forgot 那档限流是"日 10 次＋最小间隔 30 秒"，
-		// 同一测试 IP 连打三次会在第二枪就 429，把"三条出口是否同句"这条判据换成限流闸的判据（假红）。
-		forgotSeq++
-		r.RemoteAddr = "203.0.113." + strconv.Itoa(int(forgotSeq%200)+1) + ":54321"
-		w := httptest.NewRecorder()
-		s.handleForgotPassword(w, r)
-		var m map[string]any
-		if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
-			t.Fatalf("forgot 响应非 JSON: %s", w.Body.String())
-		}
-		if w.Code != 200 || m["success"] != true {
-			t.Fatalf("防枚举锁：forgot 必须恒 200+success，实得 code=%d body=%s", w.Code, w.Body.String())
-		}
-		msg, _ := m["message"].(string)
-		return msg
+	exists := f20CallForgot(t, s, "203.0.113.11", map[string]string{"email": "p0_d@example.com"})
+	if exists.Code != 200 || !strings.Contains(exists.Body.String(), forgotSentMsg) {
+		t.Fatalf("已注册邮箱应 200+发码文案，实得 code=%d body=%s", exists.Code, exists.Body.String())
 	}
-	exists := call(map[string]any{"email": "p0_d@example.com"})
-	ghost := call(map[string]any{"email": "p0_ghost_never_registered@example.com"})
-	if exists != ghost {
-		t.Fatalf("防枚举被响应文案出卖：存在=%q 不存在=%q（两条答案一比对就读出注册没有）", exists, ghost)
+	ghost := f20CallForgot(t, s, "203.0.113.12", map[string]string{"email": "p0_ghost_never_registered@example.com"})
+	if ghost.Code != http.StatusNotFound || !strings.Contains(ghost.Body.String(), "EMAIL_NOT_REGISTERED") {
+		t.Fatalf("未注册邮箱应 404+EMAIL_NOT_REGISTERED，实得 code=%d body=%s", ghost.Code, ghost.Body.String())
 	}
-	if exists != forgotAlwaysMsg {
-		t.Fatalf("forgot 三条出口必须逐字等于 forgotAlwaysMsg，实得 %q", exists)
-	}
-	// 用户名那一腿同样不许漏（旧形态"存在→另一句"在这里也一样成立）
-	if got := call(map[string]any{"username": "p0_reg_d"}); got != forgotAlwaysMsg {
-		t.Fatalf("用户名腿的 forgot 答案与恒真句不等：%q", got)
+	// 用户名入口必须关闭：只带 username 的报文不得发码。
+	byName := f20CallForgot(t, s, "203.0.113.13", map[string]string{"username": "p0_reg_d"})
+	if byName.Code != http.StatusBadRequest {
+		t.Fatalf("只带用户名应 400（邮箱为唯一入口），实得 code=%d body=%s", byName.Code, byName.Body.String())
 	}
 }
 
@@ -218,8 +196,12 @@ func TestIAMRedoP0_05_ResetRejectsWeakPasswordServerSide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("预置账号失败: %v", err)
 	}
+	const weakMail = "p0_reset_weak@example.com"
+	if err := s.Store.SetUserEmail(u.ID, u.TenantID, weakMail); err != nil {
+		t.Fatalf("绑定邮箱失败: %v", err)
+	}
 	f20SeedCode(t, u.ID, resetCode{Code: "123456", ExpiresAt: time.Now().Add(10 * time.Minute)})
-	body, _ := json.Marshal(map[string]string{"username": "p0_reset_weak", "code": "123456", "new_password": "123"})
+	body, _ := json.Marshal(map[string]string{"email": weakMail, "code": "123456", "new_password": "123"})
 	r := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	// ★ 两次调用各占一个来源 IP：reset 口是「20 次/日 + 10 秒间隔」的放行即占格，
@@ -234,7 +216,7 @@ func TestIAMRedoP0_05_ResetRejectsWeakPasswordServerSide(t *testing.T) {
 		t.Fatalf("拒绝理由必须是那把唯一尺子的文案，body=%s", w.Body.String())
 	}
 	// 反向对照：同一张码喂合格口令必须改得动（否则上面那条红只是"码本身无效"的假红）
-	good, _ := json.Marshal(map[string]string{"username": "p0_reset_weak", "code": "123456", "new_password": "goodpass1"})
+	good, _ := json.Marshal(map[string]string{"email": weakMail, "code": "123456", "new_password": "goodpass1"})
 	r2 := httptest.NewRequest(http.MethodPost, "/api/auth/reset-password", bytes.NewReader(good))
 	r2.Header.Set("Content-Type", "application/json")
 	r2.RemoteAddr = "203.0.113.202:54321" // 同上：与第一枪换一个来源 IP，否则撞 10 秒最小间隔

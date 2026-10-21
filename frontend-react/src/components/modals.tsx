@@ -112,8 +112,9 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
 
   // 发送改密验证码（带 60s 倒计时冷却）
   async function sendCode() {
+    if (!email) { setMsgOk(false); setMsg(t('auth.forgotNeed')); return }
     try {
-      const r = await sendPwdCode({ username, email })
+      const r = await sendPwdCode({ email })
       setMsgOk(true)
       setMsg(r.message || t('pwd.codeSent'))
       cd.start()
@@ -125,11 +126,12 @@ export function PasswordModal(props: { onClose: () => void; onDone?: () => void;
 
   // 提交新密码：校验长度与一致性 → 调用接口 → 成功提示并关闭
   async function submit() {
+    if (!email) { setMsgOk(false); setMsg(t('auth.forgotNeed')); return }
     if (newPwd.length < 6) { setMsgOk(false); setMsg(t('pwd.tooShort')); return }
     if (newPwd !== confirmPwd) { setMsgOk(false); setMsg(t('pwd.mismatch')); return }
     setSubmitting(true)
     try {
-      const r = await submitNewPassword({ username, code: code.trim(), new_password: newPwd })
+      const r = await submitNewPassword({ email, code: code.trim(), new_password: newPwd })
       if (!r.success) { setMsgOk(false); setMsg(r.message || t('pwd.codeBad')); return }
       setMsgOk(true)
       toast({ title: t('pwd.done'), tone: 'success' })

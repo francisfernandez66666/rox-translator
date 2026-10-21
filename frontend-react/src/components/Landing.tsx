@@ -913,25 +913,27 @@ export default function Landing() {
 
   // 首页价格三档：营销「意向卡」，文案与价位固定取 land.plan* 词典（画布 6:1 同口径）；
   // 完整、随后台变动的价目以 /pricing 为准（那张卡才渲染 /api/plans 的返回值）。
-  // ★ 〇-Z（2026-09-28）：三档 CTA 落 /login 而不是 /register——用户口径「已经有账号的人被要求
-  //   再注册一次很奇怪」，登录页同时给注册入口，选注册还是登录交回访客；本批全站 /register 直落同此一条。
+  // ★ 2026-10-21 用户后令（覆盖 〇-Z「全站注册 CTA 落 /login」）：注册类 CTA 直落 /register，
+  //   与 /pricing 的「免费注册→/register」保持同一落点；已有账号的人由 /register 页内的「去登录」返回。
+  //   「免费试用」三颗不在本条射程内——它们开就地试用面板，href=/login 只是无 JS 兜底。
   const plans = [
     {
       // 引流档：¥0 的作用只是抹平"试一下"的成本，说服交给中间那档，三档功能点数量保持一致
       key: 'free', name: t('land.planFree'), price: t('land.planFreePrice'),
-      desc: t('land.planFreeDesc'), btn: t('land.planFreeBtn'), href: '/login',
+      desc: t('land.planFreeDesc'), btn: t('land.planFreeBtn'), href: '/register',
       feats: [t('land.planFreeF1'), t('land.planFreeF2'), t('land.planFreeF3')],
     },
     {
       // pro: true 是全页唯一的视觉重心开关——反相白底、徽标、实心黑按钮三处都由它驱动
       key: 'pro', name: t('land.planPro'), price: t('land.planProPrice'),
-      desc: t('land.planProDesc'), btn: t('land.planProBtn'), href: '/login', pro: true,
+      desc: t('land.planProDesc'), btn: t('land.planProBtn'), href: '/register', pro: true,
       feats: [t('land.planProF1'), t('land.planProF2'), t('land.planProF3')],
     },
     {
-      // 企业档：价位给"定制"而非数字（口径与 /pricing 一致）；按钮写「联系销售」但 href 仍与其余两档同落 /login
+      // 企业档：价位给"定制"而非数字（口径与 /pricing 一致）；按钮写「联系销售」但入口先落注册，
+      // 与其余两档同一转化链（/register 页内可回到登录/留资）。
       key: 'ent', name: t('land.planEnt'), price: t('land.planEntPrice'),
-      desc: t('land.planEntDesc'), btn: t('land.planEntBtn'), href: '/login',
+      desc: t('land.planEntDesc'), btn: t('land.planEntBtn'), href: '/register',
       feats: [t('land.planEntF1'), t('land.planEntF2'), t('land.planEntF3')],
     },
   ]

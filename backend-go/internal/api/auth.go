@@ -477,27 +477,21 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 
 // ============ 忘记密码（验证码方式） ============
 
-// forgotAlwaysMsg 找回密码三档出口（不存在 / 未绑邮箱 / 已发码）**逐字同一句**的对外文案。
-// ★ 2026-10-21 IAM 重做 P0-6：这一句是"防枚举"这条设计唯一还成立的前提——
+// forgotSentMsg 找回密码发码成功的对外文案。
+// ★ 2026-10-21 用户后令（覆盖当日早先的 P0-6 防枚举取舍）：找回/重置改为**只按注册邮箱**定位，
 //
-//	三条分支各回一句时，探测者拿响应体一比就知道账号在不在，防枚举只剩个名字。
-//	后半句（检查拼写与垃圾箱 / 改用用户名找回）是给真用户的出路：
-//	旧形态下"邮箱写错"的人只会对着一个假成功干等十分钟，什么提示都拿不到（运营者报的第 3 条本体）。
-//	⚠️ 改这一句必须同步三处：本文件三条出口、internal/i18n/catalog_en.go 的键、
-//	api/auth_resetpassword_f20_test.go 那条逐字锁（它是这条口径的机械防线）。
-const forgotAlwaysMsg = "如果该账号存在且绑定了邮箱，验证码已发送。10 分钟内没收到请检查邮箱拼写与垃圾箱，或改用用户名找回"
+//	发码前先查库；邮箱不存在直接 404 EMAIL_NOT_REGISTERED（前端显示「该邮箱未注册」），
+//	不再回恒真成功。理由：用户实测「输错邮箱也提示已发送」只会让人空等，且重置链路没有用户名入口，
+//	继续防枚举会把可用性押进去。登录口仍保留「用户名或密码错误」的统一文案，不随之放宽。
+const forgotSentMsg = "验证码已发送至该邮箱，10 分钟内有效，请检查收件箱与垃圾箱"
 
-// handleForgotPassword 忘记密码接口：按用户名或邮箱定位用户，生成验证码并发送。
-// 安全要点：无论用户是否存在统一返回 success=true（防用户名枚举）；
-// 验证码通过邮件发送（SMTP 未配置时打印日志，前端提示测试模式）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 为 {username, email}）。
-// 返回: success=true 表示已发送验证码（或进入测试模式）。
+// handleForgotPassword 忘记密码接口：按注册邮箱定位用户，生成验证码并发送。
+// 定位口径（2026-10-21 用户后令）：只认 email，不再接受 username；邮箱不在库即拦截。
 func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 	// ★ IP 限流（2026-08-26 P0-3 止血）：复用注册护栏窗口逻辑，独立计数键。
 	//   日上限 10 次 + 最小间隔 30s——防止「无限发码骚扰 + 配合爆破」的组合滥用。
-	// ★ IAM P0-6（2026-10-21）：改用 reserve（放行即占格）。旧的 allow+record 只在
-	//   "账号存在且发信成功"那一腿计数 ⇒ 日额度耗尽与否本身泄露了账号是否存在，
-	//   等于把业务层刚堵上的枚举侧信道从限流层重新打开（详见 register_guard.go 的 reserve 注释）。
+	// ★ IAM P0-6（2026-10-21）：reserve＝放行即占格，额度只表达请求次数。
+	//   即使现在会明确回「邮箱未注册」，限流仍按请求计，避免"不存在"那一档额外得到免费重试。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.reserve("pwd-forgot:"+ip, 10, 30); !ok {
 		// ★ F-47（批 I-7）：内联 writeJSON(429) 改走统一出口——状态码不变（仍 429），
@@ -506,41 +500,31 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username string `json:"username"` // 用户名（二选一）
-		Email    string `json:"email"`    // 联系邮箱（二选一）
+		Email string `json:"email"` // 注册邮箱（唯一入口）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
-	// ★ 2026-10-21 IAM 重做 P0-1：两条定位腿先过归一化（只 trim、邮箱小写），
-	//   与注册/登录/重置同一把尺子——旧形态这里裸用输入，而 GetUserByEmail 内部又 lower+trim 一次，
-	//   两个口径叠着，换一个人改一处就会分叉。
-	req.Username = auth.NormalizeAccount(req.Username)
+	// 与注册/登录/重置同一把归一化尺子（只 trim、邮箱小写）。
 	req.Email = auth.NormalizeEmail(req.Email)
-	// 定位用户：优先用户名（跨租户匹配），其次邮箱
-	var u *store.User
-	if req.Username != "" {
-		if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
-			u = matches[0]
-		} else if err == nil && len(matches) > 1 {
-			// 多租户重名：需提供邮箱精确定位
-			u = nil
-		}
+	if req.Email == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请输入注册邮箱"))
+		return
 	}
-	if u == nil && req.Email != "" {
-		if found, err := s.Store.GetUserByEmail(req.Email); err == nil {
-			u = found
-		}
+	if !auth.LooksLikeEmail(req.Email) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
+		return
 	}
-	// 用户不存在或未绑定邮箱：统一返回成功（防枚举），但无法发送
-	if u == nil || u.Email == "" {
-		writeJSON(w, 200, map[string]interface{}{"success": true, "message": forgotAlwaysMsg})
+	// ★ 用户后令：发码前先查库，不在库当场拦截（不再生成码、不再发信）。
+	u, err := s.Store.GetUserByEmail(req.Email)
+	if err != nil || u == nil || u.Email == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrEmailNotRegistered, "该邮箱未注册，请确认邮箱或先注册账号"))
 		return
 	}
 	// 校验账号状态：停用账号不发送（注销宽限期内仍可发送——找回密码链路保持可用）
 	if iamEffectiveStatus(u) != store.UserActive {
-		writeJSON(w, 200, map[string]interface{}{"success": true, "message": forgotAlwaysMsg})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "该邮箱对应账号当前不可用，请联系管理员"))
 		return
 	}
 	// 生成 6 位数字验证码
@@ -568,16 +552,9 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "邮件发送失败，请稍后重试或联系管理员"))
 		return
 	}
-	// ★ IAM P0-6（2026-10-21）：原来这里有一句 `record(...)`「业务成功才计数」——
-	//   它正是上面说的那条侧信道（只有存在且发成功的请求才记），现由入口处的 reserve 取代，
-	//   这里**不得**再补 record（会变成一次请求占两格）。
+	// 限流已在入口 reserve 占格，这里不得再 record（会变成一次请求占两格）。
 	s.Store.LogAudit(u.TenantID, u.ID, "forgot_password", "auth", "请求重置密码验证码")
-	// ★ 2026-10-21 IAM 重做 P0-6（防枚举补严）：**发成功的那一腿也回同一句恒真文案**。
-	//   旧形态"存在且发了"回「验证码已发送到绑定邮箱」、"不存在"回恒真句 —— 两条答案一比对，
-	//   账号是否存在当场可读，所谓防枚举只挡了一半，而且是**看得见的那一半没挡**。
-	//   取向（用户拍板）：防枚举保留 ⇒ 三档出口逐字同形，可行动性靠文案后半句给（检查拼写/垃圾箱/改用用户名）。
-	//   ⚠️ 前端不得再自带一句"已发送到绑定邮箱"覆盖它（Login.tsx 那条改判为透传后端 message）。
-	writeJSON(w, 200, map[string]interface{}{"success": true, "message": forgotAlwaysMsg})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "message": forgotSentMsg})
 }
 
 // handleResetPassword 重置密码接口：校验验证码后更新密码。
@@ -585,15 +562,15 @@ func (s *Server) handleForgotPassword(w http.ResponseWriter, r *http.Request) {
 // 返回: success=true 表示重置成功；
 // ★ 观察2②（2026-09-25 UAT 修复批G）：验证码错误/用户不存在/已过期/错次超限/一次性码失配
 //
-//	四类失败族由「HTTP 200 + success:false」统一收口为 HTTP 400 + 统一错误码
-//	VALIDATION_ERROR（s.writeError，与 F-21③ 同向）；中文文案逐字保留原文
-//	（i18n catalog 按中文字面量匹配，换文案会翻红），前端 request() 对 4xx 会归一
-//	解析 body.message，登录页失败提示链路不变。
+//	验证码类失败族由「HTTP 200 + success:false」统一收口为 HTTP 400 + 统一错误码
+//	VALIDATION_ERROR（s.writeError，与 F-21③ 同向）；邮箱不在库走 404 EMAIL_NOT_REGISTERED
+//	（前端按稳定码显示本地化文案）。前端 request() 对 4xx 会归一解析 body.message，
+//	登录页失败提示链路不变。
 func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	// ★ IP 限流（2026-08-26 P0-3 止血）：验证码校验接口的爆破主战场，
 	//   与 forgot 限流独立计数；日 20 次 + 最小间隔 10s（正常用户重试绰绰有余）。
 	// ★ IAM P0-6（2026-10-21）：与 forgot 同步改成 reserve（放行即占格），
-	//   使"当日额度"只表达请求次数，不再随账号是否存在而变化。
+	//   使"当日额度"只表达请求次数，不随请求成败变化。
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.reserve("pwd-reset:"+ip, 20, 10); !ok {
 		// ★ F-47（批 I-7）：与 forgot 同口径走统一出口（429 + RATE_LIMITED + retry_after）
@@ -601,15 +578,14 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Username    string `json:"username"`     // 用户名（用于定位验证码归属；与 email 二者其一）
-		Email       string `json:"email"`        // 绑定邮箱（只用邮箱找回时用它定位同一个账号）
+		Email       string `json:"email"`        // 注册邮箱（唯一入口）
 		Code        string `json:"code"`         // 6 位验证码
 		NewPassword string `json:"new_password"` // 新密码
 	}
-	// ★ 定位腿与发码腿（handleForgotPassword）同口径：username 或 email 二者其一即可。
-	//   旧形态只认 username，只用邮箱找回的用户到这里是空串 → 直接回「请求格式错误」，
-	//   明明刚收到验证码却重置不了（现网缺陷）。
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || (req.Username == "" && req.Email == "") || req.Code == "" || req.NewPassword == "" {
+	// ★ 2026-10-21 用户后令：重置只按注册邮箱定位，不再接受用户名。
+	//   旧形态「用户名或邮箱二选一」导致界面上一半人把邮箱填进用户名框，后端按用户名查不到，
+	//   回「请求格式错误」——用户看到的就是"重置不了"。
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Email == "" || req.Code == "" || req.NewPassword == "" {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
@@ -620,26 +596,16 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
 		return
 	}
-	// ★ P0-1：两条定位腿都先过归一化（只 trim、邮箱小写），与注册/登录/发码同一把尺子；
-	//   用户名腿仍保留"全平台唯一命中才采纳"的原判据（重名不许猜人）。
-	req.Username = auth.NormalizeAccount(req.Username)
+	// 与发码腿同一把归一化尺子（只 trim、邮箱小写）。
 	req.Email = auth.NormalizeEmail(req.Email)
-	var u *store.User
-	if req.Username != "" {
-		if matches, err := s.Store.GetUserByUsernameGlobal(req.Username); err == nil && len(matches) == 1 {
-			u = matches[0]
-		}
+	if !auth.LooksLikeEmail(req.Email) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
+		return
 	}
-	// username 未命中（空或多租户重名）时回落邮箱定位——与发码腿完全相同的两条腿
-	if u == nil && req.Email != "" {
-		if found, err := s.Store.GetUserByEmail(req.Email); err == nil {
-			u = found
-		}
-	}
-	// ★ 观察2②（批G）失败族①「用户不存在」：与「验证码错误」回同一文案（防枚举语义不变），
-	//   仅把出口从内联 writeJSON(200, success:false) 收口为 writeError → HTTP 400 + VALIDATION_ERROR。
-	if u == nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "验证码错误或已过期"))
+	// ★ 用户后令：邮箱不在库当场拦截（与 forgot 同码同文案，前端可本地化）。
+	u, err := s.Store.GetUserByEmail(req.Email)
+	if err != nil || u == nil || u.Email == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrEmailNotRegistered, "该邮箱未注册，请确认邮箱或先注册账号"))
 		return
 	}
 	// 校验验证码（一次性 + 防爆破，2026-08-26 P0-3 止血）：
@@ -714,18 +680,12 @@ func (s *Server) handleResetPassword(w http.ResponseWriter, r *http.Request) {
 	delete(resetCodes.m, u.ID)
 	resetCodes.Unlock()
 	vcodeDel(rkey)
-	// ★ IAM P0-6（2026-10-21）：与 forgot 同口径——入口 reserve 已占格，这里不再 record
-	//   （旧写法"重置成功才计数"会让成功率变成可观测的额度差，与防枚举方向相反）。
+	// ★ IAM P0-6（2026-10-21）：入口 reserve 已占格，这里不再 record
+	//   （否则一次请求占两格，正常重试的人会比预想更早撞限流）。
 	s.Store.LogAudit(u.TenantID, u.ID, "reset_password", "auth", "通过验证码重置密码")
-	// ★ P0-5：出参回"刚刚用来定位这张码的那个标识"（不许回库内邮箱——那会把
-	//   只知道用户名的人送到一个他本不该看到的地址上）。前端据此回填登录框：
-	//   登录现在双入口，邮箱档找回的人回填邮箱就能直接登进去
-	//   （旧形态只回填用户名、邮箱档什么都不回 ⇒ "重置完还是进不去"）。
-	loginAccount := req.Username
-	if loginAccount == "" {
-		loginAccount = req.Email
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "login_account": loginAccount})
+	// ★ P0-5：出参回"刚刚用来定位这张码的那个邮箱"，前端据此回填登录框并自动登录。
+	//   旧形态只回填用户名、邮箱档什么都不回 ⇒ "重置完还是进不去"。
+	writeJSON(w, 200, map[string]interface{}{"success": true, "login_account": req.Email})
 }
 
 // genResetCode 生成 6 位数字验证码（密码学安全随机）。

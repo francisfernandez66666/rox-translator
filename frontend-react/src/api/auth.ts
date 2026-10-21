@@ -107,25 +107,14 @@ export async function registerConfig(): Promise<AdminResp & { email_verify_enabl
   return request('/api/auth/register-config')
 }
 
-/** 忘记密码：发送验证码到绑定邮箱 */
-/** 忘记密码：向绑定邮箱发送重置验证码 */
-export async function forgotPassword(data: { username?: string; email?: string }): Promise<AdminResp> {
+/** 忘记密码：向注册邮箱发送重置验证码（2026-10-21 用户后令：只按邮箱定位） */
+export async function forgotPassword(data: { email: string }): Promise<AdminResp> {
   return request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify(data) })
 }
 
-/** 重置密码：校验验证码并设置新密码 */
-/** 忘记密码：验证码核验 */
-// ★ 找回密码支持「用户名」或「绑定邮箱」两条定位腿（与 forgotPassword 同口径）。
-//   只用邮箱找回的用户 username 为空，后端必须能按 email 定位到同一账号，否则回「请求格式错误」。
-//   email 仅在非空时才进报文（保持既有用户名档载荷逐字段不变）。
-export async function resetPassword(data: { username?: string; email?: string; code: string; new_password: string }): Promise<AdminResp> {
-  const payload: { username?: string; email?: string; code: string; new_password: string } = {
-    username: data.username || undefined,
-    email: data.email || undefined,
-    code: data.code,
-    new_password: data.new_password,
-  }
-  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(payload) }))
+/** 重置密码：注册邮箱 + 验证码 + 新密码（后端先查邮箱是否已注册，未注册回 EMAIL_NOT_REGISTERED） */
+export async function resetPassword(data: { email: string; code: string; new_password: string }): Promise<AdminResp> {
+  return bizResp(() => request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify(data) }))
 }
 
 /** 获取注册行业列表（无需登录，来自超管维护的行业包） */
@@ -138,14 +127,13 @@ export async function registerIndustries(): Promise<AdminResp> {
 // 自助修改密码（邮箱校验流程，复用找回密码通道）
 // ============================================================================
 
-/** sendPwdCode 向账号绑定邮箱发送改密验证码（username/email 二选一定位）。 */
-export async function sendPwdCode(data: { username?: string; email?: string }): Promise<AdminResp> {
+/** sendPwdCode 向账号绑定邮箱发送改密验证码（只按邮箱定位）。 */
+export async function sendPwdCode(data: { email: string }): Promise<AdminResp> {
   return forgotPassword(data)
 }
 
 /** submitNewPassword 校验验证码并设置新密码。 */
-/** 忘记密码尾步：验证码通过后设置新密码 */
-export async function submitNewPassword(data: { username?: string; email?: string; code: string; new_password: string }): Promise<AdminResp> {
+export async function submitNewPassword(data: { email: string; code: string; new_password: string }): Promise<AdminResp> {
   return resetPassword(data)
 }
 

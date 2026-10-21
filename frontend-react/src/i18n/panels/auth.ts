@@ -159,8 +159,10 @@ export const zh: Record<string, string> = {
   'auth.selectIndustry': '请选择所属行业',
   'auth.orgCnPlaceholder': '与企业执照名称一致',
   'auth.captchaRequired': '请先完成人机验证',
+  'auth.captchaNote': '人机验证仅用于注册与发送邮箱验证码；登录、找回密码、重置密码与修改密码暂不启用，以免影响自动化与无障碍使用。',
+  'auth.emailNotRegistered': '该邮箱未注册，请确认邮箱或先注册账号',
   'auth.sendCodeFail': '验证码发送失败',
-  'auth.forgotNeed': '请输入用户名或绑定邮箱',
+  'auth.forgotNeed': '请输入注册邮箱',
   'auth.sendFail': '发送失败',
   'auth.resetNeed': '请输入验证码和新密码（至少 6 位）',
   'auth.resetFail': '重置失败',
@@ -170,11 +172,11 @@ export const zh: Record<string, string> = {
 
   // —— 忘记密码屏 ——
   'auth.forgotTitle': '找回密码',
-  'auth.forgotDesc': '输入用户名或绑定邮箱，验证码将发送到邮箱',
-  'auth.boundEmail': '绑定邮箱',
+  'auth.forgotDesc': '输入注册邮箱，我们会将验证码发送到该邮箱',
+  'auth.boundEmail': '注册邮箱',
   'auth.newPassword': '新密码（至少 6 位）',
   'auth.resetPassword': '重置密码',
-  'auth.forgotSent': '验证码已发送到绑定邮箱',
+  'auth.forgotSent': '验证码已发送至该邮箱',
   'auth.successReset': '密码已重置，请使用新密码登录',
 }
 
@@ -329,8 +331,10 @@ export const en: Record<string, string> = {
   'auth.selectIndustry': 'Select an industry',
   'auth.orgCnPlaceholder': 'Same as your business license name',
   'auth.captchaRequired': 'Please complete human verification first',
+  'auth.captchaNote': 'Human verification is used only for sign-up and email-code sending; sign-in, password recovery, reset, and change-password intentionally skip it to keep automation and accessibility usable.',
+  'auth.emailNotRegistered': 'This email is not registered. Check the address or sign up first.',
   'auth.sendCodeFail': 'Failed to send the code',
-  'auth.forgotNeed': 'Enter your username or bound email',
+  'auth.forgotNeed': 'Enter your registered email',
   'auth.sendFail': 'Send failed',
   'auth.resetNeed': 'Enter the code and a new password (min 6 chars)',
   'auth.resetFail': 'Reset failed',
@@ -340,10 +344,10 @@ export const en: Record<string, string> = {
 
   // —— Forgot password ——
   'auth.forgotTitle': 'Reset password',
-  'auth.forgotDesc': 'Enter your username or bound email; the code goes to your inbox',
-  'auth.boundEmail': 'Bound email',
+  'auth.forgotDesc': 'Enter your registered email; we will send the code there',
+  'auth.boundEmail': 'Registered email',
   'auth.newPassword': 'New password (at least 6 chars)',
   'auth.resetPassword': 'Reset password',
-  'auth.forgotSent': 'The code was sent to your bound email',
+  'auth.forgotSent': 'The code was sent to that email',
   'auth.successReset': 'Password reset — please sign in with the new password',
 }

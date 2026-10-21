@@ -23,6 +23,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { setLang, t } from '@/i18n'
+import { ApiError } from '@/api/core'
 import { ToastProvider } from '@/ui/langcross/src'
 import Login from './Login'
 // ★ 2026-10-13 用户后令：触发钮可见文字固定英文，判据从组件取同一常量（不在此重写字面量）
@@ -184,6 +185,52 @@ describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）'
   })
 })
 
+
+// ============================================================================
+// ★ 2026-10-21 用户后令：找回/重置只按注册邮箱，且邮箱不在库必须当场拦截。
+// 注册屏、登录屏与找回屏此前三处都出现过 username；这里把它钉成"只有 email 一个入口"。
+// ============================================================================
+describe('找回密码 · 邮箱唯一入口与明确拦截', () => {
+  const openForgot = () => {
+    renderLogin()
+    fireEvent.click(footButtons().find((b) => b.textContent?.includes('忘记密码'))!)
+  }
+
+  it('⑪ 找回屏只有注册邮箱输入框，没有用户名输入框', () => {
+    openForgot()
+    expect(card().querySelector('input[aria-label="用户名"]')).toBeNull()
+    expect(card().querySelector('input[aria-label="注册邮箱"]')).toBeTruthy()
+  })
+
+  it('⑫ 邮箱不在库：显示本地化「该邮箱未注册」，不显示假成功', async () => {
+    vi.mocked(forgotPassword).mockRejectedValueOnce(new ApiError('该邮箱未注册，请确认邮箱或先注册账号', 404, 'EMAIL_NOT_REGISTERED'))
+    openForgot()
+    fireEvent.change(card().querySelector('input[aria-label="注册邮箱"]')!, { target: { value: 'ghost@example.com' } })
+    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
+    await waitFor(() => expect(card().textContent).toContain(t('auth.emailNotRegistered')))
+    expect(card().textContent).not.toContain(t('auth.forgotSent'))
+    expect(vi.mocked(forgotPassword).mock.calls.at(-1)?.[0]).toEqual({ email: 'ghost@example.com' })
+  })
+
+  it('⑬ 重置成功后用邮箱+新密码自动登录（不再停在登录页让用户重输）', async () => {
+    const onLogin = vi.fn()
+    vi.mocked(forgotPassword).mockResolvedValueOnce({ success: true, message: '验证码已发送至该邮箱' })
+    vi.mocked(resetPassword).mockResolvedValueOnce({ success: true, login_account: 'me@example.com' })
+    vi.mocked(login).mockResolvedValueOnce({ success: true, token: 'tok', user: { id: 1, username: 'me', role: 'user', tenant_id: 0 } } as never)
+    render(<ToastProvider><Login mode="home" onLogin={onLogin} /></ToastProvider>)
+    fireEvent.click(footButtons().find((b) => b.textContent?.includes('忘记密码'))!)
+    fireEvent.change(card().querySelector('input[aria-label="注册邮箱"]')!, { target: { value: 'me@example.com' } })
+    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
+    await waitFor(() => expect(card().querySelector(`input[aria-label="${t('auth.newPassword')}"]`)).toBeTruthy())
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.fieldEmailCode')}"]`)!, { target: { value: '123456' } })
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.newPassword')}"]`)!, { target: { value: 'newpass123' } })
+    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
+    await waitFor(() => expect(login).toHaveBeenCalledWith('me@example.com', 'newpass123'))
+    await waitFor(() => expect(onLogin).toHaveBeenCalled())
+    expect(vi.mocked(resetPassword).mock.calls.at(-1)?.[0]).toEqual({ email: 'me@example.com', code: '123456', new_password: 'newpass123' })
+  })
+})
+
 // ============================================================================
 // ★ #38（2026-09-21）登录屏 SSO 身份源入口回归
 // 缺陷背景：后端 /api/sso/{providers,login,callback} 三件套早已齐备，登录页却没有任何入口，
@@ -192,7 +239,7 @@ describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）'
 //   ② 启用时按 display_name 出入口；③ 入口必须是 <a href="/api/sso/login?provider=…">，
 //      用 fetch 走接口会把 302 到 IdP 的重定向链连同 state cookie 一起丢掉。
 // ============================================================================
-const { ssoProviders } = await import('@/api')
+const { ssoProviders, forgotPassword, resetPassword, login } = await import('@/api')
 
 describe('登录屏 · SSO 身份源入口（#38）', () => {
   beforeEach(() => { vi.mocked(ssoProviders).mockReset() })

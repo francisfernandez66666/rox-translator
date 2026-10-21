@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（454 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（457 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -397,9 +397,11 @@ var exactEN = map[string]string{
 	"该设备今天注册的账号已达上限，请明天再试或登录已有账号":                      "This device has reached today's registration limit; try again tomorrow or sign in to an existing account",
 	"该语言暂不在试用范围内":                                      "This language is not available in the trial",
 	"该邀请码已被使用，无法撤销":                                    "This invite code was already used and cannot be revoked",
+	"该邮箱对应账号当前不可用，请联系管理员":                              "The account for this email is currently unavailable; contact your administrator",
 	"该邮箱已被其他账号绑定":                                      "This email is already bound to another account",
 	"该邮箱已被用于邀请注册奖励，无法换绑":                               "This email has been used for referral rewards and cannot be rebound",
 	"该邮箱未开通账号，请联系管理员":                                  "This email has no account; contact your administrator",
+	"该邮箱未注册，请确认邮箱或先注册账号":                               "This email is not registered; check the address or create an account",
 	"语音产物暂存失败":                                         "Failed to stage the audio result on the server",
 	"语音产物读取失败":                                         "Failed to read the audio result",
 	"请以 multipart/form-data 提交图片":                      "Please submit the image as multipart/form-data",
@@ -429,6 +431,7 @@ var exactEN = map[string]string{
 	"请求过于频繁，请稍后再试":                                     "Too many requests; please retry later",
 	"请输入原邮箱验证码":                                        "Enter the current email's verification code",
 	"请输入新邮箱验证码":                                        "Enter the new email's verification code",
+	"请输入注册邮箱":                                          "Enter your registered email",
 	"请输入要试译的内容":                                        "Enter the text you would like to trial-translate",
 	"请阅读并同意《用户协议》与《隐私协议》":                              "Please read and accept the Terms of Service and Privacy Policy",
 	"读取前端入口失败":                                         "Failed to read frontend entry",

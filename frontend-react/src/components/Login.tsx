@@ -1,6 +1,6 @@
 // ============================================================================
 // components/Login.tsx — 登录 / 自助注册 / 忘记密码（LangCross 纯黑组件库实现）
-// 设计：认证卡用 AuthCard（380 宽、内边距 32、圆角 14、外层 .lc-auth-bg）。
+// 设计：认证卡用 AuthCard（400 宽、内边距 32、圆角 14、外层 .lc-auth-bg）。
 // 几何口径来自画布 57:3（登录）/ 57:117（找回密码）实测；三屏标题字号见 components.css 注释。
 // 注册交互：点「免费注册」→ 传统表单卡闪烁三次 → 整页 120ms 退出 → AI 助理面板接管
 //          （AiRegisterFlow.tsx，交付包 §5 / demo-register-ai-motion.html）。
@@ -22,6 +22,7 @@ import {
   ssoProviders, ssoLoginUrl, type AuthUser, type SSOProvider,
 } from '@/api'
 import { t, useT } from '@/i18n'
+import { ApiError } from '@/api/core'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
 import { useBranding, BrandLoginShell, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
@@ -117,7 +118,7 @@ export default function Login({ mode, onLogin }: Props) {
   // 忘记密码
   const [forgotMsg, setForgotMsg] = useState('')
   const [forgotSent, setForgotSent] = useState(false) // 已发码 → 同一张卡切换成「填码 + 新密码」形态
-  const [forgot, setForgot] = useState({ username: '', email: '', code: '', newPassword: '' })
+  const [forgot, setForgot] = useState({ email: '', code: '', newPassword: '' })
   // ★ #38（2026-09-21）：已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
   const [ssoList, setSsoList] = useState<SSOProvider[]>([])
 
@@ -365,48 +366,52 @@ export default function Login({ mode, onLogin }: Props) {
   }
 
   // ---- 忘记密码：发验证码 → 校验验证码重置新密码 ----
-  // 提交找回：用户名或绑定邮箱二者其一即可（后端按绑定关系发码，不要求两个都填）
+  // 提交找回：只认**注册邮箱**（2026-10-21 用户后令；后端发码前先查库，未注册即 404）。
   async function doForgotSend() {
-    if (!forgot.username.trim() && !forgot.email.trim()) { setForgotMsg(t('auth.forgotNeed')); return }
-    // ★ P0-6：走邮箱那一腿时先判形状。防枚举不回答"这个邮箱注册过没有"，
-    //   但"这串根本不是邮箱地址"是纯形状问题，必须当场说——旧形态连 type="email" 都没挂，
-    //   写错一个字母的人收到的是假成功，要空等十分钟。
-    if (!forgot.username.trim() && !isEmailShape(forgot.email)) { setForgotMsg(t('auth.emailBad')); return }
+    if (!forgot.email.trim()) { setForgotMsg(t('auth.forgotNeed')); return }
+    if (!isEmailShape(forgot.email)) { setForgotMsg(t('auth.emailBad')); return }
     setLoading(true); setForgotMsg('')
     try {
-      const resp = await forgotPassword({ username: forgot.username.trim() || undefined, email: forgot.email.trim() || undefined })
+      const resp = await forgotPassword({ email: forgot.email.trim() })
       if (!resp.success) { setForgotMsg(resp.message || t('auth.sendFail')); return }
       setForgotSent(true)
-      // ★ 2026-10-21 IAM 重做 P0-6（防枚举）：这里**透传后端那句恒真文案**，不再自带
-      //   「验证码已发送到绑定邮箱」——后端现在三条出口（不存在／未绑邮箱／已发码）逐字同句，
-      //   前端若继续用自己的那句"已发送"覆盖，等于把刚堵上的存在性回执又从界面上画回来。
-      //   新文案自带出路（检查拼写与垃圾箱／改用用户名找回），正是旧形态缺的那一句。
+      codeCd.start() // ★ IAM P1-4：找回屏与注册屏同档 60s 冷却，成功后立即启动
       setForgotMsg(resp.message || t('auth.forgotSent'))
-    } catch (e) { setForgotMsg((e as Error).message || t('auth.sendFail')) }
+    } catch (e) {
+      // ★ 2026-10-21 用户后令：邮箱不在库是明确拦截（404 EMAIL_NOT_REGISTERED），
+      //   按稳定码显示本地化文案，不把后端中文原样丢给十二语种访客。
+      if (e instanceof ApiError && e.code === 'EMAIL_NOT_REGISTERED') setForgotMsg(t('auth.emailNotRegistered'))
+      else setForgotMsg((e as Error).message || t('auth.sendFail'))
+    }
     finally { setLoading(false) }
   }
 
-  // 用验证码重置：成功后把用户名/新密码回填到登录表单再切回登录屏，
-  // 用户不需要重新输入一遍（error 位显示「密码已重置」当作正向反馈复用同一条提示槽）
+  // 用验证码重置：成功后把邮箱/新密码回填到登录表单并**自动登录**，
+  // 用户不需要重新输入一遍；自动登录失败才回登录屏并提示「密码已重置」。
   async function doReset() {
     // ★ 2026-10-21 IAM 重做 P1-1：与注册/后端同一把长度尺子（旧写法写死 6，改档即前后端打架）
     if (!forgot.code.trim() || forgot.newPassword.length < PWD_MIN_LEN) { setForgotMsg(t('auth.resetNeed')); return }
     setLoading(true); setForgotMsg('')
     try {
-      // ★ 定位腿与发码腿同口径：用户名或绑定邮箱二者其一即可（只用邮箱找回的用户 username 为空，
-      //   不把 email 一起带上，后端就无从定位账号 → 回「请求格式错误」）。
-      const resp = await resetPassword({ username: forgot.username.trim() || undefined, email: forgot.email.trim() || undefined, code: forgot.code.trim(), new_password: forgot.newPassword })
+      // ★ 2026-10-21 用户后令：重置只按注册邮箱定位，报文里不再出现 username。
+      const resp = await resetPassword({ email: forgot.email.trim(), code: forgot.code.trim(), new_password: forgot.newPassword })
       if (!resp.success) { setForgotMsg(resp.message || t('auth.resetFail')); return }
-      // ★ 2026-10-21 IAM 重做 P0-5：回填"刚刚用来定位这张码的那个标识"（服务端回显：
-      //   邮箱档回邮箱、用户名档回用户名）。旧形态只回填用户名、邮箱档什么都不回，
-      //   而登录当时只认用户名 ⇒ 用邮箱找回密码的人拿着新密码仍然登不进去（第 2 条报障本体）。
-      //   现在登录双入口（用户名或邮箱），把邮箱回填进同一个框就能直接进。
-      const issued = typeof resp.login_account === 'string' && resp.login_account ? resp.login_account : forgot.username.trim()
-      if (issued) setUsername(issued)
-      setPassword(forgot.newPassword)
+      const account = typeof resp.login_account === 'string' && resp.login_account ? resp.login_account : forgot.email.trim()
+      const newPwd = forgot.newPassword
+      // 先回填登录表单，再尝试自动登录：自动登录失败也不会把人留在一张空表单上。
+      setUsername(account)
+      setPassword(newPwd)
       closeForgot()
+      setError('')
+      try {
+        const lr = await login(account, newPwd)
+        if (lr.success) { await settleSession(lr, setError); return }
+      } catch { /* 自动登录失败不覆盖"已重置成功"这条事实 */ }
       setError(t('auth.successReset'))
-    } catch (e) { setForgotMsg((e as Error).message || t('auth.resetFail')) }
+    } catch (e) {
+      if (e instanceof ApiError && e.code === 'EMAIL_NOT_REGISTERED') setForgotMsg(t('auth.emailNotRegistered'))
+      else setForgotMsg((e as Error).message || t('auth.resetFail'))
+    }
     finally { setLoading(false) }
   }
 
@@ -414,7 +419,7 @@ export default function Login({ mode, onLogin }: Props) {
   function closeForgot() {
     setView('signin')
     setForgotSent(false)
-    setForgot({ username: '', email: '', code: '', newPassword: '' })
+    setForgot({ email: '', code: '', newPassword: '' })
   }
 
   // ====================== 渲染 ======================
@@ -424,7 +429,7 @@ export default function Login({ mode, onLogin }: Props) {
   // 卡右上角语言入口（★ #23：原 zh/en 胶囊换成 12 语种 LangSelect，三个认证屏共用）
   const langPill = <LangSelect align="right" />
 
-  // 登录屏（卡宽 380、标题=品牌名、底部两行居中链接、密码框右端眼睛、卡右上角 EN 胶囊）
+  // 登录屏（卡宽 400、标题=品牌名、底部两行居中链接、密码框右端眼睛、卡右上角 LangSelect）
   if (view === 'signin') {
     return (
       <BrandLoginShell>
@@ -510,12 +515,9 @@ export default function Login({ mode, onLogin }: Props) {
           )}
         >
           <Field>
-            <Input aria-label={t('auth.username')} value={forgot.username} onChange={(e) => setForgot({ ...forgot, username: e.target.value })} placeholder={t('auth.username')} />
-          </Field>
-          <Field>
-            {/* 走邮箱找回的那条腿，输入形状必须当场校验：type=email 让移动端出 @ 键，
-                浏览器也顺带做一次基础形状检查（真正的判据仍在前端 isEmailShape 与后端） */}
-            <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" value={forgot.email} onChange={(e) => setForgot({ ...forgot, email: e.target.value })} placeholder={t('auth.boundEmail')} />
+            {/* ★ 2026-10-21 用户后令：找回/重置只认注册邮箱，界面上不再出现用户名输入框。
+                type=email 让移动端出 @ 键；真正的形状判据仍在前端 isEmailShape 与后端。 */}
+            <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" autoComplete="email" value={forgot.email} onChange={(e) => setForgot({ ...forgot, email: e.target.value })} placeholder={t('auth.boundEmail')} />
           </Field>
           {!!forgotMsg && <div className={forgotSent ? 'auth-ok' : 'auth-err'}>{forgotMsg}</div>}
           {forgotSent && (
@@ -534,6 +536,11 @@ export default function Login({ mode, onLogin }: Props) {
                   trailing={<PwdEye shown={showForgotPwd} onToggle={() => setShowForgotPwd((v) => !v)} />}
                 />
               </Field>
+              <div className="auth-resend">
+                <button type="button" className="auth-link" disabled={codeCd.left > 0} onClick={doForgotSend}>
+                  {codeCd.left > 0 ? tplF('auth.codeResend', { n: codeCd.left }) : t('auth.sendCode')}
+                </button>
+              </div>
             </>
           )}
         </AuthCard>
@@ -691,6 +698,9 @@ export default function Login({ mode, onLogin }: Props) {
 
         {/* Turnstile 挂载点：容器自己不留任何文案，开启人机验证时由 renderTurnstile 往里塞 widget */}
             <div ref={captchaBoxRef} id="__ts_widget__" />
+        {/* ★ IAM P1-5：把「人机验证只覆盖注册＋发码」这条刻意取舍写在界面上，免得用户以为
+            登录/找回漏了防护；文案走 12 语种词典，不硬编码中文。 */}
+        {captchaOn && <p className="auth-note">{t('auth.captchaNote')}</p>}
         {/* 走 label 属性而不是 children：Checkbox 内部是 <input>（void 元素），children 若被摊进去会直接抛错 */}
         <Checkbox
           checked={agreed}
@@ -778,6 +788,9 @@ const CSS_AUTH = `
 .lc-auth-bg{position:fixed;inset:0;display:flex;align-items:center;align-items:safe center;justify-content:center;background:#000;font-family:var(--lc-font);padding:24px;box-sizing:border-box;overflow-y:auto;}
 .auth-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);padding:0;}
 .auth-link:hover{color:var(--lc-text);text-decoration:underline;}
+.auth-link:disabled{opacity:.55;cursor:default;text-decoration:none;}
+.auth-note{margin:0;color:var(--lc-text-3);font-size:14px;line-height:1.5;}
+.auth-resend{display:flex;justify-content:flex-end;margin-top:-4px;}
 /* 卡右上角语言胶囊（31×19、面 #16181C、纯白、无描边、圆角全圆） */
 .auth-lang{height:19px;padding:0 8px;border:0;border-radius:999px;background:var(--lc-raised);color:#FFFFFF;font-family:var(--lc-font-latin);font-size:13px;font-weight:500;line-height:1;cursor:pointer;}
 .auth-lang:hover{box-shadow:inset 0 0 0 2px var(--lc-border-pill);}

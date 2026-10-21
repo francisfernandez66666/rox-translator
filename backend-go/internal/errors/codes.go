@@ -91,6 +91,11 @@ const (
 	// 以及运营侧「该不该放宽额度」的判断都靠这个码分流；Details.reason 进一步点明
 	// 是 device／ip／global 哪一档拦的，避免把平台预算耗尽误报成个人用完。
 	ErrTrialExhausted ErrorCode = "TRIAL_EXHAUSTED"
+	// ErrEmailNotRegistered ★ 2026-10-21 用户后令：找回/重置密码按**注册邮箱**定位，
+	// 发码前必须先查库；邮箱不在库即明确拦截（不再沿用防枚举的恒真成功）。
+	// 这档暴露的是用户自己输入的那一个邮箱是否注册过，是用户明确要求的产品取舍；
+	// 登录口仍保留「用户名或密码错误」的统一文案，不随之放宽。
+	ErrEmailNotRegistered ErrorCode = "EMAIL_NOT_REGISTERED"
 )
 
 // 开放 API 对外错误码（snake_case，Python/TS/Java SDK 依赖，勿改值）。
@@ -242,6 +247,10 @@ func (e *APIError) HTTPStatus() int {
 		return http.StatusForbidden
 	case ErrValidation, ErrQuotaExceeded, ErrFileTooLarge, ErrChatTextTooLong:
 		return http.StatusBadRequest
+	case ErrEmailNotRegistered:
+		// 404：请求格式没问题，但不存在的资源（这个邮箱没有对应账号）。
+		// 前端按 code 显示本地化文案，不依赖后端中文。
+		return http.StatusNotFound
 	case ErrRateLimited, ErrTrialExhausted:
 		// ★ F-47（批 I-7）：限流从 400 组里拆出来单映射 429。
 		// 旧口径把「你请求太快，等 T 秒再来」和「参数填错了」压成同一个 400，

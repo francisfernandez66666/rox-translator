@@ -9,7 +9,7 @@
 //     否则"我想复制这句译文"会变成"我要试用"。
 //   3 全站转化落点（用户口径：已经有账号的人不该被要求再注册一次）：
 //     落地页整页零 href="/register"，「免费试用」三处（导航/hero/收尾）一律开试用面板、
-//     href 兜到 /login，其余注册类按钮直落 /login。
+//     href 兜到 /login；注册/套餐类 CTA 直落 /register（2026-10-21 用户后令）。
 //
 // 运行：npx vitest run src/components/Landing.trial.dom.test.tsx
 // ============================================================================
@@ -89,18 +89,21 @@ describe('落地页 · 点演示卡切试用（〇-Z #74/#75）', { timeout: 15_
   it('⑥ 三颗「免费试用」都开试用面板，且 href 兜到 /login（无 JS／中键新窗口仍有落点）', () => {
     render(<Landing />)
     const cta = t('land.ctaFree')
-    const btns = [...document.querySelectorAll<HTMLAnchorElement>('a.lc-mkt-btn')].filter((a) => a.textContent?.includes(cta))
+    // 注意：套餐免费档的按钮文案也是「免费试用」，但它的落点是 /register（用户后令）；
+    // 这一条只认**开试用面板**的那三颗，故按 href=/login 过滤，避免把套餐 CTA 混进来。
+    const btns = [...document.querySelectorAll<HTMLAnchorElement>('a.lc-mkt-btn')]
+      .filter((a) => a.textContent?.includes(cta) && a.getAttribute('href') === '/login')
     expect(btns.length).toBeGreaterThanOrEqual(3) // 导航 + hero 主投 + 收尾 lg
-    for (const b of btns) expect(b.getAttribute('href')).toBe('/login')
     fireEvent.click(btns[0])
     expect(document.querySelector('[data-trial="1"]')).toBeTruthy()
   })
 
-  it('⑦ 全站转化落点：落地页零 href="/register"（注册页只在试用引导卡里出现）', () => {
+  it('⑦ 转化落点分诊：注册/套餐 CTA 直落 /register，试用类仍落 /login', () => {
     render(<Landing />)
-    const text = document.body.innerHTML
-    expect(text.includes('href="/register"'), '仍有一键直落注册页：' + (text.match(/href="\/register"/g) ?? []).length).toBe(false)
-    // 反向对照②：/login 确实在页上（否则上一条的"零"是页面没渲染出来的假绿）
+    // 正锁：三档套餐 CTA 必须直落注册（与 /pricing 的「免费注册→/register」同口径）
+    const planLinks = [...document.querySelectorAll<HTMLAnchorElement>('a[href="/register"]')]
+    expect(planLinks.length).toBeGreaterThanOrEqual(3)
+    // 负向对照：登录/试用链路仍在，且试用面板自己的 href 不被误改
     expect(document.querySelectorAll('a[href="/login"]').length).toBeGreaterThanOrEqual(4)
   })
 })

@@ -64,8 +64,8 @@ describe('Login 观察2② · 重置密码 4xx 归一后失败文案必须上屏
     render(<ToastProvider><Login mode="home" onLogin={() => {}} /></ToastProvider>)
     // 进找回密码屏
     fireEvent.click(btnByText(t('auth.forgot'))!)
-    // 第一步：填用户名提交找回申请（fetch 桩回 success:true → 进入已发码态）
-    fireEvent.change(inputByAria(t('auth.username'))!, { target: { value: 'uat_user_01' } })
+    // 第一步：填注册邮箱提交找回申请（fetch 桩回 success:true → 进入已发码态）
+    fireEvent.change(inputByAria(t('auth.boundEmail'))!, { target: { value: 'uat_user_01@example.com' } })
     fireEvent.click(btnByText(t('auth.sendCode'))!)
     await waitFor(() => {
       // 已发码态判据：出现第二步独有的「新密码」输入框
@@ -85,7 +85,7 @@ describe('Login 观察2② · 重置密码 4xx 归一后失败文案必须上屏
     // 出网锁：forgot-password 与 reset-password 各恰好 1 枪；重置载荷逐字段等值
     const resetCall = outbox.find((c) => c.url.includes('/api/auth/reset-password'))
     expect(resetCall, '重置请求必须真的发出（后端从 200 改 400 后前端链路未断）').toBeTruthy()
-    expect(JSON.parse(resetCall!.body)).toEqual({ username: 'uat_user_01', code: '000000', new_password: 'pw123456' })
+    expect(JSON.parse(resetCall!.body)).toEqual({ email: 'uat_user_01@example.com', code: '000000', new_password: 'pw123456' })
     expect(outbox.filter((c) => c.url.includes('/api/auth/reset-password')).length).toBe(1)
   })
 })

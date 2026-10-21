@@ -390,7 +390,7 @@ ck T5-task-completed '"status":"completed"' "$POLL"
 ck T5-task-download 'no_result|无可下载' "$(curl -s "$B/openapi/v1/tasks/download?id=$TASKID" -H "Authorization: Bearer $AK" --max-time 60)"
 ck T5-task-badkey 'invalid|无效' "$(curl -s "$B/openapi/v1/tasks/status?id=$TASKID" -H "Authorization: Bearer sk-bogus")"
 
-# ---------- T6 认证：改密/新密登录/恢复 + 忘记密码防枚举 + 错误重置码 ----------
+# ---------- T6 认证：改密/新密登录/恢复 + 未注册邮箱拦截 + 错误重置码 ----------
 R=$(post "$H1" '{"old_password":"uatpass123","new_password":"uatpass999"}' /api/auth/change-password)
 ck T6-change-pwd '"success":true' "$R"
 # ★ B2 会话撤销（2026-09-12）：改密后旧 JWT 必须立即失效（此前 24h 内仍可用属漏洞）
@@ -405,11 +405,12 @@ ck T6-restore-login '"success":true' "$(curl -s $B/api/auth/login -H "$J" -d '{"
 # ★ B2：两次改密已使开场签发的 H1 失效；后续套件（T9/T10/T12/T14）复用 H1，重新登录刷新
 T1=$(tok uatuser_a uatpass123); H1="Authorization: Bearer $T1"
 [ ${#T1} -lt 10 ] && { echo "FATAL|T6 后刷新 uatuser_a token 失败"; exit 1; }
-ck T6-forgot-guard '"success":true' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"nonexist@test.com"}')"
+# ★ 2026-10-21 用户后令：发码前先查库，未注册邮箱必须 404 + EMAIL_NOT_REGISTERED（不再假成功）
+ck T6-forgot-guard '"code":"EMAIL_NOT_REGISTERED"' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"nonexist@test.com"}')"
 # ★ F-20 后端半（2026-09-25 批G）：重置密码四类失败（码错/过期/用户缺/已占用之外的校验族）
 #   已收敛为 writeError + 稳定码 VALIDATION_ERROR + 文案「验证码错误或已过期」——
 #   旧断言只吃中文文案，文案一 i18n 就失明；这里补 code 字段等值锁，前端按码分支才有依据。
-R6B=$(curl -s $B/api/auth/reset-password -H "$J" -d '{"username":"uatuser_a","code":"000000","new_password":"hacked999"}')
+R6B=$(curl -s $B/api/auth/reset-password -H "$J" -d '{"email":"uat_a@test.com","code":"000000","new_password":"hacked999"}')
 ck T6-reset-badcode '验证码|无效|expired|不正确' "$R6B"
 ck T6-reset-badcode-code '"code":"VALIDATION_ERROR"' "$R6B"
 
@@ -1527,13 +1528,14 @@ else PASS=$((PASS+1)); echo "PASS|T44-backup-cmd-no-whitelist"; fi
 ck T44-csp-header 'Content-Security-Policy' "$(grep -m1 'Content-Security-Policy' "$ROOT44/deploy/caddy/translator.conf" || echo NONE)"
 
 # ---------- T45 密码找回全链路（2026-09-16 测试盲区补全） ----------
-# 此前 T6 只测了 forgot 防枚举与错误重置码拒绝，完整闭环（发码→取码→重置→新密登录→还原）无覆盖。
+# 此前 T6 只测了未注册邮箱拦截与错误重置码拒绝，完整闭环（发码→取码→重置→新密登录→还原）无覆盖。
+# ★ 2026-10-21 起找回/重置只按注册邮箱定位（用户后令），故本段报文全部用 uat_a@test.com。
 # 原理：UAT 环境 MAIL_ENABLED 未配置 → NoopSender；run_uat.sh 注入 MAIL_NOOP_PRINT_BODY=1
 #   使验证码正文随服务日志可见（仅测试环境），T45 从 UAT_SERVER_LOG 增量读取 6 位码完成闭环。
 echo "--- T45 密码找回全链路（发码→日志取码→重置→新密登录→还原）---"
 if [ -n "${UAT_SERVER_LOG:-}" ] && [ -f "$UAT_SERVER_LOG" ]; then
   MARK45=$(wc -l < "$UAT_SERVER_LOG" | tr -d '[:space:]')
-  ck T45-forgot-accept '"success":true' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"username":"uatuser_a"}')"
+  ck T45-forgot-accept '"success":true' "$(curl -s $B/api/auth/forgot-password -H "$J" -d '{"email":"uat_a@test.com"}')"
   RCODE=""
   for i in $(seq 1 15); do   # 邮件异步入队 → 轮询日志增量取码
     # ★ python3 提取（2026-09-16 修复）：grep -oE 中文 pattern 在 ck 的 $(...) 命令替换 +
@@ -1550,7 +1552,7 @@ print(m)' 2>/dev/null)
   done
   [ -n "$RCODE" ] && { PASS=$((PASS+1)); echo "PASS|T45-code-from-log($RCODE)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T45-code-from-log|mark=$MARK45 增量行数=$(wc -l < "$UAT_SERVER_LOG" | tr -d '[:space:]') 日志尾=$(tail -1 "$UAT_SERVER_LOG" | head -c 120)"; }
   if [ -n "$RCODE" ]; then
-    R45BODY="{\"username\":\"uatuser_a\",\"code\":\"$RCODE\",\"new_password\":\"UatReset@45x\"}"
+    R45BODY="{\"email\":\"uat_a@test.com\",\"code\":\"$RCODE\",\"new_password\":\"UatReset@45x\"}"
     ck T45-reset-ok '"success":true' "$(curl -s $B/api/auth/reset-password -H "$J" -d "$R45BODY")"
     T45T=$(tok uatuser_a UatReset@45x)
     [ ${#T45T} -gt 30 ] && { PASS=$((PASS+1)); echo "PASS|T45-login-new-pwd"; } || { FAIL=$((FAIL+1)); echo "FAIL|T45-login-new-pwd"; }
