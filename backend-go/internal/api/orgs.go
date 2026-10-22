@@ -238,7 +238,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 		TenantID int64  `json:"tenant_id"` // 归属租户（超管创建根级组织时指定）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织名称不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "组织名称不能为空"))
 		return
 	}
 	req.Name = strings.TrimSpace(req.Name)
@@ -256,7 +256,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 	// 父节点归属校验（非根时父节点必须属于本租户）
 	if req.ParentID > 0 {
 		if err := s.validateOrg(tid, req.ParentID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 			return
 		}
 	}
@@ -270,7 +270,7 @@ func (s *Server) handleOrgCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if orgType != store.OrgTypeOrg && orgType != store.OrgTypeDept {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "组织类型仅支持 org(组织)/dept(部门)"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "组织类型仅支持 org(组织)/dept(部门)"))
 		return
 	}
 	org, err := s.Store.CreateOrg(tid, req.ParentID, req.Name, orgType)
@@ -309,16 +309,16 @@ func (s *Server) handleOrgRename(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"` // 新名称
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数错误"))
 		return
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if err := s.validateOrg(tid, req.ID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if err := s.Store.RenameOrg(req.ID, strings.TrimSpace(req.Name)); err != nil {
@@ -357,12 +357,12 @@ func (s *Server) handleOrgMove(w http.ResponseWriter, r *http.Request) {
 		ParentID int64 `json:"parent_id"` // 目标父节点 ID（0=根组织下）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数错误"))
 		return
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if err := s.Store.MoveOrg(tid, req.ID, req.ParentID); err != nil {
@@ -393,16 +393,16 @@ func (s *Server) handleOrgDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 组织 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数错误"))
 		return
 	}
 	tid, err := s.orgTenant(r, u, req.ID)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if err := s.validateOrg(tid, req.ID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ F-63（2026-09-26 批 I-3）：删除前先取节点名与直属子节点数——删除后这些信息就没了，
@@ -493,7 +493,7 @@ func (s *Server) handleOrgUsers(w http.ResponseWriter, r *http.Request) {
 	orgIDs := []int64{}
 	if orgID > 0 {
 		if err := s.validateOrg(tid, orgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 			return
 		}
 		orgIDs, err = s.Store.OrgDescendantIDs(tid, orgID)
@@ -583,17 +583,17 @@ func (s *Server) handleOrgTokenLimit(w http.ResponseWriter, r *http.Request) {
 		LimitPoints int64 `json:"limit_points"` // 月度积分预算（≥0）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgID <= 0 || req.LimitPoints < 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	o, oerr := s.Store.GetOrgByID(req.OrgID)
 	if oerr != nil || o.TenantID != s.effTenant(r, u) {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "组织不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "组织不存在"))
 		return
 	}
 	limit := s.Store.TokensFromPoints(req.LimitPoints)
 	if err := s.Store.SetOrgTokenLimit(req.OrgID, limit); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "org_token_limit", "orgs",
@@ -633,7 +633,7 @@ func (s *Server) handleOrgBudgetSummary(w http.ResponseWriter, r *http.Request) 
 	}
 	sum, err := s.Store.GetOrgBudgetSummary(s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "summary": s.orgBudgetViewJSON(sum)})

@@ -65,11 +65,11 @@ func (s *Server) sweepOldChunks() {
 // handleKBUploadChunk 接收单个分片（幂等覆盖写）。
 func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	if err := r.ParseMultipartForm(24 << 20); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "分片解析失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "分片解析失败"))
 		return
 	}
 	// 参数校验：upload_id 格式、index/total 范围（总片数上限防滥用）
@@ -77,22 +77,22 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	idx, _ := strconv.Atoi(r.FormValue("index"))
 	total, _ := strconv.Atoi(r.FormValue("total"))
 	if !uploadIDRe.MatchString(uploadID) || idx < 0 || total <= 0 || total > chunkMaxTotal || idx >= total {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "upload_id/index/total 参数非法"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "upload_id/index/total 参数非法"))
 		return
 	}
 	f, hdr, err := r.FormFile("chunk")
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少分片内容"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少分片内容"))
 		return
 	}
 	defer f.Close()
 	if hdr.Size <= 0 || hdr.Size > kbChunkMax {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "分片大小须在 0-8MB"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "分片大小须在 0-8MB"))
 		return
 	}
 	dir := s.chunkDirPath(uploadID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if idx == 0 {
@@ -102,19 +102,19 @@ func (s *Server) handleKBUploadChunk(w http.ResponseWriter, r *http.Request) {
 	tmp := filepath.Join(dir, "tmp.part")
 	out, err := os.Create(tmp)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	n, err := io.Copy(out, io.LimitReader(f, kbChunkMax+1))
 	out.Close()
 	if err != nil || n > kbChunkMax {
 		os.Remove(tmp)
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "分片写入失败或超限"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "分片写入失败或超限"))
 		return
 	}
 	if err := os.Rename(tmp, filepath.Join(dir, chunkPartName(idx))); err != nil {
 		os.Remove(tmp)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 记录 total 供 status/merge 校验（简单文件，避免内存态）
@@ -155,12 +155,12 @@ func receivedChunks(dir string) []int {
 // handleKBUploadStatus 已收分片清单（续传定位）。
 func (s *Server) handleKBUploadStatus(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	uploadID := r.URL.Query().Get("upload_id")
 	if !uploadIDRe.MatchString(uploadID) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "upload_id 非法"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "upload_id 非法"))
 		return
 	}
 	dir := s.chunkDirPath(uploadID)
@@ -175,7 +175,7 @@ func (s *Server) handleKBUploadStatus(w http.ResponseWriter, r *http.Request) {
 // handleKBUploadMerge 校验分片完整后合并为 kbmerged 文件（供 recognize-kb 直读）。
 func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -183,13 +183,13 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		Filename string `json:"filename"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !uploadIDRe.MatchString(req.UploadID) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "upload_id 非法"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "upload_id 非法"))
 		return
 	}
 	// 扩展名须在 KB 白名单内；读 meta 记录比对已收片数是否收齐
 	ext := strings.ToLower(filepath.Ext(req.Filename))
 	if !kbExtWhitelist[ext] {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不支持的文件类型：" + ext})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的文件类型："+ext))
 		return
 	}
 	ext = strings.TrimPrefix(ext, ".")
@@ -223,7 +223,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(s.kbTempDir(), tmp)
 	out, err := os.Create(path)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 逐片顺序 io.Copy 追加，累计字节超 chunkMaxActual 即中止清理，防拼出半截文件
@@ -233,7 +233,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			out.Close()
 			os.Remove(path)
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "分片读取失败"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "分片读取失败"))
 			return
 		}
 		n, err := io.Copy(out, part)
@@ -242,7 +242,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 		if err != nil || written > chunkMaxActual {
 			out.Close()
 			os.Remove(path)
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "合并失败或文件超限"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "合并失败或文件超限"))
 			return
 		}
 	}
@@ -250,7 +250,7 @@ func (s *Server) handleKBUploadMerge(w http.ResponseWriter, r *http.Request) {
 	// 收尾：原子改名为正式产物名（kbmerged_xxx.ext）并删除整个分片目录
 	if err := os.Rename(path, filepath.Join(s.kbTempDir(), name)); err != nil {
 		os.Remove(path)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	_ = os.RemoveAll(dir)

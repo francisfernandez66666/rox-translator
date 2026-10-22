@@ -62,7 +62,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 解析请求参数
@@ -77,22 +77,22 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 		Mode         string            `json:"mode"`         // fast | pro
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 校验反馈内容
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写反馈意见"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写反馈意见"))
 		return
 	}
 	if len([]rune(content)) > feedbackMaxLen {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("反馈意见最多 %d 字", feedbackMaxLen)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("反馈意见最多 %d 字", feedbackMaxLen)))
 		return
 	}
 	// 每日限流（防滥用）
 	if n := s.Store.CountFeedbacksToday(u.ID); n >= feedbackDailyLimit {
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": "今日反馈已达上限，请明天再试"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "今日反馈已达上限，请明天再试"))
 		return
 	}
 	// 默认反馈类型为文本
@@ -116,7 +116,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 	if targetType == "ticket" {
 		t, err := s.Store.GetTicket(req.TicketID, u.TenantID)
 		if err != nil || t.CreatedBy != u.ID {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权反馈该工单"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权反馈该工单"))
 			return
 		}
 		f.TicketID = t.ID
@@ -154,7 +154,7 @@ func (s *Server) handleFeedbackCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 创建反馈记录
 	if err := s.Store.CreateFeedback(f); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 告警触达（复用告警面板/邮件/群机器人链路）
@@ -190,7 +190,7 @@ func (s *Server) handleAdminFeedbackResolve(w http.ResponseWriter, r *http.Reque
 		Note string `json:"note"` // 处理备注（可选）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "无效的反馈 ID"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "无效的反馈 ID"))
 		return
 	}
 	if err := s.Store.ResolveFeedback(req.ID, strings.TrimSpace(req.Note)); err != nil {
@@ -238,7 +238,7 @@ func (s *Server) appendReply(f *store.Feedback, u *store.User, content string) (
 func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	status := r.URL.Query().Get("status")
@@ -303,7 +303,7 @@ func (s *Server) handleFeedbackList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -311,12 +311,12 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 		Content string `json:"content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	content := strings.TrimSpace(req.Content)
 	if content == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写回复内容"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写回复内容"))
 		return
 	}
 	// 载入反馈并做回复闸口：仅超管或提交者本人可复；resolved 后线程封存
@@ -329,7 +329,7 @@ func (s *Server) handleFeedbackReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) && f.UserID != u.ID {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管或提交者可回复"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管或提交者可回复"))
 		return
 	}
 	if f.Status == "resolved" {

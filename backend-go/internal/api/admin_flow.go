@@ -60,11 +60,11 @@ func (s *Server) handleFlowSave(w http.ResponseWriter, r *http.Request) {
 		Steps []store.FlowStep `json:"steps"` // 流程步骤启停配置数组（含 key/name/enable）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if s.Ten == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "租户存储未初始化"))
 		return
 	}
 	cfg := tenant.FlowConfig{Steps: map[string]bool{}}
@@ -92,7 +92,7 @@ func (s *Server) handleFlowRunTicket(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待执行流程的工单 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少工单 id"))
 		return
 	}
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))

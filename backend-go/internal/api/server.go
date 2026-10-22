@@ -1030,7 +1030,7 @@ func (s *Server) handleTranslationLangs(w http.ResponseWriter, r *http.Request) 
 // 等于把 rox 租户的 KB 规模公开；现与 estimate 同口径要求登录态。
 func (s *Server) handleKBStats(w http.ResponseWriter, r *http.Request) {
 	if s.authUser(r) == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 知识库未加载时返回提示

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/ops"
 )
 
@@ -241,7 +242,7 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "运营策略仅超级管理员可设置"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "运营策略仅超级管理员可设置"))
 		return
 	}
 	var req struct {
@@ -249,17 +250,17 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 		Policy ops.OperationsPolicy `json:"policy"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "策略格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "策略格式错误"))
 		return
 	}
 	// ★ B6（2026-09-12）：旧注释称「安全裁剪」实为整包直写——补上真实校验：
 	//   时间窗 id 非空且唯一、窗口 overrides 禁止夹带 billing.enforced / payment.mode 后门。
 	if err := ops.ValidatePolicyWindows(req.Policy); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "策略校验失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "策略校验失败: "+err.Error()))
 		return
 	}
 	if err := s.Store.SetConfig("ops_policy", marshalOps(req.Policy)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存失败: "+err.Error()))
 		return
 	}
 	s.invalidatePolicyCache() // ★ C31
@@ -278,24 +279,24 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可管理推广时间窗"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可管理推广时间窗"))
 		return
 	}
 	var req struct {
 		Window ops.PromoWindow `json:"window"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Window.Start == "" || req.Window.End == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "窗口起止时间必填"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "窗口起止时间必填"))
 		return
 	}
 	// 校验 start < end
 	if !ops.WindowTimesValid(req.Window, s.opsPlatformPolicy().TZ) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "时间窗格式非法或 start≥end"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "时间窗格式非法或 start≥end"))
 		return
 	}
 	// ★ B6：单窗保存同样过覆盖禁项校验（id 非空在上方已隐含，此处禁项）
 	if err := ops.ValidateWindowOverrides(req.Window); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	pol := s.opsPlatformPolicy()
@@ -311,7 +312,7 @@ func (s *Server) handleOpsWindowSave(w http.ResponseWriter, r *http.Request) {
 		pol.PromoWindows = append(pol.PromoWindows, req.Window)
 	}
 	if err := s.Store.SetConfig("ops_policy", marshalOps(pol)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存失败: "+err.Error()))
 		return
 	}
 	s.invalidatePolicyCache() // ★ C31
@@ -332,7 +333,7 @@ func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 	}
 	tid := s.effTenant(r, u)
 	if tid <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请先切换到目标租户"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请先切换到目标租户"))
 		return
 	}
 	// 超管代操作：body 可带 tenant_id（仅超管生效）
@@ -349,7 +350,7 @@ func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 	}
 	eff := s.effectivePolicy(tid)
 	if !eff.Package.MonthlyResetEnabled {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "未开放套餐重置"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "未开放套餐重置"))
 		return
 	}
 	// ★ C7（2026-09-12）：限额检查 + 台账重置 + 计数累加合并为单事务原子操作
@@ -357,11 +358,11 @@ func (s *Server) handlePackageReset(w http.ResponseWriter, r *http.Request) {
 	//   且重置波及升级转入行造成价值通胀）。
 	cnt, used, rejected, err := s.Store.ResetPackageMonthly(tid, eff.Package.MonthlyResetLimit)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "重置失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "重置失败: "+err.Error()))
 		return
 	}
 	if rejected {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "本月重置次数已达上限"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "本月重置次数已达上限"))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "billing_package_reset", "packages", strconv.Itoa(used))

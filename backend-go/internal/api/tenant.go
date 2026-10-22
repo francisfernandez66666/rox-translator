@@ -44,12 +44,12 @@ func (s *Server) handleTenantList(w http.ResponseWriter, r *http.Request) {
 	_ = u
 	// 租户存储未初始化时拒绝
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	list, err := s.Ten.List()
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tenants": list})
@@ -68,7 +68,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = u
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	// 解析创建参数：编码/名称/有效期/权限 + 可选初始管理员 + 行业与品牌扩展字段（均选填）
@@ -85,7 +85,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		BrandNames  string `json:"brand_names"`   // 品牌多语言名 JSON（可选）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 创建租户
@@ -93,10 +93,10 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// ★ 脱敏（2026-09-12 PG 重研）：驱动错误不透吐（PG 泄漏约束名 tenants_code_key/SQLSTATE）
 		if store.IsUniqueViolation(err) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败：租户编码已存在"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "创建失败：租户编码已存在"))
 			return
 		}
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "创建失败: " + store.DebriefDBError(err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "创建失败: "+store.DebriefDBError(err)))
 		return
 	}
 	// 功能②：初始化租户默认包 + 行业（缺选回退通用行业兜底）
@@ -111,7 +111,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 	// 创建该租户的初始租户管理员账号（挂到新租户下；仅当提供了用户名/密码时）
 	if s.Store != nil && req.AdminUser != "" && req.AdminPass != "" {
 		if _, err := s.Store.CreateUser(t.ID, req.AdminUser, auth.PasswordHash(req.AdminPass), req.AdminUser+" 管理员", store.RoleTenantAdmin, u.ID, 0); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户已创建，但管理员账号创建失败: " + err.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户已创建，但管理员账号创建失败: "+err.Error()))
 			return
 		}
 	}
@@ -138,7 +138,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = u
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	// 解析更新字段：基础三元组 + 品牌定制（名称/Logo/域名/页脚链接）+ 行业/邀请开关（nil=不改）
@@ -155,19 +155,19 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 		InviteEnabled *bool  `json:"invite_enabled"` // 邀请好友功能开关（nil=不改动；非 nil=按值设置）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 更新租户
 	if err := s.Ten.Update(req.ID, req.Name, req.ExpiresAt, req.Permissions); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "更新失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "更新失败: "+err.Error()))
 		return
 	}
 	// 功能②：更新租户行业编码（仅当显式传入且非空时；空值不改动，避免误清）。
 	//   行业决定共享行业包的载入范围（与注册口径一致）。
 	if req.Industry != "" {
 		if err := s.Ten.SetIndustry(req.ID, req.Industry); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业保存失败: " + err.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "行业保存失败: "+err.Error()))
 			return
 		}
 	}
@@ -175,7 +175,7 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 	// 避免「邀请好友」开关、编辑租户名等只改部分字段的请求把已有品牌清空（品牌有独立保存接口）。
 	if req.BrandName != "" || req.BrandLogo != "" || req.Domain != "" || req.BrandLinks != "" {
 		if msg := validateBrandPayloads(req.BrandLogo, ""); msg != "" { // ★ E15
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
 			return
 		}
 		// ★ F-46（批 I-9）第二个写入口同样要收敛：这条是超管「编辑租户」表单里的品牌字段，
@@ -187,14 +187,14 @@ func (s *Server) handleTenantUpdate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.Ten.SetBranding(req.ID, req.BrandName, logoURL, req.Domain, req.BrandLinks); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "品牌保存失败: " + err.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "品牌保存失败: "+err.Error()))
 			return
 		}
 	}
 	// 更新「邀请好友」开关（仅当显式传入时）
 	if req.InviteEnabled != nil {
 		if err := s.Ten.SetInviteEnabled(req.ID, *req.InviteEnabled); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请开关保存失败: " + err.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请开关保存失败: "+err.Error()))
 			return
 		}
 	}
@@ -246,7 +246,7 @@ func (s *Server) handleTenantStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = u
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	var req struct {
@@ -254,16 +254,16 @@ func (s *Server) handleTenantStatus(w http.ResponseWriter, r *http.Request) {
 		Status string `json:"status"` // 目标状态：active（启用）/ disabled（禁用）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 状态白名单校验
 	if req.Status != tenant.StatusActive && req.Status != tenant.StatusDisabled {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "状态仅支持 active/disabled"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "状态仅支持 active/disabled"))
 		return
 	}
 	if err := s.Ten.SetStatus(req.ID, req.Status); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "操作失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "操作失败: "+err.Error()))
 		return
 	}
 	t, _ := s.Ten.GetByID(req.ID)
@@ -283,23 +283,23 @@ func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = u
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"` // 目标租户 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 安全约束：不允许删除默认租户（平台根基）
 	if req.ID == 1 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "默认租户不可删除"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "默认租户不可删除"))
 		return
 	}
 	if err := s.Ten.Delete(req.ID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "删除失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "删除失败: "+err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -503,11 +503,11 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 		Enabled  bool  `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "存储未初始化"))
 		return
 	}
 	// 授权表整体存于 system_config 一个 JSON map（租户id→true），撤销即删键、末段整体写回
@@ -527,11 +527,11 @@ func (s *Server) handleAdminBrandGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := json.Marshal(m)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "序列化失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "序列化失败"))
 		return
 	}
 	if err := s.Store.SetConfig(brandGrantsKey, string(b)); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "保存失败: "+err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -753,26 +753,26 @@ func (s *Server) handleFooterLinksSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "存储未初始化"))
 		return
 	}
 	var req struct {
 		Links string `json:"links"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// links 非空时先校验为合法 JSON 数组再落库（空串=清空恢复默认）
 	if req.Links != "" {
 		var arr []interface{}
 		if err := json.Unmarshal([]byte(req.Links), &arr); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "links 需为合法 JSON 数组"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "links 需为合法 JSON 数组"))
 			return
 		}
 	}
 	if err := s.Store.SetConfig("footer_links", req.Links); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "保存失败: "+err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
@@ -807,7 +807,7 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
 		return
 	}
 	// 品牌全字段入参：名称（中/英/多语）+ Logo/域名/首页背景 + 登录卡片位置与布局 + 页脚链接
@@ -825,11 +825,11 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		BrandLinks        string `json:"brand_links"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if msg := validateBrandPayloads(req.BrandLogo, req.BrandHomeBg); msg != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
 		return
 	}
 	tid := req.ID
@@ -842,12 +842,12 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		}
 	}
 	if !auth.IsSuperAdmin(u) && tid != u.TenantID {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "只能设置本租户品牌"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "只能设置本租户品牌"))
 		return
 	}
 	// ★ 品牌定制鉴权：付费套餐且在有效期内才能编辑（超管拥有覆盖权）
 	if !auth.IsSuperAdmin(u) && !tenantBrandingUnlocked(s, tid) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "品牌定制为付费套餐功能，请先订阅有效套餐后解锁"))
 		return
 	}
 	// ★ F-76（2026-09-27 〇-X）：品牌域前缀在入库前归一并校验。
@@ -881,7 +881,7 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		m["brand_login_layout"] = req.BrandLoginLayout
 		m["brand_links"] = req.BrandLinks
 		if err := s.setPlatformBranding(m); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "保存失败: "+err.Error()))
 			return
 		}
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
@@ -890,19 +890,19 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	// 租户分支四段独立保存：基础字段/首页背景/登录卡片位置/登录布局，任一失败即中止返回
 	// （★ F-46：两张图传的是上面收敛好的 URL，dataURI 已在写侧被拒绝或已落成静态件）
 	if err := s.Ten.SetBranding(tid, req.BrandName, brandLogoURL, req.Domain, req.BrandLinks); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "保存失败: "+err.Error()))
 		return
 	}
 	if err := s.Ten.SetBrandHomeBg(tid, brandHomeBgURL, req.BrandHomeBgStyle); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "首页背景保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "首页背景保存失败: "+err.Error()))
 		return
 	}
 	if err := s.Ten.SetBrandLoginCardPos(tid, req.BrandLoginCardPos); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "登录卡片位置保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "登录卡片位置保存失败: "+err.Error()))
 		return
 	}
 	if err := s.Ten.SetBrandLoginLayout(tid, req.BrandLoginLayout); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "登录页布局保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "登录页布局保存失败: "+err.Error()))
 		return
 	}
 	// ★ 品牌固定用法补种（2026-09-04）：后台品牌定制保存时同步 brand_names/brand_name_en
@@ -925,17 +925,17 @@ func (s *Server) handleTenantExport(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 目标租户 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
 	// 导出该租户全部业务数据
 	data, err := s.Store.ExportTenantData(req.ID)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 格式化 JSON 并作为附件下载
@@ -960,21 +960,21 @@ func (s *Server) handleTenantErase(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 目标租户 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 安全约束：默认租户不可清除
 	if req.ID == 1 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "默认租户不可清除"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "默认租户不可清除"))
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
 	// 清除租户全部业务数据（GDPR 删除权；★ C5：含磁盘产物清理的完整版入口）
 	if err := s.Store.EraseTenantDataFull(req.ID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 清除操作审计

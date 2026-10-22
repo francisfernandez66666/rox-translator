@@ -154,6 +154,33 @@ func verifyEmailCode(email, code string) bool {
 
 // verifyEmailCodeFor 按用途校验并一次性消费验证码；用途不同互不覆盖。
 func verifyEmailCodeFor(email, code, purpose string) bool {
+	return verifyEmailCodeImpl(email, code, purpose, true)
+}
+
+// verifyEmailCodeKeep 验证但**不作废**——供「先改密成功、后作废码」的链路使用（方案 P0-14）。
+// ⚠️ 调用方必须在业务动作成功后调 consumeEmailCode，否则该码在 TTL 内可被重复使用。
+// 用它的是 handleChangePassword：旧形态「验证即删」会把写库失败（err / 0 行）时的码一起烧掉，
+// 用户明明没改成功却要重新发一次码——这正是 P0-14 要禁的那件事。
+func verifyEmailCodeKeep(email, code, purpose string) bool {
+	return verifyEmailCodeImpl(email, code, purpose, false)
+}
+
+// consumeEmailCode 作废指定用途的验证码（本地 + Redis 双删，与 verify 成功分支同一口径）。
+func consumeEmailCode(email, purpose string) {
+	if purpose == "" {
+		purpose = emailPurposeRegister
+	}
+	key := emailCodeKey(email, purpose)
+	emailCodes.mu.Lock()
+	delete(emailCodes.codes, key)
+	emailCodes.mu.Unlock()
+	vcodeDel(vcodeEmailKey(key))
+}
+
+// verifyEmailCodeImpl 是三个对外入口共用的实现：
+//   - verifyEmailCode / verifyEmailCodeFor：consume=true，验证通过即作废（注册/登录语义，一次性）；
+//   - verifyEmailCodeKeep：consume=false，留给调用方在业务成功后自行 consumeEmailCode（改密语义，P0-14）。
+func verifyEmailCodeImpl(email, code, purpose string, consume bool) bool {
 	if purpose == "" {
 		purpose = emailPurposeRegister
 	}
@@ -190,11 +217,13 @@ func verifyEmailCodeFor(email, code, purpose string) bool {
 		}
 		return false
 	}
-	// 验证通过即消费：本地 + Redis 双删
-	emailCodes.mu.Lock()
-	delete(emailCodes.codes, key)
-	emailCodes.mu.Unlock()
-	vcodeDel(ekey)
+	// 验证通过即消费：本地 + Redis 双删（consume=false 时留给调用方在业务成功后自己删）
+	if consume {
+		emailCodes.mu.Lock()
+		delete(emailCodes.codes, key)
+		emailCodes.mu.Unlock()
+		vcodeDel(ekey)
+	}
 	return true
 }
 
@@ -209,12 +238,12 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 		AppLang      string `json:"app_lang"`      // ★ F-17（批E）：发送界面语种（可空；回落 X-App-Lang 头）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	email := strings.TrimSpace(req.Email)
 	if !emailRe.MatchString(email) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
 		return
 	}
 	if !validEmailPurpose(req.Purpose) {
@@ -246,7 +275,7 @@ func (s *Server) handleEmailCode(w http.ResponseWriter, r *http.Request) {
 	// 不能因为域名规则把人锁在门外；自动建号分支在创建前会再走一次黑名单。
 	if req.Purpose != emailPurposeLogin {
 		if msg := s.disposableEmailRejected(email); msg != "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
 			return
 		}
 	}
@@ -325,24 +354,24 @@ func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeEmailCode(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
 		Email string `json:"email"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	email := strings.TrimSpace(req.Email)
 	if !emailRe.MatchString(email) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
 		return
 	}
 	// ★ S3 防薅：奖励双唯一之外，一次性邮箱直接拒绑
 	if msg := s.disposableEmailRejected(email); msg != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
 		return
 	}
 	if other, err := s.Store.GetUserByEmail(email); err == nil && other != nil && other.ID != u.ID {

@@ -41,13 +41,13 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 	}
 	// 检查知识库是否已加载
 	if s.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "翻译技能未加载（未传入 -kb）"))
 		return
 	}
 	// 保存上传的对照表文件
 	savePath, err := s.saveUploadedFile(r)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件上传失败"))
 		return
 	}
 	defer os.Remove(savePath) // 用完即删（对照表不落库留痕）
@@ -55,7 +55,7 @@ func (s *Server) handleImportBitext(w http.ResponseWriter, r *http.Request) {
 	// 解析对照表文件（复用 KB 解析逻辑）
 	records, allCols, err := kb.ParseKBFile(savePath)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "解析失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "解析失败: "+err.Error()))
 		return
 	}
 	if len(records) == 0 {
@@ -146,7 +146,7 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "翻译技能未加载（未传入 -kb）"))
 		return
 	}
 	// 上传→解析链：临时文件用完即删；TMX 需含 ≥2 语言的有效 tu 才继续
@@ -154,13 +154,13 @@ func (s *Server) handleImportTMX(w http.ResponseWriter, r *http.Request) {
 	//   （旧实现一律吞成「文件上传失败」，用户无从知道是类型不对还是超了 20MB）
 	savePath, err := s.saveUploadedFileWith(r, tmxExtWhitelist)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	defer os.Remove(savePath)
 	tus, err := fileproc.ParseTMX(savePath)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "TMX 解析失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "TMX 解析失败: "+err.Error()))
 		return
 	}
 	if len(tus) == 0 {
@@ -302,14 +302,14 @@ func (s *Server) handleExportTMX(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "知识库未加载"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "知识库未加载"))
 		return
 	}
 	lang := strings.TrimSpace(r.URL.Query().Get("lang"))
 	mod := strings.TrimSpace(r.URL.Query().Get("module"))
 	rows, qErr := s.DB.ExportRows(s.kbTenant(r, u), lang)
 	if qErr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": qErr.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, qErr.Error()))
 		return
 	}
 	doc := buildTMX(rows, mod)

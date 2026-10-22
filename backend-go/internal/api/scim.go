@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -546,7 +547,7 @@ func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 		RootOrgID *int64 `json:"root_org_id"`
 	}
 	if json.NewDecoder(r.Body).Decode(&req) != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	cfg, _ := s.Store.GetSCIMConfigByTenant(tid)
@@ -564,7 +565,7 @@ func (s *Server) handleTenantSCIM(w http.ResponseWriter, r *http.Request) {
 		cfg.RootOrgID = *req.RootOrgID
 	}
 	if err := s.Store.UpsertSCIMConfig(cfg); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "scim_config", "scim", mapBoolStr(cfg.Enabled))

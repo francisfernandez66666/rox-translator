@@ -116,7 +116,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		SortOrder    int     `json:"sort_order"`    // 展示排序
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code/name 不能为空"))
 		return
 	}
 	// ptype 缺省补 paid，随后白名单校验（仅 free/paid/increment）
@@ -124,17 +124,17 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		req.PType = store.PackagePaid
 	}
 	if req.PType != store.PackageFree && req.PType != store.PackagePaid && req.PType != store.PackageIncrement {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ptype 仅支持 free/paid/increment"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "ptype 仅支持 free/paid/increment"))
 		return
 	}
 	// sentences/points 双口径：至少一项为正（★S1 起新包主推 points 积分面值）
 	if req.Sentences <= 0 && req.Points <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "sentences 与 points 至少一项大于 0（积分包填 points）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "sentences 与 points 至少一项大于 0（积分包填 points）"))
 		return
 	}
 	// ★ C14（2026-09-12）：负价拒绝（旧实现直落库，退款/统计口径被打穿）
 	if req.PriceMoney < 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "price_money 不能为负"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "price_money 不能为负"))
 		return
 	}
 	if req.DurationDays <= 0 {
@@ -187,7 +187,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 		SortOrder    *int     `json:"sort_order"`    // 排序（nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 读当前包全量字段做基底，逐字段增量覆盖（指针字段 nil=不修改），最后整行写回
@@ -206,7 +206,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	if req.PType != "" {
 		if req.PType != store.PackageFree && req.PType != store.PackagePaid && req.PType != store.PackageIncrement {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ptype 仅支持 free/paid/increment"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "ptype 仅支持 free/paid/increment"))
 			return
 		}
 		cur.PType = req.PType
@@ -216,7 +216,7 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	if req.Points != nil {
 		if *req.Points < 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "points 不能为负"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "points 不能为负"))
 			return
 		}
 		cur.Points = *req.Points
@@ -225,14 +225,14 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	//   （旧实现 -1/缺省混淆：0 元价改不了、限期改不回不限、负价直接落库）。
 	if req.PriceMoney != nil {
 		if *req.PriceMoney < 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "price_money 不能为负"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "price_money 不能为负"))
 			return
 		}
 		cur.PriceMoney = *req.PriceMoney
 	}
 	if req.DurationDays != nil {
 		if *req.DurationDays < 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "duration_days 不能为负"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "duration_days 不能为负"))
 			return
 		}
 		cur.DurationDays = *req.DurationDays
@@ -404,7 +404,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		DingtalkWebhookURL     *string `json:"dingtalk_webhook_url"`     // 钉钉群机器人地址
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ C28（2026-09-12）重构：旧实现「边校验边写入、审计在校验前落笔」——
@@ -414,7 +414,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	add := func(k, v string) { pending = append(pending, struct{ key, val string }{k, v}) }
 	if req.BillingEnforced != nil {
 		if *req.BillingEnforced != "0" && *req.BillingEnforced != "1" { // 值域白名单（C28）
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `billing_enforced 仅支持 "0"/"1"`})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, `billing_enforced 仅支持 "0"/"1"`))
 			return
 		}
 		add("billing_enforced", *req.BillingEnforced)
@@ -428,7 +428,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	if req.PayMode != nil {
 		if *req.PayMode != "mock" && *req.PayMode != "sdk" && *req.PayMode != "static_qr" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pay_mode 仅支持 mock/sdk/static_qr"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "pay_mode 仅支持 mock/sdk/static_qr"))
 			return
 		}
 		add("pay_mode", *req.PayMode)
@@ -444,7 +444,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	// ★ USDT 收款（2026-09-15）：开关键 + 收款要素（地址/汇率按链校验后才可开启总闸）
 	if req.USDTEnabled != nil {
 		if *req.USDTEnabled != "0" && *req.USDTEnabled != "1" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_enabled 仅支持 "0"/"1"`})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, `usdt_enabled 仅支持 "0"/"1"`))
 			return
 		}
 		if *req.USDTEnabled == "1" {
@@ -454,7 +454,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 				rateOK = *req.USDFtRateFen > 0
 			}
 			if !rateOK {
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 开启失败：请先配置汇率（usdt_rate_fen_per_usdt，人民币分/USDT）"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 开启失败：请先配置汇率（usdt_rate_fen_per_usdt，人民币分/USDT）"))
 				return
 			}
 			addrOf := func(chain string, reqVal *string) string {
@@ -480,7 +480,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 				}
 			}
 			if !found {
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "USDT 开启失败：请先配置至少一条链的合法收款地址"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "USDT 开启失败：请先配置至少一条链的合法收款地址"))
 				return
 			}
 		}
@@ -488,14 +488,14 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	}
 	if req.USDTAutoSettle != nil {
 		if *req.USDTAutoSettle != "0" && *req.USDTAutoSettle != "1" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_auto_settle 仅支持 "0"/"1"`})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, `usdt_auto_settle 仅支持 "0"/"1"`))
 			return
 		}
 		add("usdt_auto_settle", *req.USDTAutoSettle)
 	}
 	if req.USDTCtailEnabled != nil {
 		if *req.USDTCtailEnabled != "0" && *req.USDTCtailEnabled != "1" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `usdt_tail_enabled 仅支持 "0"/"1"`})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, `usdt_tail_enabled 仅支持 "0"/"1"`))
 			return
 		}
 		add("usdt_tail_enabled", *req.USDTCtailEnabled)
@@ -505,13 +505,13 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 		for _, c := range strings.Split(*req.USDTChains, ",") {
 			c = payment.NormalizeChain(c)
 			if c == "" {
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_chains 含未知链（可用：trc20/erc20/bep20）"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "usdt_chains 含未知链（可用：trc20/erc20/bep20）"))
 				return
 			}
 			chains = append(chains, c)
 		}
 		if len(chains) == 0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_chains 不能为空"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "usdt_chains 不能为空"))
 			return
 		}
 		add("usdt_chains", strings.Join(chains, ","))
@@ -519,7 +519,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	if req.USDTAddrTRC20 != nil {
 		v := strings.TrimSpace(*req.USDTAddrTRC20)
 		if v != "" && !payment.ValidUSDTAddress("trc20", v) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "TRC20 收款地址格式非法（T 开头 34 位 base58）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "TRC20 收款地址格式非法（T 开头 34 位 base58）"))
 			return
 		}
 		add("usdt_addr_trc20", v)
@@ -527,7 +527,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	if req.USDTAddrERC20 != nil {
 		v := strings.TrimSpace(*req.USDTAddrERC20)
 		if v != "" && !payment.ValidUSDTAddress("erc20", v) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ERC20 收款地址格式非法（0x+40 位十六进制）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "ERC20 收款地址格式非法（0x+40 位十六进制）"))
 			return
 		}
 		add("usdt_addr_erc20", v)
@@ -535,14 +535,14 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	if req.USDTAddrBEP20 != nil {
 		v := strings.TrimSpace(*req.USDTAddrBEP20)
 		if v != "" && !payment.ValidUSDTAddress("bep20", v) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "BEP20 收款地址格式非法（0x+40 位十六进制）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "BEP20 收款地址格式非法（0x+40 位十六进制）"))
 			return
 		}
 		add("usdt_addr_bep20", v)
 	}
 	if req.USDFtRateFen != nil {
 		if *req.USDFtRateFen <= 0 || *req.USDFtRateFen > 100_000_000 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_rate_fen_per_usdt 非法（分/USDT，如 ¥7.2 → 720）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "usdt_rate_fen_per_usdt 非法（分/USDT，如 ¥7.2 → 720）"))
 			return
 		}
 		add("usdt_rate_fen_per_usdt", strconv.FormatInt(*req.USDFtRateFen, 10))
@@ -552,7 +552,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 			continue
 		}
 		if *ptr <= 0 || *ptr > 2000 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "usdt_confirmations 非法（1–2000）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "usdt_confirmations 非法（1–2000）"))
 			return
 		}
 		add("usdt_confirmations_"+chain, strconv.FormatInt(*ptr, 10))
@@ -589,7 +589,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	// 四个参数各自范围校验后以字符串值进 pending 暂存区，循环外统一落库（见下）
 	if req.MarkupMultiplier != nil {
 		if *req.MarkupMultiplier < 1.0 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "均摊系数不能小于 1.0"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "均摊系数不能小于 1.0"))
 			return
 		}
 		add("billing_markup_multiplier", strconv.FormatFloat(*req.MarkupMultiplier, 'f', 2, 64))
@@ -597,7 +597,7 @@ func (s *Server) handleAdminPackageSettingsSave(w http.ResponseWriter, r *http.R
 	// 敏感词闸门开关：仅接受 "0"/"1" 字符串（前端开关态直传）
 	if req.SensitiveGate != nil {
 		if *req.SensitiveGate != "0" && *req.SensitiveGate != "1" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": `sensitive_gate_enabled 仅支持 "0"/"1"`})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, `sensitive_gate_enabled 仅支持 "0"/"1"`))
 			return
 		}
 		add("sensitive_gate_enabled", *req.SensitiveGate)
@@ -655,31 +655,31 @@ func (s *Server) handleAdminQRUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	// 大小/扩展名校验（复用 parseUpload，仅允许图片白名单）
 	if err := parseUpload(r, qrImageUploadMax, qrImageWhitelist); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少文件"))
 		return
 	}
 	defer file.Close()
 	// 保存到上传目录 _qr 子目录（独立命名空间，避免与翻译上传文件混放）
 	dir := filepath.Join(s.Cfg.UploadDir, "_qr")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "无法创建上传目录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "无法创建上传目录"))
 		return
 	}
 	savePath := filepath.Join(dir, uniqueName(header.Filename))
 	f, err := os.Create(savePath)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "无法保存文件"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "无法保存文件"))
 		return
 	}
 	defer f.Close()
 	if _, err := io.Copy(f, file); err != nil {
 		os.Remove(savePath)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "写入失败"))
 		return
 	}
 	qrURL := "/api/qr-image/" + filepath.Base(savePath)
@@ -693,14 +693,14 @@ func (s *Server) handleAdminQRUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQRImage(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/qr-image/")
 	if name == "" || strings.ContainsAny(name, "/\\") {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "图片不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "图片不存在"))
 		return
 	}
 	dir := filepath.Join(s.Cfg.UploadDir, "_qr")
 	full := filepath.Join(dir, filepath.Base(name))
 	info, err := os.Stat(full)
 	if err != nil || info.IsDir() {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "图片不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "图片不存在"))
 		return
 	}
 	w.Header().Set("Cache-Control", "public, max-age=86400")
@@ -715,17 +715,17 @@ func (s *Server) handleQRImage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleQRRender(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	text := strings.TrimSpace(r.URL.Query().Get("text"))
 	if text == "" || len(text) > 512 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "text 参数必填且不超过 512 字符"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "text 参数必填且不超过 512 字符"))
 		return
 	}
 	png, err := qrcode.Encode(text, qrcode.Medium, 256)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "二维码生成失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "二维码生成失败: "+err.Error()))
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
@@ -747,7 +747,7 @@ func (s *Server) handleAdminPackageDelete(w http.ResponseWriter, r *http.Request
 		ID int64 `json:"id"` // 待删除包 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.DeletePackage(req.ID); err != nil {

@@ -56,8 +56,24 @@ func (s *Server) handleEmailCodeLogin(w http.ResponseWriter, r *http.Request, re
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
 		return
 	}
+	// ★ 2026-10-22 一致性核查补漏：**账号级失败锁定**（与密码腿同一把尺子，见 auth.go 的 loginAccountKey）。
+	//
+	// 此前 OTP 腿只有"单码 5 次错误作废"这一道，而 IP 档只读不记（handleLogin 顶部查了冷却，
+	// 但这条腿从不 recordLoginFail）——等于密码腿有两本账、验证码腿一本都没有。
+	// 方案 §三·6 明写「按账号的失败锁定与按 IP 并行，定向爆破不再只靠 IP 档」，
+	// 那是**两条腿共同**的承诺，不能因为"6 位码 + 5 次/码 算下来爆不动"就豁免：
+	// 口径不一致本身就是缺陷温床——下一个人会以为两腿等价。
+	acctKey := loginAccountKey(email)
+	if wait := s.loginAcctCooldownSec(acctKey); wait > 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, "登录尝试过于频繁，请稍后再试").WithRetryAfter(wait))
+		return
+	}
 	if !verifyEmailCodeFor(email, code, emailPurposeLogin) {
 		// 验证码错与不存在同一条文案：登录面不提供"这个邮箱有没有注册"的回执。
+		// ★ 两本账都要记：只记账号会让「分布式换 IP 打一片账号」绕过 IP 档，
+		//   只记 IP 会让「同一台机器换账号」绕过账号档——与密码腿同一条理由（auth.go 注释）。
+		s.recordLoginFail(r)
+		s.recordLoginAcctFail(acctKey)
 		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "验证码错误或已过期"))
 		return
 	}
@@ -97,11 +113,17 @@ func (s *Server) handleEmailCodeLogin(w http.ResponseWriter, r *http.Request, re
 			}
 		}
 	}
+	// ★ 2026-10-22：登录成功，两本账清零（与密码腿 clearLoginFails / clearLoginAcctFails 同口径）。
+	//   放在 finishLogin 之前：清零的对象是"这次尝试的失败账"，与后面签不签得出 token 无关。
+	s.clearLoginFails(r)
+	s.clearLoginAcctFails(acctKey)
 	s.finishLogin(w, r, u)
 }
 
 // finishLogin 签发会话并返回统一的登录响应（验证码/密码两条腿共用）。
-// 与旧 handleLogin 尾部保持同一契约，额外带上 profile_setup_required 供前端弹首登资料提醒。
+// ★ 2026-10-22 一致性核查：这里此前自己拼了一份 user map 且**漏掉 brand_host/sso_code**，
+// 于是在专属品牌域用验证码登录的用户拿不到跳转目标、停在主站。
+// 现在与密码腿共用 writeLoginResponse（auth.go），字段只在一处维护。
 func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, u *store.User) {
 	tok, err := auth.Sign(u, 24*time.Hour)
 	if err != nil {
@@ -116,17 +138,7 @@ func (s *Server) finishLogin(w http.ResponseWriter, r *http.Request, u *store.Us
 	}
 	s.grantTaskEventOnTenant(r, auditTID, u.ID, store.TaskKeyLoginDaily, "")
 	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录(邮箱)")
-	writeJSON(w, 200, map[string]interface{}{
-		"success": true,
-		"token":   tok,
-		"user": map[string]interface{}{
-			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
-			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-			"must_change_pwd": u.MustChangePwd,
-			// ★ 首登资料提醒：可跳过、不是 428 强制闸；与 must_change_pwd 严格分离。
-			"profile_setup_required": u.ProfileSetupRequired,
-		},
-	})
+	s.writeLoginResponse(w, r, u, tok)
 }
 
 // createPersonalByEmail 为未注册邮箱自动创建空白个人账号（个人租户 + tenant_admin）。

@@ -25,6 +25,9 @@ import {
 } from '@/api'
 import { t, useT } from '@/i18n'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
+// ★ 2026-10-22：密码可见切换的唯一实现挪到独立文件（原注释声称"四处共用"，
+//   而强制改密窗 import 不到它 ⇒ 那个必过的弹窗三个密码框全是盲输）。
+import PwdEye from '@/components/PwdEye'
 import { useBranding, BrandLoginShell, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
@@ -747,22 +750,8 @@ export default function Login({ mode, onLogin }: Props) {
   )
 }
 
-// ★ 2026-10-21 IAM 重做 P1-3：密码可见切换的唯一实现（登录/注册/找回/强制改密四处共用）。
-//   aria-label 走现成的 showPwd/hidePwd 两键——历史上一处写成了词典里不存在的键，
-//   屏幕阅读器会把键名字符串念出来；共用这一个组件就不再有"某处忘了改"的形态。
-function PwdEye({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
-  return (
-    <button
-      type="button"
-      className="lc-input-affix auth-pwd-eye"
-      aria-pressed={shown}
-      aria-label={shown ? t('auth.hidePwd') : t('auth.showPwd')}
-      onClick={onToggle}
-    >
-      {shown ? <EyeOffIcon /> : <EyeIcon />}
-    </button>
-  )
-}
+// ★ 2026-10-21 IAM 重做 P1-3：密码可见切换已抽到 `components/PwdEye.tsx`（登录/注册/找回/强制改密共用）。
+//   本文件原先在这里定义了一份，注释写"四处共用"而强制改密窗取不到——2026-10-22 核查后挪走。
 
 // 首登强制改密弹窗（保留原逻辑，langcross Dialog 实现）
 // 三个认证屏共用同一个实例（每屏末尾各挂一处），props 全部由上层受控：

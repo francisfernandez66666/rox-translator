@@ -149,12 +149,12 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 		ClearKeys []string `json:"clear_keys"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 保存全局配置
 	if s.Store == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
 	// 读取现有全局路由并解密（库内为 enc:v1: 密文或历史明文，回填需明文）
@@ -192,7 +192,7 @@ func (s *Server) handleModelsSave(w http.ResponseWriter, r *http.Request) {
 	// 而且表现是"保存失败但有些请求已经变了"，比整批没生效更难归因。
 	b, _ := json.Marshal(encryptRoutes(merged))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 清空作用域先处理：clear_keys 指定的密钥直接从库里删（先于写入，避免刚写又被清）
@@ -310,13 +310,13 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 		Routes []config.ProviderConfig `json:"routes"` // 模型路由全量配置（空数组=清空路由回退单供应商）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 校验：非空时必须每条含 api_base/model/api_key
 	for i, rt := range req.Routes {
 		if rt.APIBase == "" || rt.Model == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("第 %d 条路由缺少 api_base/model", i+1)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("第 %d 条路由缺少 api_base/model", i+1)))
 			return
 		}
 		if rt.Provider == "" {
@@ -340,7 +340,7 @@ func (s *Server) handleModelRoutesSave(w http.ResponseWriter, r *http.Request) {
 	// ★ 入库加密（评审整改 D3）；★ 〇-AR 第 5 波：先落库，落成才同步本进程（与 handleModelsSave 同口径）
 	b, _ := json.Marshal(encryptRoutes(req.Routes))
 	if err := s.Store.SetConfig("model_routes", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 把"当前生效"整份换成刚写库这一份：其余实例靠各自的 TTL 探测追上来，这一台立刻到位。
@@ -413,11 +413,11 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 		Stages config.StageModels `json:"stages"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "平台存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
 	// 读取旧配置并解密，掩码密钥保留原值
@@ -492,7 +492,7 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.Marshal(stored)
 	if err := s.Store.SetConfig("stage_models", string(b)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "stage_models_save", "system", fmt.Sprintf("%d 阶段", len(stored)))
@@ -555,11 +555,11 @@ func (s *Server) handlePolicySave(w http.ResponseWriter, r *http.Request) {
 		DataFeedbackOptOut *bool              `json:"data_feedback_opt_out"` // ★ 数据回流关闭开关（D7；nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if s.Ten == nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "租户存储未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "租户存储未初始化"))
 		return
 	}
 	// 以当前策略为底做增量合并：仅覆盖显式传入且 >0 的数值字段，未传字段保持原值

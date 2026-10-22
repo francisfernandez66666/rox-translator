@@ -34,11 +34,17 @@ const PasswordTooShortMsg = "密码至少 6 位"
 // ValidatePassword 口令强度唯一判据：非空、去空白后仍非空、长度 ≥ PasswordMinLen。
 // ⚠️ 刻意**不**在这里 trim：口令里的空格是用户的一部分输入（见 NormalizeAccount 那条注释），
 //
-//	这里只判"长度够不够"，不改内容——改内容才是①那两条缺陷的来源。
+//	这里只判"够不够格"，不改内容——改内容才是①那两条缺陷的来源。
+//
+// ★ 2026-10-22 一致性核查补漏：此前只判 `p == ""`，于是 `"      "`（6 个空格）、
+//
+//	6 个全角空格、6 个制表符全部被判合格——而方案 §三·7 要求的是「≥6 **且非纯空白**」，
+//	本函数注释也一直写着"去空白后仍非空"。注释在替没写的代码作证，已按注释口径补齐实现。
+//	注意 trim 只用于**判定**，不改写 p 本身：`" pass word "` 仍然是它自己。
 //
 // 返回 false 时调用方必须回 400 并带 PasswordTooShortMsg，不许静默放行。
 func ValidatePassword(p string) bool {
-	if p == "" {
+	if strings.TrimSpace(p) == "" {
 		return false
 	}
 	// 长度按字节算与历史一致（bcrypt 自身截到 72 字节，这里不做二次加工）

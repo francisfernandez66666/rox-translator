@@ -207,7 +207,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 		CrossOrgs      []int64 `json:"cross_orgs"`       // 跨部门包：涵盖部门（使用/维护范围）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code/name 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code/name 不能为空"))
 		return
 	}
 	if req.PackType == "" {
@@ -218,7 +218,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	// 包类型权限校验：租户管理员仅可建企业/部门包；部门管理员仅可建部门包；超管可建全部类型
 	if !canManagePackType(u, req.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权创建该类型的知识库包"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权创建该类型的知识库包"))
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -226,7 +226,7 @@ func (s *Server) handleKBPackageCreate(w http.ResponseWriter, r *http.Request) {
 	// 部门管理员创建部门包：挂到本部门
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法创建部门包"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "部门管理员未绑定部门，无法创建部门包"))
 			return
 		}
 		p, err = s.Store.CreateKBPackageForOrg(tid, 0, req.Code, req.Name, req.PackType, req.Role, u.OrgID)
@@ -291,13 +291,13 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		CrossOrgs      []int64 `json:"cross_orgs"`       // 跨部门包：涵盖部门（nil=不修改）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.kbTenant(r, u)
 	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
@@ -305,11 +305,11 @@ func (s *Server) handleKBPackageUpdate(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("manage")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权更新该类型的知识库包"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权更新该类型的知识库包"))
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
@@ -377,17 +377,17 @@ func (s *Server) handleKBPackageDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待删除包 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 包类型权限校验（删除同样校验）
 	pkg, gErr := s.Store.GetKBPackage(req.ID, s.kbTenant(r, u))
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除该类型的知识库包"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权删除该类型的知识库包"))
 		return
 	}
 	// 维护权限：跨部门包须涵盖本部门（含子树/全公司仅超管租管）；部门包须归属本部门
@@ -423,7 +423,7 @@ func (s *Server) handleKBEntries(w http.ResponseWriter, r *http.Request) {
 	pkgID, _ := strconv.ParseInt(qp.Get("package_id"), 10, 64)
 	// ★ H3：普通成员需该包只读授权方可浏览条目
 	if auth.RoleLevel(u.Role) < 2 && !s.kbPackAllowed(r, u, "read", pkgID) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的只读授权"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的只读授权"))
 		return
 	}
 	// 解析过滤与分页参数；count=1 时只回包条目总数，否则按 layer/target_lang/q 分页列出
@@ -468,7 +468,7 @@ func (s *Server) handleBrandTerms(w http.ResponseWriter, r *http.Request) {
 	}
 	pkgID, _ := strconv.ParseInt(r.URL.Query().Get("package_id"), 10, 64)
 	if auth.RoleLevel(u.Role) < 2 && !s.kbPackAllowed(r, u, "read", pkgID) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的只读授权"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的只读授权"))
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -499,14 +499,14 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		Module     string `json:"module"`      // 所属模块
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "source_text 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "source_text 不能为空"))
 		return
 	}
 	tid := s.kbTenant(r, u)
 	// 包类型与维护权限校验（跨部门包须涵盖本部门；部门包须归属本部门）
 	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
@@ -514,11 +514,11 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("write")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权向该类型的知识库包写入"))
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
@@ -567,18 +567,18 @@ func (s *Server) handleKBEntryDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待删除条目 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ H3：普通成员需条目所属包的编辑授权（先定位包再放行）
 	if auth.RoleLevel(u.Role) < 2 {
 		rows, e := s.Store.GetEntryForUpdate(s.kbTenant(r, u), req.ID)
 		if e != nil || len(rows) == 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "条目不存在或无权操作"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "条目不存在或无权操作"))
 			return
 		}
 		if perr := s.requireKBPackPerm(r, u, "write", rows[0].PackageID); perr != nil {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": perr.Error()})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, perr.Error()))
 			return
 		}
 	}
@@ -619,11 +619,11 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		Module     string `json:"module"`      // 所属模块
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.SourceText == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "source_text 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "source_text 不能为空"))
 		return
 	}
 	if req.TargetLang == "" {
@@ -635,12 +635,12 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 	if rows, e := s.Store.GetEntryForUpdate(tid, req.ID); e == nil && len(rows) > 0 {
 		cur = rows[0]
 	} else {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "条目不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "条目不存在或无权操作"))
 		return
 	}
 	pkg, gErr := s.Store.GetKBPackage(cur.PackageID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
@@ -648,11 +648,11 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("write")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包写入"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权向该类型的知识库包写入"))
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
@@ -716,7 +716,7 @@ func (s *Server) handleSafetyPhraseAdd(w http.ResponseWriter, r *http.Request) {
 		Replacement string `json:"replacement"` // 替换词（仅 replace 类型）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Phrase == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "phrase 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "phrase 不能为空"))
 		return
 	}
 	if req.Lang == "" {
@@ -749,7 +749,7 @@ func (s *Server) handleSafetyPhraseDelete(w http.ResponseWriter, r *http.Request
 		ID int64 `json:"id"` // 待删除安全句 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ F-63（批 I-3）：安全句没有单条 getter，删除前扫一次本租户清单取原文（量级小：安全句按租户几十条）
@@ -788,13 +788,13 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 		Enabled int   `json:"enabled"` // 1=启用 0=停用
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.kbTenant(r, u)
 	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
@@ -802,11 +802,11 @@ func (s *Server) handleKBPackageStatus(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("manage")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作该类型的知识库包"))
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
@@ -844,13 +844,13 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 		Share int   `json:"share"` // 1=共享给跨部门检索 0=仅限归属链
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Share != 0 && req.Share != 1) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.kbTenant(r, u)
 	pkg, gErr := s.Store.GetKBPackage(req.ID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 manage 授权的普通成员跳过类型+部门范围校验
@@ -858,11 +858,11 @@ func (s *Server) handleKBPackageShare(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 manage 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("manage") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("manage")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作该类型的知识库包"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作该类型的知识库包"))
 			return
 		}
 		if err := s.deptKBScope(u, tid, pkg); err != nil {
@@ -901,7 +901,7 @@ func (s *Server) handleKBIndexRebuild(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = u
 	if s.Engine == nil || s.Engine.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "向量索引未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "向量索引未初始化"))
 		return
 	}
 	if s.Engine.Rebuilding() {
@@ -953,7 +953,7 @@ func (s *Server) handleSafetyPhraseBulkImport(w http.ResponseWriter, r *http.Req
 		Items     []*store.KBSafetyPhrase `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Items) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "items 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "items 不能为空"))
 		return
 	}
 	tid := s.kbTenant(r, u)
@@ -981,7 +981,7 @@ func (s *Server) handleSafetyPhraseStatus(w http.ResponseWriter, r *http.Request
 		Status string `json:"status"` // pending/approved/rejected
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.SetSafetyPhraseStatus(req.ID, s.kbTenant(r, u), req.Status); err != nil {
@@ -1055,7 +1055,7 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可创建行业"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可创建行业"))
 		return
 	}
 	var req struct {
@@ -1063,7 +1063,7 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Code) == "" || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 与 name 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code 与 name 不能为空"))
 		return
 	}
 	// code 规范化：小写字母/数字/下划线，防注入与展示异常
@@ -1076,13 +1076,13 @@ func (s *Server) handleIndustryCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !ok {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 仅允许小写字母/数字/下划线"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "行业 code 仅允许小写字母/数字/下划线"))
 		return
 	}
 	// code 查重通过后创建平台行业包（宿主固定为租户 0，全局共享）
 	exists, _ := s.Store.IndustryCodeExists(code)
 	if exists {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "行业 code 已存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "行业 code 已存在"))
 		return
 	}
 	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackIndustry, store.PackRoleSource)
@@ -1107,7 +1107,7 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可编辑行业"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可编辑行业"))
 		return
 	}
 	// 解析并校验 body：id>0、name 去空白后非空；通过后更新显示名并审计+失效缓存
@@ -1116,7 +1116,7 @@ func (s *Server) handleIndustryUpdate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.UpdateIndustry(req.ID, strings.TrimSpace(req.Name)); err != nil {
@@ -1141,7 +1141,7 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可启停行业"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可启停行业"))
 		return
 	}
 	// 解析并校验 body：id>0、enabled 仅允许 0/1；启停行业包并审计+失效缓存
@@ -1150,7 +1150,7 @@ func (s *Server) handleIndustryStatus(w http.ResponseWriter, r *http.Request) {
 		Enabled int   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.ToggleIndustry(req.ID, req.Enabled); err != nil {
@@ -1175,24 +1175,24 @@ func (s *Server) handleIndustryDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可删除行业"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可删除行业"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	pkg, gErr := s.Store.GetKBPackage(req.ID, store.SharedHostTenant)
 	if gErr != nil || pkg == nil || pkg.PackType != store.PackIndustry {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "行业不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "行业不存在"))
 		return
 	}
 	// 引用校验：任何租户以该行业 code 注册/配置时禁止删除（注册回落与行业包载入会失效）
 	if used, uErr := s.Store.IndustryReferenced(pkg.Code); uErr == nil && used {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该行业已被企业租户使用，无法删除（可停用替代）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该行业已被企业租户使用，无法删除（可停用替代）"))
 		return
 	}
 	if err := s.Store.DeleteIndustry(req.ID); err != nil {

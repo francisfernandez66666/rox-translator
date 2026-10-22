@@ -101,7 +101,7 @@ func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) 
 			Clear bool   `json:"clear"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求体格式错误"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求体格式错误"))
 			return
 		}
 		tok := strings.TrimSpace(req.Token)
@@ -155,7 +155,7 @@ func (s *Server) handleAdminAssistToken(w http.ResponseWriter, r *http.Request) 
 			"source": st.Source, "set": st.Set, "masked": st.Masked,
 			"db_masked": st.DBMasked, "env_overridden": st.EnvOverridden})
 	default:
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "方法不支持"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "方法不支持"))
 	}
 }
 

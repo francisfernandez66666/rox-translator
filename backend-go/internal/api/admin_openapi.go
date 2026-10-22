@@ -243,16 +243,16 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 		MD   string `json:"md"`   // Markdown 源码（空串=恢复该语言内置默认）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, errors.New(errors.ErrValidation, "请求格式错误"))
 		return
 	}
 	lang := strings.ToLower(strings.TrimSpace(req.Lang))
 	if lang != "zh" && lang != "en" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "lang 必须为 zh 或 en"})
+		s.writeError(w, r, errors.New(errors.ErrValidation, "lang 必须为 zh 或 en"))
 		return
 	}
 	if len(req.MD) > openAPIDocsMaxBytes {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文档内容超过 256KB 上限"})
+		s.writeError(w, r, errors.New(errors.ErrValidation, "文档内容超过 256KB 上限"))
 		return
 	}
 	// lang→配置键映射后整体覆盖落库；MD 空串=恢复内置默认，审计记录字节数与动作语义
@@ -261,7 +261,7 @@ func (s *Server) handleAdminOpenAPIDocsSave(w http.ResponseWriter, r *http.Reque
 		key = openAPIDocsConfigKeyEn
 	}
 	if err := s.Store.SetConfig(key, req.MD); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, errors.New(errors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	note := "自定义文档已发布"
@@ -285,11 +285,11 @@ func (s *Server) handleAdminOpenAPIDocsPreview(w http.ResponseWriter, r *http.Re
 		MD   string `json:"md"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, errors.New(errors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if len(req.MD) > openAPIDocsMaxBytes {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文档内容超过 256KB 上限"})
+		s.writeError(w, r, errors.New(errors.ErrValidation, "文档内容超过 256KB 上限"))
 		return
 	}
 	lang := strings.ToLower(strings.TrimSpace(req.Lang))

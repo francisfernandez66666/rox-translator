@@ -23,6 +23,10 @@ import { changePassword } from '@/api/auth'
 import { setAuthToken, FORCE_PASSWORD_EVENT } from '@/api/core'
 import { PWD_MIN_LEN } from '@/lib/accountForm'
 import { t } from '@/i18n'
+// ★ 2026-10-22 一致性核查：本窗是批量导入账号的**必经之路**（初始口令还是随机串），
+//   此前三个密码框全盲输——而 P1-4「密码可见性眼睛四屏都有」的实现在 Login.tsx 里，
+//   本组件取不到。现从共享组件取。
+import PwdEye from '@/components/PwdEye'
 
 /** ForcePasswordGate 首登强制改密弹窗：收到 428 事件后打开，成功后清令牌并提示重新登录。 */
 export default function ForcePasswordGate() {
@@ -33,6 +37,8 @@ export default function ForcePasswordGate() {
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
   const [msg, setMsg] = useState('')
+  // 三个框共用一个显隐态：用户点任一枚眼睛，整窗口径一致（不必逐框切换）
+  const [showPwd, setShowPwd] = useState(false)
 
   useEffect(() => {
     const onForce = () => {
@@ -85,13 +91,16 @@ export default function ForcePasswordGate() {
       <p style={{ fontSize: 15, color: 'var(--lc-text-3)', lineHeight: 1.7, margin: '0 0 14px' }}>{t('pwd.forceHint')}</p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         <Field label={t('pwd.oldPassword')}>
-          <Input type="password" value={old} onChange={(e) => setOld(e.target.value)} />
+          <Input type={showPwd ? 'text' : 'password'} value={old} onChange={(e) => setOld(e.target.value)}
+            trailing={<PwdEye shown={showPwd} onToggle={() => setShowPwd((v) => !v)} />} />
         </Field>
         <Field label={t('auth.newPassword')}>
-          <Input type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
+          <Input type={showPwd ? 'text' : 'password'} autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)}
+            trailing={<PwdEye shown={showPwd} onToggle={() => setShowPwd((v) => !v)} />} />
         </Field>
         <Field label={t('pwd.confirmPlaceholder')}>
-          <Input type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          <Input type={showPwd ? 'text' : 'password'} autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+            trailing={<PwdEye shown={showPwd} onToggle={() => setShowPwd((v) => !v)} />} />
         </Field>
         {!!msg && <div className="auth-err" style={{ color: 'var(--lc-danger)', fontSize: 15, lineHeight: 1.6 }}>{msg}</div>}
       </div>

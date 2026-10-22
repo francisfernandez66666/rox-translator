@@ -790,6 +790,57 @@ func TestUsdtScanSkipsDepositWithoutBlockHeight(t *testing.T) {
 	}
 }
 
+// TestUsdtScanHoldsDepositBelowConfirmationThreshold ★ 确认数闸的行为腿：块高在位但确认数不够 ⇒ 停在池里等下一轮。
+//
+//	为什么单开这条：`c < confMin → continue` 这道闸在两层矩阵里都射程不到——
+//	UAT 把 `usdt_confirmations_trc20` 置 1（run_uat.sh 的 dbcfg，mock 链不自行推进，
+//	19 块默认值下自动入账在 UAT 里根本不可测），于是"确认数不够"在 UAT 里永远不发生；
+//	Go 侧此前只有"块高缺失"腿（TestUsdtScanSkipsDepositWithoutBlockHeight），没有
+//	"块高在位、确认数不足"腿。两道闸各治一半：缺块高是**读数未知**，本条是**读数已知但不够深**。
+//	反证：把 `c < confMin` 改成 `c < 1`（或删掉 continue）⇒ 腿①红——未确认、可回滚的
+//	转账会被立刻置 paid，且全程零告警（旧形态正是这个死法）。
+func TestUsdtScanHoldsDepositBelowConfirmationThreshold(t *testing.T) {
+	s := newUsdtWatchServer(t)
+	cfg := s.Store.GetUSDTCfg()
+	confMin := cfg.Confirm["trc20"] // 新鲜库未配 ⇒ 代码默认 19；不写死，默认值变了的腿自动跟随
+	if confMin < 2 {
+		t.Fatalf("本用例依赖 confMin≥2 才有「不够深」一档，实得 %d", confMin)
+	}
+	o, m := newPendingUSDTOrder(t, s)
+
+	// 腿①：链头只比入账块高 confMin-2 块 ⇒ c = confMin-1 < confMin，必须停在池里
+	depBlock := int64(1000)
+	head1 := depBlock + confMin - 2
+	body := fmt.Sprintf(`{"transfers":[{"tx_id":"0xshallow","block_number":%d,"from":"0xVisitor","value":"%d"}]}`, depBlock, m.AmountMicro)
+	t.Setenv("USDT_TRON_BASE", usdtMockTron(t, head1, body))
+	if err := s.usdtScanChain("trc20", cfg); err != nil {
+		t.Fatalf("确认数不足不是扫描失败，应正常返回: %v", err)
+	}
+	if st := usdtOrderStatus(t, s, o); st != "pending" {
+		t.Fatalf("确认数不足（c=%d < confMin=%d）绝不许置 paid，实得 %q", head1-depBlock+1, confMin, st)
+	}
+	var stillThere bool
+	for _, d := range s.Store.ListUnmatchedDepositsForChain("trc20", 200) {
+		if d.TxHash == "0xshallow" {
+			stillThere = true
+		}
+	}
+	if !stillThere {
+		t.Fatal("确认数不足的入账应留在未匹配池等下轮，不该消失")
+	}
+
+	// 腿②（自愈对照）：链头再长高，同一笔入账下一轮重新评估 ⇒ 必须入账
+	//   （"上轮未达确认数、本轮已达的自愈路径"正是 usdtScanChain 注释承诺的行为）
+	head2 := depBlock + confMin + 5
+	t.Setenv("USDT_TRON_BASE", usdtMockTron(t, head2, body))
+	if err := s.usdtScanChain("trc20", cfg); err != nil {
+		t.Fatalf("自愈轮扫描失败: %v", err)
+	}
+	if st := usdtOrderStatus(t, s, o); st != "paid" {
+		t.Fatalf("确认数够了（c=%d ≥ confMin=%d）必须自愈入账，实得 %q", head2-depBlock+1, confMin, st)
+	}
+}
+
 // TestUsdtScanWindowIsPerChain ★ (54) 窗口腿：未匹配池的评估窗口必须**按链各开一个**。
 //
 //	旧形态是 `ListUnmatchedDeposits(200)`（全链共用一个 ORDER BY id ASC LIMIT 200）

@@ -32,6 +32,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/billing"
+	apierrors "translator/internal/errors"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
 	"translator/internal/observability"
@@ -44,12 +45,12 @@ import (
 // 「注入到期 → 触发 → 断言 permissions 实际摘除」的可验证入口，操作幂等。
 func (s *Server) handleWatchdogSubscriptionScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "仅支持 POST"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "仅支持 POST"))
 		return
 	}
 	u, err := s.requireTenantAdmin(r)
 	if err != nil || !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可触发订阅到期扫描"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可触发订阅到期扫描"))
 		return
 	}
 	s.runSubscriptionScan()

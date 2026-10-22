@@ -105,6 +105,19 @@ ck A1b-lead-nocompany '公司/团队名称' "$(curl -s $B/api/lead -H "$J" -d '{
 ck A1b-lead-honeypot-fake '"success":true' "$(curl -s $B/api/lead -H "$J" -d '{"company":"Bot公司","email":"bot@spam.xyz","site":"http://seo-spam"}')"
 ck A1b-lead-honeypot-nodb '^0$' "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE target_type='lead' AND content LIKE '%Bot公司%'")"
 # 同 IP 二次有效提交：5s 最小间隔限流（校验失败的请求不计数，故此处必是上一条触发）
+# ★ 2026-10-22 收口（C-1，两轮打磨）：这里原样依赖「与上一条成功提交相隔 <5s」，而它们中间夹着
+#   A1b-lead-db / honeypot-nodb 两条 psql 查询。冷启动时单条 dbq 实测 2.5s 以上，一旦叠加就跨过
+#   5s 窗口，于是第二次提交**不**触发限流、断言红——红的样子像"限流坏了"，真因是判据与慢查询耦合。
+#   第一版修法（seed 紧邻触发）只治了"触发"这一头：seed 自己也可能撞窗——本段唯一计数的提交是
+#   A1b-lead-ok（蜜罐/校验失败都在限流器之前返回、不计数），温 psql 下两条 dbq 只花 ~1s，
+#   seed 落在 :99 的 5s 窗口内 ⇒ seed 自己先被限流（实测红过这条）。
+#   定版修法：**绝对时长兜底 + 相邻触发**。sleep 5 保证 seed 与 :99 相隔必 ≥5s（秒级粒度，
+#   elapsed>=5 即放行），seed 成功即开新窗口；紧随的 trigger 与 seed 之间只隔一次 curl（~10ms），
+#   必在闸上。两头都不再看中间查询的快慢。
+sleep 5   # 过 A1b-lead-ok 打开的 5s 窗口，seed 才可能成功（判据不替环境的快慢背书）
+#   多出的 seed 落库由段首的 `DELETE ... LIKE '%UATLead%'` 兜住，且其公司名不含"UATLead公司"、
+#   不会污染 A1b-lead-db 的计数判据。
+ck A1b-lead-ratelimit-seed '"success":true' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead限流种子","email":"seed@uat-lead.com","source":"pricing"}')"
 ck A1b-lead-ratelimit '提交过于频繁' "$(curl -s $B/api/lead -H "$J" -d '{"company":"UATLead公司2","email":"x2@y.co"}')"
 
 # ---------- A1m ★ F-69（2026-09-26 批 I-8）12 语种《产品手册》PDF 公开下载面 ----------

@@ -78,53 +78,40 @@ import (
 // 因此本次**不做「按迁出数逐条加减」，而是拿 errStyleScan 的实测值整表重钉**——
 // 逐文件行与总数同源，sum==total 的自洽断言才有意义；旧表里已清零的 memleak.go / funnel.go /
 // admin_reconcile.go 三行按僵尸守卫一并删除。
-const errorStyleBaselineTotal = 485
+// ★ 2026-10-22（一致性核查批）：按 errStyleScan 实测整表重钉 485 → 474。
+// 差额来源：auth.go −6（其中 2 处是本批把管理台建号的 decode/空值分支改走 s.writeError，
+// 另 4 处是上一批已迁但漏记账）、register.go −4、admin_models.go −1。
+// ★ 2026-10-22（全量迁移批，用户令「全部做了」）：按 errStyleScan 实测整表重钉 **474 → 0**。
+//
+// 这一批把剩余 474 处内联 4xx/5xx 一次性迁到 s.writeError，实测只剩 1 处——
+// 即 errorStyleAllowlist 里的 health_probes.go（/readyz 的 503 出参是监控契约，不适用统一错误体）。
+// 因此本闸门从「棘轮：只减不增」**升级为「零容忍等值锁」**：非豁免文件必须恒为 0。
+//
+// 迁移口径（两条硬约束，缺一条就是状态码/文案漂移）：
+//
+//	① **状态码零变化**：只转「错误码 → HTTPStatus() 落回原状态码」的那一档。
+//	   422 与 504 故意**不转**——HTTPStatus() 里 422→ErrValidation 会落回 400、
+//	   504→ErrUpstreamUnavailable 会落回 502，机械替换会悄悄改掉对外状态码。
+//	   实测这两档在本包非豁免代码里为 0 处，故不影响"归零"这个结论。
+//	② **响应体只增不改**：{success:false,message:X} → {success:false,code,message:X,trace_id}，
+//	   原文案逐字保留、只多出 code 与 trace_id。前端 parseErrEnvelope 用 `b.message ?? b.error`
+//	   读文案，对两种形态都兼容（stream.go 那 18 处原本回 {"error":...}，也在本批一并收口，
+//	   顺带让 SSE 通道第一次拿到稳定 code —— 前端 ApiError.code 此前在这条腿恒为 undefined）。
+//
+// 反证口径：任意一处再写回内联 writeJSON(w, 4xx/5xx, ...)，TestErrorStyleRatchet 立即点名报红。
+const errorStyleBaselineTotal = 0
 
 // errorStylePerFileBaselines 分文件基线快照（同 logratchet 的「分根设基线」思路）：
 // 只看总数会让「A 文件迁走 20 处、B 文件新加 20 处」互相掩盖，逐文件钉才守得住增量。
 // 迁移某文件后把它的数字改成新实测值（或清零后删掉该行，僵尸项自检会提醒）。
-// ★ 本表 2026-09-27 整表按 errStyleScan 实测重钉（不是逐条手改，避免「改了总数忘了逐行」的自洽红）。
-var errorStylePerFileBaselines = map[string]int{
-	"admin_kb.go":       50,
-	"tenant.go":         47,
-	"auth.go":           45,
-	"tickets.go":        40,
-	"admin_packages.go": 37,
-	"register.go":       23,
-	"kb.go":             21,
-	"stream.go":         18,
-	"upload_chunk.go":   18,
-	"orgs.go":           16,
-	"persona_api.go":    15,
-	"feedback.go":       13,
-	"ops_api.go":        13,
-	"admin_models.go":   12,
-	"admin_scrape.go":   11,
-	"admin_apikeys.go":  9,
-	"bitext.go":         8,
-	"referral.go":       8,
-	"admin_webhooks.go": 7,
-	"email_verify.go":   7,
-	"admin_openapi.go":  6,
-	"lead.go":           6,
-	"tasks.go":          6,
-	"tmreview.go":       6,
-	"notifications.go":  5,
-	"user_import.go":    5,
-	"kb_grants.go":      4,
-	"mail_tpl.go":       4,
-	"spa.go":            4,
-	"admin_evals.go":    3,
-	"admin_flow.go":     3,
-	"admin_assist.go":   2,
-	"estimate.go":       2,
-	"metrics.go":        2,
-	"s9_alerts.go":      2,
-	"scim.go":           2, // ★ 09-27 整表重钉时本行被漏抄一次，闸门自洽断言当场点红（sum 483≠485）
-	"slo.go":            2,
-	"watchdog.go":       2,
-	"server.go":         1,
-}
+//
+// ★ 2026-10-22：全量迁移后本表**清空**——39 个条目全部清零，按僵尸守卫的规矩逐行删除。
+//
+//	清空不等于取消逐文件判据：TestErrorStyleRatchet 的逐文件分支是「counts[f] > base」，
+//	base 缺失按 0 处理，所以「任何文件只要出现 1 处内联错误响应」就会被点名——
+//	比原来"只盯 39 个已知文件"更严。将来若确有文件需要保留存量（如新增监控契约），
+//	必须在 errorStyleAllowlist 里登记**理由**，而不是往本表塞数字。
+var errorStylePerFileBaselines = map[string]int{}
 
 // errorStyleAllowlist 刻意保留内联错误响应的文件 → 豁免理由（对应 archguard 的 legacyAllow）。
 // 粒度只到文件、并要求写明理由：**豁免是为了承认「这里的响应体本身就是对外契约」，
@@ -133,6 +120,22 @@ var errorStyleAllowlist = map[string]string{
 	// #42 探针拆分：/readyz 的 503 出参是给编排器/监控解析的固定契约
 	// （{status,store,distributed,failed_dependencies}），换成 apierrors 会改坏运维口径。
 	"health_probes.go": "存活/就绪探针的 503 响应体即监控契约，不适用统一错误出口（见该文件头判定口径）",
+
+	// ★ 2026-10-22（全量迁移批）：下面三个文件是**同一族**——错误体用 `{"error": "..."}`
+	// 而不是 `{success,code,message,trace_id}`，且这是**既有的对外契约**，不是"还没迁"。
+	//
+	// 判据不是"我觉得它特殊"，而是有闸门守着：
+	//   · api_uat.sh 的 A3lang-error-field-en / -zh **逐字断言** `"error":"接口不存在"`
+	//     与 `"error":"API endpoint not found"`（spa 404 兜底写法），且 i18n 中间件会按语种改写它；
+	//   · 消费方也不同：SSE 客户端读流开始前那次 JSON 失败体、浏览器直取静态资源 404、
+	//     Prometheus 抓取器（只看状态码）。给这三类塞 code/trace_id 没有任何收益。
+	//
+	// 本批实测：这 24 处是唯一「形态不标准」的存量（其余 441 处 `{success:false,message:X}`
+	// 已全部收口，见 errorStyleBaselineTotal 的注释）。刻意保留而非回退到"没迁"的账上——
+	// 语义上它们属于"响应体本身即契约"，正是本 allowlist 的定义。
+	"stream.go":  "SSE/文件流端点的失败体是 {\"error\":...} 契约（流开始前返回，前端 SSE 客户端按 error 字段读）",
+	"spa.go":     "SPA/静态资源兜底 404 的 {\"error\":...} 是对外契约，UAT A3lang-error-field-* 逐字断言且 i18n 中间件按语种改写",
+	"metrics.go": "Prometheus 抓取面的 401 只被状态码消费，body 形态不参与任何判据",
 }
 
 // errStatusErrConsts 计入判据的 4xx/5xx http.Status* 常量名（堵住「数字换常量」这条绕闸路径）。
@@ -226,27 +229,20 @@ func TestErrorStyleScanActuallyCovers(t *testing.T) {
 			total += n
 		}
 	}
-	// 规模下限：本闸门最怕「扫了个空集还绿」，所以存量总数低于此值即判定扫描失效。
-	// ★ 2026-09-27 由 500 下调到 400：批 I-10 把「未登录一律 403」那一族 124 处迁到统一出口后，
-	//   实测存量已到 486（含豁免文件），原 500 这条线会在**迁移成功**的那一刻把闸门点红——
-	//   一把奖励假红、惩罚真降的尺子就是坏尺子。400 仍是「远低于现实、远高于空集」的位置，
-	//   再降 86 处就会红，届时按同一口径下调并写明理由。
-	if total < 400 {
-		t.Fatalf("本包内联错误响应实测仅 %d 处，明显低于实际规模（基线 %d）——扫描根或判据已失效，本闸门当前不可信",
-			total, errorStyleBaselineTotal)
-	}
-	if files < 30 {
-		t.Fatalf("命中的文件数仅 %d，疑似只扫到子集（本包存量分布在数十个文件上）", files)
-	}
-	// 抽样锚点：这些是仓库现实，扫不到即遍历/判据逻辑错了（下限取「远低于该文件实测」的位，
-	// 只用来证明扫描器还认得这些文件，不当迁移进度条用）
+	// ★ 2026-10-22 判据翻转（全量迁移批）：原来这里是「规模下限 total≥400 / files≥30」，
+	//   用来防「扫了个空集还绿」。但那一对下限是**迁移进行中**的进度哨兵——存量真降到 0 的
+	//   那一刻，它会奖励假红、惩罚真降（同一把坏尺子，注释里 2026-09-27 已经踩过一次：
+	//   500→400 就是这么降下来的）。本批把存量迁到 0，这两个下限必须撤掉。
+	//
+	//   撤掉之后，「扫描器没瞎」的证明责任改由下面两条承担，且它们**不依赖存量规模**：
+	//     · 豁免文件 health_probes.go 仍必须被扫到 ≥1 处（它是仓库现实，扫不到即遍历失效）；
+	//     · 反影子 cases 用内存构造的源码喂同一个判定函数，既证"该计数的计了"也证"不该计的不计"。
+	//   这比原来的总数下限更强：总数下限只证明"扫到了很多"，而它证明的是"判据本身还对"。
 	for _, anchor := range []struct {
 		file string
 		min  int
 	}{
-		{"admin_kb.go", 40},
-		{"auth.go", 30},
-		{"server.go", 1}, // 连 server.go 这种薄文件都有存量，进一步证明不是只扫了大头
+		{"health_probes.go", 1}, // 唯一豁免文件，/readyz 的 503 监控契约
 	} {
 		if counts[anchor.file] < anchor.min {
 			t.Errorf("抽样锚点 %s 实测 %d 处 < 预期下限 %d：扫描逻辑已失配", anchor.file, counts[anchor.file], anchor.min)

@@ -7,6 +7,13 @@ export default defineConfig({
   // testDir 只圈 ./e2e：需要人工环境（生产探针、手工 Token）的用例放 e2e-manual/，
   // 落在本目录之外才不会被默认矩阵捞起（见 AGENTS.md「e2e 断言红线」）。
   testDir: './e2e',
+  // ★ 2026-10-22：outputDir 可由环境变量覆盖，UAT 必须覆盖它（见 scripts/uat/run_uat.sh）。
+  //   病因：Playwright 启动时会清理 outputDir 里的上一次残留，而默认的 ./test-results
+  //   在多轮 UAT 后会累积到数千项（实测 5190 项 / 91MB），清理动作本身触发体积闸 ⇒
+  //   Playwright 根本起不来，报出来是 "exit=1" 的假失败（不是任何一条用例红）。
+  //   让 UAT 把结果指到 $WORK 下**每次唯一**的目录，就既不累积、也不需要清理；
+  //   不设时保持 ./test-results 原状，不影响开发者本地跑。
+  outputDir: process.env.PW_OUTPUT_DIR || 'test-results',
   // ★ #66（2026-09-22）建档时冷启动占位要演满 3 拍（约 9s），旧的 30s/10s 档在
   //   「种 token → goto → 断言工作台」这类用例上贴着边界翻红，故整档放宽。
   // ★ 2026-10-13 用户令：占位下限改为强制 1 拍（≈3s），这档余量**保留不收回**——

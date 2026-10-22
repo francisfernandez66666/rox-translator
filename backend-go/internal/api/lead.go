@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -44,12 +45,12 @@ type leadReq struct {
 // 校验顺序：方法 → 解析 → 蜜罐（假成功）→ 必填与格式 → 限流 → 人机验证 → 落库 → 超管通知。
 func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "仅支持 POST"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "仅支持 POST"))
 		return
 	}
 	var req leadReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 蜜罐命中：按成功返回但不落库不打扰超管（不给 bot 反馈信号）
@@ -62,11 +63,11 @@ func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 	langs := truncateRunes(strings.TrimSpace(req.Langs), leadMaxLangs)
 	message := truncateRunes(strings.TrimSpace(req.Message), leadMaxMessage)
 	if company == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写公司/团队名称"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写公司/团队名称"))
 		return
 	}
 	if !validLeadEmail(email) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写有效的联系邮箱"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写有效的联系邮箱"))
 		return
 	}
 	src := strings.TrimSpace(req.Source)
@@ -76,7 +77,7 @@ func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 	// IP 限流：日配额 + 最小间隔（registerGuard 持久化窗口，重启/多副本共享）
 	ip := clientIP(r)
 	if ok, wait := s.regGuard.allow("lead:"+ip, leadGuardDaily, leadGuardInterval); !ok {
-		writeJSON(w, 429, map[string]interface{}{"success": false, "message": fmt.Sprintf("提交过于频繁，请 %d 秒后再试", wait)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("提交过于频繁，请 %d 秒后再试", wait)))
 		return
 	}
 	// 人机验证（与注册同口径：仅在后台配置 turnstile 时强制）
@@ -90,7 +91,7 @@ func (s *Server) handleLeadCreate(w http.ResponseWriter, r *http.Request) {
 		company, email, orNone(langs), src, orNone(message)), leadContentRuneCap)
 	f := &store.Feedback{TenantID: 0, UserID: 0, TargetType: "lead", Content: content, TargetLangs: langs}
 	if err := s.Store.CreateFeedback(f); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "提交失败，请稍后再试"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "提交失败，请稍后再试"))
 		return
 	}
 	s.regGuard.record("lead:" + ip) // 成功才计数（与 forgot/reset 同款 allow/record 语义）

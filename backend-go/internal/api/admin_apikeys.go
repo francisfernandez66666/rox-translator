@@ -53,7 +53,7 @@ func (s *Server) handleAPIKeyCreate(w http.ResponseWriter, r *http.Request) {
 		DailyLimit int64  `json:"daily_call_limit"` // 每日调用上限（0=不限，R4 Key 级配额）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "name 不能为空"))
 		return
 	}
 	tidForKey := s.effTenant(r, u)
@@ -85,7 +85,7 @@ func (s *Server) handleAPIKeyStatus(w http.ResponseWriter, r *http.Request) {
 		Status string `json:"status"` // 目标状态：active（启用）/ disabled（停用）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -118,7 +118,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待轮换 API Key ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -130,7 +130,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.DeleteAPIKey(req.ID, tid); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// ★ 2026-10-16：新 Key 必须继承**被轮换那把 Key 的租户**（old.TenantID），不能用 tid——
@@ -139,7 +139,7 @@ func (s *Server) handleAPIKeyRotate(w http.ResponseWriter, r *http.Request) {
 	newTid := old.TenantID
 	plain, err := s.Store.CreateAPIKey(newTid, old.UserID, old.Name, old.Perms, old.DailyCallLimit) // 轮换继承旧限额与归属用户
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(newTid, u.ID, "apikey_rotate", "api_keys", old.Name)
@@ -158,7 +158,7 @@ func (s *Server) handleAPIKeyDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待删除 API Key ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -191,7 +191,7 @@ func (s *Server) handleAPIKeyLimit(w http.ResponseWriter, r *http.Request) {
 		Limit int64 `json:"daily_call_limit"` // 每日上限（0=不限）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || req.Limit < 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -247,12 +247,12 @@ func (s *Server) handleAPIKeyReveal(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // Key 主键 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	plain, err := s.Store.GetAPIKeyPlain(req.ID, s.effTenant(r, u))
 	if err != nil || plain == "" {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "Key 不存在或未存储可复制密文"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "Key 不存在或未存储可复制密文"))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "api_key": plain})

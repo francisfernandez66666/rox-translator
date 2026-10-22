@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	apierrors "translator/internal/errors"
 )
 
 // amAlert Alertmanager webhook v2 告警报文（group 内单条；status=firing/resolved）。
@@ -32,14 +33,14 @@ func (s *Server) handleAlertmanagerWebhook(w http.ResponseWriter, r *http.Reques
 		tok = r.URL.Query().Get("token")
 	}
 	if tok == "" || !constantTimeTokenEqual(tok, s.Cfg.AdminToken) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "管理凭证无效"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "管理凭证无效"))
 		return
 	}
 	var payload struct {
 		Alerts []amAlert `json:"alerts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	fired := 0

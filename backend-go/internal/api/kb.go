@@ -61,12 +61,12 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		Entries   []kbImportEntry `json:"entries"`    // 待导入条目数组
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 基础校验：包 ID 与条目数组不能为空
 	if req.PackageID <= 0 || len(req.Entries) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "package_id 与 entries 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "package_id 与 entries 不能为空"))
 		return
 	}
 	// 生效租户（租户隔离：只能写入自己的包）
@@ -77,7 +77,7 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 	//   污染后会影响全租户译文（横向越权）。
 	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	// ★ H3：持有该包 write 授权的普通成员跳过类型+部门范围校验
@@ -85,11 +85,11 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		if auth.RoleLevel(u.Role) < 2 {
 			// ★ H3 硬闸（UAT T30 捕获）：非部门管理员成员必须持该包 write 级授权，
 			//   旧版仅 skip 类型/范围校验、无正向准入检查，read 授权可越权写入
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：需要该知识库包的" + needLabel("write") + "授权"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：需要该知识库包的"+needLabel("write")+"授权"))
 			return
 		}
 		if !canManagePackType(u, pkg.PackType) {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权向该类型的知识库包导入"))
 			return
 		}
 		// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
@@ -437,7 +437,7 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	}
 	// 知识库未加载（未传入 -kb）时拒绝识别
 	if s.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "翻译技能未加载（未传入 -kb）"))
 		return
 	}
 	// 保存上传文件
@@ -445,19 +445,19 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	// ★ H5 断点续传：recognize-kb?merged=NAME 直读已合并分片产物，跳过整文件重传
 	if merged := r.URL.Query().Get("merged"); merged != "" {
 		if !mergedNameRe.MatchString(merged) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "merged 文件名非法"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "merged 文件名非法"))
 			return
 		}
 		savePath = filepath.Join(s.kbTempDir(), merged)
 		if _, statErr := os.Stat(savePath); statErr != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "合并文件不存在或已过期"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "合并文件不存在或已过期"))
 			return
 		}
 	} else {
 		var err error
 		savePath, err = s.saveUploadedFile(r)
 		if err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件上传失败"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件上传失败"))
 			return
 		}
 	}
@@ -466,7 +466,7 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	records, allCols, err := kb.ParseKBFile(savePath)
 	if err != nil {
 		os.Remove(savePath)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "识别失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "识别失败: "+err.Error()))
 		return
 	}
 	// 无有效数据：清理临时文件并提示
@@ -551,7 +551,7 @@ func (s *Server) handleRecognizeKB(w http.ResponseWriter, r *http.Request) {
 	metaPath := filepath.Join(s.kbTempDir(), "kb_"+meta.TempID+".json")
 	if err := os.WriteFile(metaPath, metaBytes, 0o644); err != nil {
 		os.Remove(savePath)
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "临时缓存写入失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "临时缓存写入失败"))
 		return
 	}
 
@@ -592,7 +592,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	}
 	// 知识库未加载时拒绝导入
 	if s.DB == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "翻译技能未加载（未传入 -kb）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "翻译技能未加载（未传入 -kb）"))
 		return
 	}
 	// 协议：前端提交 {temp_id, package_id}，从缓存读取之前保存的文件
@@ -602,29 +602,29 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 		Layer     int    `json:"layer"`      // 条目层（0 缺省 TM=2；整改 R-L4：支持术语1/安全句3/碎片4）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TempID == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 temp_id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少 temp_id"))
 		return
 	}
 	// ★ 格式白名单（2026-08-26 全仓评审 A3）：temp_id 由识别阶段 randHex(24) 生成
 	//  （24 位 hex）。不校验格式时，"../../x" 类载荷可把元信息文件路径指到任意位置
 	//  （读 oracle + 借 FilePath 字段间接打开/删除任意文件），必须在此卡死。
 	if !tempIDRe.MatchString(req.TempID) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "temp_id 无效"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "temp_id 无效"))
 		return
 	}
 	if req.PackageID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少 package_id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少 package_id"))
 		return
 	}
 	tid := s.effTenant(r, u)
 	// 包归属 + 类型权限校验
 	pkg, gErr := s.Store.GetKBPackage(req.PackageID, tid)
 	if gErr != nil {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "包不存在或无权操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "包不存在或无权操作"))
 		return
 	}
 	if !canManagePackType(u, pkg.PackType) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权向该类型的知识库包导入"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权向该类型的知识库包导入"))
 		return
 	}
 	// 部门管理员：目标包须在本部门及子部门内（部门包），或跨部门包须涵盖本部门（含子树/全公司仅超管租管）。
@@ -639,19 +639,19 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	metaPath := filepath.Join(s.kbTempDir(), "kb_"+req.TempID+".json")
 	metaBytes, err := os.ReadFile(metaPath)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "识别数据已过期，请重新上传识别"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "识别数据已过期，请重新上传识别"))
 		return
 	}
 	var meta kbRecognizeMeta
 	if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.FilePath == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "识别数据无效，请重新上传"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "识别数据无效，请重新上传"))
 		return
 	}
 	// ★ 路径白名单（2026-08-26 全仓评审 A3 双重闸）：元信息内的 FilePath 必须落在
 	//   上传目录内——即使 temp_id 校验被绕过或元信息文件被替换，也不允许解析/
 	//   删除上传目录之外的任意文件。复用 stream.go 的 resolveSafePath。
 	if _, ok := resolveSafePath([]string{s.Cfg.UploadDir}, meta.FilePath); !ok {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "识别数据无效，请重新上传"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "识别数据无效，请重新上传"))
 		return
 	}
 	savePath := meta.FilePath
@@ -664,7 +664,7 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 	// 重新解析文件
 	records, _, err := kb.ParseKBFile(savePath)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "解析失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "解析失败: "+err.Error()))
 		return
 	}
 	if len(records) == 0 {

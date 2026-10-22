@@ -269,14 +269,23 @@ mkdir -p frontend-react/artifacts
 #   默认 300s 降到 60s——曾实测高负载下偶发「worker did not exit」拖红闸门 10 分钟；
 #   ②首轮失败自动 --last-failed 复跑一轮，区分「真回归」（复跑仍红）与「环境 flaky」
 #   （复跑转绿→WARN 不拦截），消除发布闸门随机误红。
-(cd frontend-react && PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
+# ★ 2026-10-22：PW_OUTPUT_DIR 必须指到 $WORK 下**每次唯一**的目录。
+#   病因：Playwright 启动时会清理 outputDir 里的上一次残留，而默认 ./test-results
+#   多轮 UAT 后累积到 5190 项 / 91MB，清理动作本身触发体积闸 ⇒ Playwright 起不来，
+#   报出来是 "exit=1" 的**假失败**（没有任何一条用例红）。2026-10-22 就这么栽过一次：
+#   后端两套件全绿，只有 E2E 报 exit=1，差点被当成前端回归。
+#   指到唯一目录后既不累积、也不需要清理；不设时 playwright.config.ts 保持 ./test-results，
+#   不影响开发者本地跑（本地没有这层体积闸）。
+PW_OUT_DIR="$WORK/pw-results-$(date +%s)-$$"
+(cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
 # ★ P1-1 闸门补防（2026-09-15）：Playwright 失败必须进退出码——旧实现只 tee 日志不采码，
 #   「发布闸门」对前端 E2E 不设防（HEAD 曾带 2 条红用例合入并被声明全绿）。
 PW_EXIT=${PIPESTATUS[0]}
 PW_FAIL=0
 if [ "${PW_EXIT:-1}" -ne 0 ]; then
   log "首轮 E2E 非零（exit=${PW_EXIT}），复跑失败用例甄别 flaky..."
-  (cd frontend-react && PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test --last-failed --reporter=line) | tee "$WORK/pixel_uat_retry.log"
+  # 复跑沿用同一个 PW_OUTPUT_DIR：--last-failed 只会往里追加本次重试的产物，不读历史目录
+  (cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test --last-failed --reporter=line) | tee "$WORK/pixel_uat_retry.log"
   PW_RETRY_EXIT=${PIPESTATUS[0]}
   if [ "${PW_RETRY_EXIT:-1}" -eq 0 ]; then
     log "⚠️ 复跑全绿：首轮为环境 flaky（非代码回归），闸门放行并留痕 pixel_uat_retry.log"

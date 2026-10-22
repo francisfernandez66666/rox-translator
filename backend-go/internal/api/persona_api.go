@@ -68,20 +68,20 @@ func (s *Server) handleRegisterPersonas(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleMyJobRole(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
 		JobRole string `json:"job_role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	code := strings.ToLower(strings.TrimSpace(req.JobRole))
 	if code != "" {
 		if _, err := s.Store.FindEnabledPersonaByCode(code); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "角色不存在或已停用"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "角色不存在或已停用"))
 			return
 		}
 	}
@@ -132,7 +132,7 @@ func (s *Server) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可创建角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可创建角色"))
 		return
 	}
 	var req struct {
@@ -140,17 +140,17 @@ func (s *Server) handlePersonaCreate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "code 与 name 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code 与 name 不能为空"))
 		return
 	}
 	code, ok := normalizePersonaCode(req.Code)
 	if !ok {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "角色 code 仅允许小写字母/数字/下划线"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "角色 code 仅允许小写字母/数字/下划线"))
 		return
 	}
 	exists, _ := s.Store.PersonaCodeExists(code)
 	if exists {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "角色 code 已存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "角色 code 已存在"))
 		return
 	}
 	p, err := s.Store.CreateKBPackage(store.SharedHostTenant, 0, code, strings.TrimSpace(req.Name), store.PackPersona, store.PackRoleSource)
@@ -176,7 +176,7 @@ func (s *Server) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可编辑角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可编辑角色"))
 		return
 	}
 	var req struct {
@@ -184,7 +184,7 @@ func (s *Server) handlePersonaUpdate(w http.ResponseWriter, r *http.Request) {
 		Name string `json:"name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || strings.TrimSpace(req.Name) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.UpdatePersona(req.ID, strings.TrimSpace(req.Name)); err != nil {
@@ -209,7 +209,7 @@ func (s *Server) handlePersonaStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可启停角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可启停角色"))
 		return
 	}
 	var req struct {
@@ -217,7 +217,7 @@ func (s *Server) handlePersonaStatus(w http.ResponseWriter, r *http.Request) {
 		Enabled int   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.TogglePersona(req.ID, req.Enabled); err != nil {
@@ -244,23 +244,23 @@ func (s *Server) handlePersonaDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可删除角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可删除角色"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	pkg, gErr := s.Store.GetKBPackage(req.ID, store.SharedHostTenant)
 	if gErr != nil || pkg == nil || pkg.PackType != store.PackPersona {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "角色不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "角色不存在"))
 		return
 	}
 	if used, uErr := s.Store.PersonaReferenced(pkg.Code); uErr == nil && used {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该角色仍被用户使用，无法删除（可停用替代）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该角色仍被用户使用，无法删除（可停用替代）"))
 		return
 	}
 	if err := s.Store.DeletePersona(req.ID); err != nil {

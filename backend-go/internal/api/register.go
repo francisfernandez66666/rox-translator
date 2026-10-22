@@ -43,12 +43,12 @@ import (
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 平台未初始化（缺存储/租户存储）时拒绝注册
 	if s.Store == nil || s.Ten == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "平台未初始化"))
 		return
 	}
 	// 注册开关：默认开放（system_config registration_enabled=0 时关闭）
 	if v, _ := s.Store.GetConfig("registration_enabled"); v == "0" {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "注册已关闭，请联系管理员开通"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "注册已关闭，请联系管理员开通"))
 		return
 	}
 	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
@@ -104,7 +104,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		Agreed bool `json:"agreed"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 字段归一化（★ 2026-10-21 IAM 重做 P0-1：账号与邮箱只走 auth 那一把尺子）
@@ -153,12 +153,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	inviteTenantID := int64(0)
 	// ★ 邮箱必填：所有自助注册路径（含受邀加入）都必须提供邮箱——验证码收件与找回密码依赖
 	// ★ S3 防薅：一次性/临时邮箱域名黑名单（注册礼包=唯一钩子，先卡域名再验码）
-	if msg := s.disposableEmailRejected(req.Email); msg != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+	// ★ 变量名用 rejectMsg 而非 msg：本文件下方（注册成功的响应体）另有一个
+	//   `msg := "注册成功，试用额度已发放"`，而 TestAPICnMessageEscapePattern 是**文本级**闸门
+	//   （按标识符名判「这个变量被赋过中文字面量」），同名会让本行被误判成「中文经变量传给 New」。
+	//   这里 msg 的来源是 disposableEmailRejected 的函数返回值，不是中文字面量，属合规形态。
+	if rejectMsg := s.disposableEmailRejected(req.Email); rejectMsg != "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, rejectMsg))
 		return
 	}
 	if strings.TrimSpace(req.Email) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱为必填项"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱为必填项"))
 		return
 	}
 	// 邮箱全局唯一（他人已绑定则拒绝）——★ 2026-10-21 P0-9：这一腿**已挪到"验码＋人机"之后**，
@@ -170,11 +174,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if verifyOn && req.Invite == "" {
 		if strings.TrimSpace(req.Email) == "" || strings.TrimSpace(req.EmailCode) == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写邮箱并输入验证码"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写邮箱并输入验证码"))
 			return
 		}
 		if !verifyEmailCode(req.Email, req.EmailCode) {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱验证码错误或已过期"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱验证码错误或已过期"))
 			return
 		}
 	}
@@ -306,12 +310,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if dedicatedTid > 0 {
 		invCode := strings.TrimSpace(req.Invite)
 		if invCode == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请填写企业邀请码后再注册"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写企业邀请码后再注册"))
 			return
 		}
 		inv, ierr := s.Store.GetInviteCodeByCode(invCode)
 		if ierr != nil || inv.Used == 1 || inv.Revoked == 1 || inv.TenantID != dedicatedTid {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效、已使用或不属于该企业"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效、已使用或不属于该企业"))
 			return
 		}
 		inviteTenantID = dedicatedTid
@@ -320,7 +324,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if req.Invite != "" {
 		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
 		if err != nil || inv.Used == 1 || inv.Revoked == 1 {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效或已使用"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效或已使用"))
 			return
 		}
 		inviteTenantID = inv.TenantID
@@ -328,7 +332,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		//   这里不再用「该租户下用户名已存在」拦注册（否则邀约成员仍被旧唯一语义卡住）。
 		// 标记邀请码已使用（一次性；★ 整改 A4：抢占失败=被并发请求抢先，拒绝本次注册）
 		if claimed, merr := s.Store.MarkInviteCodeUsed(inv.ID, req.Username); merr != nil || !claimed {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码无效或已使用"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效或已使用"))
 			return
 		}
 	}
@@ -337,7 +341,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	tenantInfo := map[string]interface{}{}
 	if inviteTenantID == 0 {
 		if req.Code == "" {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供租户编码"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供租户编码"))
 			return
 		}
 		if req.Name == "" {
@@ -374,11 +378,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG/sqlite 文案不同且含约束名）
 			if store.IsUniqueViolation(err) {
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户创建失败：该企业编码已存在"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户创建失败：该企业编码已存在"))
 				return
 			}
 			log.Printf("[register] 租户创建失败 code=%s: %v", req.Code, err)
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "租户创建失败: " + store.DebriefDBError(err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户创建失败: "+store.DebriefDBError(err)))
 			return
 		}
 		inviteTenantID = t.ID
@@ -440,7 +444,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	nu, err := s.Store.CreateUserWithEmail(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, inviteOrgID,
 		strings.ToLower(strings.TrimSpace(req.Email)), regAgreedAt, 0)
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户创建失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户创建失败: "+err.Error()))
 		return
 	}
 	// ★ F-81 坐实点：账号已经建成，这一格从此不再退（额度发放失败由登录路径补发）。
@@ -655,7 +659,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 		TenantID int64 `json:"tenant_id"` // 待发放的租户 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TenantID < 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "无效的租户 ID"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "无效的租户 ID"))
 		return
 	}
 	// ★ C30（2026-09-12）：tid<=0 不再发放体验额度——该桶在 gateUsage 全量豁免计费，
@@ -671,7 +675,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	t, err := s.Ten.GetByID(req.TenantID)
 	if err != nil {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "租户不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "租户不存在"))
 		return
 	}
 	// ★ 任务2.4：不再幂等拒绝——每次都是「重新发放」叠加一份新体验
@@ -690,7 +694,7 @@ func (s *Server) handleGrantTrial(w http.ResponseWriter, r *http.Request) {
 	}
 	pb, _ := json.Marshal(perms)
 	if err := s.Ten.Update(t.ID, t.Name, t.ExpiresAt, string(pb)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	// 充值 token 余额（叠加新台账行，独立到期日）
@@ -853,7 +857,7 @@ func (s *Server) handleInviteCodeCreate(w http.ResponseWriter, r *http.Request) 
 		TenantID int64  `json:"tenant_id"` // 0=新建租户；>0=绑定已有租户（受邀加入）；企业用户强制绑定本企业
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Code) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邀请码不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码不能为空"))
 		return
 	}
 	// 企业用户（非超管）创建邀请码只能绑定本企业，忽略请求体中的 tenant_id

@@ -29,6 +29,7 @@ import (
 	"net/http"
 
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 )
 
 // estimateReq 预估接口入参（提成具名类型：单测要直接构造它，匿名结构体在包外/跨函数不可复用）。
@@ -52,12 +53,12 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req estimateReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// mode 归一与扣费腿同一个函数（fast 之外一律 pro，别让两侧对「未知档」的理解不一样）

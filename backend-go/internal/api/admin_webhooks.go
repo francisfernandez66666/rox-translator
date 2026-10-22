@@ -65,11 +65,11 @@ func (s *Server) handleWebhookSave(w http.ResponseWriter, r *http.Request) {
 		RetryInterval int    `json:"retry_interval"` // 重试间隔秒数
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.URL == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "回调 URL 不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "回调 URL 不能为空"))
 		return
 	}
 	hook := &store.Webhook{
@@ -110,7 +110,7 @@ func (s *Server) handleWebhookDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待删除 webhook ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.DeleteWebhook(req.ID, s.effTenant(r, u)); err != nil {
@@ -135,7 +135,7 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待测试 webhook ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 校验 webhook 归属
@@ -156,7 +156,7 @@ func (s *Server) handleWebhookTest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if target == nil {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "webhook 不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "webhook 不存在"))
 		return
 	}
 	// 投递 ping 事件（异步，忽略事件订阅过滤，验证回调可达）
@@ -182,7 +182,7 @@ func (s *Server) handleWebhookDeliveries(w http.ResponseWriter, r *http.Request)
 	webhookIDStr := r.URL.Query().Get("webhook_id")
 	webhookID, _ := strconv.ParseInt(webhookIDStr, 10, 64)
 	if webhookID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "webhook_id 参数缺失"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "webhook_id 参数缺失"))
 		return
 	}
 	limitStr := r.URL.Query().Get("limit")
@@ -219,7 +219,7 @@ func (s *Server) handleWebhookRetry(w http.ResponseWriter, r *http.Request) {
 		DeliveryID int64 `json:"delivery_id"` // 待重试投递 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeliveryID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.RetryDelivery(req.DeliveryID, s.effTenant(r, u)); err != nil {

@@ -428,3 +428,85 @@ describe('AiRegisterFlow 批G · F-28/F-02/F-03 回归', () => {
     expect(send.textContent).toBe('在线') // 重试成功后 F-02 的文案翻转同样生效
   })
 })
+
+// ============================================================================
+// ★ 2026-10-22 一致性核查修复（P1-3「一种错误位」）：AI 注册流的卡内红字
+//   方案 §四·3 原文：「错误一律卡内红字 `.auth-err`（AI 流保留 toast 但**必须
+//   同时**在卡内落一条）」。修复前本组件 8 处错误全走 toastError、卡内零落位——
+//   toast 一消失用户看到的就是"点了没反应"，而传统注册卡（Login.tsx）早就有
+//   .auth-err，同一件事两种形态。本 describe 固化三条约口径：
+//   ① fail() 两个出口同源同文：卡内红字与 toast 文案逐字一致；
+//   ② 每次提交先清上一轮红字（setFormErr('') 在所有前置校验之后、请求之前），
+//      否则改完再提，旧错误会跟着新请求一起显示，指错方向；
+//   ③ 形态锚点：红字紧贴提交钮上方——用户点完按钮目光就落在这里，不必回滚找提示。
+// ============================================================================
+describe('AiRegisterFlow P1-3 · 卡内红字错误位（.auth-err）', () => {
+  /** 走到个人版账号表单并填齐除协议勾选外的全部必填项（用户名/密码/邮箱/6 位验证码） */
+  async function fillExceptAgree(container: HTMLElement) {
+    await reachForm(container)
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    fireEvent.change(inputs[0], { target: { value: 'p1_3_user' } }) // 用户名
+    const pwd = container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!
+    fireEvent.change(pwd, { target: { value: 'P13Pass2026!' } }) // 口令
+    fireEvent.change(inputs[2], { target: { value: 'p1_3@example.com' } }) // 邮箱
+    const cells = container.querySelectorAll<HTMLInputElement>('.ar-otp')
+    '123456'.split('').forEach((d, i) => fireEvent.change(cells[i], { target: { value: d } }))
+    return container.querySelector('.ar-form') as HTMLElement
+  }
+
+  /** 表单内的提交钮（文案取 auth.registerAndLogin「注册并登录」） */
+  const submitBtn = (form: HTMLElement) =>
+    Array.from(form.querySelectorAll<HTMLButtonElement>('button'))
+      .find((b) => (b.textContent || '').includes('注册并登录'))!
+
+  it('未勾协议点提交：卡内 .auth-err 落位、与 toast 同源同文、注册请求不出网', async () => {
+    vi.mocked(authRegister).mockClear()
+    vi.mocked(toastError).mockClear()
+    const { container } = mount('')
+    const form = await fillExceptAgree(container)
+    fireEvent.click(submitBtn(form))
+    // 卡内红字落位（修复前这里查询为 null：错误只走 toast）
+    const err = form.querySelector('.auth-err') as HTMLElement
+    expect(err, '卡内必须有红字错误位（不能只弹 toast）').not.toBeNull()
+    expect(err.textContent).toBe('请阅读并同意《用户协议》与《隐私协议》')
+    // 同源同文：toast 与卡内是 fail() 的同一个 msg，逐字一致
+    expect(toastError).toHaveBeenCalledWith('请阅读并同意《用户协议》与《隐私协议》')
+    expect(authRegister, '未勾协议不得发出注册请求').not.toHaveBeenCalled()
+  })
+
+  it('卡内红字紧贴提交钮上方（形态锚点：点完按钮目光落点，不必回滚找提示）', async () => {
+    const { container } = mount('')
+    const form = await fillExceptAgree(container)
+    fireEvent.click(submitBtn(form)) // 先制造一条红字
+    const err = form.querySelector('.auth-err') as HTMLElement
+    expect(err).not.toBeNull()
+    // 红字与提交钮同在 .ar-form 内，且红字是提交钮的前一个兄弟节点
+    expect(err.closest('.ar-form')).toBe(form)
+    expect(err.nextElementSibling, '红字必须紧贴提交钮上方').toBe(submitBtn(form))
+  })
+
+  it('红字落位后补齐再提交：旧红字先清、请求出网（不指错方向）', async () => {
+    // authRegister 挂一个永不落定的 Promise：把"提交瞬间清红字"这个同步动作
+    // 定格在请求在途态，避开 success:false 分支马上又写一条新红字的竞态
+    vi.mocked(authRegister).mockClear()
+    vi.mocked(authRegister).mockImplementation(() => new Promise(() => {}))
+    try {
+      const { container } = mount('')
+      const form = await fillExceptAgree(container)
+      fireEvent.click(submitBtn(form)) // 第一轮：未勾协议 → 红字落位
+      expect(form.querySelector('.auth-err')).not.toBeNull()
+      // 第二轮：补勾协议 → 放行；提交瞬间必须先把旧红字清掉
+      const cb = form.querySelector<HTMLInputElement>('input.lc-checkbox')!
+      fireEvent.click(cb)
+      fireEvent.click(submitBtn(form))
+      await waitFor(() => {
+        expect(form.querySelector('.auth-err'), '新提交必须先清旧红字').toBeNull()
+      })
+      expect(authRegister, '补齐后注册请求必须出网').toHaveBeenCalledTimes(1)
+    } finally {
+      // 还原顶层 mock 的默认实现，别把"永不落定"漏给后续用例
+      vi.mocked(authRegister).mockReset()
+      vi.mocked(authRegister).mockImplementation(async () => ({ success: false }))
+    }
+  })
+})

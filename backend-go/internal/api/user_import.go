@@ -28,6 +28,7 @@ import (
 	"github.com/xuri/excelize/v2"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -125,12 +126,12 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	tid := s.effTenant(r, u)
 	// 解析并落盘上传的 xlsx（白名单与大小限制复用 KB 导入）
 	if err := parseUpload(r, kbUploadMax, map[string]bool{".xlsx": true, ".xls": true, ".csv": true}); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少文件"))
 		return
 	}
 	defer file.Close()
@@ -138,12 +139,12 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	savePath := s.Cfg.UploadDir + "/imp_" + uniqueName(header.Filename)
 	fd, err := os.Create(savePath)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "文件保存失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "文件保存失败"))
 		return
 	}
 	if _, err := fd.ReadFrom(file); err != nil {
 		fd.Close()
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "文件读取失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "文件读取失败"))
 		return
 	}
 	fd.Close()
@@ -152,7 +153,7 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	// 解析导入表为行模型（表头可缺省，按模板固定列序兜底）
 	rows, err := readImportRows(savePath)
 	if err != nil || len(rows) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "Excel 解析失败或为空，请使用模板列：用户名称、姓名、部门、角色、邮箱"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "Excel 解析失败或为空，请使用模板列：用户名称、姓名、部门、角色、邮箱"))
 		return
 	}
 	// 组织名 → ID 映射（用于按名称挂部门）

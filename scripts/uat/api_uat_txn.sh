@@ -507,7 +507,12 @@ ck T15-status-degraded '"degraded":(true|false)' "$R"
 #   ★ 2026-10-21 IAM 重做后用户名可重名，故脱敏靶子改用**仍唯一**的邮箱（uat_a@test.com 已被占用），
 #   用户名这一维另在 A3-dup-username-allowed 里按新方案判「允许」。
 UA_TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND tenant_id>0 LIMIT 1")
-DUPU=$(post "$AH" "{\"username\":\"uat_dup_t15\",\"password\":\"x\",\"name\":\"d\",\"email\":\"uat_a@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
+#   ★ 2026-10-22 工装同步：password 由 "x" 改为合法口令。本用例的靶子是「重复邮箱脱敏」
+#   （下一行的 ckn + ck），而 2026-10-22 给管理台建号补上了强度闸（B-2）——
+#   "x" 只有 1 位，会在**强度闸**就被拦成「密码至少 6 位」，根本走不到邮箱重复那一步，
+#   于是 ck 判据（期望 CONFLICT/已存在）被换成强度闸的判据（假红且定位偏）。
+#   改密码而不是放宽强度闸：闸是本次要立的，用例的靶子才是"脱敏"。
+DUPU=$(post "$AH" "{\"username\":\"uat_dup_t15\",\"password\":\"uatpass123\",\"name\":\"d\",\"email\":\"uat_a@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
 ckn T15-sanitize-user 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq|json_extract' "$DUPU"
 ck T15-sanitize-user-msg '"code":"CONFLICT"|绑定|已存在' "$DUPU"
 DUPC=$(post "$AH" "{\"code\":\"$(dbq "SELECT code FROM tenants LIMIT 1")\",\"name\":\"d\"}" /api/tenant/create)
@@ -1385,16 +1390,59 @@ ST=$(sq "SELECT status FROM orders WHERE id=$OIDC")
 TXC=$(python3 -c "print('c3'*32)")
 curl -s $CHAIN/advance -H "$CJ" -d '{"n":3}' >/dev/null
 curl -s $CHAIN/inject -H "$CJ" -d "{\"to\":\"$ADDR\",\"value\":$AMTC,\"tx_id\":\"$TXC\"}" >/dev/null
-PAID=0
-for k in $(seq 1 24); do sleep 3; ST=$(sq "SELECT status FROM orders WHERE id=$OIDC"); [ "$ST" = "paid" ] && { PAID=1; break; }; done
-[ "$PAID" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-paid($ST)"; }
-N=$(sq "SELECT COUNT(*) FROM payments WHERE order_id=$OIDC AND tx_hash='$TXC'")
-[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-tx-proof"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-tx-proof($N)"; }
+PAID=0; DEP=0
+for k in $(seq 1 24); do sleep 3; ST=$(sq "SELECT status FROM orders WHERE id=$OIDC"); [ "$ST" = "paid" ] && { PAID=1; break; }; [ "$DEP" = "0" ] && [ "$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXC'")" = "1" ] && DEP=1; done
+# ★ 2026-10-22 收口（C-3 的 auto-settle-paid）：判据本身不动——24×3s 已覆盖 14 个
+#   扫描周期（UAT 实测 5s/轮），二轮红的真因是环境故障期扫描轮被拖住（同期 sqlite/psql
+#   在大面积 disk I/O error 里，现场读数：TXW 已消费、TXC 注入后 72s 未被消费）。
+#   补的是**自诊断**：红时必须能一眼分出「扫描器没消费这笔」（dep=0 ⇒ 游标/扫描器问题）
+#   与「消费了但没结算」（dep=1 ⇒ 匹配/确认数问题），二者排障方向完全相反。
+[ "$PAID" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-paid"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-paid(st=$ST dep=$DEP)"; }
+# ★ 2026-10-22 收口（C-3 的 tx-proof）：原为订单一变 paid 就**立即**查 payments，无任何等待。
+#   上一条 auto-settle-paid 是轮询订单状态的（24×3s），而 payments 行的写入与 orders.status
+#   的更新并非同一时刻完成——「订单已 paid、payment 还没落」那一瞬被抓到，断言红。
+#   红的样子像"入账没写 payment"，真因是判据没等异步尾巴。改为轮询等行出现。
+PAYROWS=0
+for k in $(seq 1 20); do sleep 1; PAYROWS=$(sq "SELECT COUNT(*) FROM payments WHERE order_id=$OIDC AND tx_hash='$TXC'"); [ "$PAYROWS" = "1" ] && break; done
+[ "$PAYROWS" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-auto-settle-tx-proof"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-auto-settle-tx-proof($PAYROWS)"; }
 N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXW' AND matched_order_id=0")
 [ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-orphan-kept-unmatched"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-orphan-kept-unmatched($N)"; }
-sleep 8
-N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXC'")
-[ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-rescan-idempotent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-rescan-idempotent($N)"; }
+# ★ 2026-10-22 收口（C-3 的 rescan-idempotent）：原为固定 sleep 8 后断言 COUNT=1，
+#   两个方向的假：
+#   ① 假绿——扫描周期（UAT 实测 5s，生产默认 30s）>8s 时第二轮根本没发生；且即便
+#     第二轮发生，游标逐轮推进、旧块不会被重拉，"COUNT=1"只是自然结果，**没有任何
+#     东西在检验幂等键**；扫描器若已死，"COUNT=1"同样绿灯（无正向对照）。
+#   ② 假红——8s 是无依据魔法数。
+#   改为**真的制造一次重复扫描**：usdtScanChain 的拉取口径是 from_block=游标+1
+#   （TronFetcher.FetchDeposits），mock 按 block_number>=from_block 过滤 ⇒ 把链游标
+#   回退到 TXC 入账块之前，下一轮扫描必重新拉取同一事件并再次走 InsertUSDTDeposit
+#   （(chain,tx_hash,log_index) 唯一键 + INSERT OR IGNORE），COUNT 必须仍为 1。
+#   探针 tx 与 TXC **同块**注入（mock /inject 支持指定 block）：正常轮游标＝链头，
+#   从 block+1 起拉，永远看不到它；只有回退过游标的那一轮才会把它拉进台账 ⇒
+#   「探针落账」＝「重复扫描真的发生了」的正向对照，缺了它扫描器已死/游标没退成
+#   都能让 COUNT=1 绿灯。同块探针还把唯一竞态（回退写入撞上一轮游标读→写窗口，
+#   实测概率 <1%）从「假绿」翻成「探针超时」，用至多 3 次重试收敛。
+BLKC=$(sq "SELECT block_no FROM usdt_deposits WHERE tx_hash='$TXC'")
+if printf '%s' "$BLKC" | grep -qE '^[0-9]+$' && [ "$BLKC" -ge 1 ]; then
+  TXPROBE=$(python3 -c "print('ee'*32)")
+  curl -s $CHAIN/inject -H "$CJ" -d "{\"to\":\"$ADDR\",\"value\":$((AMTC-99)),\"tx_id\":\"$TXPROBE\",\"block\":$BLKC}" >/dev/null
+  RESCANNED=0
+  for att in 1 2 3; do
+    dbcfg 'usdt_cursor_trc20' "$((BLKC-1))" >/dev/null
+    for k in $(seq 1 15); do
+      sleep 2
+      N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXPROBE'")
+      [ "$N" = "1" ] && { RESCANNED=1; break; }
+    done
+    [ "$RESCANNED" = "1" ] && break
+  done
+  N=$(sq "SELECT COUNT(*) FROM usdt_deposits WHERE tx_hash='$TXC'")
+  [ "$RESCANNED" = "1" ] && [ "$N" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T42-rescan-idempotent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T42-rescan-idempotent(rescanned=$RESCANNED tx_rows=$N)"; }
+  sq "DELETE FROM usdt_deposits WHERE tx_hash='$TXPROBE'" >/dev/null   # 清场：探针不入台账
+  dbcfg 'usdt_cursor_trc20' "$BLKC" >/dev/null                        # 游标复位（自然收敛值同为链头）
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T42-rescan-idempotent(no TXC deposit block: [$BLKC])"
+fi
 ML=$(get "$AH" /api/admin/orders/manual)
 T41CHK=$(echo "$ML" | python3 -c "import sys,json;ids=[int(o['id']) for o in json.load(sys.stdin).get('orders',[])];print('STILL' if $OIDA in ids else 'GONE')" 2>/dev/null || echo ERR)
 if [ "$T41CHK" = "STILL" ]; then FAIL=$((FAIL+1)); echo "FAIL|T42-paid-left-manual-list"; else PASS=$((PASS+1)); echo "PASS|T42-paid-left-manual-list"; fi
@@ -3031,6 +3079,19 @@ ck T66-a1-left4 '"left":4' "$R3BODY"
 ck T66-a1-mode-pro '"mode":"pro"' "$R3BODY"
 ck T66-a1-has-translation '"translation":"[^"]' "$R3BODY"
 ckn T66-a1-not-exhausted '"exhausted":true' "$R3BODY"
+# ② 最小间隔闸（同设备连点）：**必须与「额度用完」分码**——前端按 code 决定是「等 3 秒再来」还是
+#    「去注册」，混成一个码就等于把只是手快的访客送去注册页。
+# ★ 2026-10-22 收口（C-2）：本块原放在 ja/en 两条腿**之后**，依赖"DEV66A 此刻仍卡在 3s 闸上"
+#   这个假设。但 ja/en 是两次真实翻译（引擎首调实测 2.6s/次），慢机器上两腿跑完已远超 3s ⇒
+#   重打 DEV66A 得到 200 而非 429，本条红；且 200 那句会真吃一句配额，连锁把 retry-after /
+#   not-trial-code / no-count / left 读数全带歪。红的样子像"间隔闸坏了"，真因是判据与两条
+#   慢腿耦合。修法＝把本块**紧贴 a1 之后**（窗口刚建，必在闸上），ja/en 两腿挪到本块之后
+#   ——它们的设备号本就独立（DEV66E/F），位置不影响其判据。
+req3 POST "" /api/trial/translate "$B66"; ck3 T66-a-interval-429 429 RATE_LIMITED '太快'
+ck T66-a-interval-retry-after '"retry_after":' "$R3BODY"
+ckn T66-a-interval-not-trial-code 'TRIAL_EXHAUSTED' "$R3BODY"
+# ★ 计数纪律：被闸拒掉的一句**不吃配额**（访客没拿到译文却少了一句额度，是最容易被投诉的一种账）
+ckq T66-a-interval-no-count 1 "$(t66cnt trial_dev "$DEV66A")"
 # ★ A8（㊵ 判据补齐，2026-10-04 R-1 批）：**en 与 ja 两条腿必须同判据**。
 #   本段的对端故障形态正是"en/ja 双 500、zh 独活"（现网三次实跑，见修改文档 §二），
 #   只锁 en 一次的话，"换条腿就活"这种半成品修法不会被发现；zh 那条腿本来就 200，
@@ -3057,13 +3118,6 @@ ckn T66-en-no-failure-code 'TRANSLATION_FAILED' "$R3BODY"
 #   凭据那一层的等价锁在 Go 侧：A4（解析返回哪一档）＋ A4b（internal/engine/stage_http_route_test.go，
 #   真 httptest 上游逐次记 model 与 Authorization）。本段在矩阵里的真实射程＝
 #   「路由已注册＋匿名可达＋这条腿真能走到出译文」，不含"用的是哪份密钥"。
-# ② 最小间隔闸（同设备连点）：**必须与「额度用完」分码**——前端按 code 决定是「等 3 秒再来」还是
-#    「去注册」，混成一个码就等于把只是手快的访客送去注册页。
-req3 POST "" /api/trial/translate "$B66"; ck3 T66-a-interval-429 429 RATE_LIMITED '太快'
-ck T66-a-interval-retry-after '"retry_after":' "$R3BODY"
-ckn T66-a-interval-not-trial-code 'TRIAL_EXHAUSTED' "$R3BODY"
-# ★ 计数纪律：被闸拒掉的一句**不吃配额**（访客没拿到译文却少了一句额度，是最容易被投诉的一种账）
-ckq T66-a-interval-no-count 1 "$(t66cnt trial_dev "$DEV66A")"
 sleep 3   # 过 trialMinIntervalSec（常量 3s、不可配）；RateRecord 记的 window_start 按秒取整，睡满 3 必过
 req3 POST "" /api/trial/translate "$B66"; cks T66-a2-ok 200
 ck T66-a2-left3 '"left":3' "$R3BODY"

@@ -29,11 +29,11 @@ import (
 func (s *Server) requireSuperJSON(w http.ResponseWriter, r *http.Request) (*store.User, bool) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return nil, false
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超级管理员可操作"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超级管理员可操作"))
 		return nil, false
 	}
 	return u, true
@@ -89,7 +89,7 @@ func (s *Server) handleTmReviewApprove(w http.ResponseWriter, r *http.Request) {
 	}
 	// 写入正式翻译记忆库（module='manual'）
 	if _, err := s.DB.SaveBack(cr.Zh, map[string]string{cr.Lang: cr.Trans}, "manual", cr.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）
@@ -134,7 +134,7 @@ func (s *Server) handleTmReviewAdopt(w http.ResponseWriter, r *http.Request) {
 		Trans      string `json:"trans"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Zh) == "" || strings.TrimSpace(req.Trans) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "参数缺失"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "参数缺失"))
 		return
 	}
 	cr := &store.TmReview{
@@ -142,11 +142,11 @@ func (s *Server) handleTmReviewAdopt(w http.ResponseWriter, r *http.Request) {
 		Trans: strings.TrimSpace(req.Trans), Source: "feedback", RefType: "feedback", RefID: req.FeedbackID,
 	}
 	if err := s.Store.CreateTmReview(cr); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	if _, err := s.DB.SaveBack(cr.Zh, map[string]string{cr.Lang: cr.Trans}, "manual", cr.TenantID); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.invKB() // ★ KB 内容变更：失效引擎 CJK 精确缓存（新术语立即可命中）

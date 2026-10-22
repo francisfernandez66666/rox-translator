@@ -31,7 +31,7 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 分页参数：脏值一律折回默认档（不报错——见 store 侧那条"新增防护不拿可用性交押金"）
@@ -87,7 +87,7 @@ func effectivePageLimit(limit int) int {
 func (s *Server) handleNotificationsUnread(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	n, err := s.Store.UnreadCount(u.ID)
@@ -105,14 +105,14 @@ func (s *Server) handleNotificationsUnread(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleNotificationsRead(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.MarkNotificationRead(req.ID, u.ID); err != nil {
@@ -132,7 +132,7 @@ func (s *Server) handleNotificationsRead(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleNotificationsReadAll(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	if err := s.Store.MarkAllNotificationsRead(u.ID); err != nil {

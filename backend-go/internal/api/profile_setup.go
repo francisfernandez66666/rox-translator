@@ -52,13 +52,26 @@ func (s *Server) handleProfileSetup(w http.ResponseWriter, r *http.Request) {
 				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
 				return
 			}
-			if _, err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(pwd)); err != nil {
+			// ★ 2026-10-22：哈希只算一次。旧写法在 ResetPassword 实参与下面的内存副本各算一遍，
+			//   bcrypt 是**随机盐**（两次结果不同但都能验同一口令），功能无差异，
+			//   只是白付一次 ~60ms 的 CPU——资料补全在首登路径上，这一下是能感觉到的。
+			h := auth.PasswordHash(pwd)
+			if _, err := s.Store.ResetPassword(u.ID, u.TenantID, h); err != nil {
 				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "密码保存失败"))
 				return
 			}
 			// ResetPassword 递增 token_version：内存副本必须同步，否则重签出来的 token 立即失效。
 			u.TokenVersion++
-			u.PasswordHash = auth.PasswordHash(pwd)
+			u.PasswordHash = h
+			// ★ 2026-10-22 一致性核查修复：这里同样是"改密"，必须与 handleChangePassword
+			//   （auth.go:455-456）同一把尺子——**清了才算改完**。
+			//   此前不清：用户在资料补全屏设好合格密码、重签 token 仍带 mcp=1，
+			//   下一个请求立刻被 428 拦，观感是"我明明改了密码还让我改"。
+			//   写失败只留旧态（用户再走强制改密窗即可），不把已经成功的改密判成失败。
+			if u.MustChangePwd > 0 {
+				_ = s.Store.SetMustChangePwd(u.ID, u.TenantID, 0)
+				u.MustChangePwd = 0
+			}
 		}
 		if err := s.Store.SetUsername(u.ID, u.TenantID, uname); err != nil {
 			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "用户名保存失败"))
@@ -93,10 +106,9 @@ func (s *Server) handleProfileSetup(w http.ResponseWriter, r *http.Request) {
 	s.Store.LogAudit(u.TenantID, u.ID, "profile_setup", "user", map[bool]string{true: "跳过", false: "完成"}[req.Skip])
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "token": tok,
-		"user": map[string]interface{}{
-			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
-			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-			"must_change_pwd": u.MustChangePwd, "profile_setup_required": left,
-		},
+		// ★ 2026-10-22 一致性核查：这里原先手工拼了一份 user map。字段与 loginUserPayload
+		//   当前逐字相同（8 个键），但那是**巧合**不是保证——B-5 的病根正是"同一件事写两遍"：
+		//   finishLogin 那份漂了、漏掉 brand_host/sso_code。加字段只改 loginUserPayload 一处。
+		"user": loginUserPayload(u),
 	})
 }

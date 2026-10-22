@@ -20,6 +20,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import ForcePasswordGate from './ForcePasswordGate'
 import { ToastProvider } from '@/ui/langcross/src'
+import { setLang } from '@/i18n'
 import { FORCE_PASSWORD_EVENT, getAuthToken, setAuthToken } from '@/api/core'
 import { PWD_MIN_LEN } from '@/lib/accountForm'
 
@@ -143,5 +144,63 @@ describe('ForcePasswordGate（★ IAM P0-8 强制改密闸门）', () => {
     // 清 token 是同步发生的；随后的 location.assign('/login') 在 jsdom 里只报 not-implemented，
     // 不影响这条判据（这里锁的是"离开时不许把旧会话留着"）。
     expect(getAuthToken()).toBe('')
+  })
+})
+
+// ============================================================================
+// ★ 2026-10-21 IAM 重做 P1-3 / 2026-10-22 一致性核查：强制改密窗的密码可见切换
+//   背景（PwdEye.tsx 文件头）：这颗钮子原先只写在 Login.tsx 里，注释承诺"登录/注册/
+//   找回/强制改密四处共用"，而 ForcePasswordGate 是独立组件、import 不到它——于是这个
+//   "必须过"的弹窗里三个密码框（当前口令 + 新口令 + 确认口令）全是盲输，而它是批量
+//   导入账号的必经之路，初始口令还是随机串。修复 = 三框共用 components/PwdEye.tsx。
+//   本 describe 锁两条口径：
+//   ① 三框各挂一颗眼睛钮（不再有盲输框）；
+//   ② 三颗钮共享同一个显隐状态——点任意一颗，三个 input 的 type 同时翻转
+//      （"同进同退"：绝不出现第一个框亮了、后两个还盲着）。
+// ============================================================================
+describe('ForcePasswordGate 密码可见切换（三框同进同退）', () => {
+  /** 打开弹窗并返回三个密码输入框（按 label 定位，不依赖 DOM 次序） */
+  async function openGate() {
+    setLang('zh') // 锁中文：aria-label 断言不随默认语种漂移
+    renderGate()
+    fireForceEvent()
+    await waitFor(() => expect(dialogOpen()).toBe(true))
+    return {
+      old: screen.getByLabelText('当前密码（初始密码）'),
+      next: screen.getByLabelText(/^新密码/),
+      confirm: screen.getByLabelText('再次输入新密码'),
+    }
+  }
+
+  it('三个密码框各挂一颗眼睛钮（批量导入的必经弹窗不允许有盲输框）', async () => {
+    await openGate()
+    // Dialog 走 portal 挂 body，从 document 查（render 的 container 里没有）
+    const eyes = document.querySelectorAll('.auth-pwd-eye')
+    expect(eyes.length, '当前/新/确认三个框必须各有一颗眼睛钮').toBe(3)
+    // 初始全是密文态：aria-label 为「显示密码」、aria-pressed=false
+    eyes.forEach((e) => {
+      expect(e.getAttribute('aria-label')).toBe('显示密码')
+      expect(e.getAttribute('aria-pressed')).toBe('false')
+    })
+  })
+
+  it('点任意一颗钮：三个 input 的 type 同时翻转（同进同退，再点同时翻回）', async () => {
+    const { old, next, confirm } = await openGate()
+    expect([old.getAttribute('type'), next.getAttribute('type'), confirm.getAttribute('type')])
+      .toEqual(['password', 'password', 'password'])
+    // 点第一颗（当前口令那颗）——共享状态必须让三个框一起亮
+    fireEvent.click(document.querySelectorAll('.auth-pwd-eye')[0])
+    expect([old.getAttribute('type'), next.getAttribute('type'), confirm.getAttribute('type')])
+      .toEqual(['text', 'text', 'text'])
+    // 三颗钮的 aria 态同步翻面（可访问语义与视觉一致）
+    const eyes = document.querySelectorAll('.auth-pwd-eye')
+    eyes.forEach((e) => {
+      expect(e.getAttribute('aria-label')).toBe('隐藏密码')
+      expect(e.getAttribute('aria-pressed')).toBe('true')
+    })
+    // 点第三颗（确认口令那颗）——同样三个框一起收回去
+    fireEvent.click(eyes[2])
+    expect([old.getAttribute('type'), next.getAttribute('type'), confirm.getAttribute('type')])
+      .toEqual(['password', 'password', 'password'])
   })
 })

@@ -199,45 +199,67 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// 此刻请求还没有 Authorization 头，生效租户显式传入；旁路调用，失败只留痕不影响登录。
 	s.grantTaskEventOnTenant(r, auditTID, u.ID, store.TaskKeyLoginDaily, "")
 	s.Store.LogAudit(auditTID, u.ID, "login", "auth", "用户登录")
-	// 品牌域名跳转：若用户所属租户配置了专属品牌子域，且本次登录不在该子域上，
-	// 返回 brand_host 供前端重定向过去（需求 1-B）。
-	// ★ P0-3 修复（2026-09-14）：跨子域登录改发一次性 sso_code（60s、单次消费、
-	//   经 /api/auth/sso/exchange 兑换 JWT）——旧实现把裸 JWT 放进重定向 URL
-	//   （进浏览器历史/Referer），且 E3 后前端不再消费 ?token=，链路整体断裂。
-	brandHost := ""
-	brandSSOCode := ""
-	if t, e := s.Ten.GetByID(u.TenantID); e == nil && t.Domain != "" {
-		base := brandingBaseDomain(s)
-		if bh := strings.TrimSpace(t.Domain) + "." + base; r.Host != bh {
-			brandHost = bh
-			if xcode := newSSOExchangeCode(); xcode != "" {
-				payload, _ := json.Marshal(map[string]int64{"uid": u.ID, "tid": u.TenantID})
-				vcodeSet("sso_xchg:"+xcode, payload, 60*time.Second)
-				brandSSOCode = xcode
-			}
-		}
+	// 品牌域名跳转 + 用户信息 + token 的**唯一出口**。
+	// ★ 2026-10-22 一致性核查：此前这里是内联的一整段（brand_host/sso_code 二选一 + 两份 user map），
+	//   而邮箱验证码腿的 finishLogin 另拼了一份、漏掉 brand_host/sso_code。
+	//   同一件事写两遍，字段必然随改动漂移——抽成 writeLoginResponse 后两条腿共用。
+	s.writeLoginResponse(w, r, u, tok)
+}
+
+// loginUserPayload 登录响应里 user 对象的唯一构造点（两条登录腿共用）。
+// 加字段只改这里；不要在任一 handler 里另拼一份 map。
+func loginUserPayload(u *store.User) map[string]interface{} {
+	return map[string]interface{}{
+		"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
+		"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
+		// must_change_pwd：1=登录后必须先改密（428 强制闸，见 auth_password_gate.go）
+		// profile_setup_required：首登资料提醒（可跳过，**不是**强制闸）
+		"must_change_pwd": u.MustChangePwd, "profile_setup_required": u.ProfileSetupRequired,
 	}
-	// 返回 JWT 与脱敏后的用户信息（不含密码哈希）
-	// ★ P0-3：需要跨子域跳转时不返回裸 token，仅返回一次性 sso_code（E3 口径对齐）
+}
+
+// brandRedirectFor 计算跨子域跳转字段（需求 1-B）。
+//   - 返回 ("", "")：本次登录就在该租户的品牌子域上，或该租户没配专属域 ⇒ 无需跳转；
+//   - 返回 (host, "")：需要跳转但一次性码没签出来（Redis 不可用等）⇒ 调用方回裸 token 兜底；
+//   - 返回 (host, code)：标准形态，前端拿 code 去 /api/auth/sso/exchange 换 JWT。
+//
+// ★ P0-3 修复（2026-09-14）：跨子域登录改发一次性 sso_code（60s、单次消费）——
+// 旧实现把裸 JWT 放进重定向 URL（进浏览器历史/Referer），且 E3 后前端不再消费 ?token=。
+func (s *Server) brandRedirectFor(r *http.Request, u *store.User) (string, string) {
+	if s.Ten == nil || u.TenantID <= 0 {
+		return "", ""
+	}
+	t, e := s.Ten.GetByID(u.TenantID)
+	if e != nil || t == nil || strings.TrimSpace(t.Domain) == "" {
+		return "", ""
+	}
+	bh := strings.TrimSpace(t.Domain) + "." + brandingBaseDomain(s)
+	if r.Host == bh {
+		return "", ""
+	}
+	xcode := newSSOExchangeCode()
+	if xcode == "" {
+		return bh, ""
+	}
+	payload, _ := json.Marshal(map[string]int64{"uid": u.ID, "tid": u.TenantID})
+	vcodeSet("sso_xchg:"+xcode, payload, 60*time.Second)
+	return bh, xcode
+}
+
+// writeLoginResponse 登录成功的唯一出口：密码腿（handleLogin）与邮箱验证码腿（finishLogin）都走这里。
+// ★ P0-3 口径：需要跨子域跳转时不返回裸 token，仅返回一次性 sso_code。
+func (s *Server) writeLoginResponse(w http.ResponseWriter, r *http.Request, u *store.User, tok string) {
+	brandHost, brandSSOCode := s.brandRedirectFor(r, u)
 	if brandHost != "" && brandSSOCode != "" {
 		writeJSON(w, 200, map[string]interface{}{
 			"success": true, "brand_host": brandHost, "sso_code": brandSSOCode,
-			"user": map[string]interface{}{
-				"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
-				"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-				"must_change_pwd": u.MustChangePwd, "profile_setup_required": u.ProfileSetupRequired,
-			},
+			"user": loginUserPayload(u),
 		})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "token": tok, "brand_host": brandHost,
-		"user": map[string]interface{}{
-			"id": u.ID, "username": u.Username, "display_name": u.DisplayName,
-			"role": u.Role, "tenant_id": u.TenantID, "email": u.Email,
-			// ★ 首登强制改密（2026-09-02 功能）：1=登录后必须先改密，前端弹窗引导
-			"must_change_pwd": u.MustChangePwd, "profile_setup_required": u.ProfileSetupRequired,
-		},
+		"user": loginUserPayload(u),
 	})
 }
 
@@ -324,7 +346,7 @@ func (s *Server) clearLoginAcctFails(account string) {
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// ★ 积分口径全面上线（2026-09-19）：不再下发积分↔token 汇率——所有余额/用量
@@ -338,7 +360,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMeContext(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 按登录归属逐级补齐展示字段：部门名（GetOrgByID）→ 租户名/个人账号/邀请开关（Ten.GetByID，查询失败留空不阻断）
@@ -396,7 +418,7 @@ var legacyCounter atomic.Int64
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -419,7 +441,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	//   而无原密码的账号被锁在改密入口外。发码口已强制校验当前会话，验证码只能发给本人邮箱。
 	emailCodeProvided := strings.TrimSpace(req.EmailCode) != ""
 	if emailCodeProvided {
-		if strings.TrimSpace(u.Email) == "" || !verifyEmailCodeFor(u.Email, req.EmailCode, emailPurposePassword) {
+		// ★ 2026-10-22 P0-14 补落地：这里改用「验证但**不消费**」的那把尺子。
+		//   旧形态 verifyEmailCodeFor 验证通过即删码，而下面 ResetPassword 还可能 err / 0 行——
+		//   用户密码没改成、码却被烧掉，只能重新发一次（方案 §三·14 明令「先改密成功再作废码」）。
+		//   成功路径在 n>0 之后调 consumeEmailCode 补删。
+		if strings.TrimSpace(u.Email) == "" || !verifyEmailCodeKeep(u.Email, req.EmailCode, emailPurposePassword) {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱验证码错误或已过期"))
 			return
 		}
@@ -446,6 +472,11 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	if n == 0 {
 		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号不存在或已被删除，请重新登录后再试"))
 		return
+	}
+	// ★ 2026-10-22 P0-14：改密**已经成功**，此刻才作废验证码（上面用的是 keep 版校验）。
+	//   失败分支（err / n==0）一律不删——用户手里的码还留着，可以直接重试，不必重新发码。
+	if emailCodeProvided {
+		consumeEmailCode(u.Email, emailPurposePassword)
 	}
 	// 记录修改密码审计
 	// ★ F-63（2026-09-26 批 I-3）：detail 原为空串；只记「谁改了口令」这一事实与账号名，
@@ -502,15 +533,15 @@ func genResetCode() (string, error) {
 func (s *Server) handleDeactivateAccount(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	if u.Role != store.RoleUser {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅普通用户支持自助注销；管理员账号请联系上级处理"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅普通用户支持自助注销；管理员账号请联系上级处理"))
 		return
 	}
 	if err := s.Store.DeactivateSelf(u.ID, u.TenantID); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 		return
 	}
 	revoked := s.Store.DisableAPIKeysByUser(u.TenantID, u.ID) // ★ 连带停用名下全部 API Key
@@ -636,11 +667,19 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	decErr := json.NewDecoder(r.Body).Decode(&req)
 	if decErr != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("请求格式错误: %v", decErr)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("请求格式错误: %v", decErr)))
 		return
 	}
 	if req.Username == "" || req.Password == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "用户名和密码不能为空"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户名和密码不能为空"))
+		return
+	}
+	// ★ 2026-10-22 一致性核查补漏（P0-3「强度闸一处定义」）：
+	//   管理台建号是四个口令写口之一，此前**只判非空**，于是超管/租户管理员可代客设 1 位密码，
+	//   与注册（register.go:130）、重置（:948）、改密（:413）、资料补全（profile_setup.go:51）
+	//   四把尺子不一致。方案 §9.1 P0-3 宣称"四个写口全调它"，实测只有三处，本处补齐。
+	if !auth.ValidatePassword(req.Password) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
 		return
 	}
 	// 角色默认普通用户
@@ -651,16 +690,16 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	switch req.Role {
 	case store.RoleUser, store.RoleDeptAdmin, store.RoleTenantAdmin, store.RoleSuperAdmin, store.RoleApprover, store.RoleAdmin:
 	default:
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "角色无效"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "角色无效"))
 		return
 	}
 	// 权限校验：仅超级管理员可创建超级管理员/管理员等高权限角色；租户管理员可创建部门管理员/普通用户
 	if auth.RoleLevel(req.Role) >= 4 && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅超级管理员可分配该角色"))
 		return
 	}
 	if auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅租户管理员及以上可分配该角色"))
 		return
 	}
 	// ★ F-31（闸 1/2，2026-09-25 批F）：dept_admin 必须绑定部门——
@@ -688,20 +727,20 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	// 组织归属校验：非平台级用户组织必须属于归属租户
 	if tid > 0 {
 		if err := s.validateOrg(tid, req.OrgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 			return
 		}
 	}
 	// 部门管理员范围：目标组织必须在其本部门及子部门树内（否则拒绝创建）
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法开通账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "部门管理员未绑定部门，无法开通账号"))
 			return
 		}
 		if req.OrgID > 0 {
 			inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, req.OrgID)
 			if e != nil || !inTree {
-				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权在非本部门下开通账号"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权在非本部门下开通账号"))
 				return
 			}
 		}
@@ -770,7 +809,7 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 		OrgID       *int64  `json:"org_id"`       // 所属组织 ID（nil=不修改，0=根组织）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// ★ 目标用户真实租户解析（问题2修复）：超管平台上下文（tid<=0）按 ID 定位用户实际归属租户，
@@ -801,12 +840,12 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	// 权限校验：目标用户角色检查（防越权操作超管）
 	// 租户管理员不能操作超管账号
 	if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：不能操作超级管理员"))
 		return
 	}
 	// 非超管不能把用户提升为超管级角色
 	if reqRole != "" && auth.RoleLevel(reqRole) >= 4 && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅超级管理员可分配该角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅超级管理员可分配该角色"))
 		return
 	}
 	// ★ 收口（2026-09-16 安全整改）：等级≥4 角色只允许平台级账号（tenant_id=0）持有——
@@ -814,44 +853,44 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	//   实测可造出 role='admin' AND tenant_id>0 的违规行，穿透旧 IsSuperAdmin 完成
 	//   跨租户退款/下载。与 create 口径对齐：非平台归属目标直接拒绝高角色分配。
 	if reqRole != "" && auth.RoleLevel(reqRole) >= 4 && tid > 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "超管级角色仅可分配给平台级账号（tenant_id=0），请先调整归属"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "超管级角色仅可分配给平台级账号（tenant_id=0），请先调整归属"))
 		return
 	}
 	// 非租户管理员不能分配租户管理员级角色
 	if reqRole != "" && auth.RoleLevel(reqRole) >= 3 && !auth.IsTenantAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：仅租户管理员及以上可分配该角色"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅租户管理员及以上可分配该角色"))
 		return
 	}
 	// 部门管理员范围：目标用户必须在本部门及子部门树内
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "部门管理员未绑定部门，无法操作"))
 			return
 		}
 		// ★ P0-2 修复（2026-09-14）：目标 org_id=0（未分配，注册/SCIM/建号默认值）也必须拒绝——
 		//   旧实现 `target.OrgID > 0` 才做子树校验，org_id=0 时整段校验被跳过，
 		//   部门管理员可重置/接管同租户租户管理员账号（未分配部门）。与 Delete 口径对齐。
 		if target.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作未分配部门的账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作未分配部门的账号"))
 			return
 		}
 		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
 		if e2 != nil || !inTree {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作非本部门下账号"))
 			return
 		}
 	}
 	// 组织归属校验：非超管不能把用户移出本租户组织（租户隔离，仅校验组织存在性）
 	if req.OrgID != nil {
 		if err := s.validateOrg(tid, *req.OrgID); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
 			return
 		}
 		// 部门管理员：目标组织也须在本部门子树内
 		if auth.RoleLevel(u.Role) == 2 {
 			inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, *req.OrgID)
 			if e2 != nil || !inTree {
-				writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权把用户移出本部门范围"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权把用户移出本部门范围"))
 				return
 			}
 		}
@@ -963,29 +1002,29 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 	}
 	// 权限校验：非超管不能重置超管密码（防越权）
 	if target, err := s.Store.GetUser(req.ID, tid); err == nil && auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：不能操作超级管理员"))
 		return
 	}
 	// 部门管理员范围：目标用户须在本部门子树内
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "部门管理员未绑定部门，无法操作"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "部门管理员未绑定部门，无法操作"))
 			return
 		}
 		// ★ P0-2 修复（2026-09-14）：org_id=0（未分配）目标必须拒绝——旧实现跳过校验，
 		//   部门管理员可重置租户管理员密码完成接管。与 Update/Delete 口径对齐。
 		target, e := s.Store.GetUser(req.ID, tid)
 		if e != nil {
-			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "目标用户不存在"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "目标用户不存在"))
 			return
 		}
 		if target.OrgID <= 0 {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作未分配部门的账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作未分配部门的账号"))
 			return
 		}
 		inTree, e2 := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
 		if e2 != nil || !inTree {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作非本部门下账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作非本部门下账号"))
 			return
 		}
 	}
@@ -1009,8 +1048,16 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		return
 	}
 	if n == 0 {
-		// 0 行影响不是错误，是"什么都没改到"——显式判失败，禁止回 success
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "口令未能写入，请重试"))
+		// 0 行影响不是错误，是"什么都没改到"——显式判失败，禁止回 success。
+		// ★ 2026-10-22 口径统一（方案 §六 ⑥ 补锁时发现）：这里原先回 500「口令未能写入，请重试」，
+		//   而 handleChangePassword 的同一分支回 404。两处是**同一种情形**——
+		//   存在性前置已经通过（上面的 target / authUser），UPDATE 却影响 0 行，
+		//   即账号在两次读之间被删的竞态。同样的情形两种回执，等于让调用方猜。
+		//   取 404：语义准确（资源确实不存在了）、文案可行动（刷新/重登，而不是"重试"——
+		//   重试永远不会成功，把不可重试说成"请重试"是把用户按在原地反复撞同一堵墙）。
+		//   文案与 handleChangePassword 同一条腿**逐字相同**（口径统一，且复用已录词条，
+		//   不新开一条只在这一处出现的 i18n 文案）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "账号不存在或已被删除，请重新登录后再试"))
 		return
 	}
 	// ★ F-63（批 I-3）：detail 补「被重置的账号」，并留「首登强制改密」标记（旧实现空串：
@@ -1042,11 +1089,11 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.ID == u.ID {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "不能删除自己的账号"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不能删除自己的账号"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -1080,17 +1127,17 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	// 删除闸口：非超管不得删超管；部门管理员限同租户且目标账号在本部门子树内
 	if auth.IsSuperAdmin(target) && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "权限不足：不能操作超级管理员"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：不能操作超级管理员"))
 		return
 	}
 	if auth.RoleLevel(u.Role) == 2 {
 		if u.OrgID <= 0 || target.OrgID <= 0 || target.TenantID != tid {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除非本部门账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权删除非本部门账号"))
 			return
 		}
 		inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, target.OrgID)
 		if e != nil || !inTree {
-			writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除非本部门账号"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权删除非本部门账号"))
 			return
 		}
 	}
@@ -1116,7 +1163,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -1125,33 +1172,33 @@ func (s *Server) handleUpdateEmail(w http.ResponseWriter, r *http.Request) {
 		OldCode string `json:"old_code"` // 发往原绑定邮箱的验证码（防劫持：证明对旧邮箱支配权）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(req.Email))
 	if emailRe.MatchString(email) == false {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "邮箱格式不正确"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱格式不正确"))
 		return
 	}
 	// ★ S3 防薅：一次性邮箱拒绑
 	if msg := s.disposableEmailRejected(email); msg != "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": msg})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, msg))
 		return
 	}
 	// ★ 新邮箱撞库预检（2026-08-26 需求）：目标邮箱出现在邀请奖励流水中即拒绝换绑——
 	//   从账户层入口杜绝「换到带奖励历史的邮箱 → 后续受邀零奖励」的死胡同。
 	if s.Store.EmailInRewardLedger(email) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "该邮箱已被用于邀请注册奖励，无法换绑"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "该邮箱已被用于邀请注册奖励，无法换绑"))
 		return
 	}
 	if strings.TrimSpace(req.NewCode) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入新邮箱验证码"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请输入新邮箱验证码"))
 		return
 	}
 	// ★ 已绑定过邮箱的账号：还需校验「原邮箱」验证码，双重确认防止账号邮箱被单点劫持
 	oldEmail := strings.ToLower(strings.TrimSpace(u.Email))
 	if oldEmail != "" && strings.TrimSpace(req.OldCode) == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请输入原邮箱验证码"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请输入原邮箱验证码"))
 		return
 	}
 	if oldEmail != "" && !verifyEmailCode(oldEmail, req.OldCode) {

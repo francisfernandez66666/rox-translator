@@ -123,7 +123,7 @@ func (s *Server) handleAdminTaskSave(w http.ResponseWriter, r *http.Request) {
 		CapPerWeek  *int   `json:"cap_per_week"` // 每周上限（0=不限）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if req.Title == "" {
@@ -220,7 +220,7 @@ func (s *Server) handleAdminTaskDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待删除任务 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少任务 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少任务 id"))
 		return
 	}
 	if err := s.Store.DeleteUserTask(req.ID); err != nil {
@@ -238,7 +238,7 @@ func (s *Server) handleAdminTaskDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleMyTasks(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -290,7 +290,7 @@ func (s *Server) handleAdminTaskResetConsumption(w http.ResponseWriter, r *http.
 	}
 	if r.Body != nil {
 		if e := json.NewDecoder(r.Body).Decode(&req); e != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 			return
 		}
 	}
@@ -319,7 +319,7 @@ func (s *Server) handleAdminTaskResetConsumption(w http.ResponseWriter, r *http.
 func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	if !s.effectivePolicyCached(s.effTenant(r, u)).Task.Enabled { // ★ C31
@@ -333,7 +333,7 @@ func (s *Server) handleClaimTask(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待领取任务 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少任务 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少任务 id"))
 		return
 	}
 	ok, tokens := s.Store.ClaimUserTask(u.ID, u.TenantID, req.ID)

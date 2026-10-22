@@ -174,7 +174,7 @@ func (s *Server) handleAlertSilence(w http.ResponseWriter, r *http.Request) {
 		Minutes  int    `json:"minutes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Kind == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误（kind 必填）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误（kind 必填）"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -208,7 +208,7 @@ func (s *Server) handleAlertUnsilence(w http.ResponseWriter, r *http.Request) {
 		Kind     string `json:"kind"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Kind == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误（kind 必填）"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误（kind 必填）"))
 		return
 	}
 	tid := s.effTenant(r, u)
@@ -240,7 +240,7 @@ func (s *Server) handleAlertResolve(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"` // 待关闭告警 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if err := s.Store.ResolveAlert(req.ID); err != nil {

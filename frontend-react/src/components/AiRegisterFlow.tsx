@@ -123,6 +123,16 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   const [backDisabled, setBackDisabled] = useState(false)
   const [finished, setFinished] = useState(false) // 已进入收尾流程：此后不接受回退
   const [busy, setBusy] = useState(false) // 注册请求进行中：锁选项与提交，防重复建号
+  // ★ 2026-10-22 一致性核查修复（P1-3「一种错误位」）：
+  //   方案 §四·3 原文：「错误一律卡内红字 `.auth-err`（AI 流保留 toast 但**必须同时**在卡内落一条）」。
+  //   此前本组件 8 处错误全走 toastError、卡内零落位——toast 一消失用户看到的就是
+  //   "点了没反应"，而传统注册卡（Login.tsx）早就有 .auth-err，同一件事两种形态。
+  //   现在两个出口同一个来源：fail() 既 toast 又落卡内。
+  const [formErr, setFormErr] = useState('')
+  const fail = useCallback((msg: string) => {
+    setFormErr(msg)
+    toastError(msg)
+  }, [])
   // AI 流程内的账号信息表单（与传统注册表单字段有意不共用：这里只有 4~6 项）
   const [aiForm, setAiForm] = useState({
     username: prefillUsername, password: '', email: '', emailCode: '', orgCode: '', orgCn: '', orgEn: '',
@@ -460,15 +470,16 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
     // ★ 2026-10-21 IAM 重做 P1-4：协议勾选从"提交即视为同意"改成表单内显式勾选，
     //   未勾选直接拦下（与传统表单 doRegister 的 needAgree 同一把判据）。
-    if (!aiForm.agreed) { setBusy(false); toastError(t('auth.needAgree')); return }
+    if (!aiForm.agreed) { setBusy(false); fail(t('auth.needAgree')); return }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
-    if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
+    if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
     const kind = sel.type ==='personal'?'personal': sel.role ==='admin'?'admin':'staff'
     // F-06 前置校验（对齐传统表单 Login.tsx 的 orgCodeRequired/inviteRequired）：
     // 管理员缺组织编码、员工缺企业邀请码都必吃后端 400，卡内字段前有 * 标记，故只拦不弹
     if (kind === 'admin' && !aiForm.orgCode.trim()) { setBusy(false); return }
     if (kind === 'staff' && !aiForm.orgCode.trim()) { setBusy(false); return }
+    setFormErr('') // 每次提交先清上一轮红字：否则改完再提，旧错误会跟着新请求一起显示
     setBusy(true)
     const tk = takeCaptchaToken()
     try {
@@ -492,7 +503,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       })
       // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
       // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
-      if (!r.success) { setBusy(false); toastError(r.message || t('auth.sendFail')); return }
+      if (!r.success) { setBusy(false); fail(r.message || t('auth.sendFail')); return }
       // 注册成功即登录（★ 2026-10-21 IAM 重做 P1-6）：
       // 服务端随注册响应直接下发会话，优先消费它——旧形态在这里**再调一次 login()**，
       // 而那正是 IAM 报障第 1 条的形态：注册用邮箱/口令落库，登录却只认用户名、
@@ -525,15 +536,15 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         // 账号已经建成，只差进不去：这句必须显式出声（旧形态静默解锁表单，
         // 用户以为注册失败又提交一次，第二次必吃「用户名已存在」）
         setBusy(false)
-        toastError(t('auth.regOkLoginFail'))
+        fail(t('auth.regOkLoginFail'))
       }
     } catch (e) {
       setBusy(false) // 接口异常一律转回可重试态
       // ★ 2026-09-24：旧写法静默吞异常，人机验证 403 时用户只看到「点了提交没反应」；
       //   现把失败原因显式 toast（后端文案经 publicErrMessage 脱敏，可直接面向用户）
-      toastError((e as Error).message || t('auth.sendFail'))
+      fail((e as Error).message || t('auth.sendFail'))
     }
-  }, [alive, aiForm, t, addMsg, typeText, reduced, finish, scrollBottom, captchaOn, takeCaptchaToken])
+  }, [alive, aiForm, t, addMsg, typeText, reduced, finish, scrollBottom, captchaOn, takeCaptchaToken, fail])
 
   // 首个问题：账号类型（dedicatedRegister 直接走企业员工分支）
   // deps 只留挂载：面板每次挂上都是从第一步重来（不跨挂载续答），
@@ -619,6 +630,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                   kind={selRef.current.type ==='personal'?'personal': selRef.current.role ==='admin'?'admin':'staff'}
                   form={aiForm} setForm={setAiForm}
                   brought={usernameBrought}
+                  errMsg={formErr}
                   codeSent={codeSent}
                   cooldown={codeCd.left > 0}
                   onSendCode={async () => {
@@ -626,7 +638,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                     // F-03：冷却期内双保险拦重发（按钮此时已 disabled，这里防住任何旁路触发）
                     if (codeCd.left > 0) return
                     // 开验但还没领到 token：明确告知要过人机验证（旧写法直接裸发 → 403 无提示）
-                    if (captchaOn && !tsTokenRef.current) { toastError(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
+                    if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
                     // F-02：乐观置位（与旧 ref 行为一致，请求在途即显示「在线」），失败分支回滚
                     setCodeSent(true)
                     const tk = takeCaptchaToken()
@@ -635,12 +647,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                       if (!r.success) {
                         setCodeSent(false) // 发码失败回滚标记：按钮回到「发送验证码」
                         codeCd.start()     // F-03：失败进 60s 冷却，禁止立刻连点刷验证码接口
-                        toastError(r.message || t('auth.sendCodeFail'))
+                        fail(r.message || t('auth.sendCodeFail'))
                       }
                     } catch (e) {
                       setCodeSent(false)
                       codeCd.start() // F-03：异常同样落 60s 冷却（与业务失败同口径）
-                      toastError((e as Error).message || t('auth.sendCodeFail')) // E10：异常必须显式提示，未捕获拒绝就是「点了没反应」
+                      fail((e as Error).message || t('auth.sendCodeFail')) // E10：异常必须显式提示，未捕获拒绝就是「点了没反应」
                     }
                   }}
                   busy={busy}
@@ -694,13 +706,15 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
 // ---------- 账号信息表单块（真实可控输入，字段按分支裁剪） ----------
 function AccountFormBlock({
-  kind, form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t,
+  kind, form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t, errMsg,
 }: {
   kind:'personal'|'staff'|'admin'
   form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string; agreed: boolean }
   setForm: (f: typeof form) => void
   /** 用户名是否由登录页带入（仅影响提示文案，字段本身始终可编辑） */
   brought: boolean
+  /** ★ 2026-10-22 P1-3：卡内错误位文案（与 toast 同源，由上层 fail() 一并写入） */
+  errMsg?: string
   codeSent: boolean
   /** ★ F-03（2026-09-25 批G）：发码失败后的 60s 冷却期（true=冷却中，按钮禁用不可重发） */
   cooldown: boolean
@@ -823,6 +837,13 @@ function AccountFormBlock({
           </>
         )}
       />
+      {/* ★ 2026-10-22 一致性核查修复（P1-3）：卡内红字错误位，与 toast 同源。
+          贴提交钮上方而不是表单顶部——用户点完按钮目光就落在这里，不必回滚去找提示。
+          inline style 兜底同 ProfileSetupGate：CSS_AUTH 里的 .auth-err 只在登录面加载，
+          本面板走 CSS_AR，不兜底就会"类名在、样式无"。 */}
+      {!!errMsg && (
+        <div className="auth-err" style={{ color: 'var(--lc-danger)', fontSize: 15, lineHeight: 1.6 }}>{errMsg}</div>
+      )}
       {/* 提交期间禁用并转圈：注册是「有副作用的一次性动作」，重复点击会再发一次注册请求 */}
       <button className={'lc-btn lc-btn--primary lc-btn--block'+ (busy ?'ar-busy':'')} type="button"disabled={busy}
               onClick={onSubmit}>

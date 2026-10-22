@@ -26,6 +26,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/config"
 	"translator/internal/engine"
+	apierrors "translator/internal/errors"
 )
 
 // sloDef 单个 SLO 目标定义。
@@ -237,7 +238,7 @@ func (s *Server) openAlertOfKind(kind string) (bool, int64) {
 func (s *Server) handleOpsSLO(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil || !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可查看 SLO 状态"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可查看 SLO 状态"))
 		return
 	}
 	st := s.slo
@@ -271,7 +272,7 @@ func round1(v float64) float64 { return float64(int(v*10+0.5)) / 10 }
 func (s *Server) handleOpsRoutes(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil || !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超管可查看路由统计"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可查看路由统计"))
 		return
 	}
 	var routes []engine.RouteStatView

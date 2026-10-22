@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	apierrors "translator/internal/errors"
 	"translator/internal/mail"
 )
 
@@ -464,7 +465,7 @@ func (s *Server) handleAdminMailTemplates(w http.ResponseWriter, r *http.Request
 	case http.MethodPut, http.MethodPost:
 		s.handleAdminMailTemplatesPut(w, r)
 	default:
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "方法不允许"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "方法不允许"))
 	}
 }
 
@@ -514,21 +515,21 @@ func (s *Server) handleAdminMailTemplatesPut(w http.ResponseWriter, r *http.Requ
 		Templates map[string]MailTpl `json:"templates"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 仅允许已知模板 code，且只保留合法字段
 	merged := s.loadCustomMailTpls()
 	for code, tpl := range req.Templates {
 		if _, ok := mailTplMeta(code); !ok {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "未知模板类型: " + code})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "未知模板类型: "+code))
 			return
 		}
 		merged[code] = MailTpl{Subject: tpl.Subject, Body: tpl.Body, CC: tpl.CC}
 	}
 	raw, _ := json.Marshal(merged)
 	if err := s.Store.SetConfig("mail_templates", string(raw)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存失败: "+err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "message": "邮件模板已保存"})

@@ -17,6 +17,7 @@ import (
 	qrcode "github.com/skip2/go-qrcode"
 
 	"translator/internal/auth"
+	apierrors "translator/internal/errors"
 	"translator/internal/store"
 )
 
@@ -37,7 +38,7 @@ func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
 	// 用户鉴权
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 确保用户有邀请码（懒生成）
@@ -74,18 +75,18 @@ func (s *Server) handleReferralMy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleReferralQrcode(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	if s.Store == nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "平台未初始化"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "平台未初始化"))
 		return
 	}
 	code := s.Store.EnsureRefCode(u.ID)
 	url := inviteBaseURL(r) + "/register?ref=" + code
 	png, err := qrcode.Encode(url, qrcode.Medium, 512)
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "二维码生成失败: " + err.Error()})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "二维码生成失败: "+err.Error()))
 		return
 	}
 	w.Header().Set("Content-Type", "image/png")
@@ -117,7 +118,7 @@ func sysReferralCfgInt64(get func(string) (string, error), key string, def int64
 func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil || !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅超级管理员可配置邀请参数"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超级管理员可配置邀请参数"))
 		return
 	}
 	const (
@@ -151,7 +152,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 			PaidDays     *int64 `json:"paid_reward_days"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
-			writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 			return
 		}
 		// 各键逐项增量落库：积分入参折回 token 记账值，负值归零，未传指针跳过不动既有配置
@@ -193,7 +194,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 		s.Store.LogAudit(0, u.ID, "referral_config", "system_config", "邀请裂变运营参数更新")
 		writeJSON(w, 200, map[string]interface{}{"success": true})
 	default:
-		writeJSON(w, 405, map[string]interface{}{"success": false, "message": "方法不允许"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "方法不允许"))
 	}
 }
 
@@ -202,7 +203,7 @@ func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Reques
 func (s *Server) handleReferralFunnel(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	f := s.Store.InviteFunnel(u.ID)

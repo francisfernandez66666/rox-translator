@@ -279,7 +279,7 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：登录用户即可查看工单（隐私：非超管强制仅自己的工单）
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 隐私隔离：除超管外，一律只返回当前用户创建的工单（涉及用户隐私）
@@ -327,7 +327,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：登录用户即可创建工单（隐私隔离：仅创建者可见）
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
@@ -338,7 +338,7 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		MaxLength   int64  `json:"max_length"`   // ★ 缩翻最长字符限制（0=未启用）
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请提供源文本"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供源文本"))
 		return
 	}
 	// 默认目标语言 en
@@ -393,13 +393,13 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 上传上限与 multipart 解析（与即时翻译对齐：translateUploadMax=40MB，多文件共享总上限）
 	r.Body = http.MaxBytesReader(w, r.Body, translateUploadMax)
 	if err := r.ParseMultipartForm(translateUploadMax); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": fmt.Sprintf("文件解析失败或超过大小上限（%dMB）", translateUploadMax/1024/1024)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("文件解析失败或超过大小上限（%dMB）", translateUploadMax/1024/1024)))
 		return
 	}
 	// 多文件：优先取 "files" 字段（可重复）；兼容旧单文件字段 "file"
@@ -411,7 +411,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if len(headers) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少文件"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少文件"))
 		return
 	}
 	// ★ 工单双模式（2026-09-13）：交付方式 delivery=restore 还原文件模式（默认）/ text 纯文案模式
@@ -425,19 +425,16 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !fileproc.IsTranslateFormat(ext, textMode) {
 			if delivery == "text" {
-				writeJSON(w, 400, map[string]interface{}{"success": false,
-					"message": "不支持的格式: " + hdr.Filename + "（纯文案模式支持 " + fileproc.FormatHintBase() +
-						" 及 " + fileproc.FormatHintText() + "）"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的格式: "+hdr.Filename+"（纯文案模式支持 "+fileproc.FormatHintBase()+
+					" 及 "+fileproc.FormatHintText()+"）"))
 				return
 			}
-			writeJSON(w, 400, map[string]interface{}{"success": false,
-				"message": "不支持的格式: " + hdr.Filename + "（仅支持 " + fileproc.FormatHintBase() + "）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的格式: "+hdr.Filename+"（仅支持 "+fileproc.FormatHintBase()+"）"))
 			return
 		}
 		// 纯文案模式下 anydoc 独占格式需要依赖就绪（缺失时老 12 种仍可用，不受影响）
 		if textMode && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
-			writeJSON(w, 400, map[string]interface{}{"success": false,
-				"message": hdr.Filename + " 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译（请管理员执行 pip install firecrawl-anydoc，或改用还原模式支持格式）"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, hdr.Filename+" 需服务器安装 firecrawl-anydoc 依赖后方可纯文案翻译（请管理员执行 pip install firecrawl-anydoc，或改用还原模式支持格式）"))
 			return
 		}
 	}
@@ -456,19 +453,19 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 		savePath := filepath.Join(dir, saveName)
 		src, ferr := hdr.Open()
 		if ferr != nil {
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "读取文件失败: " + hdr.Filename})
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "读取文件失败: "+hdr.Filename))
 			return
 		}
 		out, cerr := os.Create(savePath)
 		if cerr != nil {
 			src.Close()
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "保存文件失败"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存文件失败"))
 			return
 		}
 		if _, cerr = io.Copy(out, src); cerr != nil {
 			out.Close()
 			src.Close()
-			writeJSON(w, 500, map[string]interface{}{"success": false, "message": "写入文件失败"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "写入文件失败"))
 			return
 		}
 		out.Close()
@@ -483,7 +480,7 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 				for _, cleanup := range saved {
 					os.Remove(cleanup.path)
 				}
-				writeJSON(w, 400, map[string]interface{}{"success": false, "message": perr.Error()})
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, perr.Error()))
 				return
 			}
 		}
@@ -568,14 +565,14 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：登录用户；隐私：仅创建者或超管可运行
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"` // 工单 ID
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少工单 id"))
 		return
 	}
 	// 租户隔离：仅可取生效租户下的工单
@@ -589,7 +586,7 @@ func (s *Server) handleTicketRun(w http.ResponseWriter, r *http.Request) {
 	}
 	// 隐私校验：非创建者且非超管禁止运行他人工单
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权操作他人工单"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权操作他人工单"))
 		return
 	}
 	// ★ 整改 C5：状态机门槛——仅草稿/排队/被驳回可（重）跑。此前 completed 工单可被
@@ -704,14 +701,14 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	// 鉴权：登录用户；隐私=创建者或超管
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 解析工单 ID（来自查询参数）
 	idStr := r.URL.Query().Get("id")
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 	if id <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少工单 id"))
 		return
 	}
 	// 租户隔离：仅可取生效租户下的工单
@@ -724,7 +721,7 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	// 隐私校验：非创建者且非超管不可见他人工单详情
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权查看他人工单"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权查看他人工单"))
 		return
 	}
 	// 附带状态轨迹（流程步骤执行历史）
@@ -877,13 +874,13 @@ func (s *Server) ticketHasDeliverable(t *store.Ticket) bool {
 func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	idStr := r.URL.Query().Get("id")
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 	if id <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少工单 id"))
 		return
 	}
 	t, err := s.Store.GetTicket(id, s.effTenant(r, u))
@@ -895,7 +892,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	// 校验链：仅创建者/超管可下载，且须已完成工单
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权下载他人工单结果"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权下载他人工单结果"))
 		return
 	}
 	if t.Status != store.TicketCompleted {
@@ -940,7 +937,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			writeJSON(w, 404, map[string]interface{}{"success": false, "message": "该文件的产物不存在"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "该文件的产物不存在"))
 			return
 		}
 		// 全部产物打包 zip（跳过未生成/失败的文件）
@@ -1068,7 +1065,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	buf, err := f.WriteToBuffer()
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": "生成 xlsx 失败"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成 xlsx 失败"))
 		return
 	}
 	w.Header().Set("Content-Disposition", contentDisposition(baseName+".xlsx"))
@@ -1089,7 +1086,7 @@ func cellName(col, row int) string {
 func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 权限校验：需角色等级 >= 2（approver/admin/tenant_admin/super_admin）
@@ -1116,7 +1113,7 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 权限校验：需角色等级 >= 2
@@ -1133,7 +1130,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		ApprovedText string `json:"approved_text"` // 审批员可编辑终稿
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 租户隔离：仅可取生效租户下的工单
@@ -1180,7 +1177,7 @@ func (s *Server) handleApproveAction(w http.ResponseWriter, r *http.Request) {
 		//   「系统失败原因」，后者不得被当意见喂给模型。
 		t.RejectSource = store.RejectSourceHuman
 	default:
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "action 仅支持 approve/reject"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "action 仅支持 approve/reject"))
 		return
 	}
 	if err := s.Store.UpdateTicket(t); err != nil {
@@ -1291,13 +1288,13 @@ func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Reque
 				p = f.ResultPath
 			}
 			if p == "" {
-				writeJSON(w, 404, map[string]interface{}{"success": false, "message": "该文件暂无纯文案产物"})
+				s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "该文件暂无纯文案产物"))
 				return
 			}
 			s.serveOneFile(w, r, p, textDeliverableName(f))
 			return
 		}
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "文件不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "文件不存在"))
 		return
 	}
 	for _, f := range tfiles {
@@ -1355,7 +1352,7 @@ func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Reque
 func (s *Server) serveOneFile(w http.ResponseWriter, r *http.Request, path, dlName string) {
 	fh, err := os.Open(path)
 	if err != nil {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "产物文件不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "产物文件不存在"))
 		return
 	}
 	defer fh.Close()
@@ -1380,7 +1377,7 @@ func textDeliverableName(f *store.TicketFile) string {
 func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// 校验链：登录 → body id 合法 → 工单存在 → 仅创建者/超管 → 进行中/排队中禁删
@@ -1388,25 +1385,25 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
 	if err != nil {
-		writeJSON(w, 404, map[string]interface{}{"success": false, "message": "工单不存在"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "工单不存在"))
 		return
 	}
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权删除他人工单"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权删除他人工单"))
 		return
 	}
 	// 删除状态闸口：排队/翻译中禁删（避免 worker 写回已删工单），完成/取消才可删
 	if t.Status == store.TicketInProgress || t.Status == store.TicketQueued {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "工单正在翻译中，无法删除"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "工单正在翻译中，无法删除"))
 		return
 	}
 	if err := s.Store.DeleteTicketWithFiles(req.ID, s.effTenant(r, u)); err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_delete", "tickets", t.TicketNo)
@@ -1418,14 +1415,14 @@ func (s *Server) handleTicketDelete(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	var req struct {
 		ID int64 `json:"id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "缺少工单 id"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "缺少工单 id"))
 		return
 	}
 	t, err := s.Store.GetTicket(req.ID, s.effTenant(r, u))
@@ -1436,7 +1433,7 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if t.CreatedBy != u.ID && !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "无权取消他人工单"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权取消他人工单"))
 		return
 	}
 	// 取消闸口：仅创建者/超管，且状态必须是排队中/翻译中

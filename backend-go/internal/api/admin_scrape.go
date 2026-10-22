@@ -36,7 +36,7 @@ func (s *Server) requireSuperAdmin(w http.ResponseWriter, r *http.Request) (*sto
 		return nil, err
 	}
 	if !auth.IsSuperAdmin(u) {
-		writeJSON(w, 403, map[string]interface{}{"success": false, "message": "仅平台超管可操作数据采集"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅平台超管可操作数据采集"))
 		return nil, &apiErr{"非超管"}
 	}
 	return u, nil
@@ -64,20 +64,20 @@ func (s *Server) handleKBScrapeSourceCreate(w http.ResponseWriter, r *http.Reque
 	}
 	var req store.KBScrapeSource
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "name 必填"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "name 必填"))
 		return
 	}
 	// 合法性校验
 	switch req.Kind {
 	case "official_api", "limited_web", "llm_gen":
 	default:
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "kind 仅支持 official_api/limited_web/llm_gen"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "kind 仅支持 official_api/limited_web/llm_gen"))
 		return
 	}
 	switch req.PackType {
 	case "industry", "locale", "persona": // ★ 角色功能（2026-09-19）：persona 角色包纳入采集口径
 	default:
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "pack_type 仅支持 industry/locale/persona"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "pack_type 仅支持 industry/locale/persona"))
 		return
 	}
 	// Tier 优先级限 1..3，越界一律回落最低优先级 3
@@ -103,7 +103,7 @@ func (s *Server) handleKBScrapeSourceUpdate(w http.ResponseWriter, r *http.Reque
 	}
 	var req store.KBScrapeSource
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "id 必填"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "id 必填"))
 		return
 	}
 	// Tier 优先级限 1..3，越界一律回落最低优先级 3
@@ -130,7 +130,7 @@ func (s *Server) handleKBScrapeSourceStatus(w http.ResponseWriter, r *http.Reque
 		Enabled int   `json:"enabled"` // 1=启用 0=停用
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 || (req.Enabled != 0 && req.Enabled != 1) {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	if serr := s.Store.SetScrapeSourceEnabled(req.ID, req.Enabled); serr != nil {
@@ -222,11 +222,11 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 		Action string  `json:"action"` // approve / reject
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ids 必填"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "ids 必填"))
 		return
 	}
 	if req.Action != "approve" && req.Action != "reject" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "action 仅支持 approve/reject"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "action 仅支持 approve/reject"))
 		return
 	}
 	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
@@ -337,11 +337,11 @@ func (s *Server) handleKBScrapeRestore(w http.ResponseWriter, r *http.Request) {
 		Edits map[string]map[string]any `json:"edits"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.IDs) == 0 {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "ids 必填"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "ids 必填"))
 		return
 	}
 	if req.Kind != "entries" && req.Kind != "phrases" {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "kind 仅支持 entries/phrases"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "kind 仅支持 entries/phrases"))
 		return
 	}
 	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
@@ -446,7 +446,7 @@ func (s *Server) handleKBRewardConfig(w http.ResponseWriter, r *http.Request) {
 		DailyCap int64 `json:"daily_cap"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, 400, map[string]interface{}{"success": false, "message": "请求格式错误"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
 		return
 	}
 	// 三项开关各自独立 SetConfig（仅传了有效值才动），changed 收集明细供审计追溯

@@ -78,7 +78,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		pkgID, _ := strconv.ParseInt(r.URL.Query().Get("pack_id"), 10, 64)
 		u := s.authUser(r)
 		if u == nil {
-			writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+			s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 			return
 		}
 		if err := s.requireKBPackPerm(r, u, "manage", pkgID); err != nil {
@@ -98,7 +98,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	// POST 授权/撤销：解析 body 后依次过 manage 闸口、包存在性、role 白名单（空串=撤销）
@@ -151,7 +151,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 		err = s.Store.GrantKBPack(tid, req.PackID, req.UserID, role)
 	}
 	if err != nil {
-		writeJSON(w, 500, map[string]interface{}{"success": false, "message": publicErrMessage(r.Context(), err)})
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "kb_pack_grant", "kb_packages",
@@ -164,7 +164,7 @@ func (s *Server) handleKBPackGrants(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleKBPackMine(w http.ResponseWriter, r *http.Request) {
 	u := s.authUser(r)
 	if u == nil {
-		writeJSON(w, 401, map[string]interface{}{"success": false, "message": "未登录"})
+		s.writeError(w, r, apierrors.New(apierrors.ErrUnauthorized, "未登录"))
 		return
 	}
 	list, err := s.Store.ListKBPackGrantsByUser(s.effTenant(r, u), u.ID)
