@@ -165,6 +165,20 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱为必填项"))
 		return
 	}
+	// ★ 2026-10-22 统一登录批：「完善信息」升级注册通道（只有主站自动建号场景能触发）。
+	//   主站邮箱验证码登录会为未注册邮箱自动创建空白个人账号（email_login.go
+	//   createPersonalByEmail：无口令 + profile_setup_required=1）。登录后 AI 补全面板里
+	//   改选「企业」（新建组织 / 凭邀请码加入）再提交时，下方邮箱唯一腿会 409 拒死——
+	//   挡住注册的"其他账号"正是调用者本人几分钟前刚自动建的那个空白号。
+	//   放行条件三条同时满足（缺一不可）：① 请求带有效 JWT；② 邮箱归属调用者本人；
+	//   ③ 该账号是空白账号（无口令且待补全标记在身）。放行动作见下方唯一腿：先停用
+	//   空白账号释放邮箱，再原样走新建账号+组织。游客注册与租户站注册不带这条边，
+	//   upgradeBlankID 恒为 0，行为逐字节不变；防薅三档（IP/设备/平台名额）照旧占格。
+	upgradeBlankID := int64(0)
+	if caller := s.authUser(r); caller != nil && strings.EqualFold(caller.Email, req.Email) &&
+		caller.PasswordHash == "" && caller.ProfileSetupRequired == 1 {
+		upgradeBlankID = caller.ID
+	}
 	// 邮箱全局唯一（他人已绑定则拒绝）——★ 2026-10-21 P0-9：这一腿**已挪到"验码＋人机"之后**，
 	// 判据本体见下方 `该邮箱已被其他账号绑定` 那一段的注释（防枚举：先证明邮箱归你，才告诉你它被占用）。
 	// 邮箱验证开关（email_verify_enabled=1）：自助注册必须先验证邮箱归属（受邀加入不受影响）
@@ -172,7 +186,10 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
 		verifyOn = true
 	}
-	if verifyOn && req.Invite == "" {
+	// ★ 升级通道豁免 register-purpose 验码：邮箱归属已由本次登录的 login-purpose 验证码
+	//   证明（同一邮箱、同一会话、间隔分钟级）；补全面板按用户令不再索取邮箱与验证码，
+	//   此处若仍强校验，「完善信息改选企业」在开验部署下必吃 400。其余路径照旧。
+	if verifyOn && req.Invite == "" && upgradeBlankID == 0 {
 		if strings.TrimSpace(req.Email) == "" || strings.TrimSpace(req.EmailCode) == "" {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写邮箱并输入验证码"))
 			return
@@ -203,8 +220,21 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   ⚠️ 残余风险要如实说：`email_verify_enabled=0` 且 `captcha_provider=none` 时这一腿仍然可被枚举
 	//   ——那是**部署档位**的取舍（《部署指南》§生产档位明写生产应开邮箱验证），不在代码里替他兜。
 	if other, oerr := s.Store.GetUserByEmail(req.Email); oerr == nil && other != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
-		return
+		// ★ 升级通道：占用者是调用者本人的空白账号时，先停用它释放邮箱再放行。
+		//   idx_users_email 是**部分唯一索引**（只约束 active/deactivating，见 iam/store.go
+		//   SetUserEmail 注释），置 disabled 即释放；GetUserByEmail/CreateUserWithEmail
+		//   两处查重都带 status 过滤，停用后新建账号不会撞索引。旧账号行保留（数据不删），
+		//   与「注销账号邮箱可被占用」的既有语义同族。
+		if upgradeBlankID == 0 || other.ID != upgradeBlankID {
+			s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已被其他账号绑定"))
+			return
+		}
+		if uerr := s.Store.UpdateUser(other.ID, other.TenantID, other.DisplayName, other.Role, store.UserDisabled, other.OrgID); uerr != nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "账号升级失败，请稍后重试"))
+			return
+		}
+		s.Store.LogAudit(other.TenantID, other.ID, "account_upgrade", "users",
+			"完善信息升级注册：空白个人账号已停用，邮箱由新注册账号接管")
 	}
 	// ★ 注册类型（个人用户 / 企业用户）：
 	//   personal = 个人用户：自动建个人租户，好友邀请码经 ref 走邀请裂变（个人用户默认可获奖励）；

@@ -11,14 +11,16 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AiRegisterFlow from './AiRegisterFlow'
-import { authRegister, sendEmailCode } from '@/api'
+import { authRegister, sendEmailCode, profileSetup, setAuthToken, type AuthUser } from '@/api'
 import { toastError } from '@/lib/toastBus'
 
-// api 桩：只桩本组件用到的五个出口，注册/登录一律 success:false（本测试不走到提交成功）
+// api 桩：只桩本组件用到的出口，注册/登录一律 success:false（本测试不走到提交成功）
+// ★ 2026-10-22：补 profileSetup（complete 模式个人分支走它补全；register 模式用例不碰它）
 vi.mock('@/api', () => ({
   authRegister: vi.fn(async () => ({ success: false })),
   login: vi.fn(async () => ({ success: false })),
   sendEmailCode: vi.fn(async () => ({ success: true })),
+  profileSetup: vi.fn(async () => ({ success: false })),
   setAuthToken: vi.fn(),
   setActiveTenantId: vi.fn(),
 }))
@@ -508,5 +510,159 @@ describe('AiRegisterFlow P1-3 · 卡内红字错误位（.auth-err）', () => {
       vi.mocked(authRegister).mockReset()
       vi.mocked(authRegister).mockImplementation(async () => ({ success: false }))
     }
+  })
+})
+
+// ============================================================================
+// ★ 2026-10-22 统一登录批：complete（完善信息）模式——主站登录后由 ProfileSetupGate 挂载。
+// 与 register 模式的差异全在本 describe 固化：
+//   ① 话术整体换「完善信息」口径（标题/首问/选项/尾款/完成卡，共享键一个不改）；
+//   ② 表单没有邮箱与验证码两步（登录时已验证过邮箱），个人分支连协议勾选也没有；
+//   ③ 个人提交走 profileSetup（补既有空白账号），企业提交走 authRegister 升级通道
+//      （带登录邮箱、不带 email_code）；两条路都要消费重签/新签的 token。
+// ============================================================================
+describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登录批）', () => {
+  const loginEmail = 'temporary@example.com'
+
+  /** complete 模式挂载：登录邮箱 + 当前登录用户（兜底用）由上层（ProfileSetupGate）传入 */
+  function mountComplete(prefill: string, captcha?: { enabled: boolean; siteKey: string }) {
+    const sessionUser = { id: 7, username: prefill, role: 'user', tenant_id: 3, email: loginEmail } as AuthUser
+    return render(
+      <AiRegisterFlow
+        prefillUsername={prefill}
+        dedicatedRegister={false}
+        mode="complete"
+        loginEmail={loginEmail}
+        sessionUser={sessionUser}
+        captcha={captcha}
+        onDone={() => {}}
+        onClose={() => {}}
+      />,
+    )
+  }
+
+  /** 在最后一个选项组里按文本点选项（complete 模式选项标题不同，按新话术找） */
+  async function pickOpt(container: HTMLElement, text: string) {
+    await waitFor(() => {
+      const groups = container.querySelectorAll('.ar-opts')
+      if (groups.length === 0) throw new Error('options not ready')
+      const btn = Array.from(groups[groups.length - 1].querySelectorAll<HTMLButtonElement>('button'))
+        .find((b) => (b.textContent || '').includes(text))
+      if (!btn) throw new Error(`option "${text}" not ready`)
+      fireEvent.click(btn)
+    }, { timeout: 3000 })
+  }
+
+  it('话术换「完善信息」口径：标题/首问/选项/尾款全部改词，租户注册词不出现', async () => {
+    const { container } = mountComplete('temporary')
+    // 标题与首问
+    await waitFor(() => {
+      expect(container.querySelector('.ar-nav-t')?.textContent).toBe('AI 完善助理')
+    })
+    expect(document.body.textContent).toContain('要完善哪类资料？')
+    // 选项：个人资料 / 企业资料（不是「个人注册 / 企业注册」）
+    const optTexts = [...container.querySelectorAll('.ar-opt-t')].map((el) => el.textContent)
+    expect(optTexts).toContain('个人资料')
+    expect(optTexts).toContain('企业资料')
+    expect(document.body.textContent).not.toContain('个人注册')
+    // 注册话术关键词整屏不出现（共享键未改，只是这个模式不走它们）
+    expect(document.body.textContent).not.toContain('AI 注册助理')
+    // 走进个人分支：尾款话术也是完善口径（「设个密码…个人资料就齐了」）
+    await pickOpt(container, '个人资料')
+    await pickOpt(container, '暂不选择')
+    await waitFor(() => {
+      expect(container.querySelector('.ar-form'), '个人分支应渲染账号表单').not.toBeNull()
+    }, { timeout: 3000 })
+    expect(document.body.textContent).toContain('设个密码')
+    expect(document.body.textContent).toContain('保存并进入') // 提交钮 = auth.profileDone
+  })
+
+  it('个人分支表单：没有邮箱框、没有验证码六格与发码钮、没有协议勾选', async () => {
+    const { container } = mountComplete('temporary')
+    await pickOpt(container, '个人资料')
+    await pickOpt(container, '暂不选择')
+    await waitFor(() => {
+      expect(container.querySelector('.ar-form')).not.toBeNull()
+    }, { timeout: 3000 })
+    // 只剩用户名 + 密码两枚输入（邮箱字段隐退）
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    expect(inputs.length).toBe(2)
+    expect(container.querySelector('.ar-otp-row')).toBeNull()
+    expect(container.querySelector('.ar-otp')).toBeNull()
+    // 个人补全不是注册：协议勾选隐退（企业分支仍要，见下一个用例）
+    expect(container.querySelector('.ar-form input.lc-checkbox')).toBeNull()
+  })
+
+  it('个人分支提交走 profileSetup（用户名/密码/职业角色），消费重签 token，完成卡展示登录邮箱', async () => {
+    vi.mocked(profileSetup).mockClear()
+    vi.mocked(profileSetup).mockResolvedValueOnce({
+      success: true, token: 'ps-tok', user: { id: 7, username: 'real-name', role: 'user', tenant_id: 3, email: loginEmail, profile_setup_required: 0 },
+    } as never)
+    const { container } = mountComplete('temporary')
+    await pickOpt(container, '个人资料')
+    await pickOpt(container, '暂不选择')
+    await waitFor(() => { expect(container.querySelector('.ar-form')).not.toBeNull() }, { timeout: 3000 })
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    fireEvent.change(inputs[0], { target: { value: 'real-name' } }) // 用户名
+    fireEvent.change(container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!, { target: { value: 'P13Pass2026!' } })
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
+      .find((b) => (b.textContent || '').includes('保存并进入'))!
+    fireEvent.click(submit)
+    await waitFor(() => {
+      expect(profileSetup).toHaveBeenCalledWith({ username: 'real-name', password: 'P13Pass2026!', job_role: undefined })
+    }, { timeout: 3000 })
+    // 重签的 token 必须消费（旧 token 的 token_version 已递增，不换就 401）
+    await waitFor(() => { expect(vi.mocked(setAuthToken)).toHaveBeenCalledWith('ps-tok') })
+    // 完成卡：完善完成 + 邮箱行只读展示登录邮箱（表单里根本没有邮箱框）
+    await waitFor(() => {
+      expect(container.querySelector('.ar-done-t')?.textContent).toBe('完善完成')
+    }, { timeout: 5000 })
+    const emailRow = [...container.querySelectorAll('.ar-kv')].find((kv) => (kv.textContent || '').includes('邮箱'))
+    expect(emailRow?.textContent).toContain(loginEmail)
+    // 企业注册语义的检查点（创建账号/发欢迎邮件）不得出现
+    expect(document.body.textContent).not.toContain('创建账号')
+    expect(document.body.textContent).not.toContain('发送欢迎邮件')
+  })
+
+  it('企业·管理员分支：组织字段在、协议勾选在，提交走 authRegister 升级通道（带登录邮箱、无 email_code）', async () => {
+    vi.mocked(authRegister).mockClear()
+    vi.mocked(authRegister).mockResolvedValueOnce({
+      success: true, token: 'up-tok', user: { id: 9, username: 'uat_complete', role: 'tenant_admin', tenant_id: 11, email: loginEmail, profile_setup_required: 0 },
+    } as never)
+    const { container } = mountComplete('temporary')
+    await pickOpt(container, '企业资料')      // 账号类型（完善口径）
+    await pickOpt(container, '管理员')        // 企业身份
+    await pickOpt(container, '电商')          // 行业
+    await pickOpt(container, '暂不选择')      // 职业角色跳过
+    await waitFor(() => {
+      expect(container.querySelector('.ar-form'), '管理员分支应渲染账号表单').not.toBeNull()
+    }, { timeout: 3000 })
+    // 字段：用户名/密码/组织编码/组织中文名/组织英文名（没有邮箱框）
+    const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
+    expect(inputs.length).toBe(5)
+    expect(container.querySelector('.ar-otp')).toBeNull()
+    // 企业分支是「真注册」：协议勾选保留
+    const cb = container.querySelector<HTMLInputElement>('.ar-form input.lc-checkbox')!
+    expect(cb).not.toBeNull()
+    fireEvent.change(inputs[0], { target: { value: 'uat_complete' } }) // 用户名
+    fireEvent.change(container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!, { target: { value: 'Uat2026Pass!' } })
+    fireEvent.change(inputs[2], { target: { value: 'uatorg01' } }) // 组织编码
+    fireEvent.change(inputs[3], { target: { value: '优测物流' } }) // 组织中文名
+    fireEvent.change(inputs[4], { target: { value: 'Utest Logistics' } }) // 组织英文名
+    fireEvent.click(cb) // 勾协议
+    const submit = Array.from(container.querySelectorAll<HTMLButtonElement>('.ar-form button'))
+      .find((b) => (b.textContent || '').includes('保存并进入'))!
+    fireEvent.click(submit)
+    await waitFor(() => {
+      expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'enterprise', role_choice: 'admin', code: 'uatorg01',
+        email: loginEmail, agreed: true,
+      }))
+    }, { timeout: 3000 })
+    // 升级通道：不带 email_code（后端对本人空白账号豁免 register-purpose 验码）
+    const body = vi.mocked(authRegister).mock.calls[0]?.[0] as Record<string, unknown>
+    expect(body.email_code).toBeUndefined()
+    // 换会话：新 token 必须落 core
+    await waitFor(() => { expect(vi.mocked(setAuthToken)).toHaveBeenCalledWith('up-tok') })
   })
 })

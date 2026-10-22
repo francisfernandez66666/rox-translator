@@ -12,10 +12,14 @@
 // 覆盖（每条对应上面一条缺陷）：
 //   ① 卡标题 = DEFAULT_BRAND_NAME，而不是「登录」；
 //   ② 登录卡内不存在「免费注册」按钮（回归防护）；
-//   ③ 底部链接 = 两行、文案与顺序为 忘记密码？ / 没有账号？自助注册试用；
+//   ③ 底部链接 = 两行、文案与顺序为 忘记密码？ / 没有账号？自助注册试用（★ 2026-10-22 起仅租户站）；
 //   ④ 密码框眼睛按钮可切换 type password ↔ text，并同步 aria-pressed；
 //   ⑤ 卡右上角存在语言胶囊，点击可切换语言；
-//   ⑥ 认证屏字段没有可见 label（可访问名由 aria-label 承担）。
+//   ⑥ 认证屏字段没有可见 label（可访问名由 aria-label 承担）（★ 2026-10-22 起仅租户站）。
+// ★ 2026-10-22 统一登录批新增（只影响主站，租户站逐字不动）：
+//   ③-bis 主站底部只剩「使用密码登录」；⑥-bis 主站四枚字段都有可见标签；
+//   ⑬ 主站撤下 otpDesc 段落、提示改驻邮箱框 placeholder（auth.autoCreateHint）；
+//   ⑭ 主站 profile_setup_required 直接 onLogin（补全交给根级 ProfileSetupGate，不再弹本屏内联对话框）。
 //
 // 运行：npx vitest run src/components/Login.auth.dom.test.tsx
 // ============================================================================
@@ -50,6 +54,11 @@ vi.mock('@/api', () => ({
   ssoLoginUrl: (p: string) => `/api/sso/login?provider=${encodeURIComponent(p)}`,
 }))
 
+// ★ 2026-10-22 统一登录批：品牌租户可切（主站 0 / 租户站 7）。
+//   vi.hoisted 保证工厂被调用时（静态 import 阶段）brandCtx 已初始化——
+//   普通 let 会撞 TDZ（vi.mock 工厂先于模块体语句执行）。
+const brandCtx = vi.hoisted(() => ({ tenantId: 0 }))
+
 // 只把 useBranding 的远端品牌置空（回落默认品牌），DEFAULT_BRAND_NAME 仍取真实常量
 vi.mock('@/branding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/branding')>()
@@ -57,21 +66,23 @@ vi.mock('@/branding', async (importOriginal) => {
     ...actual,
     useBranding: () => ({
       brandName: '', dedicatedRegister: false, tenantName: '',
-      tenantId: 0, brandLogo: '', domain: '',
+      tenantId: brandCtx.tenantId, brandLogo: '', domain: '',
     }),
   }
 })
 
 const { DEFAULT_BRAND_NAME } = await import('@/branding')
 
-function renderLogin() {
-  return render(<ToastProvider><Login mode="home"onLogin={() => { /* noop */ }} /></ToastProvider>)
+/** 挂载登录屏；tid=0 主站（默认）/ 7 租户站（注册分支仍在的那个站） */
+function renderLogin(tid = 0, onLogin: (u: unknown) => void = () => { /* noop */ }) {
+  brandCtx.tenantId = tid
+  return render(<ToastProvider><Login mode="home"onLogin={onLogin} /></ToastProvider>)
 }
 
 const card = () => document.querySelector('.lc-auth-card') as HTMLElement
 const footButtons = () => [...document.querySelectorAll('.lc-auth-card__foot button')] as HTMLButtonElement[]
 
-beforeEach(() => { cleanup(); setLang('zh') })
+beforeEach(() => { cleanup(); setLang('zh'); brandCtx.tenantId = 0 })
 
 describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
   it('① 卡标题是品牌名，不是「登录」', () => {
@@ -88,10 +99,17 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     expect(labels).not.toContain('自助注册试用')
   })
 
-  it('③ 底部不再有找回密码入口：验证码主登录 + 密码备用 + 注册', () => {
-    renderLogin()
+  it('③ 底部链接 = 验证码主登录 + 密码备用 + 注册（★ 2026-10-22 起此形态仅租户/演示站）', () => {
+    renderLogin(7) // 租户站：注册分支仍在
     expect(footButtons().map((b) => b.textContent?.trim()))
       .toEqual(['使用密码登录', '没有账号？自助注册试用'])
+    expect(card().textContent).not.toContain('忘记密码')
+  })
+
+  it('③-bis ★2026-10-22 主站统一登录：底部只剩「使用密码登录」，注册入口全撤', () => {
+    renderLogin() // 主站（tenantId 0）
+    expect(footButtons().map((b) => b.textContent?.trim())).toEqual(['使用密码登录'])
+    expect(card().textContent).not.toContain('自助注册试用')
     expect(card().textContent).not.toContain('忘记密码')
   })
 
@@ -137,11 +155,27 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     setLang('zh') // 复位，别把英文态漏给后续用例
   })
 
-  it('⑥ 字段没有可见 label，但仍保留可访问名（验证码主档）', () => {
-    renderLogin()
+  it('⑥ 字段没有可见 label，但仍保留可访问名（验证码主档；★ 2026-10-22 起仅租户站）', () => {
+    renderLogin(7) // 租户站保持原形态
     expect(card().querySelectorAll('.lc-field__label').length).toBe(0)
     expect(card().querySelector('input[aria-label="' + t('auth.boundEmail') + '"]')).toBeTruthy()
     expect(card().querySelector('input[aria-label="' + t('auth.fieldEmailCode') + '"]')).toBeTruthy()
+  })
+
+  it('⑥-bis ★2026-10-22 主站：邮箱/验证码两枚字段都有可见标签，可访问名不丢', () => {
+    renderLogin() // 主站
+    const labels = [...card().querySelectorAll('.lc-field__label')].map((el) => el.textContent?.trim())
+    expect(labels).toEqual([t('auth.fieldEmail'), t('auth.fieldEmailCode')])
+    // 可见标签不替换 aria-label：读屏与点击聚焦（label↔input 的 htmlFor）都还在
+    expect(card().querySelector('input[aria-label="' + t('auth.boundEmail') + '"]')).toBeTruthy()
+    expect(card().querySelector('input[aria-label="' + t('auth.fieldEmailCode') + '"]')).toBeTruthy()
+  })
+
+  it('⑥-ter ★2026-10-22 主站：密码备用档的用户名/密码也都有可见标签', () => {
+    renderLogin() // 主站
+    fireEvent.click(footButtons().find((b) => b.textContent?.includes(t('auth.usePassword')))!)
+    const labels = [...card().querySelectorAll('.lc-field__label')].map((el) => el.textContent?.trim())
+    expect(labels).toEqual([t('auth.fieldUsername'), t('auth.fieldPassword')])
   })
 })
 
@@ -155,10 +189,11 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
 //   （void 元素），children 随 {...rest} 被摊上去 → 抛
 //   「input is a void element tag and must neither have children…」。
 // 这条断言在**整屏**层面守门：任何把 void 元素喂出 children 的改动都会让它红。
+// ★ 2026-10-22 统一登录批：注册屏只存在于租户/演示站，本 describe 固定走租户上下文。
 // ============================================================================
 describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）', () => {
   it('⑦ 点「自助注册试用」后注册卡正常渲染，协议勾选框存在且是 void 元素', () => {
-    renderLogin()
+    renderLogin(7) // 租户站才有注册分支
     const regBtn = footButtons().find((b) => b.textContent?.includes('自助注册'))
     expect(regBtn).toBeTruthy()
     fireEvent.click(regBtn!)
@@ -177,12 +212,29 @@ describe('注册屏 · 整屏可渲染（回归：void 元素被喂 children）'
   })
 
   it('⑧ 注册屏勾选框可交互：点击后 checked 翻转', () => {
-    renderLogin()
+    renderLogin(7) // 租户站才有注册分支
     fireEvent.click(footButtons().find((b) => b.textContent?.includes('自助注册'))!)
     const cb = card().querySelector('.lc-checkbox') as HTMLInputElement
     expect(cb.checked).toBe(false)
     fireEvent.click(cb)
     expect(cb.checked).toBe(true)
+  })
+
+  it('⑧-bis ★2026-10-22 主站没有注册屏可点：底部无注册钮', () => {
+    renderLogin() // 主站
+    expect(footButtons().find((b) => b.textContent?.includes('自助注册'))).toBeUndefined()
+  })
+
+  it('⑧-ter ★2026-10-22 主站：地址栏 /register 也不展开注册屏（落回登录屏）', () => {
+    window.history.pushState({}, '', '/register')
+    try {
+      renderLogin() // 主站
+      expect(card().querySelector('.lc-auth-card__title')?.textContent).toBe(DEFAULT_BRAND_NAME)
+      expect(document.body.textContent).not.toContain(t('auth.registerTitle'))
+      expect(footButtons().find((b) => b.textContent?.includes('自助注册'))).toBeUndefined()
+    } finally {
+      window.history.pushState({}, '', '/')
+    }
   })
 })
 
@@ -205,7 +257,7 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     vi.mocked(loginWithEmail).mockResolvedValueOnce({
       success: true, token: 'tok', user: { id: 1, username: 'otp', role: 'user', tenant_id: 0 },
     } as never)
-    render(<ToastProvider><Login mode="home" onLogin={onLogin} /></ToastProvider>)
+    renderLogin(0, onLogin)
     fireEvent.change(card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`)!, { target: { value: email } })
     fireEvent.click([...card().querySelectorAll('button')].find((b) => b.textContent?.includes(t('auth.sendCode')))!)
     await waitFor(() => expect(send).toHaveBeenCalledWith(email, undefined, 'login'))
@@ -224,7 +276,7 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     vi.mocked(profileSetup).mockResolvedValueOnce({
       success: true, token: 'tok2', user: { id: 1, username: 'newbie', role: 'user', tenant_id: 7, profile_setup_required: 1 },
     } as never)
-    render(<ToastProvider><Login mode="home" onLogin={onLogin} /></ToastProvider>)
+    renderLogin(7, onLogin) // 租户站：内联资料对话框仍在（主站已交给根级闸门，见 ⑭）
     fireEvent.change(card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`)!, { target: { value: email } })
     fireEvent.change(card().querySelector(`input[aria-label="${t('auth.fieldEmailCode')}"]`)!, { target: { value: '123456' } })
     fireEvent.click(card().querySelector('input[type="checkbox"]') as HTMLElement)
@@ -234,6 +286,34 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     fireEvent.click([...document.querySelectorAll('button')].find((b) => b.textContent?.trim() === t('auth.skipForNow'))!)
     await waitFor(() => expect(profileSetup).toHaveBeenCalledWith(expect.objectContaining({ skip: true })))
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ profile_setup_required: 1 })))
+  })
+
+  it('⑬ ★2026-10-22 主站撤下 otpDesc 段落、提示改驻邮箱框 placeholder；租户站两样都保留', () => {
+    renderLogin() // 主站
+    expect(card().textContent).not.toContain(t('auth.otpDesc'))
+    const emailBox = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
+    expect(emailBox.getAttribute('placeholder')).toBe(t('auth.autoCreateHint'))
+    // 租户站：原段落与原 placeholder 逐字不动（只影响主站）
+    renderLogin(7)
+    expect(card().textContent).toContain(t('auth.otpDesc'))
+    const tenantBox = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
+    expect(tenantBox.getAttribute('placeholder')).toBe(t('auth.boundEmail'))
+  })
+
+  it('⑭ ★2026-10-22 主站：profile_setup_required 直接 onLogin，本屏不再弹内联资料对话框', async () => {
+    const onLogin = vi.fn()
+    vi.mocked(loginWithEmail).mockResolvedValueOnce({
+      success: true, token: 'tok', user: { id: 1, username: 'newbie', role: 'user', tenant_id: 0, profile_setup_required: 1 },
+    } as never)
+    renderLogin(0, onLogin) // 主站
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`)!, { target: { value: email } })
+    fireEvent.change(card().querySelector(`input[aria-label="${t('auth.fieldEmailCode')}"]`)!, { target: { value: '123456' } })
+    fireEvent.click(card().querySelector('input[type="checkbox"]') as HTMLElement)
+    fireEvent.click(card().querySelector('.lc-auth-card__submit') as HTMLElement)
+    // 直接放行：补全由根级 ProfileSetupGate 的 AI 完善面板接手（登录与会话恢复共用）
+    await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ profile_setup_required: 1 })))
+    expect(document.body.textContent).not.toContain(t('auth.profileTitle'))
+    expect(profileSetup).not.toHaveBeenCalled()
   })
 })
 

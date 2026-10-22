@@ -60,9 +60,12 @@ vi.mock('@/api', () => ({
   ssoLoginUrl: (p: string) => `/api/sso/login?provider=${encodeURIComponent(p)}`,
 }))
 
+// ★ 2026-10-22 统一登录批：本文件锁的注册屏流程（点「自助注册试用」→ AI 接管 → 退回）
+//   只存在于租户/演示站——主站已无注册分支（selfRegister 钮隐退、/register 不展开）。
+//   故品牌上下文从主站（tenantId 0）改为租户站（tenantId 7），测的还是同一条 F-07 链路。
 vi.mock('@/branding', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/branding')>()
-  return { ...actual, useBranding: () => ({ brandName: '', dedicatedRegister: false, tenantName: '', tenantId: 0, brandLogo: '', domain: '' }) }
+  return { ...actual, useBranding: () => ({ brandName: '', dedicatedRegister: false, tenantName: '', tenantId: 7, brandLogo: '', domain: '' }) }
 })
 
 // 动效不豁免：AI 接管节拍（1300/2220/2350ms）正是本缺陷的触发路径，必须真跑

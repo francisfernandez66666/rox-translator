@@ -60,6 +60,14 @@ export default function Login({ mode, onLogin }: Props) {
   const [lang, , tplF] = useT() // tplF：带 {n} 占位的模板取词（验证码倒计时「{n}s 后重发」用）
   const { toast } = useToast() // 迁移口径：原 TDesign MessagePlugin.warning/error 全部换成组件库 toast
   const branding = useBranding()
+  // ★ 2026-10-22 统一登录批：「统一登录」只落在主站公开登录页（画布 home + 根域名）。
+  //   unified=true 时：没有注册分支（自助注册钮隐退、/register 与 ?ref= 不再自动展开注册），
+  //   邮箱验证通过即注册登录（未注册邮箱由后端自动建空白账号），字段补齐可见标签，
+  //   首登资料提醒交给根级 ProfileSetupGate 的 AI 完善面板。
+  //   门控信号与 ProfileSetupGate 同源：tenantId===0＝平台根域名＝主站；
+  //   租户子域/演示站（tenantId>0）与后台登录（mode='admin'）一切照旧——
+  //   这一批改动的红线就是「只影响主站」。
+  const unified = mode === 'home' && branding.tenantId === 0
   // 邀请裂变个人码（?ref=），登录页与注册提交共用
   // 提到组件顶层而非在提交前现取：注册表单、传统注册提交、AI 接管流三处都要读；
   // 认证页存活期间地址栏 query 不变，故不必 useMemo
@@ -145,14 +153,17 @@ export default function Login({ mode, onLogin }: Props) {
   }, [mode])
 
   // 进入 /register 或带 ?ref= 自动展开注册并捕获邀请码
+  // ★ 2026-10-22 统一登录批：主站没有注册分支了——/register 与 ?ref= 不再展开注册屏，
+  //   统一登录下「新账号验证通过即注册」，邀请裂变码改由登录后的 AI 完善流承接。
+  //   （租户/演示站与后台登录页不受影响：unified=false 时行为逐字不变。）
   useEffect(() => {
     try {
-      if (mode === 'home' && (window.location.pathname === '/register' || ref)) setView('register')
+      if (mode === 'home' && !unified && (window.location.pathname === '/register' || ref)) setView('register')
       // ref（好友裂变个人码）刻意不写进 invite 输入框：invite 是「企业邀请码」，两者语义不同，
       // 混填会让用户以为已经带了好友码（实际由 doRegister 的 ref 字段单独上报）
       if (ref) setForm((f) => ({ ...f, invite: f.invite || '' }))
     } catch { /* ignore */ }
-  }, [mode, ref])
+  }, [mode, ref, unified])
 
   // 仅前台加载注册配置（邮箱验证 / 人机验证 / 行业字典）
   useEffect(() => {
@@ -270,7 +281,10 @@ export default function Login({ mode, onLogin }: Props) {
       return
     }
     // ★ 首登资料提醒：只提醒、不阻断——用户可跳过，下次登录仍会提醒（profile_setup_required 不动）。
-    if ((u as unknown as { profile_setup_required?: number }).profile_setup_required) {
+    //   ★ 2026-10-22 统一登录批：主站（unified）不再走本屏内联对话框——补全交给根级
+    //   ProfileSetupGate 的 AI 完善面板（登录与会话恢复共用，刷新后同样提醒）。
+    //   这里直接 onLogin，闸门随后依 user.profile_setup_required 自行弹出。
+    if (!unified && (u as unknown as { profile_setup_required?: number }).profile_setup_required) {
       setSetupUser(u); setSetupName(''); setSetupPwd(''); setSetupMsg('')
       return
     }
@@ -467,7 +481,10 @@ export default function Login({ mode, onLogin }: Props) {
   const langPill = <LangSelect align="right" />
 
   // 登录屏（卡宽 400、标题=品牌名、底部两行居中链接、密码框右端眼睛、卡右上角 LangSelect）
-  if (view === 'signin') {
+  // ★ 2026-10-22 统一登录批：`|| unified` 是防御性兜底——主站的 view 只能停在 'signin'
+  //   （两个置 'register' 的入口都已门控），这句保证即使将来新增入口也落回登录屏，
+  //   注册表单在主站永不可达。
+  if (view === 'signin' || unified) {
     return (
       <BrandLoginShell>
         <AuthCard
@@ -483,19 +500,29 @@ export default function Login({ mode, onLogin }: Props) {
               <button type="button" className="auth-link" onClick={() => { setLoginMode(loginMode === 'otp' ? 'password' : 'otp'); setError('') }}>
                 {loginMode === 'otp' ? t('auth.usePassword') : t('auth.useCode')}
               </button>
-              {/* login.selfRegister 已是「没有账号？自助注册试用」整句（中英齐备），不再用 auth.noAccount + auth.freeRegister 拼 */}
-              <button type="button" className="auth-link" onClick={() => setView('register')}>{t('login.selfRegister')}</button>
+              {/* ★ 2026-10-22 统一登录批：主站撤掉「没有账号？自助注册试用」——
+                  统一登录下没有注册分支，新邮箱验证通过即注册。租户/演示站/后台保留原按钮。 */}
+              {!unified && (
+                <button type="button" className="auth-link" onClick={() => setView('register')}>{t('login.selfRegister')}</button>
+              )}
             </>
           )}
         >
           {loginMode === 'otp' ? (
             <>
-              <p className="auth-note" style={{ margin: '0 0 10px' }}>{t('auth.otpDesc')}</p>
-              <Field>
+              {/* ★ 2026-10-22 统一登录批：otpDesc 段落（"输入邮箱，获取一次性验证码即可登录；
+                  未注册的邮箱会自动创建空白账号"）在主站撤下——同一句提示改放进邮箱框
+                  placeholder（auth.autoCreateHint），少一段说明文、信息不丢。
+                  租户/演示站保留原段落与「注册邮箱」placeholder，逐字不动。 */}
+              {!unified && <p className="auth-note" style={{ margin: '0 0 10px' }}>{t('auth.otpDesc')}</p>}
+              {/* 可见字段名标签：主站四个字段全部补上（用户令「显示字段就是：邮箱/密码等字段名」），
+                  不再只靠 placeholder/aria-label；租户站保持原样（只影响主站）。 */}
+              <Field label={unified ? t('auth.fieldEmail') : undefined}>
                 <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" autoComplete="email"
-                  value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} placeholder={t('auth.boundEmail')} />
+                  value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
+                  placeholder={unified ? t('auth.autoCreateHint') : t('auth.boundEmail')} />
               </Field>
-              <Field>
+              <Field label={unified ? t('auth.fieldEmailCode') : undefined}>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Input style={{ flex: 1 }} aria-label={t('auth.fieldEmailCode')} inputMode="numeric"
                     value={loginCode} onChange={(e) => setLoginCode(e.target.value)} placeholder={t('auth.fieldEmailCode')}
@@ -518,11 +545,12 @@ export default function Login({ mode, onLogin }: Props) {
             </>
           ) : (
             <>
-              {/* 备用密码登录：仅用于已设置密码的存量账号与导入账号。 */}
-              <Field>
+              {/* 备用密码登录：仅用于已设置密码的存量账号与导入账号。
+                  ★ 2026-10-22：主站两枚字段同样补可见标签（fieldUsername/fieldPassword）。 */}
+              <Field label={unified ? t('auth.fieldUsername') : undefined}>
                 <Input aria-label={t('auth.username')} value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t('auth.username')} autoComplete="username" />
               </Field>
-              <Field>
+              <Field label={unified ? t('auth.fieldPassword') : undefined}>
                 <Input
                   aria-label={t('auth.password')}
                   type={showPwd ? 'text' : 'password'}

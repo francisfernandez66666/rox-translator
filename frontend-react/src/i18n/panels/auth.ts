@@ -186,6 +186,32 @@ export const zh: Record<string, string> = {
   'auth.passwordOptional': '设置密码（可选，留空则只用邮箱验证码登录）',
   'auth.skipForNow': '暂时跳过',
   'auth.successReset': '密码已重置，请使用新密码登录',
+
+  // —— AI 完善信息引导（★ 2026-10-22 统一登录批：主站登录后补全模式 mode='complete'）——
+  // 与上方「AI 接管注册引导」是同一个组件（AiRegisterFlow）的两种模式：租户/演示站仍走
+  // 注册模式（共享键一个不改），主站登录后走完善模式。本组键只服务完善模式话术，
+  // 刻意不就地改共享词——那一改会顺着共享键串到租户站的注册流，违反「只影响主站」。
+  'auth.acpTitle': 'AI 完善助理',
+  'auth.acpIntro': '账号已经开好了，趁现在把资料补齐。回答几个问题就好，剩下的我来收尾。',
+  'auth.acpAskType': '要完善哪类资料？',
+  'auth.acpPersonal': '个人资料',
+  'auth.acpEnterprise': '企业资料',
+  'auth.acpPersonalDesc': '用户名、密码与职业角色',
+  'auth.acpSkipPersona': '暂不选择，之后随时能补',
+  'auth.acpTailPersonal': '用户名我帮你带过来了（可修改）。设个密码，再告诉我你的岗位，个人资料就齐了。',
+  'auth.acpTailPersonalPlain': '接下来只差两样：用户名和密码；顺便告诉我你的岗位。',
+  'auth.acpTailAdmin': '用户名也帮你带过来了（可修改）。企业信息我来收尾：组织中文名和英文名填一下，品牌固定译名我按公司名帮你预配。',
+  'auth.acpTailAdminPlain': '企业信息我来收尾：用户名、组织中文名和英文名填一下，品牌固定译名我按公司名帮你预配。',
+  'auth.acpTailStaff': '用户名带过来了（可修改）。填上密码，再填邀请函里的组织编码，就能加入企业。',
+  'auth.acpTailStaffPlain': '填上用户名、密码，再填邀请函里的组织编码，就能加入企业。',
+  'auth.acpFinishingPersonal': '信息齐了。正在保存你的账号资料。',
+  'auth.acpCkPersonal1': '保存账号信息',
+  'auth.acpCkPersonal2': '写入职业角色',
+  'auth.acpCkPersonal3': '更新会话',
+  'auth.acpDoneChat': '搞定，资料补齐了。摘要如下：',
+  'auth.acpDone': '完善完成',
+  // ★ 2026-10-22 统一登录批：主站登录页邮箱框提示词（原 otpDesc 段落仅租户/演示站保留）
+  'auth.autoCreateHint': '未注册的邮箱会自动创建空白账号',
 }
 
 // 英文口径：与 zh 逐键对应、且键顺序完全一致（便于左右对照与 parity 校错），
@@ -367,4 +393,30 @@ export const en: Record<string, string> = {
   'auth.passwordOptional': 'Password (optional; leave blank to use email codes only)',
   'auth.skipForNow': 'Skip for now',
 
+  // —— AI profile-completion flow (★ 2026-10-22 unified sign-in batch: main-site
+  //    post-login mode='complete'). Same component (AiRegisterFlow), second mode:
+  //    tenant/demo sites keep the register mode untouched; this group only serves
+  //    the complete-mode copy. Shared keys are deliberately NOT reworded in place.
+  'auth.acpTitle': 'AI profile assistant',
+  'auth.acpIntro': "Your account is ready — let's round out your profile. Answer a few questions and I'll handle the rest.",
+  'auth.acpAskType': 'Which profile would you like to complete?',
+  'auth.acpPersonal': 'Personal profile',
+  'auth.acpEnterprise': 'Business profile',
+  'auth.acpPersonalDesc': 'Username, password and job role',
+  'auth.acpSkipPersona': 'Skip for now — you can add it anytime',
+  'auth.acpTailPersonal': "I carried over your username (still editable). Set a password and tell me your job role — that completes your personal profile.",
+  'auth.acpTailPersonalPlain': "Two things left: a username and a password — and your job role while you're at it.",
+  'auth.acpTailAdmin': 'I carried over your username too (still editable). For the org: enter the CN and EN names; I preconfigure the brand terms from the company name.',
+  'auth.acpTailAdminPlain': 'For the org: pick a username and enter the CN and EN org names; I preconfigure the brand terms from the company name.',
+  'auth.acpTailStaff': 'Username carried over (still editable). Set a password, then enter the org code from your invite to join.',
+  'auth.acpTailStaffPlain': 'Pick a username and password, then enter the org code from your invite to join.',
+  'auth.acpFinishingPersonal': 'All set. Saving your account details.',
+  'auth.acpCkPersonal1': 'Save account details',
+  'auth.acpCkPersonal2': 'Apply job role',
+  'auth.acpCkPersonal3': 'Refresh session',
+  'auth.acpDoneChat': 'Done — your profile is complete. Summary:',
+  'auth.acpDone': 'Profile complete',
+  // ★ 2026-10-22 unified sign-in batch: main-site email-field hint (the old otpDesc
+  //    paragraph stays on tenant/demo sites only)
+  'auth.autoCreateHint': 'An unregistered email creates a blank account automatically',
 }

@@ -7,6 +7,13 @@
 //   ⑤ 管理员提交后追加品牌固定译名预配 chips ⑥ 检查点三连 + 完成摘要卡
 // 支持「← 上一步」（首步隐藏、完成后禁用）；尊重 prefers-reduced-motion；generation 计数器防竞态。
 // 业务逻辑复用 @/api 的 authRegister / login / sendEmailCode，仅重写呈现与交互。
+// ★ 2026-10-22 统一登录批：本面板新增第二种模式 mode='complete'（完善信息）——
+//   主站登录后由 ProfileSetupGate 挂载，邮箱/验证码两步已不需要（登录时已验证过邮箱），
+//   个人分支改走 profileSetup 补全既有空白账号，企业分支走 authRegister 升级通道
+//   （带登录邮箱，后端对「本人空白账号」豁免验码并停用旧号建新号）。
+//   两种模式共用同一套问答动效，仅话术键与提交换算不同：注册话术键经 ACP_KEYS
+//   映射换成「完善信息」话术（auth.acp*，2026-10-22 新增 12 语种），
+//   共享键一个不改——那一改会顺着共享键串到租户站的注册流（「只影响主站」红线）。
 // ★ 2026-09-24 发码 403 生产事故修复：本面板此前完全不接人机验证（Turnstile），
 //   后台开启后「发送验证码/提交注册」必吃 403 且异常未捕获，表现为「点了没反应」——
 //   现由 captcha 入参接管：表单块内挂验证组件、token 一请求一消费、失败显式 toast。
@@ -15,7 +22,7 @@
 //   （复用 lib/useCountdown，与传统表单 Login.tsx 对齐）。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { authRegister, login, sendEmailCode, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
+import { authRegister, login, sendEmailCode, profileSetup, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
 import { registerPersonas } from '@/api/persona'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { toastError } from '@/lib/toastBus'
@@ -83,17 +90,47 @@ const INDUSTRIES = [
   { t:'auth.aiInd4', d:'auth.aiInd4Desc', code:'b2b'},
 ]
 
+// ★ 2026-10-22 统一登录批：complete（完善信息）模式的话术键映射。
+// 键位是「注册话术 → 完善话术」的一对一替换；查不到的键原样返回（行业/角色/组织字段
+// 这些两种模式同义的键不走映射）。刻意不就地改共享词：共享键一改，租户/演示站的
+// 注册流话术会跟着变，违反「这一批改动只影响主站」。
+const ACP_KEYS: Record<string, string> = {
+  'auth.aiTitle': 'auth.acpTitle',
+  'auth.aiIntro': 'auth.acpIntro',
+  'auth.aiAskType': 'auth.acpAskType',
+  'auth.aiPersonal': 'auth.acpPersonal',
+  'auth.aiEnterprise': 'auth.acpEnterprise',
+  'auth.aiPersonalDesc': 'auth.acpPersonalDesc',
+  'auth.aiSkipPersona': 'auth.acpSkipPersona',
+  'auth.aiTailPersonal': 'auth.acpTailPersonal',
+  'auth.aiTailPersonalPlain': 'auth.acpTailPersonalPlain',
+  'auth.aiTailAdmin': 'auth.acpTailAdmin',
+  'auth.aiTailAdminPlain': 'auth.acpTailAdminPlain',
+  'auth.aiTailStaff': 'auth.acpTailStaff',
+  'auth.aiTailStaffPlain': 'auth.acpTailStaffPlain',
+  'auth.aiFinishingPersonal': 'auth.acpFinishingPersonal',
+  'auth.aiDoneChat': 'auth.acpDoneChat',
+  'auth.aiRegisterDone': 'auth.acpDone',
+}
+
 /**
  * AiRegisterFlow 入参：
  * prefillUsername 登录页已输入的用户名（带入但不锁）；dedicatedRegister 品牌专属域名入口
  * （跳过问答直落企业员工分支）；captcha 人机验证配置（登录页 register-config 下发，
  * ★ 2026-09-24 起必传口径——缺省视为关闭，与后端 captcha_provider=none 同义）；
  * onDone 注册并自动登录成功后进工作台；onClose 退回传统表单。
+ * ★ 2026-10-22 统一登录批：mode='complete'（完善信息，主站登录后）三件套——
+ *   mode 决定话术键映射与提交换算；loginEmail 是登录邮箱（企业分支升级注册要原样带回，
+ *   后端据此识别「本人空白账号」；摘要卡只读展示）；sessionUser 是当前登录用户，
+ *   仅作接口未回 user 时的兜底（完成/进入工作台都要一个有 id 的 AuthUser）。
  */
 interface Props {
   prefillUsername: string
   dedicatedRegister: boolean
   captcha?: { enabled: boolean; siteKey: string }
+  mode?: 'register' | 'complete'
+  loginEmail?: string
+  sessionUser?: AuthUser | null
   onDone: (u: AuthUser) => void
   onClose: () => void
 }
@@ -103,8 +140,11 @@ interface Props {
  * 用问答 + 一个必要表单替用户跑完注册，最后调 authRegister/login 两个真实接口。
  * 步骤是命令式「渲染函数」组成的栈（stepStack），上一步靠截断消息重放，而不是路由或状态机库。
  */
-export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, captcha, onDone, onClose }: Props) {
+export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, captcha, mode = 'register', loginEmail = '', sessionUser = null, onDone, onClose }: Props) {
   const [lang, t] = useT()
+  // ★ 2026-10-22：complete 模式的话术键映射器（mode 挂载后不变，故 tk 稳定）。
+  // 用法：把原来写 t('auth.aiX') 的地方换成 t(tk('auth.aiX'))。
+  const tk = useCallback((k: string) => (mode === 'complete' ? ACP_KEYS[k] ?? k : k), [mode])
   const branding = useBranding()
   const reduced = usePrefersReducedMotion()
   const chatRef = useRef<HTMLDivElement>(null) // 聊天滚动容器：每次追加消息都要手动贴底
@@ -263,22 +303,23 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   // 每个步骤体都是「(my) => 追加气泡 → 等打完 → .then 里追加下一条」的链式结构：
   // 串起来打而不并行，是为了同一时刻只有一个光标；my（代际）逐层透传，回退时整条链一起作废
   const askType = useCallback((my: number) => {
-    const m = addMsg({ side: 'ai', full: t('auth.aiIntro'), text: reduced ? t('auth.aiIntro') : '', opts: undefined })
-    void typeText(m, t('auth.aiIntro'), my).then((ok) => {
+    const introKey = tk('auth.aiIntro'), askKey = tk('auth.aiAskType')
+    const m = addMsg({ side: 'ai', full: t(introKey), text: reduced ? t(introKey) : '', opts: undefined })
+    void typeText(m, t(introKey), my).then((ok) => {
       if (!ok || !alive(my)) return
-      const m2 = addMsg({ side:'ai', full: t('auth.aiAskType'), text: reduced ? t('auth.aiAskType') :''})
-      void typeText(m2, t('auth.aiAskType'), my).then((ok2) => {
+      const m2 = addMsg({ side:'ai', full: t(askKey), text: reduced ? t(askKey) :''})
+      void typeText(m2, t(askKey), my).then((ok2) => {
         if (!ok2 || !alive(my)) return
         addMsg({
           side: 'ai', opts: [
-            { t: t('auth.aiPersonal'), d: t('auth.aiPersonalDesc') },
-            { t: t('auth.aiEnterprise'), d: t('auth.aiEnterpriseDesc') },
+            { t: t(tk('auth.aiPersonal')), d: t('auth.aiPersonalDesc') },
+            { t: t(tk('auth.aiEnterprise')), d: t('auth.aiEnterpriseDesc') },
           ],
         })
         // 选项点击在渲染时绑定（见 renderMsg 的 opts 处理）
       })
     })
-  }, [addMsg, typeText, alive, reduced, t])
+  }, [addMsg, typeText, alive, reduced, t, tk])
 
   const askRole = useCallback((my: number) => {
     const m = addMsg({ side:'ai', full: t('auth.aiAskRole'), text: reduced ? t('auth.aiAskRole') :''})
@@ -286,12 +327,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       if (!ok || !alive(my)) return
       addMsg({
         side: 'ai', opts: [
-          { t: t('auth.aiEnterprise') +'·'+ t('auth.roleAdmin'), d: t('auth.aiRoleAdminDesc') },
-          { t: t('auth.aiEnterprise') +'·'+ t('auth.roleStaff'), d: t('auth.aiRoleStaffDesc') },
+          { t: t(tk('auth.aiEnterprise')) +'·'+ t('auth.roleAdmin'), d: t('auth.aiRoleAdminDesc') },
+          { t: t(tk('auth.aiEnterprise')) +'·'+ t('auth.roleStaff'), d: t('auth.aiRoleStaffDesc') },
         ],
       })
     })
-  }, [addMsg, typeText, alive, reduced, t])
+  }, [addMsg, typeText, alive, reduced, t, tk])
 
   const askIndustry = useCallback((my: number) => {
     const m = addMsg({ side:'ai', full: t('auth.aiAskIndustry'), text: reduced ? t('auth.aiAskIndustry') :''})
@@ -310,22 +351,24 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       addMsg({
         side: 'ai', opts: [
           ...personaList.map((x) => ({ t: personaName(x.code, x.name, lang), d: '' })),
-          { t: t('auth.aiSkipPersona'), d: t('auth.aiSkipPersonaDesc') },
+          { t: t(tk('auth.aiSkipPersona')), d: t('auth.aiSkipPersonaDesc') },
         ],
       })
     })
-  }, [addMsg, typeText, alive, reduced, t, personaList, lang])
+  }, [addMsg, typeText, alive, reduced, t, tk, personaList, lang])
 
   const askAccount = useCallback((my: number, kind:'personal'|'staff'|'admin') => {
     // 带没带用户名用不同话术：带了说「已带入（可修改）」，没带就请用户在本步填写
     const kindKey = kind ==='personal'?'Personal': kind ==='admin'?'Admin':'Staff'
-    const tailKey = usernameBrought ? `auth.aiTail${kindKey}` : `auth.aiTail${kindKey}Plain`
+    // ★ 2026-10-22：尾款话术也要过 tk——complete 模式下六条尾款全部换成「完善信息」口径
+    // （原话术里「邮箱和验证码」的提醒在登录后已不适用，字段也没了）
+    const tailKey = tk(usernameBrought ? `auth.aiTail${kindKey}` : `auth.aiTail${kindKey}Plain`)
     const m = addMsg({ side:'ai', full: t(tailKey), text: reduced ? t(tailKey) :''})
     void typeText(m, t(tailKey), my).then((ok) => {
       if (!ok || !alive(my)) return
       addMsg({ side: 'ai', form: true })
     })
-  }, [addMsg, typeText, alive, reduced, t, usernameBrought])
+  }, [addMsg, typeText, alive, reduced, t, tk, usernameBrought])
 
   // 角色答完后的推进：账号信息步的序号/总步数按分支排布
   // （个人：类型1→角色2→账号3/4；员工：类型1→身份2→角色3→账号4/5；管理员：类型1→身份2→行业3→角色4→账号5/6）
@@ -341,15 +384,21 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     setFinished(true); setBackDisabled(true); setBackHidden(true)
     // 三条分支各自的总步数（2026-09-19 起含角色问答一步）：管理员 6、员工 5、个人 4
     const total = kind ==='admin'? 6 : kind ==='staff'? 5 : 4
-    setStepLabel(tpl('auth.aiStepOf', { idx: total, total, name: t('auth.aiRegisterDone') }))
+    setStepLabel(tpl('auth.aiStepOf', { idx: total, total, name: t(tk('auth.aiRegisterDone')) }))
     setTrackPct(100)
-    const finishKey = kind ==='personal'?'auth.aiFinishingPersonal': kind ==='admin'?'auth.aiFinishingAdmin':'auth.aiFinishingStaff'
+    const finishKey = kind ==='personal'? tk('auth.aiFinishingPersonal'): kind ==='admin'?'auth.aiFinishingAdmin':'auth.aiFinishingStaff'
     // 管理员话术里嵌了行业名：t() 不做参数插值，这里手动替换 {industry} 占位
-    const finishText = kind ==='admin'&& industryName ? t('auth.aiFinishingAdmin').replace('{industry}', industryName) : t(finishKey)
+    const finishText = kind ==='admin'&& industryName ? t(finishKey).replace('{industry}', industryName) : t(finishKey)
     const m = addMsg({ side:'ai', full: finishText, text: reduced ? finishText :''})
     if (!await typeText(m, finishText, my)) return
+    // ★ 2026-10-22：个人分支的检查点在 complete 模式换「完善信息」口径——
+    // 旧三条（创建账号/初始化词库/发欢迎邮件）描述的是注册副作用，而完善模式只是
+    // profileSetup 保存既有账号的资料（用户名/口令/职业角色 + 重签会话）。
+    // 企业两条分支照旧：升级注册确实在建新账号与组织，共享词无需改。
     const ckNames = kind === 'personal'
-      ? [t('auth.ckPersonal1'), t('auth.ckPersonal2'), t('auth.ckPersonal3')]
+      ? (mode === 'complete'
+          ? [t('auth.acpCkPersonal1'), t('auth.acpCkPersonal2'), t('auth.acpCkPersonal3')]
+          : [t('auth.ckPersonal1'), t('auth.ckPersonal2'), t('auth.ckPersonal3')])
       : kind === 'admin'
         ? [t('auth.ckAdmin1'), t('auth.ckAdmin2'), t('auth.ckAdmin3')]
         : [t('auth.ckStaff1'), t('auth.ckStaff2'), t('auth.ckStaff3')]
@@ -381,24 +430,27 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     }
     await sleep(reduced ? 0 : 380)
     if (!alive(my)) return
-    const d2 = addMsg({ side:'ai', full: t('auth.aiDoneChat'), text: reduced ? t('auth.aiDoneChat') :''})
-    if (!await typeText(d2, t('auth.aiDoneChat'), my)) return
+    const doneChatKey = tk('auth.aiDoneChat')
+    const d2 = addMsg({ side:'ai', full: t(doneChatKey), text: reduced ? t(doneChatKey) :''})
+    if (!await typeText(d2, t(doneChatKey), my)) return
     const identity = kind ==='personal'? t('auth.aiIdentityPersonal')
       : kind ==='admin'? t('auth.aiIdentityAdmin') + (aiForm.orgCn ?'·'+ aiForm.orgCn :'')
         : t('auth.aiIdentityStaff') + (aiForm.orgCode ?'·'+ aiForm.orgCode :'')
     addMsg({
       side: 'ai', done: {
-        type: selRef.current.type ==='personal'? t('auth.aiPersonal') : t('auth.aiEnterprise'),
+        type: selRef.current.type ==='personal'? t(tk('auth.aiPersonal')) : t(tk('auth.aiEnterprise')),
         identity,
         industry: kind ==='admin'? industryName : undefined,
         persona: selRef.current.personaName || undefined,
         username: aiForm.username,
-        email: aiForm.email,
-        inviteLeft: kind === 'personal',
+        // ★ 2026-10-22：complete 模式没有邮箱字段——摘要卡只读展示登录邮箱
+        // （企业分支随后就把它作为升级注册的账号邮箱原样发回后端）
+        email: mode === 'complete' ? loginEmail : aiForm.email,
+        inviteLeft: kind === 'personal' && mode === 'register',
       },
     })
     scrollBottom()
-  }, [addMsg, typeText, alive, reduced, t, aiForm.username, aiForm.email, aiForm.orgCn, aiForm.orgCode])
+  }, [addMsg, typeText, alive, reduced, t, tk, mode, loginEmail, aiForm.username, aiForm.email, aiForm.orgCn, aiForm.orgCode])
 
   // 选项点击：先在原位做一次确认（被点的提亮、其余压暗），再推进到下一步
   const onPick = useCallback(async (label: string, my: number, btn?: HTMLButtonElement | null) => {
@@ -412,20 +464,23 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     }
     addMsg({ side: 'user', text: label })
     const sel = selRef.current
-    // 账号类型
-    if (label === t('auth.aiPersonal')) {
+    // 账号类型（★ 2026-10-22：四个判定全部经 tk——complete 模式选项标题已换成
+    // 「个人资料/企业资料」，用注册语境的键去比会恒不中，点了没反应）
+    const personalLabel = t(tk('auth.aiPersonal'))
+    const enterpriseLabel = t(tk('auth.aiEnterprise'))
+    if (label === personalLabel) {
       sel.type = 'personal'
       stepRender(2, null, t('auth.aiStepPersona'), (my) => askPersona(my))
       return
     }
-    if (label === t('auth.aiEnterprise')) {
+    if (label === enterpriseLabel) {
       sel.type = 'enterprise'
-      stepRender(2, null, t('auth.aiEnterprise'), (my) => askRole(my))
+      stepRender(2, null, enterpriseLabel, (my) => askRole(my))
       return
     }
     // 企业身份（label 形如 "企业注册 · 管理员（新建企业）"）
-    if (label.startsWith(t('auth.aiEnterprise') +'·')) {
-      const roleLabel = label.slice((t('auth.aiEnterprise') +'·').length)
+    if (label.startsWith(enterpriseLabel +'·')) {
+      const roleLabel = label.slice((enterpriseLabel +'·').length)
       if (roleLabel.startsWith(t('auth.roleAdmin'))) {
         sel.role = 'admin'
         stepRender(3, 6, t('auth.industry'), (my) => askIndustry(my))
@@ -444,7 +499,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       return
     }
     // 角色问答（2026-09-19）：选中记下 code+显示名，「暂不选择」落空值，答完统一推进
-    if (label === t('auth.aiSkipPersona')) {
+    if (label === t(tk('auth.aiSkipPersona'))) {
       sel.personaCode = ''
       sel.personaName = ''
       advanceAfterPersona(my)
@@ -456,7 +511,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       sel.personaName = per.name
       advanceAfterPersona(my)
     }
-  }, [alive, addMsg, t, stepRender, askAccount, askRole, askIndustry, askPersona, advanceAfterPersona, personaList, reduced, lang])
+  }, [alive, addMsg, t, tk, stepRender, askAccount, askRole, askIndustry, askPersona, advanceAfterPersona, personaList, reduced, lang])
 
   // 账号信息表单提交：调用真实注册接口
   // 前置校验命中只 return、不弹提示：字段前有 * 必填标记，AI 气泡不该把用户已填内容冲掉。
@@ -466,11 +521,18 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     if (!aiForm.username.trim()) { setBusy(false); return }
     // ★ 2026-10-21 IAM 重做 P1-1：长度走共享尺子（旧写法写死 6）
     if (aiForm.password.length < PWD_MIN_LEN) { setBusy(false); return }
-    if (!aiForm.email.trim()) { setBusy(false); return }
-    if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
-    // ★ 2026-10-21 IAM 重做 P1-4：协议勾选从"提交即视为同意"改成表单内显式勾选，
-    //   未勾选直接拦下（与传统表单 doRegister 的 needAgree 同一把判据）。
-    if (!aiForm.agreed) { setBusy(false); fail(t('auth.needAgree')); return }
+    // ★ 2026-10-22 统一登录批：complete 模式没有邮箱/验证码两步——登录时邮箱已由
+    //   login-purpose 验证码证明过（后端升级通道据此豁免 register-purpose 验码），
+    //   字段也没渲染，校验必须跟着字段一起退场，否则永远卡在这两行。
+    if (mode === 'register') {
+      if (!aiForm.email.trim()) { setBusy(false); return }
+      if (aiForm.emailCode.trim().length < 6) { setBusy(false); return }
+    }
+    // 协议勾选：注册模式全分支要；complete 模式只要企业分支要——
+    // 企业分支走的是真注册（建新账号），个人补全只是给既有账号补资料。
+    if (mode === 'register' || selRef.current.type === 'enterprise') {
+      if (!aiForm.agreed) { setBusy(false); fail(t('auth.needAgree')); return }
+    }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
     if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
@@ -481,39 +543,92 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     if (kind === 'staff' && !aiForm.orgCode.trim()) { setBusy(false); return }
     setFormErr('') // 每次提交先清上一轮红字：否则改完再提，旧错误会跟着新请求一起显示
     setBusy(true)
-    const tk = takeCaptchaToken()
+    const capTk = takeCaptchaToken()
     try {
-      const r = await authRegister({
-        username: aiForm.username,
-        password: aiForm.password,
-        type: sel.type ==='personal'?'personal':'enterprise',
-        role_choice: sel.role ==='admin'?'admin': sel.role ==='staff'?'member': undefined,
-        email: aiForm.email.trim(),
-        email_code: aiForm.emailCode.trim(),
-        captcha_token: tk || undefined, // ★ 2026-09-24：与发码各用一枚 token（旧实现这里压根不下发，开验后 AI 注册整条断）
-        // 组织英文名后端暂无独立字段，按交付约束不改动 @/api；此处仅取组织名/品牌用于提交
-        name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
-        brand_name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
-        brand_name_en: kind ==='admin'? aiForm.orgEn.trim() : undefined,
-        industry: kind ==='admin'? sel.industryCode : undefined,
-        job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
-        invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
-        code: kind ==='admin'? (aiForm.orgCode.trim() || undefined) : undefined, // F-06：管理员=新建租户，租户编码经组织编码字段下发（后端 register.go 无邀请绑定时必填）
-        agreed: aiForm.agreed,
-      })
-      // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
-      // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
-      if (!r.success) { setBusy(false); fail(r.message || t('auth.sendFail')); return }
-      // 注册成功即登录（★ 2026-10-21 IAM 重做 P1-6）：
-      // 服务端随注册响应直接下发会话，优先消费它——旧形态在这里**再调一次 login()**，
-      // 而那正是 IAM 报障第 1 条的形态：注册用邮箱/口令落库，登录却只认用户名、
-      // 且注册侧 trim 了口令而登录侧不 trim，只要用户前后敲的空格不一致就"注册成功但进不去"。
-      // 只有服务端签发失败（响应里没有 token）那条兜档才回落到补登，且补登失败要**说清楚**，
-      // 不能像旧形态那样静默 setBusy(false)（用户看到的是"填完了，什么也没发生"）。
-      const lr: { success?: boolean; token?: string; user?: AuthUser } =
-        (typeof r.token === 'string' && r.token && r.user)
+      // ★ 2026-10-22 统一登录批：两种模式各自算出「登录结果」lr，下面共享收尾。
+      //   变量名从 tk 改成 capTk：tk 已是 complete 模式的话术键映射器，重名会把它遮住。
+      let lr: { success?: boolean; token?: string; user?: AuthUser } | null = null
+      if (mode === 'complete') {
+        if (kind === 'personal') {
+          // 个人补全：profileSetup 给既有空白账号补资料（用户名/口令/职业角色），
+          // 会话主体不变；接口按设计重签 token（设了口令会递增 token_version），
+          // 必须消费新 token，否则下一个请求立刻 401。
+          const r = await profileSetup({
+            username: aiForm.username.trim(),
+            password: aiForm.password,
+            job_role: sel.personaCode || undefined, // 角色绑用户不绑企业（跳过=不下发）
+          })
+          if (!r.success) { setBusy(false); fail(r.message || t('auth.sendFail')); return }
+          lr = {
+            success: true,
+            token: typeof r.token === 'string' ? r.token : '',
+            user: (r.user && typeof r.user === 'object')
+              ? r.user
+              // 兜底：接口没回 user 时用当前登录用户改字段（完成/进入工作台都要有 id 的 AuthUser）
+              : { ...(sessionUser as AuthUser), username: aiForm.username.trim(), profile_setup_required: 0 },
+          }
+        } else {
+          // 企业补全＝升级注册：authRegister 带登录邮箱、**不带** email_code。
+          // 后端 register.go 的升级通道三条件（JWT 调用者 + 邮箱是本人 + 本人是无口令空白账号）
+          // 命中后豁免 register-purpose 验码、停用旧空白号、建新号并下发新会话；
+          // 游客或他人同邮箱一律 409。authRegister 自带 authHeaders，JWT 随请求出网。
+          const r = await authRegister({
+            username: aiForm.username,
+            password: aiForm.password,
+            type: 'enterprise',
+            role_choice: sel.role === 'admin' ? 'admin' : 'member',
+            email: loginEmail.trim(),
+            captcha_token: capTk || undefined, // ★ 2026-09-24：与发码各用一枚 token（升级通道只免验码，不免人机验证）
+            // 组织英文名后端暂无独立字段，按交付约束不改动 @/api；此处仅取组织名/品牌用于提交
+            name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
+            brand_name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
+            brand_name_en: kind ==='admin'? aiForm.orgEn.trim() : undefined,
+            industry: kind ==='admin'? sel.industryCode : undefined,
+            job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
+            invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
+            code: kind ==='admin'? (aiForm.orgCode.trim() || undefined) : undefined, // F-06：管理员=新建租户，租户编码经组织编码字段下发（后端 register.go 无邀请绑定时必填）
+            agreed: aiForm.agreed,
+          })
+          if (!r.success) { setBusy(false); fail(r.message || t('auth.sendFail')); return }
+          // 升级注册必须换会话（旧空白号已停用）：没拿到 token/user 就不能进收尾
+          if (!(typeof r.token === 'string' && r.token && r.user)) {
+            setBusy(false); fail(t('auth.regOkLoginFail')); return
+          }
+          lr = { success: true, token: r.token, user: r.user }
+        }
+      } else {
+        // 注册模式（租户/演示站，原逻辑）
+        const r = await authRegister({
+          username: aiForm.username,
+          password: aiForm.password,
+          type: sel.type ==='personal'?'personal':'enterprise',
+          role_choice: sel.role ==='admin'?'admin': sel.role ==='staff'?'member': undefined,
+          email: aiForm.email.trim(),
+          email_code: aiForm.emailCode.trim(),
+          captcha_token: capTk || undefined, // ★ 2026-09-24：与发码各用一枚 token（旧实现这里压根不下发，开验后 AI 注册整条断）
+          // 组织英文名后端暂无独立字段，按交付约束不改动 @/api；此处仅取组织名/品牌用于提交
+          name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
+          brand_name: kind ==='admin'? aiForm.orgCn.trim() : undefined,
+          brand_name_en: kind ==='admin'? aiForm.orgEn.trim() : undefined,
+          industry: kind ==='admin'? sel.industryCode : undefined,
+          job_role: sel.personaCode || undefined, // 角色绑用户不绑企业：三条分支共用（跳过=不下发）
+          invite: kind ==='staff'? aiForm.orgCode.trim() : undefined,
+          code: kind ==='admin'? (aiForm.orgCode.trim() || undefined) : undefined, // F-06：管理员=新建租户，租户编码经组织编码字段下发（后端 register.go 无邀请绑定时必填）
+          agreed: aiForm.agreed,
+        })
+        // 注册失败：表单留在原地可直接重提，但原因必须 toast——静默返回就是用户报的「点了没反应」
+        // （人机验证类文案经 /api/auth/* 豁免链路透传后端原文，不再是误导性的「无管理权限」）
+        if (!r.success) { setBusy(false); fail(r.message || t('auth.sendFail')); return }
+        // 注册成功即登录（★ 2026-10-21 IAM 重做 P1-6）：
+        // 服务端随注册响应直接下发会话，优先消费它——旧形态在这里**再调一次 login()**，
+        // 而那正是 IAM 报障第 1 条的形态：注册用邮箱/口令落库，登录却只认用户名、
+        // 且注册侧 trim 了口令而登录侧不 trim，只要用户前后敲的空格不一致就"注册成功但进不去"。
+        // 只有服务端签发失败（响应里没有 token）那条兜档才回落到补登，且补登失败要**说清楚**，
+        // 不能像旧形态那样静默 setBusy(false)（用户看到的是"填完了，什么也没发生"）。
+        lr = (typeof r.token === 'string' && r.token && r.user)
           ? { success: true, token: r.token, user: r.user }
           : await login(aiForm.username, aiForm.password)
+      }
       if (lr.success && lr.token && lr.user) {
         setAuthToken(lr.token)
         setActiveTenantId(0)
@@ -544,7 +659,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       //   现把失败原因显式 toast（后端文案经 publicErrMessage 脱敏，可直接面向用户）
       fail((e as Error).message || t('auth.sendFail'))
     }
-  }, [alive, aiForm, t, addMsg, typeText, reduced, finish, scrollBottom, captchaOn, takeCaptchaToken, fail])
+  }, [alive, aiForm, t, mode, loginEmail, sessionUser, addMsg, typeText, reduced, finish, scrollBottom, captchaOn, takeCaptchaToken, fail])
 
   // 首个问题：账号类型（dedicatedRegister 直接走企业员工分支）
   // deps 只留挂载：面板每次挂上都是从第一步重来（不跨挂载续答），
@@ -565,7 +680,8 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       selRef.current = { type:'enterprise', role:'staff'}
       stepRender(1, 5, t('auth.aiStepPersona'), (my) => askPersona(my))
     } else {
-      stepRender(1, null, t('auth.aiAskType'), askType)
+      // 步骤名与首问同源过 tk：complete 模式下进度条要显示「完善信息」语境的步骤名
+      stepRender(1, null, t(tk('auth.aiAskType')), askType)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -576,10 +692,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       <div className="ar-panel">
       {/* 顶部栏 */}
       <div className="ar-nav">
-        <button className="ar-close"type="button"aria-label={t('auth.backToLogin')} onClick={onClose}>
+        {/* ★ 2026-10-22：complete 模式的 × 不是「返回登录」而是「暂时跳过」
+            （用户已登录，关掉面板只是本轮不补资料，账号照用） */}
+        <button className="ar-close"type="button"aria-label={mode === 'complete' ? t('auth.skipForNow') : t('auth.backToLogin')} onClick={onClose}>
           <svg width="16"height="16"viewBox="0 0 24 24"fill="none"stroke="currentColor"strokeWidth="1.9"strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
-        <span className="ar-nav-t">{t('auth.aiTitle')}</span>
+        <span className="ar-nav-t">{t(tk('auth.aiTitle'))}</span>
         <span className="ar-online"><i />{t('auth.aiOnline')}</span>
       </div>
       {/* 进度（带名字） */}
@@ -596,7 +714,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         {msgs.map((m) => (
           <div key={m.id} className={`ar-msg ar-msg--${m.side}`}>
             {m.side ==='ai'&& (
-              <div className="ar-who"><span className="ar-badge">AI</span><span>{branding.brandName || t('auth.aiTitle')}</span></div>
+              <div className="ar-who"><span className="ar-badge">AI</span><span>{branding.brandName || t(tk('auth.aiTitle'))}</span></div>
             )}
             <div className="ar-body">
               {m.text !== undefined && (
@@ -628,6 +746,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
               {m.form && (
                 <AccountFormBlock
                   kind={selRef.current.type ==='personal'?'personal': selRef.current.role ==='admin'?'admin':'staff'}
+                  mode={mode}
                   form={aiForm} setForm={setAiForm}
                   brought={usernameBrought}
                   errMsg={formErr}
@@ -684,7 +803,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
               {/* 完成摘要卡：行随分支裁剪（行业词库仅管理员有），「进入工作台」才真正交回上层 */}
               {m.done && (
                 <div className="ar-done lc-mo-pop">
-                  <div className="ar-done-t">{t('auth.aiRegisterDone')}</div>
+                  <div className="ar-done-t">{t(tk('auth.aiRegisterDone'))}</div>
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryType')}</span><span className="ar-kv-v">{m.done.type}</span></div>
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryIdentity')}</span><span className="ar-kv-v">{m.done.identity}</span></div>
                   {m.done.industry && <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryIndustry')}</span><span className="ar-kv-v">{m.done.industry}</span></div>}
@@ -706,9 +825,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
 // ---------- 账号信息表单块（真实可控输入，字段按分支裁剪） ----------
 function AccountFormBlock({
-  kind, form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t, errMsg,
+  kind, mode = 'register', form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t, errMsg,
 }: {
   kind:'personal'|'staff'|'admin'
+  /** ★ 2026-10-22 统一登录批：complete=登录后完善信息——邮箱/验证码两步隐退
+   *  （登录时已验证过邮箱），个人分支连协议勾选也隐退（补资料不是注册） */
+  mode?: 'register' | 'complete'
   form: { username: string; password: string; email: string; emailCode: string; orgCode: string; orgCn: string; orgEn: string; agreed: boolean }
   setForm: (f: typeof form) => void
   /** 用户名是否由登录页带入（仅影响提示文案，字段本身始终可编辑） */
@@ -770,13 +892,20 @@ function AccountFormBlock({
           </button>
         </span>
       </div>
-      <div className="ar-fgroup">
-        <span className="ar-flabel">{t('auth.fieldEmail')} <i>*</i></span>
-        <input className="lc-input"value={form.email} placeholder="name@company.com"onChange={(e) => set('email', e.target.value)} />
-      </div>
+      {/* ★ 2026-10-22：complete 模式没有邮箱字段——登录邮箱由上层经 loginEmail 直接带走，
+          这里再要一次邮箱既是重复劳动，也会把「已验证过的邮箱」和「新邮箱」两种语义搅混 */}
+      {mode !== 'complete' && (
+        <div className="ar-fgroup">
+          <span className="ar-flabel">{t('auth.fieldEmail')} <i>*</i></span>
+          <input className="lc-input"value={form.email} placeholder="name@company.com"onChange={(e) => set('email', e.target.value)} />
+        </div>
+      )}
       {/* ★ 2026-09-24：人机验证容器。Turnstile widget 挂在邮箱与验证码之间——
-          发码/提交都要吃这个 token，放在邮箱旁边语义最贴；未开启时整块不渲染，不留空档 */}
+          发码/提交都要吃这个 token，放在邮箱旁边语义最贴；未开启时整块不渲染，不留空档。
+          ★ 2026-10-22：complete 模式邮箱/验证码隐退后容器前移到密码之后，
+          企业分支的升级注册提交仍要吃这枚 token（升级通道只免验码，不免人机验证） */}
       {tsOn && <div className="ar-ts" ref={tsAttach} />}
+      {mode !== 'complete' && (
       <div className="ar-fgroup">
         <span className="ar-flabel">{t('auth.fieldEmailCode')} <i>*</i></span>
         <div className="ar-otp-row">
@@ -797,6 +926,7 @@ function AccountFormBlock({
                   onClick={onSendCode}>{codeSent ? t('auth.aiOnline') : t('auth.sendCode')}</button>
         </div>
       </div>
+      )}
       {kind ==='staff'&& (
         <div className="ar-fgroup">
           <span className="ar-flabel">{t('auth.aiOrgCode')} <i>*</i></span>
@@ -824,19 +954,23 @@ function AccountFormBlock({
       )}
       {/* ★ 2026-10-21 IAM 重做 P1-4：协议勾选与传统表单同形——同一款 Checkbox＋同一组
           条款链接文案（12 语种词典已有 agreeTerms/userAgreement/privacyPolicy，零新增键）。
-          旧形态这里没有勾选、提交硬编码 agreed:true，等于把"我同意"替用户点了。 */}
-      <Checkbox
-        checked={form.agreed}
-        onChange={(e) => setForm({ ...form, agreed: e.target.checked })}
-        label={(
-          <>
-            {t('auth.agreeTerms')}{''}
-            <a href="/docs/terms" target="_blank" rel="noreferrer" className="ar-link">{t('auth.userAgreement')}</a>
-            {' & '}
-            <a href="/docs/privacy" target="_blank" rel="noreferrer" className="ar-link">{t('auth.privacyPolicy')}</a>
-          </>
-        )}
-      />
+          旧形态这里没有勾选、提交硬编码 agreed:true，等于把"我同意"替用户点了。
+          ★ 2026-10-22：complete 模式的个人分支隐退勾选——给既有账号补资料不是注册，
+          没有新协议要同意；企业分支保留（升级注册建的是新账号，同意闸照过）。 */}
+      {!(mode === 'complete' && kind === 'personal') && (
+        <Checkbox
+          checked={form.agreed}
+          onChange={(e) => setForm({ ...form, agreed: e.target.checked })}
+          label={(
+            <>
+              {t('auth.agreeTerms')}{''}
+              <a href="/docs/terms" target="_blank" rel="noreferrer" className="ar-link">{t('auth.userAgreement')}</a>
+              {' & '}
+              <a href="/docs/privacy" target="_blank" rel="noreferrer" className="ar-link">{t('auth.privacyPolicy')}</a>
+            </>
+          )}
+        />
+      )}
       {/* ★ 2026-10-22 一致性核查修复（P1-3）：卡内红字错误位，与 toast 同源。
           贴提交钮上方而不是表单顶部——用户点完按钮目光就落在这里，不必回滚去找提示。
           inline style 兜底同 ProfileSetupGate：CSS_AUTH 里的 .auth-err 只在登录面加载，
@@ -844,10 +978,12 @@ function AccountFormBlock({
       {!!errMsg && (
         <div className="auth-err" style={{ color: 'var(--lc-danger)', fontSize: 15, lineHeight: 1.6 }}>{errMsg}</div>
       )}
-      {/* 提交期间禁用并转圈：注册是「有副作用的一次性动作」，重复点击会再发一次注册请求 */}
+      {/* 提交期间禁用并转圈：注册是「有副作用的一次性动作」，重复点击会再发一次注册请求。
+          ★ 2026-10-22：complete 模式提交钮换成「保存并进入」（auth.profileDone，
+          与旧资料弹窗同一个键）——完善信息不是"注册并登录"，用户本来就登录着 */}
       <button className={'lc-btn lc-btn--primary lc-btn--block'+ (busy ?'ar-busy':'')} type="button"disabled={busy}
               onClick={onSubmit}>
-        {busy && <span className="ar-spin"/>}{busy ? t('auth.aiSubmitting') : t('auth.registerAndLogin')}
+        {busy && <span className="ar-spin"/>}{busy ? t('auth.aiSubmitting') : (mode === 'complete' ? t('auth.profileDone') : t('auth.registerAndLogin'))}
       </button>
     </div>
   )
