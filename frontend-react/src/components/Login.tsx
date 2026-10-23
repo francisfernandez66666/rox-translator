@@ -171,9 +171,19 @@ export default function Login({ mode, onLogin }: Props) {
     } catch { /* ignore */ }
   }, [mode, ref, unified])
 
-  // 仅前台加载注册配置（邮箱验证 / 人机验证 / 行业字典）
+  // 加载注册配置（邮箱验证 / 人机验证 / 行业字典）
+  // ★ 2026-10-23 修（用户报障：/admin「无法调起 cloudflare 认证，报错：请完成人机验证」）：
+  //   admin 档也必须拉这份配置。/admin 未登录时落的是 LoginFace mode="admin"，而 2026-10-22
+  //   统一登录批之后 admin 档渲染的就是主站同一张「邮箱+验证码」登录卡——后端 email-code 与
+  //   email-login 两道都强制校验 captcha token（captcha.go verifyCaptcha，生产库
+  //   captcha_provider=turnstile 已开）。旧写法 mode!=='home' 直接 return ⇒ captchaOn 恒 false、
+  //   挂件容器根本不渲染，前端两道守卫（captchaOn && !token）全部放行，请求裸奔到后端
+  //   吃 403「请完成人机验证」——管理员被关在 /admin 门外，唯一活路是切「使用密码登录」
+  //   走不校验 captcha 的 /api/auth/login。现网实测：/admin 登录卡完整、但对
+  //   challenges.cloudflare.com 零请求、window.turnstile 不存在。
+  //   其余字段（emailVerifyOn/industries/personas）只作用于注册流，admin 档设了也不显形。
   useEffect(() => {
-    if (mode !== 'home') return
+    if (mode !== 'home' && mode !== 'admin') return
     ;(async () => {
       try {
         const c = await registerConfig()
@@ -226,13 +236,17 @@ export default function Login({ mode, onLogin }: Props) {
     mountCaptcha(captchaSiteKey)
   }, [regPhase, view, mode, captchaOn, captchaSiteKey])
 
+  // 登录屏（signin）的人机验证挂件：home 与 admin 两档都要挂——理由同上面配置拉取那段，
+  // admin 档就是统一登录卡，后端 email-code/email-login 强制校验 token，没有挂件＝没有 token
+  // ＝403「请完成人机验证」。loginMode 进依赖：切到「使用密码登录」时 OTP 区块连同挂件容器
+  // 一起卸载，切回来必须重挂，否则又是「有开关、没有框」的同一类事故（F-07 同源）。
   useEffect(() => {
-    if (mode !== 'home' || view !== 'signin') return
+    if ((mode !== 'home' && mode !== 'admin') || view !== 'signin') return
     if (!captchaOn || !captchaSiteKey) return
     const el = loginCaptchaBoxRef.current
     if (!el || el.querySelector('iframe')) return
     mountLoginCaptcha(captchaSiteKey)
-  }, [view, mode, captchaOn, captchaSiteKey])
+  }, [view, mode, loginMode, captchaOn, captchaSiteKey])
 
   // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
   function mountCaptcha(siteKey: string) {
@@ -503,7 +517,9 @@ export default function Login({ mode, onLogin }: Props) {
           foot={(
             <>
               {/* ★ 2026-10-21 IAM 重做：公开找回已下线，密码降为备用；主流程是邮箱验证码。 */}
-              <button type="button" className="auth-link" onClick={() => { setLoginMode(loginMode === 'otp' ? 'password' : 'otp'); setError('') }}>
+              {/* ★ 2026-10-23：切档同时清掉旧 token——token 一次一用，密码档用不到它，
+                  不清就会把已消费/已过期的旧令牌带回验证码档（后端 siteverify 判失败）。 */}
+              <button type="button" className="auth-link" onClick={() => { setLoginMode(loginMode === 'otp' ? 'password' : 'otp'); setLoginCaptchaToken(''); setError('') }}>
                 {loginMode === 'otp' ? t('auth.usePassword') : t('auth.useCode')}
               </button>
               {/* ★ 2026-10-22 统一登录批：主站撤掉「没有账号？自助注册试用」——
