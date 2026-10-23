@@ -51,21 +51,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "注册已关闭，请联系管理员开通"))
 		return
 	}
-	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
-	// ★ F-81（2026-09-28）：这两档改走 configIntTier，与设备档／平台日预算档同口径
-	//   （环境变量 > system_config 同名小写键 > 代码默认）。行为等价：env 未配时读的还是原来那两个
-	//   system_config 键、默认值也还是 3 次／60 秒；差别只在于**现在可以不发版临时调档**。
-	//   最小间隔那一档允许配 0（0＝不设间隔，run_uat 与本地快跑就是这么配的），故 allowZero 传 true。
-	ip := clientIP(r)
-	dailyLimit := configIntTier(s.Store, "REGISTER_IP_DAILY", "register_ip_daily_limit", regIPDailyDefault, false)
-	minInterval := configIntTier(s.Store, "REGISTER_IP_MIN_INTERVAL", "register_ip_min_interval_sec", regIPMinIntervalDef, true)
-	if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
-		// ★ F-47（批 I-7）：改走统一错误出口＝429 + code RATE_LIMITED + Retry-After 头 + retry_after 字段。
-		// 文案保留「请 N 秒后再试」原样（i18n patternsEN 已有该变体，仍可翻）；秒数同时进字段，
-		// 这样前端不必从中文里抠数字就能做倒计时（旧写法只有中文文案里夹一个数，非中文语种无法复用）。
-		s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)).WithRetryAfter(wait))
-		return
-	}
+	// ⚠️ IP 频率护栏不在这里：它已挪到「升级通道判定可算之后」（见下方 upgradeBlankID 那一段），
+	//    否则body 还没解码、拿不到邮箱，无法区分「新注册」与「本人空白账号升级」。
 	// 专属域名自助注册：从访问 Host 解析目标租户（命中路径见 resolveDedicatedTenant 注释）。
 	// 命中后注册强制归入该企业且仅为普通成员（禁止建企业/升管理员）。
 	// ★ F-77（2026-09-27 注释订正，旧注释写的是"免邀请码"，与下方代码相反）：
@@ -178,6 +165,31 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if caller := s.authUser(r); caller != nil && strings.EqualFold(caller.Email, req.Email) &&
 		caller.PasswordHash == "" && caller.ProfileSetupRequired == 1 {
 		upgradeBlankID = caller.ID
+	}
+	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
+	// ★ F-81（2026-09-28）：这两档改走 configIntTier，与设备档／平台日预算档同口径
+	//   （环境变量 > system_config 同名小写键 > 代码默认）。行为等价：env 未配时读的还是原来那两个
+	//   system_config 键、默认值也还是 3 次／60 秒；差别只在于**现在可以不发版临时调档**。
+	//   最小间隔那一档允许配 0（0＝不设间隔，run_uat 与本地快跑就是这么配的），故 allowZero 传 true。
+	// ★ 2026-10-23（用户报障「注册后引导完善信息改选企业即报『注册过于频繁，请 N 秒后再试』」）：
+	//   护栏从函数最前面（body 解码之前）挪到这里——拿不到邮箱就没法区分新注册与升级，
+	//   而**升级通道不吃 IP 档**：那条路转化的是调用者本人几分钟前刚自动建、已经计过一次
+	//   IP 的空白账号，不是新注册；拿 IP 档拦它等于把产品自己的主流程「注册→引导完善→
+	//   改选企业」掐死（最小间隔 60 秒内必撞，日限 3 次当天试两轮就满）。
+	//   防薅本尊没放：升级仍要过设备档/平台档（reserveFreeAccount——升级确实新建租户并
+	//   发放体验额度）、人机验证、一次性邮箱黑名单，以及「本人空白账号」三条件。
+	//   record 那一步同样跳过（见下方「登记注册成功」处），一次用户动作不扣两次 IP 账。
+	ip := clientIP(r)
+	if upgradeBlankID == 0 {
+		dailyLimit := configIntTier(s.Store, "REGISTER_IP_DAILY", "register_ip_daily_limit", regIPDailyDefault, false)
+		minInterval := configIntTier(s.Store, "REGISTER_IP_MIN_INTERVAL", "register_ip_min_interval_sec", regIPMinIntervalDef, true)
+		if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
+			// ★ F-47（批 I-7）：改走统一错误出口＝429 + code RATE_LIMITED + Retry-After 头 + retry_after 字段。
+			// 文案保留「请 N 秒后再试」原样（i18n patternsEN 已有该变体，仍可翻）；秒数同时进字段，
+			// 这样前端不必从中文里抠数字就能做倒计时（旧写法只有中文文案里夹一个数，非中文语种无法复用）。
+			s.writeError(w, r, apierrors.New(apierrors.ErrRateLimited, fmt.Sprintf("注册过于频繁，请 %d 秒后再试", wait)).WithRetryAfter(wait))
+			return
+		}
 	}
 	// 邮箱全局唯一（他人已绑定则拒绝）——★ 2026-10-21 P0-9：这一腿**已挪到"验码＋人机"之后**，
 	// 判据本体见下方 `该邮箱已被其他账号绑定` 那一段的注释（防枚举：先证明邮箱归你，才告诉你它被占用）。
@@ -623,7 +635,11 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册 role="+auditRole)
 	// 登记注册成功（推进同 IP 频率窗口）
-	s.regGuard.record(ip)
+	// ★ 2026-10-23：升级通道不记 IP 账——这一次转化已经计过 IP（自动建号那次），再记一次
+	//   等于把一次用户动作扣成两次；设备档/平台档的账照记（占格在 reserveFreeAccount）。
+	if upgradeBlankID == 0 {
+		s.regGuard.record(ip)
+	}
 	// 成功提示（任务2.2：注册即自动发放体验额度，不再有审核等待态）
 	msg := "注册成功，试用额度已发放"
 	regResp := map[string]interface{}{
