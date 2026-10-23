@@ -17,6 +17,7 @@ import json
 T = {
 "账号或密码错误": "Incorrect account or password",
 "账号查询失败": "Failed to look up account",
+"账号升级失败，请稍后重试": "Account upgrade failed. Please try again later.",
 "密码找回已下线，请使用邮箱验证码登录后在账号设置中修改密码": "Password recovery is no longer available. Sign in with an email code and change your password in account settings.",
 "验证码用途无效": "Invalid verification-code purpose",
 "该域名不开放个人账号注册，请通过企业邀请加入": "Personal sign-up is not available on this domain. Join via an enterprise invitation.",

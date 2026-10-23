@@ -82,7 +82,10 @@ function renderLogin(tid = 0, onLogin: (u: unknown) => void = () => { /* noop */
 const card = () => document.querySelector('.lc-auth-card') as HTMLElement
 const footButtons = () => [...document.querySelectorAll('.lc-auth-card__foot button')] as HTMLButtonElement[]
 
-beforeEach(() => { cleanup(); setLang('zh'); brandCtx.tenantId = 0 })
+// ★ 2026-10-22：cleanup 之外还要 clearAllMocks——⑫ 会真调 profileSetup（skip），
+//   不清调用记录的话 ⑭ 的 `not.toHaveBeenCalled()` 会读到上一例的调用而误判。
+//   clearAllMocks 只清 calls/results，不动机厂里给的默认实现（mockReset 才会清实现）。
+beforeEach(() => { cleanup(); vi.clearAllMocks(); setLang('zh'); brandCtx.tenantId = 0 })
 
 describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
   it('① 卡标题是品牌名，不是「登录」', () => {
@@ -293,6 +296,9 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     expect(card().textContent).not.toContain(t('auth.otpDesc'))
     const emailBox = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
     expect(emailBox.getAttribute('placeholder')).toBe(t('auth.autoCreateHint'))
+    // ★ 同一用例内换站必须先 cleanup：card() 取的是 document 里第一张卡，
+    //   两份并存时读到的永远是主站那张（旧写法因此误判「租户站没有 otpDesc」）
+    cleanup()
     // 租户站：原段落与原 placeholder 逐字不动（只影响主站）
     renderLogin(7)
     expect(card().textContent).toContain(t('auth.otpDesc'))

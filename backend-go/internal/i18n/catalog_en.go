@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（472 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（473 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -448,6 +448,7 @@ var exactEN = map[string]string{
 	"读取前端入口失败":                                         "Failed to read frontend entry",
 	"读取文件失败: ":                                         "File read failed: ",
 	"账号不存在或已被删除，请重新登录后再试":                              "Account not found or already deleted; please sign in again and retry",
+	"账号升级失败，请稍后重试":                                     "Account upgrade failed. Please try again later.",
 	"账号处于首登强制改密状态：请先修改密码，再使用其他功能":                      "This account must change its password on first sign-in; change it before using other features",
 	"账号已停用":                                            "Account disabled",
 	"账号已停用或注销，无法通过 SSO 登录":                             "Account disabled or deactivated; SSO sign-in refused",

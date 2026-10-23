@@ -559,9 +559,17 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     await waitFor(() => {
       expect(container.querySelector('.ar-nav-t')?.textContent).toBe('AI 完善助理')
     })
-    expect(document.body.textContent).toContain('要完善哪类资料？')
+    // ★ 首问与选项是打字机异步链的产物：首条消息在 reduced 生效前就已开打（hook 的
+    //   useState(false) 初值 + effect 才改 true），约 1 秒；故等待窗口给到 5s
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('要完善哪类资料？')
+    }, { timeout: 5000 })
     // 选项：个人资料 / 企业资料（不是「个人注册 / 企业注册」）
-    const optTexts = [...container.querySelectorAll('.ar-opt-t')].map((el) => el.textContent)
+    const optTexts = await waitFor(() => {
+      const texts = [...container.querySelectorAll('.ar-opt-t')].map((el) => el.textContent)
+      expect(texts.length, '类型选项应已渲染').toBeGreaterThan(0)
+      return texts
+    }, { timeout: 5000 })
     expect(optTexts).toContain('个人资料')
     expect(optTexts).toContain('企业资料')
     expect(document.body.textContent).not.toContain('个人注册')
