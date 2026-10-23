@@ -164,9 +164,10 @@ describe('登录屏 · 设计稿对齐（画布 57:2 / 57:3）', () => {
     setLang('zh') // 复位，别把英文态漏给后续用例
   })
 
-  it('⑥ 字段没有可见 label，但仍保留可访问名（验证码主档；★ 2026-10-22 起仅租户站）', () => {
-    renderLogin(7) // 租户站保持原形态
-    expect(card().querySelectorAll('.lc-field__label').length).toBe(0)
+  it('⑥ ★2026-10-23 租户站也有可见字段标签（与主站对齐），可访问名不丢', () => {
+    renderLogin(7) // 租户站：本批起与主站同形
+    const labels = [...card().querySelectorAll('.lc-field__label')].map((el) => el.textContent?.trim())
+    expect(labels).toEqual([t('auth.fieldEmail'), t('auth.fieldEmailCode')])
     expect(card().querySelector('input[aria-label="' + t('auth.boundEmail') + '"]')).toBeTruthy()
     expect(card().querySelector('input[aria-label="' + t('auth.fieldEmailCode') + '"]')).toBeTruthy()
   })
@@ -297,7 +298,7 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ profile_setup_required: 1 })))
   })
 
-  it('⑬ ★2026-10-22 主站撤下 otpDesc 段落、提示改驻邮箱框 placeholder；租户站两样都保留', () => {
+  it('⑬ ★2026-10-23 otpDesc 三站一律撤下、提示改驻邮箱框 placeholder（三站同形）', () => {
     renderLogin() // 主站
     expect(card().textContent).not.toContain(t('auth.otpDesc'))
     const emailBox = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
@@ -305,11 +306,11 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     // ★ 同一用例内换站必须先 cleanup：card() 取的是 document 里第一张卡，
     //   两份并存时读到的永远是主站那张（旧写法因此误判「租户站没有 otpDesc」）
     cleanup()
-    // 租户站：原段落与原 placeholder 逐字不动（只影响主站）
+    // 租户站：与主站同一副面孔（本批用户令：字段显示与输入框提示词都对齐主站）
     renderLogin(7)
-    expect(card().textContent).toContain(t('auth.otpDesc'))
+    expect(card().textContent).not.toContain(t('auth.otpDesc'))
     const tenantBox = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
-    expect(tenantBox.getAttribute('placeholder')).toBe(t('auth.boundEmail'))
+    expect(tenantBox.getAttribute('placeholder')).toBe(t('auth.autoCreateHint'))
   })
 
   it('⑭ ★2026-10-22 主站：profile_setup_required 直接 onLogin，本屏不再弹内联资料对话框', async () => {
@@ -349,13 +350,17 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     expect(txt).toContain(t('auth.fieldEmailCode'))
   })
 
-  it('⑯ 反证：租户站后台登录保留注册入口与 otpDesc（本批只改主站）', () => {
+  it('⑯ 反证：租户站后台登录**只**保留注册入口，字段面已与主站对齐', () => {
     renderAdmin(7) // 租户站 + mode=admin
     const txt = card().textContent || ''
+    // 租户站的自助注册入口是站点能力，不在本批「对齐」范围内，必须还在
     expect(txt).toContain('自助注册试用')
-    expect(txt).toContain(t('auth.otpDesc'))
+    // 但字段面（可见标签 + placeholder + 无 otpDesc）已与主站同形
+    expect(txt).not.toContain(t('auth.otpDesc'))
+    expect(txt).toContain(t('auth.fieldEmail'))
+    expect(txt).toContain(t('auth.fieldEmailCode'))
     const box = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
-    expect(box.getAttribute('placeholder')).toBe(t('auth.boundEmail'))
+    expect(box.getAttribute('placeholder')).toBe(t('auth.autoCreateHint'))
   })
 })
 

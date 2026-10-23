@@ -516,19 +516,19 @@ export default function Login({ mode, onLogin }: Props) {
         >
           {loginMode === 'otp' ? (
             <>
-              {/* ★ 2026-10-22 统一登录批：otpDesc 段落（"输入邮箱，获取一次性验证码即可登录；
-                  未注册的邮箱会自动创建空白账号"）在主站撤下——同一句提示改放进邮箱框
-                  placeholder（auth.autoCreateHint），少一段说明文、信息不丢。
-                  租户/演示站保留原段落与「注册邮箱」placeholder，逐字不动。 */}
-              {!unified && <p className="auth-note" style={{ margin: '0 0 10px' }}>{t('auth.otpDesc')}</p>}
-              {/* 可见字段名标签：主站四个字段全部补上（用户令「显示字段就是：邮箱/密码等字段名」），
-                  不再只靠 placeholder/aria-label；租户站保持原样（只影响主站）。 */}
-              <Field label={unified ? t('auth.fieldEmail') : undefined}>
+              {/* ★ 2026-10-23（用户令「邮箱、验证码字段的显示还有输入框里的提示词，都对齐主站」）：
+                  otpDesc 段落**三站一律撤下**——它原本只为主站之外的站点保留，但同一句提示
+                  现在已经在邮箱框 placeholder（auth.autoCreateHint）里逐字出现，留着就是同一屏
+                  两遍同样的字。撤掉之后主站/演示站/租户站的这块区域结构完全一致。
+                  aria-label 仍是 auth.boundEmail（读屏与全量用例的稳定选择器），不动。 */}
+              {/* 可见字段名标签：三站统一补上（用户令「显示字段就是：邮箱/密码等字段名」），
+                  不再只靠 placeholder/aria-label。 */}
+              <Field label={t('auth.fieldEmail')}>
                 <Input aria-label={t('auth.boundEmail')} type="email" inputMode="email" autoComplete="email"
                   value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder={unified ? t('auth.autoCreateHint') : t('auth.boundEmail')} />
+                  placeholder={t('auth.autoCreateHint')} />
               </Field>
-              <Field label={unified ? t('auth.fieldEmailCode') : undefined}>
+              <Field label={t('auth.fieldEmailCode')}>
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Input style={{ flex: 1 }} aria-label={t('auth.fieldEmailCode')} inputMode="numeric"
                     value={loginCode} onChange={(e) => setLoginCode(e.target.value)} placeholder={t('auth.fieldEmailCode')}
@@ -552,11 +552,11 @@ export default function Login({ mode, onLogin }: Props) {
           ) : (
             <>
               {/* 备用密码登录：仅用于已设置密码的存量账号与导入账号。
-                  ★ 2026-10-22：主站两枚字段同样补可见标签（fieldUsername/fieldPassword）。 */}
-              <Field label={unified ? t('auth.fieldUsername') : undefined}>
+                  ★ 2026-10-23：两枚字段的可见标签同样对三站统一（与验证码档同口径）。 */}
+              <Field label={t('auth.fieldUsername')}>
                 <Input aria-label={t('auth.username')} value={username} onChange={(e) => setUsername(e.target.value)} placeholder={t('auth.username')} autoComplete="username" />
               </Field>
-              <Field label={unified ? t('auth.fieldPassword') : undefined}>
+              <Field label={t('auth.fieldPassword')}>
                 <Input
                   aria-label={t('auth.password')}
                   type={showPwd ? 'text' : 'password'}
