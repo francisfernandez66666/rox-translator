@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "Autorisation de personnalisation de la marque révoquée pour le tenant actuel",
   "brand.grantedOn": "Personnalisation de la marque accordée au tenant actuel",
   "brand.grantedTag": "Accordé",
-  "brand.hint": "Personnalisez le préfixe de sous-domaine, le nom de la marque et le logo (appliqué automatiquement sous la forme prefix.lexicorn.cn). Les liens de bas de page sont des paramètres de niveau plateforme, voir le sous-onglet « Liens de bas de page ».",
+  "brand.hint": "Personnalisez le préfixe de sous-domaine, le nom de la marque et le logo (appliqué automatiquement sous la forme prefix.lexicorn.cn).",
   "brand.homeBg": "Arrière-plan de la page de connexion",
   "brand.homeBgDragHint": "Faites glisser cette zone pour repositionner l'arrière-plan",
   "brand.homeBgHint": "Arrière-plan de la page de connexion (y compris l'inscription) ; téléversez une image ou collez une URL",

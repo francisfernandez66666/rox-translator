@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "현재 테넌트의 브랜딩 커스터마이징 승인이 취소되었습니다",
   "brand.grantedOn": "현재 테넌트에 브랜딩 커스터마이징이 허용되었습니다",
   "brand.grantedTag": "승인됨",
-  "brand.hint": "서브도메인 접두사, 브랜드명, 로고를 커스터마이징할 수 있습니다(「접두사.lexicorn.cn」 형식으로 자동 적용). 푸터 링크는 플랫폼 단위 설정입니다. 이 페이지의 “푸터 링크” 서브 탭을 참조하세요.",
+  "brand.hint": "서브도메인 접두사, 브랜드명, 로고를 커스터마이징할 수 있습니다(「접두사.lexicorn.cn」 형식으로 자동 적용).",
   "brand.homeBg": "로그인 페이지 배경 이미지",
   "brand.homeBgDragHint": "이 영역을 드래그하여 배경 위치를 조절할 수 있습니다",
   "brand.homeBgHint": "로그인 페이지(가입 페이지 포함) 배경 이미지입니다. 이미지를 업로드하거나 이미지 URL을 입력하세요.",

@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "已撤銷當前租戶的品牌定製授權",
   "brand.grantedOn": "已為當前租戶開通品牌定製",
   "brand.grantedTag": "已授權",
-  "brand.hint": "自訂子域名前綴、品牌名稱與 Logo（以「前綴.lexicorn.cn」自動生效）。頁尾連結為平台層級設定，詳見本頁「頁尾連結」子頁。",
+  "brand.hint": "自訂子域名前綴、品牌名稱與 Logo（以「前綴.lexicorn.cn」自動生效）。",
   "brand.homeBg": "登入頁背景圖",
   "brand.homeBgDragHint": "拖曳此區域可調整背景位置",
   "brand.homeBgHint": "登入頁（含註冊頁）背景圖；可上傳圖片或填寫圖片地址",

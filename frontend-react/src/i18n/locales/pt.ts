@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "Autorização de marca revogada para o tenant atual",
   "brand.grantedOn": "Marca concedida ao tenant atual",
   "brand.grantedTag": "Autorizado",
-  "brand.hint": "Personalize o prefixo do subdomínio, o nome e o logotipo da marca (acesso automático como prefixo.lexicorn.cn). Os links do rodapé são configurações da plataforma; veja a subaba \"Links do rodapé\" desta página.",
+  "brand.hint": "Personalize o prefixo do subdomínio, o nome e o logotipo da marca (acesso automático como prefixo.lexicorn.cn).",
   "brand.homeBg": "Imagem de fundo da página de login",
   "brand.homeBgDragHint": "Arraste aqui para reposicionar o fundo",
   "brand.homeBgHint": "Fundo da página de login (incluindo o cadastro); envie uma imagem ou cole a URL",

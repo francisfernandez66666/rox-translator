@@ -540,7 +540,7 @@ export const baseEn: Record<string,string> = {
 'admin.menuSystem':'System & Ops',
 'admin.menuAssist':'AI Assistant',
   'brand.title': 'Branding',
-  'brand.hint': 'Customize subdomain prefix, brand name and logo (auto-applied as prefix.lexicorn.cn). Footer links are platform-level, see the "Footer Links" sub-tab.',
+  'brand.hint': 'Customize subdomain prefix, brand name and logo (auto-applied as prefix.lexicorn.cn).',
   'brand.locked': 'Branding is a paid plan feature. Subscribe to an active paid plan (within validity) to unlock editing. The current tenant is not eligible and is view-only.',
   'brand.superOverride': 'Super admin can edit',
   'brand.grantLabel': 'Grant branding to the selected tenant (ID {id}) — exempt from plan requirement, authorized by super admin',

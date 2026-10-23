@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "Se ha retirado la personalización de marca del inquilino actual",
   "brand.grantedOn": "Se ha activado la personalización de marca para el inquilino actual",
   "brand.grantedTag": "Otorgado",
-  "brand.hint": "Personaliza el prefijo del subdominio, el nombre de la marca y el logotipo (se aplica automáticamente como prefijo.lexicorn.cn). Los enlaces del pie de página son a nivel de plataforma; consulta la subpestaña «Enlaces del pie de página».",
+  "brand.hint": "Personaliza el prefijo del subdominio, el nombre de la marca y el logotipo (se aplica automáticamente como prefijo.lexicorn.cn).",
   "brand.homeBg": "Fondo de la página de inicio de sesión",
   "brand.homeBgDragHint": "Arrastra esta área para mover la posición del fondo",
   "brand.homeBgHint": "Fondo de la página de inicio de sesión (incluida la de registro); sube una imagen o pega una URL",

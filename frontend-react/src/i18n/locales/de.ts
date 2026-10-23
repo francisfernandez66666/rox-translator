@@ -723,7 +723,7 @@ export const dict: Record<string, string> = {
   "brand.grantedOff": "Branding-Freischaltung für den aktuellen Mandanten entzogen",
   "brand.grantedOn": "Branding für den aktuellen Mandanten freigeschaltet",
   "brand.grantedTag": "Freigegeben",
-  "brand.hint": "Legen Sie Subdomain-Präfix, Markenname und Logo fest (automatisch erreichbar unter präfix.lexicorn.cn). Footer-Links gelten plattformweit, siehe Unterregister „Footer-Links“.",
+  "brand.hint": "Legen Sie Subdomain-Präfix, Markenname und Logo fest (automatisch erreichbar unter präfix.lexicorn.cn).",
   "brand.homeBg": "Hintergrund der Login-Seite",
   "brand.homeBgDragHint": "Hier ziehen, um die Hintergrundposition zu verschieben",
   "brand.homeBgHint": "Hintergrund der Login-Seite (inkl. Registrierung); Bild hochladen oder URL einfügen",
