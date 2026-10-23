@@ -64,6 +64,15 @@ describe('stores/auth · 登录态与角色等级', () => {
     expect(getAuthToken(), 'logout 必须清 core token，否则下次请求仍带旧凭证').toBe('')
   })
 
+  it('logout 同时清零生效租户（★ 2026-10-23 F1-d：旧值会静默继承给下一个登录用户）', () => {
+    setActiveTenantId(12)
+    useAdminStore.setState({ activeTenantId: 12 })
+    setAuthToken('tk-tenant12')
+    useAuthStore.getState().onLogin(sampleUser)
+    useAuthStore.getState().logout()
+    expect(getActiveTenantId(), '登出后必须回平台档 0，否则下一位登录者会带着上个会话的租户号').toBe(0)
+  })
+
   it('订阅回归：logout 触发一次订阅、且新值可读到 user=null', () => {
     setAuthToken('tk-sub')
     useAuthStore.getState().onLogin(sampleUser)

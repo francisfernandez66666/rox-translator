@@ -47,9 +47,9 @@ func (s *Store) GetPlatformRootOrg() (*Org, error) {
 	return s.iam.GetPlatformRootOrg()
 }
 
-// ListPlatformOrgs 按条件查询列表。
-func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
-	return s.iam.ListPlatformOrgs(platformRootID)
+// ListPlatformOrgs 平台组织树（includePersonal=false 时排除个人租户；第二返回值＝个人租户计数）。
+func (s *Store) ListPlatformOrgs(platformRootID int64, includePersonal bool) ([]*Org, int, error) {
+	return s.iam.ListPlatformOrgs(platformRootID, includePersonal)
 }
 
 // ListOrgs 按条件查询列表。

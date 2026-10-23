@@ -25,6 +25,8 @@ export interface OrgInfo {
   type: string // root(根组织)/org(组织)/dept(部门)
   created_at: string
   updated_at: string
+  // ★ 2026-10-23 F4：仅平台组织视图（超管 tid=0）出参填充；前端据此把个人租户根默认收起。
+  tenant_is_personal?: boolean
 }
 
 /** 组织接口统一响应结构：orgs 列表/org 单对象/root 根组织行/tenant_id 归属租户 */
@@ -35,11 +37,15 @@ export interface OrgResp {
   org?: OrgInfo
   root?: OrgInfo
   tenant_id?: number
+  // ★ 2026-10-23 F4：平台视图的个人租户计数（开关文案用；默认档不返回或为 0）
+  personal_count?: number
 }
 
-/** 获取组织列表（扁平结构，前端组装树；含根组织行） */
-export async function orgList(): Promise<OrgResp> {
-  return bizResp(() => request('/api/admin/orgs', { headers: authHeaders() }))
+/** 获取组织列表（扁平结构，前端组装树；含根组织行）。
+ *  includePersonal=true 时平台视图才展开个人租户根（默认收敛，个人注册会持续产生租户）。 */
+export async function orgList(includePersonal?: boolean): Promise<OrgResp> {
+  const q = includePersonal ? '?include_personal=1' : ''
+  return bizResp(() => request(`/api/admin/orgs${q}`, { headers: authHeaders() }))
 }
 
 /** 创建组织/部门（parent_id=0 为组织；>0 为部门） */

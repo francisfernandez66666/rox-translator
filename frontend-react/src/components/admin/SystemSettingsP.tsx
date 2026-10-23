@@ -20,11 +20,13 @@ import { useT } from '@/i18n'
 import MailTplP from './MailTplP'
 import { AlertsP, AgreementsP, AuditP } from './panels_a'
 import { WorkflowP, ModelsP } from './panels_d'
-import BrandP from './BrandP'
+import FooterP from './FooterP'
 import { OpsP } from './panels_e'
 
-/** HubTab 系统与运维 Hub 的 8 个子 Tab（2026-09-15 由 20 收敛） */
-type HubTab = 'settings' | 'mailTpl' | 'workflow' | 'agreements' | 'audit' | 'ops' | 'models' | 'brand'
+/** HubTab 系统与运维 Hub 的 8 个子 Tab（2026-09-15 由 20 收敛）
+ *  ★ 2026-10-23 F2：'brand' → 'footer'——品牌定制迁到「组织和成员」Hub（租户管理员可见），
+ *  本 Hub 只保留平台级页脚链接（仍仅超管可达）。 */
+type HubTab = 'settings' | 'mailTpl' | 'workflow' | 'agreements' | 'audit' | 'ops' | 'models' | 'footer'
 
 /** 系统设置 Hub：八类平台配置子 tab（仅超管可达，入口菜单 L4 门控） */
 export default function SystemSettingsP() {
@@ -41,7 +43,7 @@ export default function SystemSettingsP() {
     { key: 'audit', label: t('audit.title') },
     { key: 'ops', label: t('ops.title') },
     { key: 'models', label: t('models.title') },
-    { key: 'brand', label: t('hub.tabBrand') },
+    { key: 'footer', label: t('hub.tabFooter') },
   ]
   return (
     <>
@@ -56,7 +58,7 @@ export default function SystemSettingsP() {
       {tab === 'audit' && <AuditP />}
       {tab === 'ops' && <OpsP />}
       {tab === 'models' && <ModelsP />}
-      {tab === 'brand' && <BrandP />}
+      {tab === 'footer' && <FooterP />}
     </>
   )
 }

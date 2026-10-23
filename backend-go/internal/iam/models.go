@@ -101,6 +101,10 @@ type Org struct {
 	UsedThisMonth int64  `json:"-"`          // 本月已消耗（动态计算，非落库字段；内部计量不外发）
 	CreatedAt     string `json:"created_at"` // 创建时间（RFC3339 字符串）
 	UpdatedAt     string `json:"updated_at"` // 更新时间（RFC3339 字符串）
+	// TenantIsPersonal 仅在平台组织视图（ListPlatformOrgs）里由 tenants.is_personal 现读填充：
+	// 前端据此把个人租户根从平台树默认视图收起，换「显示个人租户（N）」开关展开。
+	// 非平台查询不填（false），避免把「不是个人租户」和「没查过」混成同一种形态。
+	TenantIsPersonal bool `json:"tenant_is_personal,omitempty"`
 }
 
 // 组织类型常量。

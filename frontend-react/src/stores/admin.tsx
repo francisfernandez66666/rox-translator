@@ -59,6 +59,8 @@ interface AdminCtx {
   tenantName: string
   loadInviteEnabled: () => Promise<void>
   activeTenantId: number
+  // 登录用户自己的租户（JWT 口径）；超管为 0。品牌面板的租户兜底用它，避免再引一层 auth store。
+  myTenantId: number
   switchTenant: (tid: number) => void
   loadTenants: () => Promise<void>
   orgs: OrgInfo[]
@@ -192,13 +194,16 @@ export function AdminProvider({ children }: { children: ReactNode }) {
     if (myLevel >= 4) void useAdminStore.getState().loadTenants()
   }, [myLevel])
 
-  // 登录后：【非超管】切到本人租户上下文，并静默加载组织树
+  // 登录/会话恢复后：生效租户必须与身份对得上——非超管＝本人租户；超管＝core 里存的那一档
+  // （登录成功时 Login 的 settleSession 已把它重置为 0＝平台根）。
+  // ★ 2026-10-23 F1-d：旧形态只校正非超管，admin store 会与 core（X-Tenant-ID）分叉——
+  //   上一个租管会话在 store 里留下的 12 会继续被超管的 BrandP 当成目标租户（BYD 事故触发点）。
+  //   这里用 core 的现值做唯一锚点，登录、会话恢复、SSO 三条入口一次覆盖。
   useEffect(() => {
     if (!user) return
     const st = useAdminStore.getState()
-    if (roleLevel(user.role) < 4 && user.tenant_id && st.activeTenantId !== user.tenant_id) {
-      st.switchTenant(user.tenant_id)
-    }
+    const desired = roleLevel(user.role) >= 4 ? getActiveTenantId() : (user.tenant_id || 0)
+    if (st.activeTenantId !== desired) st.switchTenant(desired)
     void st.loadOrgs()
   }, [user, activeTenantId])
 
@@ -236,7 +241,7 @@ export function useAdmin(): AdminCtx {
         : isDeptAdmin ? ['user'] : []
     return {
       myLevel, isAdmin: myLevel >= 2, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
-      tenants: s.tenants, activeTenantId: s.activeTenantId,
+      tenants: s.tenants, activeTenantId: s.activeTenantId, myTenantId: user?.tenant_id ?? 0,
       switchTenant: s.switchTenant, loadTenants: s.loadTenants, clearAuth: s.clearAuth,
       orgs: s.orgs, orgMap: s.orgMap, loadOrgs: s.loadOrgs,
       panel: s.panel, gotoPanel: s.gotoPanel,

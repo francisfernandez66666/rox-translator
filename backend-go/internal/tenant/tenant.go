@@ -266,6 +266,15 @@ func (s *Store) SetBranding(id int64, brandName, brandLogo, domain, brandLinks s
 	return err
 }
 
+// SetBrandName 只更新租户品牌中文名一列（★ 2026-10-23 F3-a）。
+// 与 SetBranding 的区别：后者会整行覆写 logo/domain/brand_links，用于注册/品牌补种
+// 这类只该动名称的场景会把客户已配的视觉与链接一起清空——F3 的窄写入口必须走本方法。
+func (s *Store) SetBrandName(id int64, name string) error {
+	_, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tenants SET brand_name=?, updated_at=? WHERE id=?", name, nowStr(), id)
+	return err
+}
+
 // SetBrandNames 保存租户级「品牌多语言名称」JSON（如 {"zh":"极石","en":"ROX"}）。
 // 参数：id=租户 ID；names=语言→品牌名 JSON 字符串（空=清空）。翻译时按固定用法种入企业知识库。
 func (s *Store) SetBrandNames(id int64, names string) error {

@@ -527,13 +527,17 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	// ★ F-79（2026-09-28 用户拍板补修）：显式参数过去是「谁带都算」，所以未登录访客在主站打
 	//   /?tenant_id=1 就能把 1 号租户的品牌注入首屏——白标承诺「品牌只在自己域生效」当时只靠前端自觉。
 	//   现在判不过就**忽略参数**（不是 403）：让下面的 Host 解析按正常口径接管，公开首屏不会因此变错误页。
+	// ★ 2026-10-23 F1-a：显式 `tenant_id=0`（仅超管放行）表示「就要平台根」，
+	//   必须短路下面的 Host 解析——否则超管从租户品牌域进后台时仍会被解析到那个租户。
+	explicitPlatform := false
 	if v := q.Get("tenant_id"); v != "" {
 		if n, e := strconv.ParseInt(v, 10, 64); e == nil && s.brandingExplicitIDAllowed(r, n) {
 			tid = n
+			explicitPlatform = n == 0
 		}
 	}
 	// 按访问子域前缀解析专属租户品牌；主站前缀按全局根处理，不套用任何租户品牌
-	if tid <= 0 {
+	if tid <= 0 && !explicitPlatform {
 		if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
 			primary := s.primaryHost()
 			base := brandingBaseDomain(s)
@@ -557,13 +561,17 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 		//   判据放在这个咽喉点而非各调用方，是因为 brandingPayload 同时服务
 		//   /api/tenant/branding 与 spa.go 首屏注入两条面（读写同源，不许两副面孔）。
 		return map[string]interface{}{
-			"success":              true,
-			"tenant_id":            0,
-			"name":                 "",
-			"code":                 "",
-			"industry":             "",
-			"industry_name":        "",
-			"brand_name":           m["brand_name"],
+			"success":       true,
+			"tenant_id":     0,
+			"name":          "",
+			"code":          "",
+			"industry":      "",
+			"industry_name": "",
+			"brand_name":    m["brand_name"],
+			// ★ 2026-10-23 F1-c：平台分支此前不返回英文名/多语名，前端品牌页的平台英文名框
+			//   永远是空的（读不到 ⇒ 保存时也写不回）。与租户分支同形输出。
+			"brand_name_en":        m["brand_name_en"],
+			"brand_names":          m["brand_names"],
 			"brand_logo":           s.brandImageURL(r.Context(), brandAssetOwner(0, "logo"), m["brand_logo"]),
 			"domain":               m["domain"],
 			"brand_home_bg":        s.brandImageURL(r.Context(), brandAssetOwner(0, "home-bg"), m["brand_home_bg"]),
@@ -826,7 +834,12 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	//   读侧是 `WHERE domain=?` 的裸等值匹配，这里不清洗就会留下「保存成功但永不生效」的静默坑；
 	//   占用校验同在这一层，因为企业编码本身就是一个能打开的子域（resolveDedicatedTenant 的编码兜底），
 	//   撞码等于把别人的注册入口挂到自己品牌下。
-	if prefix, aerr := s.normalizeDomainOnSave(req.Domain, tid); aerr != nil {
+	if tid == 0 {
+		// ★ 2026-10-23 F1-a：平台根没有「租户子域」这个概念（前端已禁用该输入）。
+		//   保留库内现值，不走租户域归一/占用校验——否则平台品牌页（现在能真正打开了）
+		//   保存任意字段时都可能被一个对平台毫无意义的域名格式规则拦住。
+		req.Domain = s.getPlatformBranding()["domain"]
+	} else if prefix, aerr := s.normalizeDomainOnSave(req.Domain, tid); aerr != nil {
 		s.writeError(w, r, aerr)
 		return
 	} else {
@@ -844,7 +857,19 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 	// 平台主站（tenant_id=0）品牌定制：超管专属，存入 system_config
 	if tid == 0 {
 		m := s.getPlatformBranding()
-		m["brand_name"] = req.BrandName
+		// ★ 2026-10-23 F1-c：平台分支过去只写 brand_name，英文名/多语名整段丢弃，
+		//   超管因此在品牌页看不到也存不了平台英文名。这里与租户分支同一把合并尺子：
+		//   显式 brand_names 为权威全集，未显式时以库内为底、表单值覆盖。
+		names, nerr := mergeBrandNameMap(m["brand_names"], req.BrandNames, req.BrandName, req.BrandNameEn)
+		if nerr != nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, nerr.Error()))
+			return
+		}
+		m["brand_name"] = names["zh"]
+		m["brand_name_en"] = names["en"]
+		if b, e := json.Marshal(names); e == nil {
+			m["brand_names"] = string(b)
+		}
 		m["brand_logo"] = brandLogoURL
 		m["domain"] = req.Domain
 		m["brand_home_bg"] = brandHomeBgURL
@@ -859,9 +884,18 @@ func (s *Server) handleTenantBrandingSet(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, 200, map[string]interface{}{"success": true, "tenant_id": 0})
 		return
 	}
+	// ★ 2026-10-23 F3-b：写入前先按「库内为底 + 表单覆盖（显式 brand_names 为权威全集）」求品牌名，
+	//   中文名框载不回真值时不再把整列洗成只有 en（BYD 事故的直接机制）。
+	//   合并失败（brand_names 非法 JSON）直接 400，不落半截。
+	names, nerr := mergeBrandNameMap(s.currentBrandNames(tid), req.BrandNames, req.BrandName, req.BrandNameEn)
+	if nerr != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, nerr.Error()))
+		return
+	}
 	// 租户分支四段独立保存：基础字段/首页背景/登录卡片位置/登录布局，任一失败即中止返回
 	// （★ F-46：两张图传的是上面收敛好的 URL，dataURI 已在写侧被拒绝或已落成静态件）
-	if err := s.Ten.SetBranding(tid, req.BrandName, brandLogoURL, req.Domain, req.BrandLinks); err != nil {
+	// ★ F3-a：brand_name 列传合并后的 zh，不是表单原值——空中文名不得抹掉库里已有的 zh。
+	if err := s.Ten.SetBranding(tid, names["zh"], brandLogoURL, req.Domain, req.BrandLinks); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "保存失败: "+err.Error()))
 		return
 	}

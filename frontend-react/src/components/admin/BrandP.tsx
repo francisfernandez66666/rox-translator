@@ -5,31 +5,36 @@
 // ② 持有有效付费套餐（套餐付费租户）；③ 超管显式指定开通（超管指定租户）。超管始终可编辑。
 // 2026-09-18（UI 融合）：本面板内的「预览位」（Logo 虚线框、登录页分栏/全屏预览、
 //   登录卡片）配色统一改为暗色主题档位，使预览与线上登录页一致；提示文案去 emoji。
+// 2026-10-23（后台报障 F1/F2/F3）：超管未选租户＝平台根 tid=0（不再回落 rox/租户1）；
+//   品牌与页脚拆开（品牌并入组织 Hub、页脚留在系统与运维）；保存显式回传 brand_names 权威全集，
+//   中文名空时用 brand_names.zh 回填，避免占位符被当成真值。
 // ============================================================================
 import { useEffect, useRef, useState } from 'react'
-import { Button, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
+import { Button, StatusPill, Switch } from '@/ui/langcross/src'
 import { useAdmin } from '@/stores/admin'
 import { useT } from '@/i18n'
 import { Panel } from './parts'
-import FooterP from './FooterP'
 import { tenantBranding, tenantBrandingSave, brandGrant } from '@/api/branding'
 import { parseBgStyle, BrandBgLayer, BgStyle, parseCardPos, parseLoginLayout, CardPos, LoginLayout } from '@/branding'
 import { toastSuccess, toastError } from '@/lib/toastBus'
 
 /** 品牌定制面板组件：编辑当前（或超管所选）租户的品牌名称、Logo、子域名前缀，受套餐付费状态限制 */
 export default function BrandP() {
-  const [tab, setTab] = useState('brand')
   const ad = useAdmin()
   const [, t, tpl] = useT()
   const isSuper = ad.myLevel >= 4
-  // 超管编辑「切换器」当前租户（平台根=rox=ID 1）；租户管理员传本租户 id，确保按本租户解析品牌授权
-  // ★ 用 || 而非 ??：activeTenantId=0（超管未选租户）时必须回落到默认租户1（独立演示站=ROX 品牌），
-  //   否则 tid=0 会被后端当作「平台主站」→ 品牌定制 tab 显示/保存主站品牌而非演示站自身品牌。
-  const targetTenantId = ad.activeTenantId || (isSuper ? 1 : 0)
+  const myTenantId = ad.myTenantId
+  // ★ 2026-10-23 F1-a：**未显式选租户＝平台根 tid=0**（平台根是租户 0；rox 只是普通租户 1）。
+  //   旧写法 `|| (isSuper ? 1 : 0)` 把超管永远钉在 rox/租户 1 上，平台品牌（system_config）结构上够不到。
+  //   租户管理员**以本人租户优先**：activeTenantId 可能是上个会话残留的高值（F1-d 的机制），
+  //   取本人 tid 才能保证「看到的/存下去的都是自己家」；myTenantId 未就绪时才退回 activeTenantId。
+  const targetTenantId = isSuper ? ad.activeTenantId : (myTenantId || ad.activeTenantId)
 
   // 表单状态：品牌名称、Logo URL、子域名、首页背景图、背景样式、登录页布局、登录卡片位置
   const [name, setName] = useState('')
   const [nameEn, setNameEn] = useState('')
+  // 库内 brand_names 全量（含其它语种）：保存时以它为底组装权威全集，避免只带 zh/en 把别家语种删掉。
+  const [namesBase, setNamesBase] = useState<Record<string, string>>({})
   const [logo, setLogo] = useState('')
   const [domain, setDomain] = useState('')
   // ★ F-76：库里已保存的品牌域原值（本地预检只在"相对它改过"时才判，见下面 domainBad）
@@ -67,11 +72,22 @@ export default function BrandP() {
   useEffect(() => {
     let alive = true
     setLoaded(false)
-    tenantBranding(targetTenantId || undefined)
+    tenantBranding(targetTenantId)
       .then((j) => {
         if (!alive || !j.success) return
-        setName(j.brand_name || '')
-        setNameEn(j.brand_name_en || '')
+        // ★ F3-b：中文名框此前只读 brand_name 列，而注册/建租户不写该列 ⇒ 恒空并灰显占位符
+        //   「能言 LangCross」，用户会把占位符当成真值（BYD 事故的观感来源）。这里改用
+        //   brand_names.zh 回填真值；输入框非空时才会被当成"要保存的名字"。
+        let parsed: Record<string, string> = {}
+        if (j.brand_names) {
+          try {
+            const v = JSON.parse(j.brand_names)
+            if (v && typeof v === 'object' && !Array.isArray(v)) parsed = v
+          } catch { parsed = {} }
+        }
+        setNamesBase(parsed)
+        setName(j.brand_name || parsed.zh || '')
+        setNameEn(j.brand_name_en || parsed.en || '')
         setLogo(j.brand_logo || '')
         setDomain(j.domain || '')
         setDomainSaved(j.domain || '')
@@ -192,11 +208,18 @@ export default function BrandP() {
     //   避免客户看到"保存成功"却在自己的品牌域上拿到白牌页。
     if (domainBad) { toastError(t('brand.domainInvalid')); return }
     setSaving(true)
+    // ★ 2026-10-23 F3-b：显式回传 brand_names 权威全集。
+    //   清空输入框＝删除该语种（用户能真正清掉品牌名）；其它语种沿用库内值。
+    //   后端据此不再靠"表单值为空"猜意图——旧载荷不带 brand_names，后端只能整列重建，zh 必丢。
+    const names: Record<string, string> = { ...namesBase }
+    if (name.trim()) names.zh = name.trim(); else delete names.zh
+    if (nameEn.trim()) names.en = nameEn.trim(); else delete names.en
     try {
       const j = await tenantBrandingSave({
         id: targetTenantId,
-        brand_name: name,
-        brand_name_en: nameEn,
+        brand_name: name.trim(),
+        brand_name_en: nameEn.trim(),
+        brand_names: JSON.stringify(names),
         brand_logo: logo,
         domain,
         brand_home_bg: homeBg,
@@ -204,8 +227,10 @@ export default function BrandP() {
         brand_login_card_pos: JSON.stringify(loginCardPos),
         brand_login_layout: JSON.stringify(loginLayout),
       })
-      if (j.success) toastSuccess(t('brand.saved'))
-      else toastError(j.message || 'error')
+      if (j.success) {
+        setNamesBase(names) // 后续保存以刚写入的那份为底，避免连续保存互相覆盖
+        toastSuccess(t('brand.saved'))
+      } else toastError(j.message || 'error')
     } catch (e: any) {
       toastError(e?.message || 'error')
     } finally {
@@ -235,13 +260,7 @@ export default function BrandP() {
 
   return (
     <Panel title={t('brand.title')}>
-      <Tabs activeKey={tab} onChange={(k) => setTab(k)} items={[
-        { key: 'brand', label: t('brand.title') },
-        ...(isSuper ? [{ key: 'footer', label: t('footer.title') }] : []),
-      ]} />
-      {tab === 'brand' && (
-        <>
-          <p style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('brand.hint')}</p>
+      <p style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 12 }}>{t('brand.hint')}</p>
       <div style={{ fontSize: 15, color: 'var(--adm-info-tx)', background: 'var(--adm-info-bg)', border: '1.2px solid var(--adm-info-bd)', borderRadius: 8, padding: '10px 12px', marginBottom: 12, lineHeight: 1.6 }}>
          {t('brand.featureDedicated')}
       </div>
@@ -250,7 +269,9 @@ export default function BrandP() {
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 15, marginBottom: 4 }}>{t('brand.tenantSelect')}</div>
           <select className="lc-select" value={String(targetTenantId)} onChange={(e) => ad.switchTenant(Number(e.target.value))} style={{ width: 320 }}>
-            {isSuper && <option value="1">{t('brand.tenantRoot')}</option>}
+            {/* ★ 2026-10-23 F1-b：平台根是租户 0。旧形态写 value=1 且文案叫「租户根（平台主站）」，
+                而 1 是 rox 普通租户——超管选「平台主站」实际改的是 rox，且列表里 #1 rox 重复出现。 */}
+            {isSuper && <option value="0">{t('brand.tenantRoot')}</option>}
             {ad.tenants.map((x) => <option key={x.id} value={String(x.id)}>{`#${x.id} ${x.name}`}</option>)}
           </select>
         </div>
@@ -307,13 +328,14 @@ export default function BrandP() {
            </div>
 
            {/* 子域名前缀输入
-               targetTenantId===1（平台根 / 默认站，code=rox）时禁用：后端解析专属租户时明确把
-               ID 1 与 rox 排除在「租户子域」之外，放开编辑等于让主站前缀去占一个租户子域。
+               targetTenantId<=1（平台根 0 / 默认站 rox 1）时禁用：后端解析专属租户时明确把
+               ID 1 与 rox 排除在「租户子域」之外，平台根更没有可编辑的品牌域；放开编辑等于
+               让主站前缀去占一个租户子域。
                下面那行提示里的 lexicorn.cn 是写死的展示值，真实后缀取后端
                system_config(base_domain) / env BRAND_DOMAIN_SUFFIX——换根域时两处要一起改。 */}
            <div>
              <div style={{ fontSize: 15, marginBottom: 4 }}>{t('brand.domain')}</div>
-                <input className="lc-input" value={domain} disabled={!editable || targetTenantId === 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder={t('brand.domainPlaceholder')} />
+                <input className="lc-input" value={domain} disabled={!editable || targetTenantId <= 1} onChange={(e) => setDomain(String(e.target.value ?? ''))} placeholder={t('brand.domainPlaceholder')} />
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 4 }}>
                 {tpl('brand.domainPreview', { host: `${domain || t('brand.domainPrefixSample')}.lexicorn.cn` })}
               </div>
@@ -452,14 +474,6 @@ export default function BrandP() {
             </div>
           )}
         </div>
-      )}
-        </>
-      )}
-        {/* 页脚链接并入品牌定制 tab（仅超管，平台级链接）
-            再判一次 isSuper 与上面 items 的过滤条件同口径（两处都写，改一处不会漏另一处）；
-            FooterP 只在切到该 tab 时才挂载，页脚链接的读取因此不是本面板的常驻开销。 */}
-      {tab === 'footer' && isSuper && (
-            <FooterP />
       )}
     </Panel>
   )

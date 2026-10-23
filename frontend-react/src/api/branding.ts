@@ -25,7 +25,9 @@ export interface BrandLink {
   url: string
 }
 
-/** 获取品牌信息（按域名自动解析；super 可指定 tenant_id）；返回形状＝{success,...} 信封，走 bizResp */
+/** 获取品牌信息（按域名自动解析；super 可指定 tenant_id，含显式 0＝平台根）；返回形状＝{success,...} 信封，走 bizResp。
+ *  ★ 2026-10-23 F1：判据从「真值」改为「是否传参」——平台根是租户 0，`tenant_id=0` 必须真的发出去，
+ *  否则超管从租户品牌域进后台时会被 Host 解析带偏到那个租户的品牌。 */
 export async function tenantBranding(tenantId?: number) {
   return bizResp(() => request<{
     success: boolean; tenant_id: number; name: string; code: string; industry: string; industry_name: string
@@ -34,7 +36,7 @@ export async function tenantBranding(tenantId?: number) {
     brand_home_bg_style: string; brand_login_card_pos: string; brand_login_layout: string
     brand_paid: boolean; brand_granted: boolean; brand_root: boolean; dedicated_register: boolean
   }>(
-    `/api/tenant/branding${tenantId ? `?tenant_id=${tenantId}` : ''}`,
+    `/api/tenant/branding${tenantId !== undefined ? `?tenant_id=${tenantId}` : ''}`,
   ))
 }
 

@@ -11,7 +11,9 @@ export const zh: Record<string, string> = {
   'hub.tabOps': '运营策略',
   'hub.tabModels': '模型与供应商',
   'hub.tabReconcile': '成本对账',
-  'hub.tabBrand': '品牌与页脚',
+  // ★ 2026-10-23 F2：品牌与页脚拆成两处入口——品牌跟随组织 Hub，页脚留在系统与运维
+  'hub.tabBrand': '品牌定制',
+  'hub.tabFooter': '页脚链接',
 }
 
 // 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
@@ -24,5 +26,6 @@ export const en: Record<string, string> = {
   'hub.tabOps': 'Ops Strategy',
   'hub.tabModels': 'Models & Providers',
   'hub.tabReconcile': 'Reconciliation',
-  'hub.tabBrand': 'Brand & Footer',
+  'hub.tabBrand': 'Brand customization',
+  'hub.tabFooter': 'Footer links',
 }

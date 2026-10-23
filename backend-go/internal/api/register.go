@@ -800,46 +800,84 @@ func (s *Server) hasOpenAlert(tid int64, kind string) bool {
 	return false
 }
 
-// seedTenantBrandTerms 把注册时填写的品牌固定用法种入租户企业知识库：
+// mergeBrandNameMap 品牌名三列的唯一合并口径（★ 2026-10-23 F3-b）：
+//   - 显式 brandNamesJSON（BrandP 现在总会回传）是**权威全集**：`{}` 表示清空，缺某语种即删除；
+//   - 未显式提供时以库内现有 brand_names 为底、表单非空值覆盖——载荷不带 brand_names 不再等于清零；
+//   - 空串一律剔除，避免把「没有这个语种」存成空值。
+//
+// 旧形态「只用表单三参数重建」在中文名框载不回真值时会整列覆盖掉 zh（BYD 事故的直接机制）。
+func mergeBrandNameMap(baseJSON, explicitJSON, brandName, brandNameEn string) (map[string]string, error) {
+	names := map[string]string{}
+	if strings.TrimSpace(explicitJSON) != "" {
+		if err := json.Unmarshal([]byte(explicitJSON), &names); err != nil {
+			return nil, fmt.Errorf("brand_names 需为合法 JSON 对象")
+		}
+		if names == nil {
+			names = map[string]string{}
+		}
+	} else if strings.TrimSpace(baseJSON) != "" {
+		if err := json.Unmarshal([]byte(baseJSON), &names); err != nil || names == nil {
+			names = map[string]string{}
+		}
+	}
+	if v := strings.TrimSpace(brandName); v != "" {
+		names["zh"] = v
+	}
+	if v := strings.TrimSpace(brandNameEn); v != "" {
+		names["en"] = v
+	}
+	for k, v := range names {
+		if strings.TrimSpace(v) == "" {
+			delete(names, k)
+		}
+	}
+	return names, nil
+}
+
+// currentBrandNames 读取租户库内现有品牌名 JSON（读不到按空底）。
+func (s *Server) currentBrandNames(tid int64) string {
+	if s.Ten == nil || tid <= 0 {
+		return ""
+	}
+	if t, err := s.Ten.GetByID(tid); err == nil && t != nil {
+		return t.BrandNames
+	}
+	return ""
+}
+
+// seedTenantBrandTerms 把注册/建租户/后台保存时的品牌固定用法种入租户企业知识库：
 // 品牌中文名（zh）→ 品牌英文名（en，或其它语言名），防止后续翻译把品牌名音译/漂移。
 // 规则：
-//   - brandNames（多语言 JSON）> brandNameEn（英文名）> brandName（中文名默认同时作为 zh_hant）；
+//   - 合并口径见 mergeBrandNameMap（显式 brandNames 权威；否则库内为底、表单非空覆盖）；
 //   - 「没有其它语言名称」时，英文名覆盖所有非 zh/zh_hant 目标语固定用法（SeedBrandTerms 兜底）；
-//   - 品牌名同时写入租户 brand_names（JSON）与 brand_name_en，供后台展示与再次种入。
+//   - F3-a：三列 brand_name / brand_names / brand_name_en 同批写入（注册后中文名框不再是空值）。
 func (s *Server) seedTenantBrandTerms(tid int64, brandName, brandNameEn, brandNamesJSON string) {
 	if s.Store == nil || s.Ten == nil || tid <= 0 {
 		return
 	}
 	brandName = strings.TrimSpace(brandName)
 	brandNameEn = strings.TrimSpace(brandNameEn)
-	names := map[string]string{}
-	if strings.TrimSpace(brandNamesJSON) != "" {
-		if err := json.Unmarshal([]byte(brandNamesJSON), &names); err != nil {
-			names = map[string]string{} // 非法 JSON 忽略，回到英文名兜底
-		}
+	explicit := strings.TrimSpace(brandNamesJSON) != ""
+	names, err := mergeBrandNameMap(s.currentBrandNames(tid), brandNamesJSON, brandName, brandNameEn)
+	if err != nil {
+		// 非法 JSON 不回写库：退回「库内为底 + 表单覆盖」，避免把整列洗空。
+		names, _ = mergeBrandNameMap(s.currentBrandNames(tid), "", brandName, brandNameEn)
+		explicit = false
 	}
-	if brandName != "" {
-		if names["zh"] == "" {
-			names["zh"] = brandName
-		}
-	}
-	if brandNameEn != "" {
-		if names["en"] == "" {
-			names["en"] = brandNameEn
-		}
-	}
-	if len(names) == 0 {
+	if len(names) == 0 && !explicit {
 		return // 未填写任何品牌名，不种入
 	}
-	// 固定写法持久化到租户 brand_names / brand_name_en（后台可展示、可再次补种）
-	if b, err := json.Marshal(names); err == nil {
+	// 固定写法持久化三列（★ F3-a：brand_name 此前只在后台保存时写，注册/建租户恒空，
+	// 品牌页中文名框因此灰显占位符「能言 LangCross」）；显式清空时这里同样会写空，语义一致。
+	if b, e := json.Marshal(names); e == nil {
 		_ = s.Ten.SetBrandNames(tid, string(b))
 	}
-	if names["en"] != "" {
-		_ = s.Ten.SetBrandNameEn(tid, names["en"])
+	_ = s.Ten.SetBrandNameEn(tid, names["en"])
+	_ = s.Ten.SetBrandName(tid, names["zh"])
+	// 企业包 L1 术语种入（幂等）；空档不清术语（旧行为：没填品牌名就不动已有术语）
+	if len(names) > 0 {
+		_ = s.Store.SeedBrandTerms(tid, names)
 	}
-	// 企业包 L1 术语种入（幂等）
-	_ = s.Store.SeedBrandTerms(tid, names)
 }
 
 // wasInviteBind 判断是否通过绑定租户的邀请码加入（用于角色判定）。

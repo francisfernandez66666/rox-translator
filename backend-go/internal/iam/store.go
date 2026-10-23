@@ -502,20 +502,28 @@ func (s *Store) GetPlatformRootOrg() (*Org, error) {
 
 // ListPlatformOrgs 平台全量组织视图：INNER JOIN 租户表防孤儿；
 // 租户根挂到平台根下、直属组织重挂到本租户根（修复断链），供前端组装平台树。
-func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
+// includePersonal=false（平台树默认档）时在 SQL 层排除个人租户：个人注册会持续产生独立租户，
+// 平铺进平台组织树会无限增长（2026-10-23 报障）。第二个返回值＝个人租户根数量（与是否包含无关），
+// 供前端「显示个人租户（N）」开关展示——计数取 DISTINCT tenant_id，不是 org 行数。
+func (s *Store) ListPlatformOrgs(platformRootID int64, includePersonal bool) ([]*Org, int, error) {
 	// INNER JOIN tenants：已删除租户的孤儿组织不再出现在平台树
 	// ★ 修复（2026-08-26 P1-b）：SELECT 补第 8 列 token_limit——旧 SQL 只查 7 列却 Scan
 	//   8 个目标，每行 Scan 报错被 continue 吞掉，导致平台组织树恒为空。
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, COALESCE(o.token_limit,0), o.created_at, o.updated_at FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
+	// ★ 2026-10-23 F4：补第 9 列 t.is_personal，前端据此按租户类型收起/展开。
+	where := "o.tenant_id>0"
+	if !includePersonal {
+		where += " AND COALESCE(t.is_personal,0)=0"
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT o.id, o.tenant_id, o.parent_id, o.name, o.type, COALESCE(o.token_limit,0), o.created_at, o.updated_at, COALESCE(t.is_personal,0) FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE "+where+" ORDER BY o.tenant_id, CASE o.type WHEN 'root' THEN 0 ELSE 1 END, o.parent_id, o.id")
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []*Org
 	tenantRoot := map[int64]int64{} // tenant_id → 该租户根组织 ID
 	for rows.Next() {
 		var o Org
-		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TenantID, &o.ParentID, &o.Name, &o.Type, &o.TokenLimit, &o.CreatedAt, &o.UpdatedAt, &o.TenantIsPersonal); err != nil {
 			continue
 		}
 		if o.Type == OrgTypeRoot {
@@ -532,7 +540,15 @@ func (s *Store) ListPlatformOrgs(platformRootID int64) ([]*Org, error) {
 			}
 		}
 	}
-	return out, nil
+	// 个人租户计数是辅助读数：读失败只回 0（不拖垮平台树主链路），开关会显示 0 而不是报错。
+	personalTenants := 0
+	if crows, cerr := db.Query(s.db, db.CurrentDialect(), "SELECT COUNT(DISTINCT o.tenant_id) FROM orgs o INNER JOIN tenants t ON o.tenant_id=t.id WHERE o.tenant_id>0 AND COALESCE(t.is_personal,0)=1"); cerr == nil {
+		defer crows.Close()
+		if crows.Next() {
+			_ = crows.Scan(&personalTenants)
+		}
+	}
+	return out, personalTenants, nil
 }
 
 // ListOrgs 列出租户下全部组织（扁平列表，前端组装树）。

@@ -22,6 +22,7 @@ import { fmtPoints } from '@/utils/points' // ★ S1 部门预算积分口径（
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
+import BrandP from './BrandP' // ★ 2026-10-23 F2：品牌定制从「系统与运维」（超管专属）迁到组织 Hub（租户管理员可见）
 import { t, tpl } from '@/i18n'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
 
@@ -36,6 +37,9 @@ export function OrgP() {
   const [orgs, setOrgs] = useState<OrgInfo[]>([])
   const [rootOrg, setRootOrg] = useState<OrgInfo | null>(null)
   const [isPlatformView, setIsPlatformView] = useState(false)
+  // ★ 2026-10-23 F4：平台树默认只显示企业租户；个人租户根按需展开（后端同参数过滤）
+  const [showPersonal, setShowPersonal] = useState(false)
+  const [personalCount, setPersonalCount] = useState(0)
   const [budgetMap, setBudgetMap] = useState<Record<number, { limit: number; used: number }>>({})
   const [selectedOrg, setSelectedOrg] = useState(0)
   const [orgUserList, setOrgUserList] = useState<Any[]>([])
@@ -63,7 +67,7 @@ export function OrgP() {
 
   const myLevel = ad.myLevel
   const isSuper = ad.isSuper
-  const [tab, setTab] = useState<'org' | 'invite' | 'users'>('org') // ★ Tab 精简（2026-09-15）：成员并入组织 Hub
+  const [tab, setTab] = useState<'org' | 'invite' | 'users' | 'brand'>('org') // ★ Tab 精简（2026-09-15）：成员并入组织 Hub；★ F2：品牌定制并入本 Hub
 
   // 根组织/平台根名：优先根组织名，回退当前激活租户名
   const rootOrgName = useMemo(() => {
@@ -74,9 +78,13 @@ export function OrgP() {
 
   // 平铺组织列表：平台视图剔除所属根组织外的 root 节点，租户视图剔除 root
   const flatOrgs = useMemo(() => {
-    if (isPlatformView) return orgs.filter((o) => !(o.type === 'root' && rootOrg && o.id === rootOrg.id))
+    if (isPlatformView) {
+      // 前端再过滤一次是纵深防御：后端默认档已排除个人租户，但旧响应/缓存包可能仍带进来。
+      return orgs.filter((o) => !(o.type === 'root' && rootOrg && o.id === rootOrg.id)
+        && (showPersonal || o.tenant_is_personal !== true))
+    }
     return orgs.filter((o) => o.type !== 'root')
-  }, [orgs, isPlatformView, rootOrg])
+  }, [orgs, isPlatformView, rootOrg, showPersonal])
 
   // 深度优先展开为带层级的线性列表（渲染缩进用）
   const flatTree = useMemo(() => {
@@ -179,15 +187,16 @@ export function OrgP() {
 
   // loadAll 组织面板整体刷新：组织树 + 成员列表并行拉取（含平台视图标记）
   const loadAll = useCallback(async () => {
-    const [r, ru] = await Promise.all([orgList(), orgUsers()])
+    const [r, ru] = await Promise.all([orgList(showPersonal), orgUsers()])
     if (r.success) {
       setIsPlatformView(!!(r as Any).platform)
       setRootOrg((r as Any).root || null)
       setOrgs((r as Any).orgs || [])
+      setPersonalCount(Number((r as Any).personal_count || 0))
     }
     if (ru.success) setOrgUserList(ru.users || [])
     await loadOrgUsers()
-  }, [selectedOrg])
+  }, [selectedOrg, showPersonal])
 
   useEffect(() => { void loadAll(); void loadBudget() }, [loadAll])
   useEffect(() => {
@@ -420,10 +429,12 @@ export function OrgP() {
 
   return (
     <>
-    <Tabs activeKey={tab} onChange={(k) => setTab(k as 'org' | 'invite')} items={[
+    <Tabs activeKey={tab} onChange={(k) => setTab(k as 'org' | 'invite' | 'users' | 'brand')} items={[
       { key: 'org', label: t('org.tabOrg') },
       { key: 'invite', label: t('org.tabInvite') },
       { key: 'users', label: t('hub.tabUsers') },
+      // 品牌定制：组织 Hub 最低 L3（租户管理员）可见；个人用户本就看不到组织 Hub（AdminDashboard 过滤）
+      { key: 'brand', label: t('hub.tabBrand') },
     ]} />
       {/* Tab 面板 */}
       {tab === 'org' && (<>
@@ -442,6 +453,14 @@ export function OrgP() {
         </div>
       )}
 
+      {/* ★ 2026-10-23 F4：平台视图下个人租户默认收起（个人注册会持续产生独立租户，
+          平铺会把平台树撑成无限长）。开关展开时才平铺，计数由后端 DISTINCT 个人租户数给出。 */}
+      {isPlatformView && (
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, fontSize: 14, color: 'var(--adm-hint)' }}>
+          <input type="checkbox" checked={showPersonal} onChange={(e) => { setShowPersonal(e.target.checked); setSelectedOrg(0) }} />
+          {tpl('org.showPersonal', { n: personalCount })}
+        </label>
+      )}
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         <div style={{ minWidth: 280, flex: '1 1 320px' }}>
           <div
@@ -642,6 +661,8 @@ export function OrgP() {
       {/* Tab 面板 */}
       {tab === 'invite' && <InvitesP />}
       {tab === 'users' && <UsersP />}
+      {/* 品牌面板自带 Panel 标题（切换子 tab 即卸载/重挂，与其他子面板同口径） */}
+      {tab === 'brand' && <BrandP />}
     </>
   )
 }

@@ -17,7 +17,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { create } from 'zustand'
-import { authMe, setAuthToken, getAuthToken, setUnauthorizedHandler, getActiveTenantId, logout as authLogout } from '@/api'
+import { authMe, setAuthToken, setActiveTenantId, getAuthToken, setUnauthorizedHandler, getActiveTenantId, logout as authLogout } from '@/api'
 import type { AuthUser } from '@/api'
 
 /** roleLevel 角色等级：super_admin/admin=4 · tenant_admin/approver=3 · dept_admin=2 · 其他=1
@@ -78,6 +78,9 @@ export const useAuthStore = create<AuthState>()((set) => ({
     //   绝不因为"撤销请求没成功"就把用户卡在已登出不了的状态里。
     void authLogout().catch(() => { /* 登出永不因服务端不可达而失败 */ })
     setAuthToken('')
+    // ★ 2026-10-23 F1-d：登出连同「生效租户」一起清零。旧形态只清 token，租管会话选过的
+    //   租户号会留在 sessionStorage，被同一浏览器里的下一个登录会话（尤其超管）静默继承。
+    setActiveTenantId(0)
     set({ user: null })
   },
   setRestoring: (v) => set({ restoring: v }),

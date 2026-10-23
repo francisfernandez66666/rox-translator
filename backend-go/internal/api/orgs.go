@@ -145,23 +145,30 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
-		// 确保所有租户都有根组织行（首次或迁移后）
+		// ★ 2026-10-23 F4：个人租户默认不进平台树（个人注册会持续建租户，平铺即无限增长）。
+		//   include_personal=1 时才展开，并由 ListPlatformOrgs 回传个人租户计数。
+		includePersonal := r.URL.Query().Get("include_personal") == "1" || strings.EqualFold(r.URL.Query().Get("include_personal"), "true")
+		// 确保所有租户都有根组织行（首次或迁移后）；个人租户在默认档不必补——它们本就被排除，
+		// 等用户真的打开「显示个人租户」时再补，免得每次进平台视图都替一批不可见的租户做写操作。
 		if s.Ten != nil {
 			if tenants, e := s.Ten.List(); e == nil {
 				for _, t := range tenants {
+					if t.IsPersonal && !includePersonal {
+						continue
+					}
 					if _, e2 := s.Store.GetRootOrg(t.ID); e2 != nil {
 						_, _ = s.Store.EnsureRootOrg(t.ID, t.Name)
 					}
 				}
 			}
 		}
-		orgs, err := s.Store.ListPlatformOrgs(root.ID)
+		orgs, personalCount, err := s.Store.ListPlatformOrgs(root.ID, includePersonal)
 		if err != nil {
 			// F-64②：平台全量组织视图（INNER JOIN tenants）读取失败＝存储侧故障（500）。
 			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": 0, "platform": true})
+		writeJSON(w, 200, map[string]interface{}{"success": true, "orgs": orgs, "root": root, "tenant_id": 0, "platform": true, "personal_count": personalCount})
 		return
 	}
 	tid := s.effTenant(r, u)

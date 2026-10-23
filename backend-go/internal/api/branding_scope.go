@@ -40,10 +40,15 @@ import (
 
 // brandingExplicitIDAllowed 判定 URL 上显式带的 `?tenant_id=` 能否生效（F-79）。
 // want = 参数指名要看的租户 id；返回 false 时调用方必须**忽略该参数**、回落按访问域名解析。
-// 三处防御性拒绝各自对应一条真实形态：nil 请求（单测/内部复用）、want≤0（脏参数与"平台根"语义）、
-// 未登录或令牌失效（匿名跨域拉取——本缺陷的主案发现场）。
+// 四档：nil 请求／负数（脏参数）／匿名或令牌失效（本缺陷的主案发现场）／
+// 非超管点名 0（平台根）——平台根不是任何租户的"自己家"。
+//
+// ★ 2026-10-23 F1-a：want==0 必须对超管放行。品牌页超管默认目标已改为平台根（租户 0），
+//
+//	若这里继续一律拒绝，前端只能靠 Host 解析拿平台品牌——超管从任一租户品牌域进后台时
+//	会静默读到那个租户的品牌（"我明明是超管却改不了主站"）。非超管仍不许点名 0。
 func (s *Server) brandingExplicitIDAllowed(r *http.Request, want int64) bool {
-	if s == nil || r == nil || want <= 0 {
+	if s == nil || r == nil || want < 0 {
 		return false
 	}
 	u := s.authUser(r)
@@ -51,7 +56,10 @@ func (s *Server) brandingExplicitIDAllowed(r *http.Request, want int64) bool {
 		return false // 匿名访客：品牌只由访问域名决定，参数一律不作数
 	}
 	if auth.IsSuperAdmin(u) {
-		return true // 超管跨租户配置/预览是这条参数的设计用途
+		return true // 超管跨租户配置/预览（含平台根 0）是这条参数的设计用途
+	}
+	if want == 0 {
+		return false // 平台根只能由超管显式点名
 	}
 	return u.TenantID == want // 只准"点名自己家"，不许点名别家
 }
