@@ -31,6 +31,7 @@ package store
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"translator/internal/db"
 	"translator/internal/tenant"
@@ -46,6 +47,11 @@ type PurgeTenantResult struct {
 	Deleted map[string]int64
 	// Failed 每张表失败的原因（表不存在 / 权限 / 连接故障等），空表示全绿
 	Failed map[string]string
+	// Skipped 本部署里「不归 tenant_id 管」的表（表不存在，或表在但没有 tenant_id 列）。
+	// ★ 2026-10-23 现网实测：ticket_state 在 PG 里是**全局状态表**、没有 tenant_id 列，
+	// 旧清单把它列进来，于是每次删租户都会把它记成一次「失败」——把真实故障淹掉。
+	// 这类表不是错误，是清单与库结构的差异，单独列出来让运维看得见。
+	Skipped []string
 	// TenantRowDeleted `tenants` 行是否已删除；false 表示数据清了但租户行还在
 	TenantRowDeleted bool
 }
@@ -111,8 +117,12 @@ func (s *Store) PurgeTenantCascade(tid int64) (*PurgeTenantResult, error) {
 	for _, table := range tenant.ScopedTables {
 		rs, err := db.Exec(s.db, dialect, "DELETE FROM "+table+" WHERE tenant_id=?", tid)
 		if err != nil {
-			// 表不存在（老库未升级）与真故障在这里混在一起，都如实记下——
-			// 让调用方自己判断「这张表本来就没有」还是「这张表没删掉」。
+			if isNotTenantScopedErr(err) {
+				// 「表不存在」或「表在但没 tenant_id 列」——不是故障，记进 Skipped 继续
+				res.Skipped = append(res.Skipped, table)
+				continue
+			}
+			// 真故障（权限 / 连接 / 锁）如实记下，让调用方判断要不要人工收尾
 			res.Failed[table] = err.Error()
 			continue
 		}
@@ -131,4 +141,26 @@ func (s *Store) PurgeTenantCascade(tid int64) (*PurgeTenantResult, error) {
 		return res, fmt.Errorf("租户行未删除（可能已被并发删除）")
 	}
 	return res, nil
+}
+
+// isNotTenantScopedErr 判断错误是否表示「这张表不归 tenant_id 管」而不是真故障。
+// 三种形态都认，否则会把「清单与库结构的差异」误报成删除失败：
+//   - sqlite：no such table: xxx
+//   - postgres 缺表：relation "xxx" does not exist
+//   - postgres 缺列：column "tenant_id" does not exist（现网 ticket_state 就是这种）
+//
+// 真故障（permission denied / connection refused / deadlock）不含这些片段，仍走 Failed。
+func isNotTenantScopedErr(e error) bool {
+	if e == nil {
+		return false
+	}
+	msg := e.Error()
+	if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
+		return true
+	}
+	// PG 的两种 does not exist：只认「relation」与「column "tenant_id"」，
+	// 不把任意 does not exist（比如 database/role 不存在）当成可跳过——
+	// 那种情况必须报出来，否则删租户会在一个连不上的库上显示「成功」。
+	return strings.Contains(msg, "does not exist") &&
+		(strings.Contains(msg, "relation") || strings.Contains(msg, `column "tenant_id"`))
 }

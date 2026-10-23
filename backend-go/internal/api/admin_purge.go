@@ -155,6 +155,7 @@ func (s *Server) handleAdminTenantDelete(w http.ResponseWriter, r *http.Request)
 		"deleted_total":      res.TotalDeleted(),
 		"deleted":            deleted,
 		"failed":             failed,
+		"skipped":            res.Skipped,
 		"tenant_row_deleted": res.TenantRowDeleted,
 	})
 }

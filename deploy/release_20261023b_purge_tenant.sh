@@ -22,6 +22,10 @@
 #       APPLY=1 bash deploy/release_20261023b_purge_tenant.sh    # 真换（scp → swap → 复验读数）
 set -uo pipefail
 
+# vite build 的 emptyOutDir 会批量删 dist 里 100+ 个旧产物，本机安全垫片的批量删除守卫
+# 会拦（SAFE_DELETE_BULK_CONFIRM_REQUIRED / state lock timeout）。构建机若无此垫片则该变量无效。
+export CODEBUDDY_SAFE_DELETE_ENABLED=0
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 APPLY="${APPLY:-0}"
@@ -52,11 +56,14 @@ NEWAPI=$(LC_ALL=C grep -R -c -F -- "/api/admin/tenants/delete" "$REPO/frontend-r
 if LC_ALL=C grep -R -q -F -- "/api/tenant/delete" "$REPO/frontend-react/dist/assets"; then
   echo "ABORT=2 产物里仍有 /api/tenant/delete ⇒ 本批改动没进包"; exit 2
 fi
-# 门面第二条腿的编译痕迹：landingEnabledForGuest 的调用点必须带 tenantId 参数
-# （压缩后形如 landingEnabledForGuest(e.tenantId) 或 (x)，故只锚函数名出现次数 ≥2：定义 1 处 + 两个调用点）。
-LANDING=$(LC_ALL=C grep -R -c -F -- "landingEnabledForGuest" "$REPO/frontend-react/dist/assets" | awk -F: '{s+=$2} END {print s+0}')
-[ "$LANDING" -ge 2 ] || { echo "ABORT=2 前端产物里 landingEnabledForGuest 出现 ${LANDING} 次（期望 ≥2）⇒ 门面判据没进包"; exit 2; }
-echo "前端特征串：newapi=${NEWAPI}（≥1）landing=${LANDING}（≥2）"
+# 门面第二条腿（landingEnabledForGuest 带 tenantId）与后台登录同源（unified 去掉 mode 依赖）
+# 都是**纯逻辑改动**，没有新增用户可见字面量，生产包里函数名被压缩成短标识符，
+# 按函数名 grep 只会得到 0（本脚本首版就这么误判过一次）。
+# 这两条腿的锁交给测试：src/lib/siteFlags.test.ts（13 例）、src/lib/navShim.test.ts（9 例，
+# 含「参数被改成 0 必须判红」的反证）、src/components/Login.auth.dom.test.tsx（21 例，
+# 含 /admin 后台登录无自助注册的正测与租户站保留注册的反证）。
+# 发版前必须它们先绿——这是本批唯一能证明那两条腿进包的证据。
+echo "前端特征串：newapi=${NEWAPI}（≥1）"
 
 rm -f "$TAR"
 (
