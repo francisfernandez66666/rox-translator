@@ -60,14 +60,20 @@ export default function Login({ mode, onLogin }: Props) {
   const [lang, , tplF] = useT() // tplF：带 {n} 占位的模板取词（验证码倒计时「{n}s 后重发」用）
   const { toast } = useToast() // 迁移口径：原 TDesign MessagePlugin.warning/error 全部换成组件库 toast
   const branding = useBranding()
-  // ★ 2026-10-22 统一登录批：「统一登录」只落在主站公开登录页（画布 home + 根域名）。
+  // ★ 2026-10-22 统一登录批：「统一登录」落在主站（根域名）。
   //   unified=true 时：没有注册分支（自助注册钮隐退、/register 与 ?ref= 不再自动展开注册），
   //   邮箱验证通过即注册登录（未注册邮箱由后端自动建空白账号），字段补齐可见标签，
   //   首登资料提醒交给根级 ProfileSetupGate 的 AI 完善面板。
   //   门控信号与 ProfileSetupGate 同源：tenantId===0＝平台根域名＝主站；
-  //   租户子域/演示站（tenantId>0）与后台登录（mode='admin'）一切照旧——
-  //   这一批改动的红线就是「只影响主站」。
-  const unified = mode === 'home' && branding.tenantId === 0
+  //   租户子域/演示站（tenantId>0）一切照旧——这一批改动的红线就是「只影响主站」。
+  // ★ 2026-10-23（用户令「主站管理后台退出以后还保留着注册，应该删除，保留和主站的统一登录
+  //   同源逻辑」）：`mode` 不再参与判定——主站的**后台登录也是主站登录**，同一张卡不该因为
+  //   从 `/admin` 退出就换一副面孔（旧写法只认 `mode==='home'`，于是后台退出后
+  //   「没有账号？自助注册试用」+ otpDesc 段落 + 「注册邮箱」placeholder 全部原样回来）。
+  //   主站既然已经取消注册分支，后台登录更没有理由留一个注册入口——注册出来的空白账号
+  //   在 applyLogin 里本来也会被 `roleLevel < 2` 弹回去（等于把人送进死路）。
+  //   租户子域/演示站（tenantId>0）仍走旧形态，一字不动。
+  const unified = branding.tenantId === 0
   // 邀请裂变个人码（?ref=），登录页与注册提交共用
   // 提到组件顶层而非在提交前现取：注册表单、传统注册提交、AI 接管流三处都要读；
   // 认证页存活期间地址栏 query 不变，故不必 useMemo

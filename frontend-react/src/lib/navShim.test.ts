@@ -230,7 +230,10 @@ const GUEST_MARKERS: Array<[string, RegExp]> = [
   ['定价页分支', /path === '\/pricing'/],
   ['比价页分支', /path === '\/compare'/],
   ['首页分支', /path === '\/'/],
-  ['门面开关判定', /!landingEnabledForGuest\(\)/],
+  // ★ 2026-10-23：判据签名从 `landingEnabledForGuest()` 变成 `landingEnabledForGuest(branding.tenantId)`
+  //   （加了租户维度：租户定制页对访客不展示平台落地页）。正则只锚到左括号，参数写什么不锁——
+  //   锁的是「两棵树都真的问过这个判据」，不是参数拼写。
+  ['门面开关判定', /!landingEnabledForGuest\(/],
   ['营销壳（不带 auth 档）', /<PublicShell>/],
 ]
 /** 登录面唯一调用点内部必须有的口径（两棵树共用，所以只查一次） */
@@ -270,6 +273,16 @@ function parityFailures(files: Map<string, string>): string[] {
   }
   if (!/<Navigate to="\/login" replace \/>/.test(guest)) bad.push('App.tsx 门面关闭分支的写法变了（本锁认 <Navigate to="/login" replace />）')
   if (!/navigate\('\/login', \{ replace: true \}\)/.test(pub)) bad.push('PublicRoot 门面关闭分支必须换地址且不压历史栈（replace: true）')
+  // ★ 2026-10-23 租户维度：两棵树都必须把 `branding.tenantId` 喂给判据。
+  //   只锁「问过判据」不够——判据自己有两条腿（租户定制页／部署级标记），
+  //   传成 0 就等于把租户那条腿**静默摘掉**：源码、tsc、单测全绿，而客户品牌域名上
+  //   访客又开始看到平台营销落地页。所以参数本身也是判据的一部分。
+  if (!/landingEnabledForGuest\(branding\.tenantId\)/.test(guest)) {
+    bad.push('App.tsx 的未登录分诊没把 branding.tenantId 传给门面判据（租户定制页那条腿会静默失效）')
+  }
+  if (!/landingEnabledForGuest\(branding\.tenantId\)/.test(pub)) {
+    bad.push('PublicRoot.tsx 没把 branding.tenantId 传给门面判据（租户定制页那条腿会静默失效）')
+  }
   // 登录后换树：公开面树没有工作台，不换就永远停在登录页（Login 自身不感知登录态）
   if (!/if \(user\) navigate\('\/', \{ replace: true \}\)/.test(pub)) bad.push('PublicRoot 缺"登录成功即换树到 App"那一腿')
   return bad
@@ -340,8 +353,15 @@ describe('D 公开面与 App 的未登录三支等值', () => {
   })
   it('反证：摘掉 PublicRoot 的门面开关判定／换树腿 —— 各自必须判红', () => {
     const m = new Map(FILES)
-    m.set(PUBLIC_ROOT, (m.get(PUBLIC_ROOT) || '').replace('!landingEnabledForGuest()', 'false'))
+    m.set(PUBLIC_ROOT, (m.get(PUBLIC_ROOT) || '').replace('!landingEnabledForGuest(branding.tenantId)', 'false'))
     expect(parityFailures(m).join('\n'), '门面开关判定被摘没被判红').toContain('门面开关判定')
+
+    // ★ 2026-10-23：判据还在、但参数被悄悄改成常量 0 —— 同样必须判红。
+    //   这一条针对的是「锁住了调用、没锁住参数」那类退化：租户定制页会静默恢复成平台落地页。
+    const mArg = new Map(FILES)
+    mArg.set(APP, (mArg.get(APP) || '').replace('landingEnabledForGuest(branding.tenantId)', 'landingEnabledForGuest(0)'))
+    expect(mArg.get(APP), '反证失效：参数变异没落地').not.toBe(FILES.get(APP))
+    expect(parityFailures(mArg).join('\n'), '参数被改成 0 没被判红').toContain('branding.tenantId')
 
     const m2 = new Map(FILES)
     m2.set(PUBLIC_ROOT, (m2.get(PUBLIC_ROOT) || '').replace(/if \(user\) navigate\('\/', \{ replace: true \}\)/, 'void user'))

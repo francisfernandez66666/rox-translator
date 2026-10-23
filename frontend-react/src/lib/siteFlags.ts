@@ -43,8 +43,27 @@ export function readSiteFlags(): SiteFlags {
 /**
  * 官网主页对未登录访客是否开放（★ 〇-Z 的唯一消费点判据）。
  * 返回 false 时，App.tsx 的访客分流把 `/` 重定向到 `/login`（地址栏跟着变）。
+ *
+ * ★ 2026-10-23 补租户维度（用户令「输入租户定制页，只载入 login，不是载入主站的未登录展示页」）：
+ *   判据有**两条腿**，任一成立即对访客关闭主页：
+ *     ① **租户定制页**（`tenantId > 0`）——客户品牌子域/演示站是「客户的站点」，
+ *        在上面给访客看平台自己的营销落地页（平台定价、平台比价、平台 CTA）本身就是错的：
+ *        访客是冲这个客户来的，不是冲平台来的。故这类域名打开 `/` 直接进登录页。
+ *     ② 部署级门面标记 `window.__SITE_FLAGS__.landing === false`（env `LANDING_DISABLED` /
+ *        `ops_policy.front.landing_enabled`）——见文件头，主管「这个部署要不要对外营业」。
+ *
+ *   为什么第 ① 条必须在前端按 `tenantId` 判、而不能也做成部署级 env：
+ *   一台机上的**主站单元同时服务平台根域名与全部租户品牌子域**（caddy 通配块 → 8787），
+ *   部署级 env 是全单元一个值，给它置 false 会把主站的落地页一起关掉。
+ *   而 `tenantId` 是**后端按 Host 解析后直出的运行时数据**（`window.__BRANDING__.tenant_id`），
+ *   不是前端写死 hostname —— 换域名/加体验机都不需要改构建产物，与文件头那条「不写死域名」的口径同向。
+ *
+ * 缺省口径不变：读不到 `tenantId`（传 0 或省略）且没有门面标记 ⇒ 按「主页开放」处理。
  */
-export function landingEnabledForGuest(): boolean {
+export function landingEnabledForGuest(tenantId: number = 0): boolean {
+  // ① 租户定制页：客户的站点不展示平台营销落地页
+  if (Number.isFinite(tenantId) && tenantId > 0) return false
+  // ② 部署级门面标记
   const f = readSiteFlags()
   return f.landing !== false
 }

@@ -460,9 +460,17 @@ func (s *Store) Name(id int64) (string, error) {
 
 // Delete 删除租户并级联清理其全部主数据与业务数据（组织树/用户/知识库/工单/订单等）。
 // 参数：id=租户 ID；默认租户（ID=1）由调用方拦截。
-// 说明：tm_segments 与业务表同库（kb.Open 复用主库连接），故一并清理，避免翻译记忆孤儿行；
-// usage_daily/audit_logs/notifications/feedbacks/alerts/jobs/system_config 等按 tenant_id 清理，
-// 防止审计与用量表无限增长。旧库缺表时忽略「no such table」错误，保证删除不中断。
+// 说明：表清单统一来自 ScopedTables（见 scoped_tables.go）——这里**不再**自带一份，
+// 否则新增带 tenant_id 的表就要改两处、漏一处就留孤儿行。
+//
+// 与 store.PurgeTenantCascade 的分工（同一份清单、两种事务语义）：
+//   - 本方法在**单事务**里删，任一表失败即整体回滚 —— 用于「注册中途失败，把刚建的租户撤掉」
+//     这类补偿：要么干净撤掉，要么维持原样，不能留下半个租户。
+//   - PurgeTenantCascade 逐表独立删、带回逐表读数 —— 用于超管后台删租户：那里需要的是
+//     「哪张表没删掉」的可核对清单，而不是一句 500。PG 里事务内单条 DELETE 失败会让整个
+//     事务进入 aborted 状态、后续语句全废，所以「继续删剩下的表」只能在事务外做。
+//
+// 旧库缺表时忽略「no such table」错误，保证删除不中断。
 func (s *Store) Delete(id int64) error {
 	if id <= 0 {
 		return fmt.Errorf("无效租户")
@@ -472,20 +480,7 @@ func (s *Store) Delete(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
-	// 主数据：组织树 + 用户
-	for _, tbl := range []string{"orgs", "users"} {
-		if e := s.delTenantRows(tx, tbl, id); e != nil {
-			return e
-		}
-	}
-	// 业务数据：知识库/工单/计费/开放能力/审计/用量/通知/反馈/告警/任务
-	for _, tbl := range []string{
-		"kb_safety_phrases", "kb_entries", "kb_packages", "tm_segments",
-		"tickets", "ticket_state", "balance_accounts", "usage_ledger", "usage_daily",
-		"orders", "payments", "api_keys", "eval_records", "invite_codes",
-		"invoices", "webhooks", "audit_logs", "notifications", "feedbacks",
-		"alerts", "jobs", "system_config",
-	} {
+	for _, tbl := range ScopedTables {
 		if e := s.delTenantRows(tx, tbl, id); e != nil {
 			return e
 		}
@@ -497,14 +492,25 @@ func (s *Store) Delete(id int64) error {
 }
 
 // delTenantRows 在事务内按 tenant_id 删除指定表数据；表不存在（旧库）时忽略，不中断删除流程。
+// 两种方言的「表不存在」文案不同，必须都认：sqlite 是 `no such table`，
+// postgres 是 `relation "xxx" does not exist` —— 只认前者会让 PG 上的旧库整条删除失败。
 func (s *Store) delTenantRows(tx *sql.Tx, tbl string, tenantID int64) error {
 	if _, e := db.Exec(tx, db.CurrentDialect(), "DELETE FROM "+tbl+" WHERE tenant_id=?", tenantID); e != nil {
-		if strings.Contains(e.Error(), "no such table") {
+		if isMissingTableErr(e) {
 			return nil // 旧库尚未建该表，跳过
 		}
 		return e
 	}
 	return nil
+}
+
+// isMissingTableErr 判断错误是否为「表不存在」（两方言都认）。
+func isMissingTableErr(e error) bool {
+	if e == nil {
+		return false
+	}
+	msg := e.Error()
+	return strings.Contains(msg, "no such table") || strings.Contains(msg, "does not exist")
 }
 
 // effectiveStatus 结合有效期计算实际状态：手动 disabled 优先；到期则 expired。

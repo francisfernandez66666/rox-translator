@@ -281,7 +281,7 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/tenant/update", s.handleTenantUpdate)
 	s.mux.HandleFunc("/api/tenant/invite-enabled", s.handleTenantInviteEnabledGet)
 	s.mux.HandleFunc("/api/tenant/status", s.handleTenantStatus)
-	s.mux.HandleFunc("/api/tenant/delete", s.handleTenantDelete)
+	// ★ 2026-10-23：/api/tenant/delete 已下线，删除租户统一走 /api/admin/tenants/delete（见 admin_purge.go）
 	s.mux.HandleFunc("/api/tenant/export", s.handleTenantExport)
 	s.mux.HandleFunc("/api/tenant/erase", s.handleTenantErase)
 	s.mux.HandleFunc("/api/tenant/branding", s.handleTenantBranding)
@@ -292,6 +292,9 @@ func (s *Server) routesTenant() {
 	s.mux.HandleFunc("/api/footer-links", s.handleFooterLinksGet)
 	s.mux.HandleFunc("/api/admin/footer-links", s.handleFooterLinksSet)
 	s.mux.HandleFunc("/api/admin/tenants/grant-trial", s.handleGrantTrial)
+	// ★ 2026-10-23：超管删除任意租户——级联清空该租户全部租户级数据后删租户行，不可逆。
+	//   安全口径（仅超管／不能删自己所在租户／必须回显 code 或 name）见 admin_purge.go 文件头。
+	s.mux.HandleFunc("/api/admin/tenants/delete", s.handleAdminTenantDelete)
 	s.mux.HandleFunc("/api/admin/mail-templates", s.handleAdminMailTemplates)
 }
 

@@ -79,6 +79,12 @@ function renderLogin(tid = 0, onLogin: (u: unknown) => void = () => { /* noop */
   return render(<ToastProvider><Login mode="home"onLogin={onLogin} /></ToastProvider>)
 }
 
+/** 挂载后台登录屏（mode="admin"）：主站从 `/admin` 退出后落到的就是这一屏 */
+function renderAdmin(tid = 0) {
+  brandCtx.tenantId = tid
+  return render(<ToastProvider><Login mode="admin" onLogin={() => { /* noop */ }} /></ToastProvider>)
+}
+
 const card = () => document.querySelector('.lc-auth-card') as HTMLElement
 const footButtons = () => [...document.querySelectorAll('.lc-auth-card__foot button')] as HTMLButtonElement[]
 
@@ -320,6 +326,36 @@ describe('登录屏 · 邮箱验证码主登录（2026-10-21 IAM 重做）', () 
     await waitFor(() => expect(onLogin).toHaveBeenCalledWith(expect.objectContaining({ profile_setup_required: 1 })))
     expect(document.body.textContent).not.toContain(t('auth.profileTitle'))
     expect(profileSetup).not.toHaveBeenCalled()
+  })
+
+  // ★ 2026-10-23（用户令「主站管理后台退出以后还保留着注册，应该删除，保留和主站的统一登录
+  //   同源逻辑」）：后台登录与前台登录在**主站**必须是同一副面孔。旧实现把 unified 绑在
+  //   `mode === 'home'` 上，于是从 `/admin` 退出后「没有账号？自助注册试用」+ otpDesc 段落
+  //   + 「注册邮箱」placeholder 全部原样回来——同一站点两副脸，且注册出来的空白账号
+  //   在 applyLogin 里本来就会被 `roleLevel < 2` 弹回，等于把人送进死路。
+  it('⑮ ★2026-10-23 主站后台登录与前台同源：撤注册入口、撤 otpDesc、placeholder 换自动建号提示', () => {
+    renderAdmin(0) // 主站 + mode=admin
+    const txt = card().textContent || ''
+    expect(txt).not.toContain('自助注册试用')
+    expect(footButtons().find((b) => b.textContent?.includes('自助注册'))).toBeUndefined()
+    // 底部只剩登录方式切换
+    expect(footButtons().map((b) => b.textContent?.trim())).toEqual(['使用密码登录'])
+    // otpDesc 段落撤下、提示改驻邮箱框
+    expect(txt).not.toContain(t('auth.otpDesc'))
+    const box = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
+    expect(box.getAttribute('placeholder')).toBe(t('auth.autoCreateHint'))
+    // 可见字段名标签也在（与前台 ⑥-bis 同口径）
+    expect(txt).toContain(t('auth.fieldEmail'))
+    expect(txt).toContain(t('auth.fieldEmailCode'))
+  })
+
+  it('⑯ 反证：租户站后台登录保留注册入口与 otpDesc（本批只改主站）', () => {
+    renderAdmin(7) // 租户站 + mode=admin
+    const txt = card().textContent || ''
+    expect(txt).toContain('自助注册试用')
+    expect(txt).toContain(t('auth.otpDesc'))
+    const box = card().querySelector(`input[aria-label="${t('auth.boundEmail')}"]`) as HTMLInputElement
+    expect(box.getAttribute('placeholder')).toBe(t('auth.boundEmail'))
   })
 })
 

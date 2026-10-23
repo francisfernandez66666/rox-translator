@@ -150,12 +150,15 @@ export function TenantsP() {
     await load()
   }
 
-  // removeTenant 删的是租户行本身：后端在单事务里连带清该 tenant_id 作用域下的各业务表（旧库缺表跳过），
-  // 所以前端一次确认即够；删完必须刷 store，否则顶栏还能切到已不存在的租户
+  // removeTenant 删的是租户行本身：后端逐表清该 tenant_id 作用域下的全部业务表、最后删租户行
+  // （不可逆，失败表会回在响应里），所以前端一次确认即够；删完必须刷 store，
+  // 否则顶栏还能切到已不存在的租户
   async function removeTenant(tt: TenantInfo) {
     // ★ 这里是删租户唯一的确认点（行内 Link 不再叠一层，详见操作列注释）；破坏性动作走 danger 档
     if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }), danger: true }))) return
-    const r = await runGuarded(() => tenantDelete(tt.id))
+    // ★ 2026-10-23：confirm 传该行的 code（无 code 时退回 name），让服务端核对「要删的就是这一行」——
+    // 列表若是旧数据（租户被改名/重建），服务端判 400 而不是照 id 删掉另一个租户
+    const r = await runGuarded(() => tenantDelete(tt.id, tt.code || tt.name))
     if (!r || !toastResp(r)) return
     await load(); ad.loadTenants()
   }

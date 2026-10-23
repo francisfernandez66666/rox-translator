@@ -293,6 +293,13 @@ T = {
 "租户创建失败：该企业编码已存在": "Tenant creation failed: this company code already exists",
 "租户存储未初始化": "Tenant storage not initialized",
 "租户已创建，但管理员账号创建失败: ": "Tenant created, but admin account creation failed: ",
+# ★ 2026-10-23：超管删除租户接口（api/admin_purge.go）——删数据是不可逆动作，错误文案必须逐条可译
+"仅平台超管可删除租户数据": "Only platform super admins can delete tenant data",
+"请求方法不支持": "Request method not supported",
+"参数错误：需要正整数 id": "Invalid parameter: a positive integer id is required",
+"不能删除自己所在的租户": "You cannot delete the tenant you belong to",
+"确认串不匹配：请在 confirm 里原样填写该租户的编码或名称": "Confirmation mismatch: enter the tenant's code or name verbatim in confirm",
+"删除未执行": "Deletion was not executed",
 # ★ 2026-09-26 批 I-3（F-55/F-56）：配额读侧/写侧「值不可用」不再是静默 0，改为如实报错
 "租户配额读取失败，请刷新重试": "Failed to read tenant quota; please refresh and retry",
 "租户配额当前值读取失败，本次保存已中止": "Failed to read the tenant quota's current value; this save was aborted",

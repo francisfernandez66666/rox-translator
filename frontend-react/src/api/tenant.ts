@@ -91,12 +91,22 @@ export async function tenantSetStatus(id: number, status: string): Promise<Tenan
   }))
 }
 
-/** 删除租户（连同数据一并删除） */
-export async function tenantDelete(id: number): Promise<TenantResp> {
-  return bizResp(() => request('/api/tenant/delete', {
+/**
+ * 删除租户（连同该租户下全部数据一并删除，不可逆）。
+ *
+ * ★ 2026-10-23：改走 /api/admin/tenants/delete。旧入口 /api/tenant/delete 已下线——
+ * 它不校验「超管必须处在平台上下文（tenant_id=0）」，也不要求确认串，与新接口构成两条
+ * 强弱不同的路径；现在只留一条。
+ *
+ * confirm 必须**原样**填该租户的 code 或 name（服务端 strings.TrimSpace 后逐字比对）。
+ * 这个参数不是给用户手打的，而是把「调用方要删的那一行」绑进请求：前端列表若是旧数据
+ * （租户被改名/重建过），服务端会判 400 而不是照 id 删掉另一个租户。
+ */
+export async function tenantDelete(id: number, confirm: string): Promise<TenantResp> {
+  return bizResp(() => request('/api/admin/tenants/delete', {
     method: 'POST',
     headers: authHeaders(),
-    body: JSON.stringify({ id }),
+    body: JSON.stringify({ id, confirm }),
   }))
 }
 

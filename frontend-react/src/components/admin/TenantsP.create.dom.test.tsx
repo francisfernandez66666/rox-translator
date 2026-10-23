@@ -172,14 +172,16 @@ describe('租户创建失败面：业务 4xx 与网络异常都必须在界面�
 // 反证（变异体）：把行内那次 confirm 装回去 ⇒ 本用例的 toHaveBeenCalledTimes(1) 判红。
 // ============================================================================
 describe('删除租户：确认恰好一次', () => {
-  it('点删除 ⇒ 一次确认 ⇒ tenantDelete 收到该 id', async () => {
+  it('点删除 ⇒ 一次确认 ⇒ tenantDelete 收到该 id 与确认串', async () => {
     mocks.tenantList.mockResolvedValue({ success: true, tenants: [{ id: 9, code: 't9', name: 'T9', status: 'active', expires_at: '', permissions: '{}', created_at: '', updated_at: '' }] })
     mocks.confirmDialog.mockResolvedValue(true)
     mocks.tenantDelete.mockResolvedValue({ success: true })
     render(<TenantsP />)
     const del = await screen.findByText('删除')
     del.click()
-    await vi.waitFor(() => { expect(mocks.tenantDelete).toHaveBeenCalledWith(9) })
+    // ★ 2026-10-23：第二个参数是确认串（该行的 code）——服务端逐字比对，
+    // 用来把「要删的那一行」绑进请求；少传会让新接口回 400 而不是照 id 删
+    await vi.waitFor(() => { expect(mocks.tenantDelete).toHaveBeenCalledWith(9, 't9') })
     expect(mocks.confirmDialog).toHaveBeenCalledTimes(1)
   })
 })

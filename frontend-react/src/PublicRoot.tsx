@@ -26,7 +26,7 @@
 //     + D 本文件与 App 的未登录三支等值／白名单同步，各配反证）。
 import { lazy, Suspense, useEffect, type ReactNode } from 'react'
 import { AuthProvider, useAuth } from '@/stores/auth'
-import { BrandingProvider } from './branding'
+import { BrandingProvider, useBranding } from './branding'
 import { landingEnabledForGuest } from '@/lib/siteFlags'
 import { PublicShell } from './components/publicshell'
 import RouteBoundary from './components/RouteBoundary'
@@ -87,6 +87,9 @@ function GuestLoginRedirect() {
 function PublicRoutes() {
   const { pathname } = useNav()
   const path = pathname
+  // ★ 2026-10-23 租户定制页门面：`tenantId > 0` 的域名（客户品牌子域/演示站）对访客不展示
+  //   平台营销落地页，打开 `/` 直接进登录——判据本体在 lib/siteFlags.ts（两条腿的说明也在那）。
+  const branding = useBranding()
 
   // 定价页属营销门面：未登录访客同样可直接访问（否则会落到登录页）
   if (path === '/pricing') {
@@ -109,7 +112,7 @@ function PublicRoutes() {
   }
   // ★ S5 门面：未登录访问 `/` 出官网落地页；登录/注册走 /login、/register
   if (path === '/') {
-    if (!landingEnabledForGuest()) return <GuestLoginRedirect />
+    if (!landingEnabledForGuest(branding.tenantId)) return <GuestLoginRedirect />
     return (
       <MarketingShell>
         <Landing />

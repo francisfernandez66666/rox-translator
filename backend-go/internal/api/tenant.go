@@ -5,9 +5,16 @@ package api
 
 // ============ 本文件职责中文说明 ============
 // 本文件实现 SaaS 租户管理接口（管理后台，JWT admin 认证）：
-//   - 租户列表/创建/更新/状态切换/删除（handleTenantList / handleTenantCreate / handleTenantUpdate / handleTenantStatus / handleTenantDelete）
+//   - 租户列表/创建/更新/状态切换（handleTenantList / handleTenantCreate / handleTenantUpdate / handleTenantStatus）
 //   - 租户数据导出（handleTenantExport）：数据主权，super_admin 导出租户全部业务数据为 JSON 下载
 //   - 租户数据清除（handleTenantErase）：GDPR 删除权，super_admin 清除租户全部业务数据
+//
+// ★ 2026-10-23：本文件**不再**提供「删除租户」——原 handleTenantDelete（POST /api/tenant/delete）
+// 已下线，统一走 POST /api/admin/tenants/delete（见 admin_purge.go）。下线的理由：
+//   - 旧接口只校验 RequireRole(4)，不看 TenantID==0，一个租户域内的 L4 也能删别的租户；
+//   - 旧接口没有确认串，与「删租户是不可逆动作」的口径不匹配；
+//   - 两套入口各自调一套清理实现（tenant.Store.Delete / store.PurgeTenantCascade），
+//     表清单会漂移 —— 现在只有一条实现、一份清单（tenant.ScopedTables）。
 // 安全与约束：
 //   - 全部接口 requireAdminUser 鉴权（super_admin）
 //   - 默认租户（ID=1）不可删除/不可清除
@@ -268,41 +275,6 @@ func (s *Server) handleTenantStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	t, _ := s.Ten.GetByID(req.ID)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "tenant": t})
-}
-
-// handleTenantDelete 删除租户接口（super_admin）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 id）。
-// 返回: success=true 表示删除成功；默认租户（ID=1）不可删除。
-func (s *Server) handleTenantDelete(w http.ResponseWriter, r *http.Request) {
-	// 鉴权：需 super_admin 权限
-	u, err := s.requireAdminUser(r)
-	if err != nil {
-		// 未登录 401／等级不足 403（★ F-64③ 批 I-10：旧写法两条都回 403，前端只在 401 走重登录链路）
-		s.writeAuthzError(w, r, err)
-		return
-	}
-	_ = u
-	if s.Ten == nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "租户存储未初始化"))
-		return
-	}
-	var req struct {
-		ID int64 `json:"id"` // 目标租户 ID
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
-		return
-	}
-	// 安全约束：不允许删除默认租户（平台根基）
-	if req.ID == 1 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "默认租户不可删除"))
-		return
-	}
-	if err := s.Ten.Delete(req.ID); err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "删除失败: "+err.Error()))
-		return
-	}
-	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
 // ============ 租户级品牌定制（按域名/租户解析，超管与租户管理员可设置） ============

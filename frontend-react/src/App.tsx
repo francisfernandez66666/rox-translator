@@ -28,8 +28,9 @@ import { applyTheme } from '@/lib/theme'
 // 首帧之前 data-theme/color-scheme 未定的话，浏览器会按浅色画一屏再翻黑（换肤期最刺眼的一次白闪）。
 // ★ 〇-N：light/auto 档已删（整站只有暗色一套真值），这里恒写 dark 并清掉历史偏好。
 applyTheme()
-// useBranding 已随左栏/移动顶栏迁进 components/frontshell（品牌位是那两件在读）
-import { BrandingProvider } from './branding'
+// useBranding 在左栏/移动顶栏那两件里用（品牌位），本文件自 2026-10-23 起也读一次：
+// 未登录分诊要给 landingEnabledForGuest 传 tenantId（租户定制页不展示平台落地页）
+import { BrandingProvider, useBranding } from './branding'
 import ErrorBoundary from './components/ErrorBoundary'
 // ★ 2026-10-21 IAM P1-7：登录面收成唯一调用点（PublicRoot 那一棵树用同一个组件，见其文件头口径①）
 import { LoginFace } from './components/LoginFace'
@@ -455,6 +456,9 @@ function FrontShell() {
 function Root() {
   // onLogin 已随登录面收进 LoginFace（本组件不再直接消费它）
   const { user, restoring } = useAuth()
+  // ★ 2026-10-23 租户定制页门面：`tenantId > 0` 的域名（客户品牌子域/演示站）对访客不展示
+  //   平台营销落地页，打开 `/` 直接进登录——判据本体在 lib/siteFlags.ts（两条腿的说明也在那）。
+  const branding = useBranding()
   const location = useLocation()
   const navigate = useNavigate()
   const path = location.pathname
@@ -522,7 +526,9 @@ function Root() {
       //   地址栏跟着变成 /login（用户口径），replace 不压历史栈，否则后退会再次撞 `/` 形成来回跳。
       //   射程只有 `/`：/pricing、/compare 仍对访客可达（体验机也要让人看到价），
       //   已登录用户根本不进这个分支（上面 `!user` 已分流），所以这一档只影响未登录访客。
-      if (!landingEnabledForGuest()) return <Navigate to="/login" replace />
+      //   ★ 2026-10-23 判据加第二条腿：租户定制页（tenantId>0）同样关闭——客户的站点不该
+      //     给访客看平台的营销落地页。两条腿的完整口径见 lib/siteFlags.ts 的注释。
+      if (!landingEnabledForGuest(branding.tenantId)) return <Navigate to="/login" replace />
       return (
         <PublicShell>
           <RouteBoundary>
