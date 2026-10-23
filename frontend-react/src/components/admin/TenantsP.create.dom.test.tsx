@@ -184,4 +184,28 @@ describe('删除租户：确认恰好一次', () => {
     await vi.waitFor(() => { expect(mocks.tenantDelete).toHaveBeenCalledWith(9, 't9') })
     expect(mocks.confirmDialog).toHaveBeenCalledTimes(1)
   })
+
+  // ★ 2026-10-23（用户报障「超管好像还是不能删除租户」）：默认租户 id=1 原先整行不渲染删除链接，
+  //   页面上只剩这一行时，超管看不到任何删除入口 ⇒ 以为功能不存在。现在入口对所有租户渲染，
+  //   但默认租户的闸门抬到「手输编码」。本条钉两件事：
+  //     ① 输错/取消一律不发请求（后端 confirm 比对之外的第二道人工闸）；
+  //     ② 输对了发的仍是 tenantDelete(id, code)，且**不**再叠一层 confirmDialog。
+  //   反证（变异体）：把 id===1 的分支删掉 ⇒ 首段 promptText 不会被调用，本条判红。
+  it('默认租户 id=1：必须手输编码才发请求，输错不发', async () => {
+    mocks.tenantList.mockResolvedValue({ success: true, tenants: [{ id: 1, code: 'rox', name: '默认租户', status: 'active', expires_at: '', permissions: '{}', created_at: '', updated_at: '' }] })
+    mocks.tenantDelete.mockResolvedValue({ success: true })
+
+    mocks.promptText.mockResolvedValue('wrong')
+    render(<TenantsP />)
+    ;(await screen.findByText('删除')).click()
+    await vi.waitFor(() => { expect(mocks.promptText).toHaveBeenCalledTimes(1) })
+    expect(mocks.tenantDelete).not.toHaveBeenCalled()
+    expect(mocks.confirmDialog).not.toHaveBeenCalled()
+
+    // 输对编码（该行 code）后放行
+    mocks.promptText.mockResolvedValue('rox')
+    ;(await screen.findByText('删除')).click()
+    await vi.waitFor(() => { expect(mocks.tenantDelete).toHaveBeenCalledWith(1, 'rox') })
+    expect(mocks.confirmDialog).not.toHaveBeenCalled()
+  })
 })

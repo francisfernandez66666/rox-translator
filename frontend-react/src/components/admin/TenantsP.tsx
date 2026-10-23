@@ -154,8 +154,21 @@ export function TenantsP() {
   // （不可逆，失败表会回在响应里），所以前端一次确认即够；删完必须刷 store，
   // 否则顶栏还能切到已不存在的租户
   async function removeTenant(tt: TenantInfo) {
-    // ★ 这里是删租户唯一的确认点（行内 Link 不再叠一层，详见操作列注释）；破坏性动作走 danger 档
-    if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }), danger: true }))) return
+    // ★ 2026-10-23（用户令「超管好像还是不能删除租户」）：默认租户（id=1）**不再隐藏删除入口**，
+    //   但确认档位抬到「手输编码」——它会连带演示站与全站数据一起消失，一次确认框挡不住手滑。
+    //   其它租户仍是单次 danger 确认（行内 Link 不叠第二层，详见操作列注释）。
+    if (tt.id === 1) {
+      const typed = await promptText({
+        header: t('tenants.delete'),
+        body: tpl('tenants.deleteConfirm', { name: tt.name }),
+        placeholder: tt.code || tt.name,
+        confirmText: t('tenants.delete'),
+      })
+      // 取消（null）或输错：静默返回，不发请求。后端也会按 confirm 逐字比对兜一道。
+      if (typed === null || typed.trim() !== (tt.code || tt.name)) return
+    } else if (!(await confirmDialog({ body: tpl('tenants.deleteConfirm', { name: tt.name }), danger: true }))) {
+      return
+    }
     // ★ 2026-10-23：confirm 传该行的 code（无 code 时退回 name），让服务端核对「要删的就是这一行」——
     // 列表若是旧数据（租户被改名/重建），服务端判 400 而不是照 id 删掉另一个租户
     const r = await runGuarded(() => tenantDelete(tt.id, tt.code || tt.name))
@@ -231,14 +244,16 @@ export function TenantsP() {
                              }}>
                       {row.status === 'active' ? t('tenants.disable') : t('tenants.enable')}
                     </Link>
-                   {/* id===1 是内置超管租户：删除与擦除入口整体不渲染（后端同样会拦，这里先不给按钮），
-                       充值/导出/启停不在此限，超管租户也要能对账。
+                   {/* ★ 2026-10-23（用户令）：删除入口对**所有**租户都渲染，含默认租户 id=1。
+                       默认租户的闸门从「不给按钮」改成「必须手输编码」（见 removeTenant）——
+                       藏按钮会让超管以为「这个功能不存在」（用户当场就是这么报的），
+                       而放开按钮又不该让一次点击就能删掉平台根基。
+                       「清除数据」（erase，GDPR 擦除）仍对 id=1 隐藏：它保留租户行、只清业务数据，
+                       和删除不是一件事，等真有需求再单独放开。
                        ★ 删除确认只在 removeTenant() 里那一次（2026-10-16 双确认批）：
                          旧写法这里先 confirm 一次、进去又 confirm 一次（且后面那次的文案不带租户名），
                          点第一次「确定」时请求还没发、列表不动——与 ApiKeysP 删除同形，一起收敛。 */}
-                   {row.id !== 1 && (
-                     <Link tone="danger" onClick={() => { void removeTenant(row) }}>{t('tenants.delete')}</Link>
-                   )}
+                   <Link tone="danger" onClick={() => { void removeTenant(row) }}>{t('tenants.delete')}</Link>
                    <Link onClick={() => charge(row)}>{t('tenants.charge')}</Link>
                    <Link onClick={() => doExport(row)}>{t('tenants.exportData')}</Link>
                    {row.id !== 1 && (
