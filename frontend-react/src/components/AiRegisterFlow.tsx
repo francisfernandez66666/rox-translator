@@ -77,6 +77,10 @@ interface Msg {
     username: string
     email: string
     inviteLeft?: boolean // 个人分支：明示「好友邀请码已留空」，避免用户以为漏填
+    // ★ 2026-10-24 多身份 B4-d（R8 拍板）：complete 那一支（既有个人账号 → 加入/新建企业）
+    //   必须在摘要卡上看见"个人身份没被并进去、随时可切回"。
+    //   **只在真的存在另一个身份时才出这一句**——纯新注册的人没有"切回"可言，写了就是空头承诺。
+    switchBack?: boolean
   }
 }
 
@@ -447,6 +451,8 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
         // （企业分支随后就把它作为升级注册的账号邮箱原样发回后端）
         email: mode === 'complete' ? loginEmail : aiForm.email,
         inviteLeft: kind === 'personal' && mode === 'register',
+        // ★ B4-d：只有 complete 那一支（个人账号升级/入职企业）才有一个"可以切回"的个人身份
+        switchBack: mode === 'complete' && kind !== 'personal',
       },
     })
     scrollBottom()
@@ -811,6 +817,9 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryUsername')}</span><span className="ar-kv-v">{m.done.username}</span></div>
                   <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryEmail')}</span><span className="ar-kv-v">{m.done.email}</span></div>
                   {m.done.inviteLeft && <div className="ar-kv"><span className="ar-kv-k">{t('auth.aiSummaryInvite')}</span><span className="ar-kv-v">{t('auth.aiInviteLeft')}</span></div>}
+                  {/* ★ B4-d（R8）：企业身份的最后一行必须是"个人身份还在"——
+                      这一族用户最怕的就是"进去以后我个人那份没了"。 */}
+                  {m.done.switchBack && <div className="ar-done-note" data-testid="ai-switch-back">{t('auth.invite.switchBack')}</div>}
                   <button className="lc-btn lc-btn--secondary lc-btn--block"type="button"onClick={() => { if (loggedUserRef.current) onDone(loggedUserRef.current) }}>{t('auth.enterApp')}</button>
                 </div>
               )}
@@ -929,7 +938,9 @@ function AccountFormBlock({
       )}
       {kind ==='staff'&& (
         <div className="ar-fgroup">
-          <span className="ar-flabel">{t('auth.aiOrgCode')} <i>*</i></span>
+          {/* ★ §6.4（2026-10-25 对账批）：成员这一格填的是**企业邀请码**（落 invite_codes 凭证），
+              过去挂 auth.aiOrgCode「组织编码（加入企业时必填）」，与管理员那格逐字同文＝byd 案例同族混淆。 */}
+          <span className="ar-flabel">{t('auth.orgInviteCode')} <i>*</i></span>
           <input className="lc-input"value={form.orgCode} placeholder={t('auth.orgCodeStaffPlaceholder')} onChange={(e) => set('orgCode', e.target.value)} />
         </div>
       )}
@@ -937,10 +948,11 @@ function AccountFormBlock({
         <>
           {/* F-06（2026-09-25 发布前 UAT）：管理员=新建租户，后端 register.go 无邀请绑定时 code 缺失即 400
               「请提供租户编码」——传统表单一直有该字段与前置校验（Login.tsx），AI 流此前漏搬，企业注册主路径必死。
-              复用既有键 auth.orgCode（12 语种全量词典已有），零新增键 */}
+              标签复用既有键 auth.orgCode；★ §6.4（2026-10-25）占位改走 auth.orgCodeAdminPlaceholder，
+              与成员那格「企业邀请码」明文区分（这一格填的是企业代号，落 tenants.code）。 */}
           <div className="ar-fgroup">
             <span className="ar-flabel">{t('auth.orgCode')} <i>*</i></span>
-            <input className="lc-input"value={form.orgCode} placeholder={t('auth.orgCode')} onChange={(e) => set('orgCode', e.target.value)} />
+            <input className="lc-input"value={form.orgCode} placeholder={t('auth.orgCodeAdminPlaceholder')} onChange={(e) => set('orgCode', e.target.value)} />
           </div>
           <div className="ar-fgroup">
             <span className="ar-flabel">{t('auth.aiOrgCn')} <i>*</i></span>
@@ -1083,6 +1095,9 @@ const CSS_AR = `
 .ar-ck{width:18px;height:18px;border-radius:50%;background:var(--lc-text);border:1.2px solid var(--lc-text);display:flex;align-items:center;justify-content:center;flex:none;}
 .ar-done{display:flex;flex-direction:column;gap:12px;padding:20px 16px;border-radius:14px;background:var(--lc-panel);border:1.2px solid var(--lc-border-done);box-shadow:var(--lc-panel-highlight);align-self:stretch;}
 .ar-done-t{font-size:15px;font-weight:600;color:var(--lc-text);}
+/* ★ B4-d（§6.5 第 4 条「受邀落地页告知」）：完成摘要卡里的「可切回个人身份」一句。
+   与 .ar-done 卡同色阶、只做次级说明，抬字号会抢过上面的身份/邮箱读数。 */
+.ar-done-note{font-size:14px;color:var(--lc-text-3);line-height:1.5;}
 .ar-kv{display:flex;gap:12px;font-size:14px;line-height:1.5;}
 .ar-kv-k{width:72px;flex:none;color:var(--lc-text-4);}
 .ar-kv-v{color:var(--lc-text-2);font-family:var(--lc-font-latin);}

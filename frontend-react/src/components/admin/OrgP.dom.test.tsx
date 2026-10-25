@@ -2,9 +2,15 @@
 // OrgP.dom.test.tsx — 组织架构面板「新建用户」提交载荷类型锁（★ F-22 批G）
 // 缺陷背景：归属组织下拉的 onChange 把 e.target.value（字符串）直接存进 nuOrgId state，
 //   建号提交的 JSON 里 org_id 变成 "7" 字符串形态，后端严格类型校验直接拒单。
-// 本用例锁两向：
+// 本用例锁三向：
 //   ① 正向：选组织后提交，adminUserCreate 载荷的 org_id 必须是 number 且精确等于 7；
 //   ② 反向：序列化后的载荷里不得出现字符串形态的 org_id 值（"org_id":" 前串）。
+//   ③ ★ B4-c 补腿：本面板的登录态是租户管理员（myLevel=3，非超管），走的是**企业档建号**——
+//     这一档不收到初始口令（改发一枚一次性邀请链接），所以载荷里**不许出现 password 字段**，
+//     输入区里出现的是邮箱格而不是口令格。旧用例原本找 placeholder='初始密码（≥6位）'，
+//     B4-c 后那一格按角色分档不再渲染，于是 fireEvent.change 拿到 undefined 当场报
+//     「Unable to fire a "change" event」——**那是实现按方案改了、判据还按旧稿**，不是回归
+//     （后端 auth.go 见到非空口令直接 400，前端照旧送口令才是缺陷）。
 //   反向锁的判据串用拼接构造，避免测试文件自身源码里出现可被误匹配的完整字面量。
 // 运行：npx vitest run src/components/admin/OrgP.dom.test.tsx
 // ============================================================================
@@ -51,6 +57,14 @@ vi.mock('./panels_a', () => ({
   UsersP: () => null,
 }))
 
+// ---- 邀请链接回执卡片打桩：卡片本体要拉二维码与剪贴板依赖，本用例只判「回执有没有出」；
+//      卡片自身的形态（含 §6.5 警示组件）由 inviteLinkSecurity.lock.test.ts 与它的 DOM 测试负责。
+vi.mock('./InviteLinkCard', () => ({
+  InviteLinkCard: ({ link }: { link: { url?: string } }) => <div data-testid="invite-card">{link?.url}</div>,
+  InviteLinkSecurityNote: () => null,
+  copyTextWithFallback: vi.fn(async () => true),
+}))
+
 // ---- 登录态：租户管理员（myLevel=3，非超管），单租户上下文 ----
 vi.mock('@/stores/admin', () => ({
   useAdmin: () => ({
@@ -67,20 +81,24 @@ beforeEach(() => {
   mocks.orgUsers.mockResolvedValue({ success: true, users: [] })
   mocks.orgBudgetSummary.mockResolvedValue({ success: true, summary: { depts: [] } })
   mocks.orgCreate.mockResolvedValue({ success: true })
-  mocks.adminUserCreate.mockResolvedValue({ success: true })
+  mocks.adminUserCreate.mockResolvedValue({ success: true, invite: { code: 'inv_probe', url: 'https://inv.test/?invite=inv_probe' } })
 })
 
-describe('组织架构 · 新建用户 org_id 类型（★ F-22）', () => {
-  it('归属组织下拉选中部门后提交，adminUserCreate 载荷 org_id 为 number 且无字符串形态', async () => {
+describe('组织架构 · 新建用户 org_id 类型（★ F-22）＋企业档不收口令（★ B4-c）', () => {
+  it('归属组织下拉选中部门后提交，载荷 org_id 为 number、无 password 字段，并回出一枚邀请链接', async () => {
     const { container } = render(<OrgP />)
     // 等组织树异步落定（标题/下拉选项都依赖 orgList 回包）
     await vi.waitFor(() => { expect(container.textContent).toContain('研发部') })
 
     const inputs = Array.from(container.querySelectorAll('input')) as HTMLInputElement[]
     const userInput = inputs.find((i) => i.placeholder === '用户名')!
-    const pwdInput = inputs.find((i) => i.placeholder === '初始密码（≥6位）')!
+    // ★ B4-c：企业档（本用例是租户管理员）这一格是邮箱，不是初始密码——邮箱预绑到链接上，
+    // 是受邀人点开链接时少填一格的东西，与"管理员替他设口令"是两回事。
+    const emailInput = inputs.find((i) => i.placeholder === '邮箱（可选，预绑到这条邀请链接）')!
+    expect(emailInput, '企业档建号区没有邮箱格（B4-c 的表单形态变了）').toBeTruthy()
+    expect(inputs.find((i) => i.type === 'password'), '企业档建号区不许出现口令格').toBeFalsy()
     fireEvent.change(userInput, { target: { value: 'qa_newbie' } })
-    fireEvent.change(pwdInput, { target: { value: 'passw0rd' } })
+    fireEvent.change(emailInput, { target: { value: 'qa@corp.test' } })
 
     // 定位「归属部门」下拉：其首个 option 是 org.rootOption「在租户根下新建组织」，
     // 与组织创建父级下拉（首项走 rootOptionTpl 带租户根名）天然区分。
@@ -101,6 +119,11 @@ describe('组织架构 · 新建用户 org_id 类型（★ F-22）', () => {
     // 等值锁①：org_id 是 number 且精确为 7
     expect(typeof payload.org_id).toBe('number')
     expect(payload.org_id).toBe(7)
+    // 等值锁③：企业档载荷**不带** password 键（后端 auth.go 见非空口令即 400；
+    // 空串虽能过，但那会把「这一档不收口令」在下一次改动里抹平，所以判"键不存在"）
+    expect(Object.prototype.hasOwnProperty.call(payload, 'password'), `企业档送了口令：${JSON.stringify(payload)}`).toBe(false)
+    // 邮箱照这一档的设计送出去，且是从 trim 后的输入来的
+    expect(payload.email).toBe('qa@corp.test')
     // 反向锁②：序列化载荷不得出现字符串形态 org_id。判据串拼接构造
     //（'"org_id":' + '"' → "org_id":"），避免本文件源码里出现完整字面量自伤匹配。
     const strOrgIdProbe = '"org_id":' + '"'
@@ -108,6 +131,14 @@ describe('组织架构 · 新建用户 org_id 类型（★ F-22）', () => {
     expect(json).not.toContain(strOrgIdProbe)
     // 同串正向确认：number 形态的 "org_id":7 必须在（防空载荷/字段丢失的假绿）
     expect(json).toContain('"org_id":7')
+
+    // 回执这一面：这一趟没建账号，只出一张链接卡片（文案说「链接已生成」而不是「已创建」）。
+    // ⚠️ Dialog 是 createPortal 到 document.body 的，所以这一枚**不在 container 里**——
+    // 拿 container.querySelector 判它会得到 undefined，于是"回执没出"和"判据找错地方"分不开。
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="invite-card"]')?.textContent)
+        .toBe('https://inv.test/?invite=inv_probe')
+    })
   })
 })
 

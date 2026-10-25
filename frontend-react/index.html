@@ -14,7 +14,16 @@
     <meta property="og:title" content="能言 LangCross · 术语翻得准，版式还得原样" />
     <meta property="og:description" content="面向跨境电商与出海企业的 AI 翻译平台：术语硬闸 + 原格式交付 + 积分透明计费。注册即送体验积分，先试后买。" />
     <meta property="og:url" content="https://langcross.lexicorn.cn/" />
-    <meta name="twitter:card" content="summary" />
+    <!-- ★ og:image（SEO 方案 §2.2 承诺项，2026-10-25 收口）：图由 scripts/growth/build_og_image.py
+         生成并随 public/ 落盘（文案在那一侧过红线），路径常量与静态页／服务端注入同源一份。
+         URL 必须是绝对地址——分享爬虫不解析相对路径，写成 /og-image.png 等于没有图。
+         twitter:card 随之从 summary 抬到 summary_large_image：1200×630 是大图卡片的比例，
+         留在 summary 会被裁成 90px 小缩略图，等于白出这张图。 -->
+    <meta property="og:image" content="https://langcross.lexicorn.cn/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="https://langcross.lexicorn.cn/og-image.png" />
     <link rel="canonical" href="https://langcross.lexicorn.cn/" />
     <script type="application/ld+json">
       {

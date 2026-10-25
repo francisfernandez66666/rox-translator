@@ -1,11 +1,20 @@
 // ============================================================================
-// e2e/register_captcha_token.spec.ts — F-03 浏览器级锁（2026-09-25 批G 收尾并入）
-// 缺陷形态：Turnstile token 一次一用（服务端 siteverify 消费即废），传统表单发码/提交
-//   消费掉 token 后必须 reexec 领新码；旧实现 reexecTurnstile 只调 execute 不调 reset，
-//   已完成挑战的挂件 execute 不一定重新出码 → 第二次请求复用废 token 必吃 403。
+// e2e/register_captcha_token.spec.ts — F-03 浏览器级锁（2026-09-25 批G 并入；2026-10-25 靶子迁移）
+// 缺陷形态：Turnstile token 一次一用（服务端 siteverify 消费即废），发码/提交消费掉 token 后
+//   必须 reexec 领新码；旧实现 reexecTurnstile 只调 execute 不调 reset，已完成挑战的挂件
+//   execute 不一定重新出码 → 第二次请求复用废 token 必吃 403。
 //   单测侧已锁「reset 先于 execute 的调用序」（AiRegisterFlow.dom.test / Login dom 套件），
 //   本文件补的是修复文档点名的 UAT 半句：**连点两次「发送验证码」，两次出网的
 //   captcha_token 前 8 位必须不同**——证明领新码真的流到了请求载荷，而不是停在 ref 里。
+//
+// ★ 2026-10-25 靶子迁移（主站统一登录批之后必须改，否则整条用例结构性恒红）：
+//   2026-10-22 起主站（unified）把「自助注册」撤下，`/register` 渲染的是**同一张邮箱验证码
+//   登录卡**（Login.tsx 的 `view === 'signin' || (unified && !inviteJoining)` 那支），
+//   AI 接管注册流（`.ar-close`）只在租户站/演示站与「服务端认过的企业邀请链接」上出现。
+//   旧写法 goto(`/register`) 后等 `.ar-close` 必然等不到（不是产品回归，是判据靶子搬了家）。
+//   现在靶子＝登录卡上的「发送验证码」按钮（`#__ts_login_widget__` 容器），
+//   这正是客户每天真正走的那条发码链；F-03 的判据本体一字未改。
+//
 // 施工形态：真实浏览器 + 真实 dist，只对两个接口做 route mock——
 //   ① /api/auth/register-config 回「人机验证开 + 邮箱验证开」，让挂件容器与发码按钮出现；
 //   ② /api/auth/email-code 一律回 200 {success:false}：失败分支不进 60s 冷却（成功才
@@ -13,8 +22,8 @@
 //   Turnstile 用 addInitScript 注入全局替身（render 挂 iframe、execute 出递增新码
 //   TS-00001/TS-00002…），loadTurnstile 见 window.turnstile 即直挂，不碰真 CF 脚本——
 //   这满足 e2e 红线（不依赖外部域名/生产配置），锁的是我们自己那条 token 消费链。
-// 顺带钉住 F-07 的用户可见判据：AI 面板 2.35s 必然接管，点 × 退回后传统表单容器里
-//   必须重新出现挂件 iframe——没有挂件就没有 token，下面的连点断言会整段失效，
+// 顺带钉住 F-07 的用户可见判据（迁移后的形态）：切到「使用密码登录」再切回「改用邮箱验证码登录」，
+//   容器里必须重新出现挂件 iframe——没有挂件就没有 token，下面的连点断言会整段失效，
 //   所以这一条既是独立回归位也是本用例的前置地基。
 // ============================================================================
 import { test, expect, Page } from '@playwright/test';
@@ -59,7 +68,7 @@ function stubTurnstile(page: Page) {
 }
 
 test.describe('F-03 · 连点两次发码，出网 captcha_token 前 8 位必须不同', () => {
-  test('注册屏挂件重挂 + 双请求 token 递增', async ({ page }) => {
+  test('统一登录卡挂件重挂 + 双请求 token 递增', async ({ page }) => {
     await stubTurnstile(page);
 
     // 录每次发码请求载荷里的 token（route 处理器在 node 侧，数组直接闭包共享）
@@ -83,20 +92,22 @@ test.describe('F-03 · 连点两次发码，出网 captcha_token 前 8 位必须
         body: JSON.stringify({ success: true, captcha_enabled: true, captcha_site_key: 'k-e2e-stub', email_verify_enabled: true }),
       }));
 
-    await page.goto(`${BASE}/register`);
+    await page.goto(`${BASE}/login`);
 
-    // F-07 前置地基：AI 面板按时接管 → 点 × 退回 → 容器里必须重新出现挂件 iframe
-    const closeBtn = page.locator('.ar-close');
-    await expect(closeBtn, '注册屏应在数秒内被 AI 面板接管').toBeVisible({ timeout: 20000 });
-    await closeBtn.click();
-    const box = page.locator('#__ts_widget__');
-    await expect(box.locator('iframe'), '退回传统表单后 Turnstile 挂件必须重挂').toBeVisible({ timeout: 10000 });
-
-    // 首码到位（替身出码有 40ms 异步拍）后连点两次发码
+    // F-07 前置地基（迁移后形态）：登录卡挂件必须真挂上（替身 render 往容器塞了 iframe）。
+    // 判据问的是"容器里有没有 iframe"而不是"页面上有没有某段文案"——挂件没挂上时下面整段都测不到东西。
+    const box = page.locator('#__ts_login_widget__');
+    await expect(box.locator('iframe'), '登录卡发码前必须挂上人机验证挂件').toBeVisible({ timeout: 10000 });
     await expect.poll(() => page.evaluate(() => (window as unknown as { __uat_ts?: { render: number } }).__uat_ts?.render ?? 0),
       { message: '替身 render 必须被调用（挂件真实挂载）' }).toBeGreaterThan(0);
-    // exact 必带：placeholder「邮箱」是「邮箱验证码」的前缀，宽匹配会 strict mode 双命中
-    const email = page.getByPlaceholder('邮箱', { exact: true });
+
+    // 切档再切回：F-07 的重挂判据（旧形态是"AI 接管点 × 退回"，统一登录下改成"密码档来回切"）
+    await page.getByRole('button', { name: '使用密码登录' }).click();
+    await expect(page.getByRole('button', { name: '改用邮箱验证码登录' }), '切到密码档后应出现切回入口').toBeVisible();
+    await page.getByRole('button', { name: '改用邮箱验证码登录' }).click();
+    await expect(box.locator('iframe'), '切回验证码档后挂件必须重新挂上（否则发码静默无 token）').toBeVisible({ timeout: 10000 });
+
+    const email = page.locator('input[aria-label="注册邮箱"]');
     await email.fill('uat_f03_replay@test.com');
     const sendBtn = page.getByRole('button', { name: '发送验证码' });
     await sendBtn.click();
@@ -107,7 +118,6 @@ test.describe('F-03 · 连点两次发码，出网 captcha_token 前 8 位必须
       { message: '消费后必须 reexec 领新码' }).toBeGreaterThanOrEqual(1);
     await sendBtn.click();
     await expect.poll(() => sentTokens.length, { message: '第二次发码请求必须出网' }).toBe(2);
-
     // ★ 修复文档点名的等值判据：两次出网 token 前 8 位必须不同（TS-00001 vs TS-00002）
     expect(sentTokens[0], '第一次请求必须带 token').toBeTruthy();
     expect(sentTokens[1], '第二次请求必须带新 token').toBeTruthy();

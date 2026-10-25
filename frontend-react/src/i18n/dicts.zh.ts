@@ -271,6 +271,10 @@ export const baseZh: Record<string,string> = {
   'audit.action.user_update': '更新用户',
   'audit.action.user_delete': '删除用户',
   'audit.action.user_reset_pwd': '重置密码',
+  'audit.action.identity_switch': '切换身份',
+  'audit.action.invite_link_create': '生成邀请链接',
+  'audit.action.membership_create': '加入企业成员',
+  'audit.action.tenant_leave': '移除企业成员',
   'audit.action.org_create': '创建组织',
   'audit.action.org_rename': '重命名组织',
   'audit.action.org_delete': '删除组织',
@@ -461,7 +465,10 @@ export const baseZh: Record<string,string> = {
   'chat.kbPackTip': '当前账号可应用的知识库包（部门>组织>行业>语言文化）',
   'org.disableTenantConfirm': '确定停用租户「{name}」？该企业全部用户将无法登录。',
   'org.enableTenantConfirm': '确定启用租户「{name}」？',
-  'org.deleteUserConfirm': '确定删除账号 {name}？该操作不可恢复。',
+  // ★ 2026-10-24 多身份 B4-d（R8+R2 拍板）：这一条删的是**企业身份**，不是账号。
+  //   旧文案「该操作不可恢复」会把管理员吓成"要把人整个删号"，而真正需要他知道的
+  //   是另一件事——此人在企业里留下的译文/工单/用量都会保留，个人账号也照旧能登录。
+  'org.deleteUserConfirm': '确定把「{name}」从本企业移除？只移除他的企业身份：他在企业里的译文、工单与用量记录都保留在企业，他的个人账号不受影响、仍可登录，之后还能再被邀请回来。',
   'admin.backWorkspace': '翻译工作台',
   'admin.forbid': '当前账号无管理权限，请使用管理员账号登录。',
 'admin.overview':'系统看板',

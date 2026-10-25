@@ -20,8 +20,12 @@
 //	D) 回执两版文案 + mailLive 三态（无队列无 SMTP=假 / MAIL_ENABLED+HOST+USER 齐=真）；
 //	   ★ 批 I-6（F-54②）改档：寄出版文案由「已通过邮件通知」收紧为「已提交发送，稍后送达」，
 //	     并加负向锁——入队≠送达，不得替系统许诺投递结果；
+//	   ★ 批 R9（2026-10-24 B3-c）改档：文案主体从「开通邮件＋初始密码」换成「邀请链接」，
+//	     并新增负向锁——文案里不得再出现「初始密码」（系统已不产口令）。
 //	E) handler 全链：multipart 上传 xlsx 两行（一行带邮箱一行不带），离线态（Noop 通道）
-//	   两行回执都必须落「线下转告」版，created=2（旧实现在此会虚假承诺「已邮件通知」）。
+//	   两行回执都必须落「链接线下转告」版。
+//	   ★ 批 R9 翻转判据本体：原来断「created=2 ＋ users 表两行」，现断**相反**那一侧——
+//	     invited=2、users 表零行、invite_codes 恰两行 kind='link'（带邮箱行绑邮箱、两行都带有效期）。
 //	   ★ 批 I-6：带邮箱那行改用可投递形态的示例域 acme-corp.com——imp1@example.com 现在会被
 //	     F-54① 的保留域闸拒收（那是另一条锁 F54-B 的射程，别混在本锁里）。
 //
@@ -197,21 +201,32 @@ func TestUATBatchF_CSVImportPath(t *testing.T) {
 }
 
 // TestUATBatchF_ImportReceiptHonesty 锁 D（回执两版 + mailLive 三态）。
+// ★ R9（2026-10-24 B3-c）文案主体换轨：批量导入已不再建号、也不再产任何口令，
+//
+//	回执的两版文案都只围绕「邀请链接」——寄出＝链接邮件已受理，未寄出＝把本行链接线下转给本人。
+//	「线下转告初始密码」那一版文案在这里已经物理上不成立了（系统里根本没有密码），
+//	留着它等于让回执承诺一件不存在的东西，故本锁按新口径翻转，负向锁同步收紧。
 func TestUATBatchF_ImportReceiptHonesty(t *testing.T) {
 	// ★ F-54（批 I-6）：寄出版的口径从「已通过邮件通知」（完成时）收到「已提交发送，稍后送达」
 	// （受理时）——enqueueMail 入队即 return nil，真正投递要等 worker 且可能永久滞留，
 	// 说「已通知」就是替系统许下系统自己不知道的果（同「发码 success ≠ 投递」那条纪律）。
 	// 负向半边：文案里不得再出现完成时的「已通过邮件通知」。
 	sent := importSuccessMessage(true)
-	if sent != "导入成功（开通邮件已提交发送，稍后送达；若长时间未收到，请把初始密码线下转告本人并提醒首登改密）" {
+	if sent != "邀请链接已提交发送（稍后送达；若长时间未收到，可复制本行链接转给本人）" {
 		t.Fatalf("已受理版文案等值锁失败: %q", sent)
 	}
 	if strings.Contains(sent, "已通过邮件通知") {
 		t.Fatalf("回执不得把「已入队」说成「已送达」（F-54② 复发）: %q", sent)
 	}
 	m := importSuccessMessage(false)
-	if m == sent || !strings.Contains(m, "线下转告") {
-		t.Fatalf("未寄出版必须走线下转告文案（杜绝虚假承诺）: %q", m)
+	if m == sent || !strings.Contains(m, "请复制本行链接转给本人") {
+		t.Fatalf("未寄出版必须走「链接线下转告」文案（杜绝虚假承诺）: %q", m)
+	}
+	// ★ R9 负向锁：这一族文案里不得再出现「初始密码」——批量导入链路已经不产口令了
+	for _, s2 := range []string{sent, m} {
+		if strings.Contains(s2, "初始密码") {
+			t.Fatalf("回执仍在许诺「初始密码」（R9 后系统不产口令，事故复发形态）: %q", s2)
+		}
 	}
 	// mailLive：离线态（无队列 + MAIL_ENABLED 未开）判假——Noop 的 nil 不算送达
 	s := &Server{}
@@ -298,9 +313,11 @@ func callUserBulkImportXlsx(t *testing.T, s *Server, tok, xlsxPath string) *http
 }
 
 // TestUATBatchF_BulkImportHandlerOfflineReceipt 锁 E（handler 全链 · 离线态回执）：
-// 两行用户（一行带邮箱一行不带）经真实 xlsx 上传导入成功，但邮件通道处于 Noop 兜底
-// （MAIL_ENABLED 未开、无队列）——两行回执都必须落「线下转告」版。
-// 旧实现（无条件「已通过邮件通知」）在此必红；修复丢失（mailLive 判断被删）同样必红。
+// 两行用户（一行带邮箱一行不带）经真实 xlsx 上传，离线态（Noop 通道）下
+// 两行回执都必须落「链接线下转告」版。
+// ★ R9（2026-10-24 B3-c）翻转的判据本体：这一条原来断的是「建了 2 个 users 行」，
+// 现在断的是**恰好相反**的那一侧——批量导入一行账号都不许建，产物只有 invite_codes 里的链接。
+// 于是它同时是 R9 的复现锁：谁把 CreateUser 写回这条链路，这一条当场红。
 func TestUATBatchF_BulkImportHandlerOfflineReceipt(t *testing.T) {
 	s, tok := newF23ImportProbe(t)
 	t.Setenv("MAIL_ENABLED", "") // 钉死离线态：t.Setenv 自动在用例结束恢复
@@ -316,35 +333,69 @@ func TestUATBatchF_BulkImportHandlerOfflineReceipt(t *testing.T) {
 	}
 	var out struct {
 		Success bool `json:"success"`
-		Created int  `json:"created"`
+		Invited int  `json:"invited"`
 		Results []struct {
-			Username string `json:"username"`
-			OK       bool   `json:"ok"`
-			Message  string `json:"message"`
+			Username  string `json:"username"`
+			OK        bool   `json:"ok"`
+			InviteURL string `json:"invite_url"`
+			Message   string `json:"message"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil || !out.Success {
 		t.Fatalf("导入响应解码失败: %v (%s)", err, rec.Body.String())
 	}
-	if out.Created != 2 || len(out.Results) != 2 {
-		t.Fatalf("应成功导入 2 行，实得 created=%d results=%d（%s）", out.Created, len(out.Results), rec.Body.String())
+	if out.Invited != 2 || len(out.Results) != 2 {
+		t.Fatalf("应成功发出 2 枚链接，实得 invited=%d results=%d（%s）", out.Invited, len(out.Results), rec.Body.String())
 	}
 	for _, rr := range out.Results {
 		if !rr.OK {
-			t.Fatalf("行 %s 应导入成功: %s", rr.Username, rr.Message)
+			t.Fatalf("行 %s 应邀请成功: %s", rr.Username, rr.Message)
 		}
-		if !strings.Contains(rr.Message, "线下转告") {
-			t.Fatalf("离线态（Noop 通道）下回执不得承诺「已通过邮件通知」，行 %s 实得: %q", rr.Username, rr.Message)
+		if !strings.Contains(rr.Message, "请复制本行链接转给本人") {
+			t.Fatalf("离线态（Noop 通道）下回执不得承诺「邮件已寄出」，行 %s 实得: %q", rr.Username, rr.Message)
+		}
+		// ★ R9：离线态下管理员唯一能拿到链接的地方就是这一行结果（邮件永远不会出门）
+		if !strings.HasPrefix(rr.InviteURL, "http") || !strings.Contains(rr.InviteURL, "inv_") {
+			t.Fatalf("每行结果必须带可复制的专属链接（inv_ 前缀），行 %s 实得 %q", rr.Username, rr.InviteURL)
 		}
 	}
-	// 落库侧顺带等值：imp1 角色归一为普通用户、imp2 邮箱为空
-	// （GetUserByUsernameGlobal 返回同名切片——用户名仅租户内唯一，全局可重名）
-	u1s, e1 := s.Store.GetUserByUsernameGlobal("imp1")
-	u2s, e2 := s.Store.GetUserByUsernameGlobal("imp2")
-	if e1 != nil || len(u1s) != 1 || e2 != nil || len(u2s) != 1 {
-		t.Fatalf("导入用户应各恰有一行落库: imp1=%v(%v) imp2=%v(%v)", len(u1s), e1, len(u2s), e2)
+	// ★ 落库侧核心等值（R9 的正反两面）：users 表一行都不许多出来，invite_codes 恰好两行 kind='link'
+	for _, un := range []string{"imp1", "imp2"} {
+		// GetUserByUsernameGlobal 返回同名切片——用户名仅租户内唯一，全局可重名
+		got, err := s.Store.GetUserByUsernameGlobal(un)
+		if err != nil {
+			t.Fatalf("查 %s 失败: %v", un, err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("批量导入不得再建 users 行（R9：受邀人注册时才落库），%s 实有 %d 行", un, len(got))
+		}
 	}
-	if u1s[0].Role != store.RoleUser || u2s[0].Email != "" {
-		t.Fatalf("落库等值锁失败: u1.role=%q u2.email=%q", u1s[0].Role, u2s[0].Email)
+	links, err := s.Store.ListInviteLinks(0)
+	if err != nil {
+		t.Fatalf("列邀请链接失败: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("应恰好落 2 枚链接，实得 %d（%+v）", len(links), links)
+	}
+	byName := map[string]*store.InviteCode{}
+	for _, l := range links {
+		byName[l.BoundUsername] = l
+	}
+	if byName["imp1"] == nil || byName["imp2"] == nil {
+		t.Fatalf("两行用户名的链接都要落库，实得 %+v", links)
+	}
+	// 带邮箱那行必须把邮箱绑进链接（注册时邮箱必须等于它）；不带邮箱那行留空=纯链接
+	if byName["imp1"].BoundEmail != "imp1@acme-corp.com" {
+		t.Fatalf("带邮箱行的 bound_email 未落库: %q", byName["imp1"].BoundEmail)
+	}
+	if byName["imp2"].BoundEmail != "" {
+		t.Fatalf("邮箱留空行不该被绑上邮箱: %q", byName["imp2"].BoundEmail)
+	}
+	if byName["imp1"].Kind != "link" || byName["imp1"].Role != store.RoleUser {
+		t.Fatalf("链接语义/角色等值锁失败: kind=%q role=%q", byName["imp1"].Kind, byName["imp1"].Role)
+	}
+	// 有效期必须落库（回执/邮件都要给客户看这一档，空串=永不过期是手输码的语义，链接不许）
+	if byName["imp1"].ExpiresAt == "" {
+		t.Fatalf("批量导入的链接必须带有效期，实得空串")
 	}
 }

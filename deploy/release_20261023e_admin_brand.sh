@@ -65,7 +65,7 @@ echo "===== P0-C 进包证据（运行期字面量，两站同件） ====="
 for lit in 'brand_names 需为合法 JSON 对象' 'include_personal' 'tenant_is_personal'; do
   n=$(LC_ALL=C grep -a -c -F "$lit" "$SERVER_BIN" || true)
   echo "bin_marker[$lit]=${n:-0}"
-  [ "${n:-0}" -ge 1 ] || { echo "ABORT=3 二进制缺运行期标记：$lit（编错树或 -ldflags 判据失效）"; exit 2; }
+  [ "${n:-0}" -ge 1 ] || { echo "ABORT=3 二进制缺运行期标记：${lit}（编错树或 -ldflags 判据失效）"; exit 2; }
 done
 # 前端：本地必须能找到承载新文案的懒加载分片（找不到＝构建树不对，后面字节等值会失去靶子）。
 ADMIN_CHUNK_LOCAL=$(grep -l -F '显示个人租户' "$REPO"/frontend-react/dist/assets/*.js 2>/dev/null | head -1 || true)

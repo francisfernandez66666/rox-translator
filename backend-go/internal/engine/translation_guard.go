@@ -210,9 +210,9 @@ func LengthExplosionInfo(src, out string) string {
 // 当译文命中，一旦写进 langTranslations，硬闸「按键存在判定是否译出」就永久跳过该段
 // ——不重试、不计 untranslated、不告警（详见本文件头）。此处即使上游 goroutine 已判过
 // 也再判一次：写入点与命中点分离（并行）时，以**写入前**的判定为准。
-func collectKBPass(texts []string, kbHitIdx []bool, kbVal []string, preFilledSeg map[string]bool) (accepted []int, needModelIdx []int) {
+func collectKBPass(texts []string, kbHitIdx []bool, kbVal []string, preFilledSeg map[string]bool, usable func(src, out string) bool) (accepted []int, needModelIdx []int) {
 	for i := range texts {
-		if i < len(kbHitIdx) && kbHitIdx[i] && i < len(kbVal) && IsTranslationUsable(texts[i], kbVal[i]) {
+		if i < len(kbHitIdx) && kbHitIdx[i] && i < len(kbVal) && usable(texts[i], kbVal[i]) {
 			accepted = append(accepted, i)
 			continue
 		}

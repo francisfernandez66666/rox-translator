@@ -120,8 +120,12 @@ var publicRouteAllowlist = map[string]string{
 	"/api/register/personas":    "注册页角色字典",
 	"/api/auth/register-config": "注册页运营配置（开关/文案），公开",
 	// —— 认证流程本身（匿名是前提；防护靠限流与凭证校验，不靠会话） ——
-	"/api/auth/login":           "登录入口：匿名可达是前提，防爆破由 IP/账号限流承担",
-	"/api/auth/register":        "注册入口：同上（含邮箱验证与限流）",
+	"/api/auth/login":    "登录入口：匿名可达是前提，防爆破由 IP/账号限流承担",
+	"/api/auth/register": "注册入口：同上（含邮箱验证与限流）",
+	// ★ 多身份方案 B3（2026-10-24）门二：专属邀请链接的公开校验口（注册页预填「你将加入 X 企业」）。
+	//   匿名可达是前提（人还没注册）；不可枚举性由码本身承担（`inv_<32hex>`＝128 bit，见 store.NewInviteLinkCode）；
+	//   出栈只有预填读数（企业名/部门名/用户名/是否锁邮箱/到期时间），零成员、零用量、零 Key。
+	"/api/auth/invite-link/":    "企业邀请链接公开校验：码串本身即不可枚举凭据，只回注册页预填所需读数，无任何租户内部数据",
 	"/api/auth/forgot-password": "找回密码：匿名 + 邮件验证码 + 限流",
 	"/api/auth/reset-password":  "重置密码：凭邮件验证码换取，无验证码不放行",
 	"/api/auth/email-code":      "邮箱验证码校验/重发：匿名 + 限流",

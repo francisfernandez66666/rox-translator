@@ -35,6 +35,7 @@ import (
 	"translator/internal/config"
 	"translator/internal/infra/concurrency"
 	"translator/internal/infra/redis"
+	"translator/internal/observability"
 )
 
 // DefaultChatConcurrent chat 后台默认并发槽；DefaultEmbedConcurrent embed 默认并发槽。
@@ -363,7 +364,20 @@ var (
 	obsStreamCalls  atomic.Int64 // 完成且可信计费的流式调用次数
 	obsTtftSumMs    atomic.Int64 // TTFT 样本毫秒合计
 	obsTtftCnt      atomic.Int64 // TTFT 样本数（每调用 1 个：首个非空 delta）
+	// ★ N-01（2026-10-25）：单次调用 prompt 超阈值的次数（/metrics 导出，配 WARN 日志一起看）。
+	//   阈值判据看的是「这一次调用有多大」，不是「这单累计多大」——文化规则块／术语表膨胀
+	//   这类问题只在单次调用维度现形，累计值会被大量正常小请求摊平。
+	obsPromptLargeCalls atomic.Int64
 )
+
+// DefaultPromptTokenWarnThreshold 单次调用 prompt token 告警阈值默认值（8,000）。
+// 可用 env LLM_PROMPT_TOKEN_WARN_THRESHOLD 覆盖（≤0 视为未配置→默认）。
+const DefaultPromptTokenWarnThreshold = 8000
+
+// promptTokenWarnThreshold 现读阈值（每次调用现读，运维改 env 后重启即生效，不必重新构建）。
+func promptTokenWarnThreshold() int {
+	return envInt("LLM_PROMPT_TOKEN_WARN_THRESHOLD", DefaultPromptTokenWarnThreshold)
+}
 
 // LLMObservability /metrics 快照形状（字段全为内部观测口径）
 type LLMObservability struct {
@@ -373,6 +387,8 @@ type LLMObservability struct {
 	StreamCalls     int64   // 流式调用完成数
 	StreamTtftAvgMs float64 // 平均首 token 延迟 ms（无样本时 0）
 	TtftSamples     int64   // TTFT 样本数（子毫秒调用会记 0ms，样本数用于判断均值可信度）
+	// PromptLargeCalls 单次 prompt 超阈值的调用数（N-01 成本失控监控腿；与上面各字段同属内部观测）。
+	PromptLargeCalls int64
 }
 
 // Observability 取进程级 LLM 观测快照（api 层 /metrics 导出用）。
@@ -386,13 +402,25 @@ func Observability() LLMObservability {
 		ttft = float64(obsTtftSumMs.Load()) / float64(n)
 	}
 	return LLMObservability{PromptTokens: p, CachedTokens: c, CacheRate: rate,
-		StreamCalls: obsStreamCalls.Load(), StreamTtftAvgMs: ttft, TtftSamples: n}
+		StreamCalls: obsStreamCalls.Load(), StreamTtftAvgMs: ttft, TtftSamples: n,
+		PromptLargeCalls: obsPromptLargeCalls.Load()}
 }
 
 // recordChatUsageObs 归集一次 chat 调用（非流式/流式共用）的输入侧观测：prompt 与缓存命中量。
-func recordChatUsageObs(prompt, cached int64) {
+// 参数 ctx=调用上下文（日志带 trace_id，可直接定位到那一单），model=本轮实际使用的模型名，
+// prompt/cached=供应商回传的真实输入 token 与缓存命中 token。
+// ★ N-01（2026-10-25 补腿）：同一条咽喉上顺带判「单次 prompt 是否超阈值」——
+// 超阈值只出 WARN + 计数器，**不拒发、不改计费**（阈值是成本信号，不是正确性判据；
+// 把它做成拦截会把一次配置膨胀打成用户可见的翻译失败）。
+// 这是唯一判定点：非流式与流式两条腿都走这里，再长出第三处调用＝同一件事两把尺子。
+func recordChatUsageObs(ctx context.Context, model string, prompt, cached int64) {
 	if prompt > 0 {
 		obsPromptTokens.Add(prompt)
+		if th := promptTokenWarnThreshold(); prompt > int64(th) {
+			obsPromptLargeCalls.Add(1)
+			observability.Warn(ctx, "llm_prompt_token_over_threshold",
+				"model", model, "prompt_tokens", prompt, "threshold", th)
+		}
 	}
 	if cached > 0 {
 		obsCachedTokens.Add(cached)
@@ -651,7 +679,7 @@ func (c *Client) doChat(ctx context.Context, endpoint, apiKey string, payload ch
 		uc.Add(cr.Usage.PromptTokens, cr.Usage.CompletionTokens)
 	}
 	// ★ B1 观测面：输入侧 prompt 与缓存命中量归集（仅 /metrics，计费行为不变）
-	recordChatUsageObs(cr.Usage.PromptTokens, cr.Usage.PromptTokensDetails.CachedTokens)
+	recordChatUsageObs(ctx, model, cr.Usage.PromptTokens, cr.Usage.PromptTokensDetails.CachedTokens)
 	// ★ 实时计费：每次 chat 调用后立即扣减，余额不足则中止翻译（边工作边计费，防白嫖）
 	if c.OnUsage != nil {
 		if err := c.OnUsage(ctx, model, cr.Usage.PromptTokens, cr.Usage.CompletionTokens); err != nil {
@@ -799,7 +827,7 @@ func (c *Client) StreamChat(ctx context.Context, baseURL, apiKey, model string,
 		return "", "", errNoStreamUsage
 	}
 	// ★ B1 观测面：流式调用完成后归集（走到这里即 usage 可信）
-	recordChatUsageObs(prompt, cached)
+	recordChatUsageObs(ctx, model, prompt, cached)
 	obsStreamCalls.Add(1)
 	if uc := CollectorFrom(ctx); uc != nil {
 		uc.Add(prompt, completion)

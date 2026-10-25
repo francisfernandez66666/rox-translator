@@ -1,29 +1,33 @@
 // ============ user_import.go · 职责说明 ============
-// 租户 Excel/CSV 批量导入用户（2026-09-02 功能；★ 2026-09-25 F-23 批F 收口）：
+// 租户 Excel/CSV 批量导入成员（2026-09-02 功能；★ 2026-09-25 F-23 批F 收口；
+// ★ 2026-10-24 多身份方案 R9／B3-c 改造为「批量发邀请链接」）：
 //   - 模板下载：GET /api/admin/users/import-template 返回带表头与示例行的 xlsx
 //     （填写说明挂示例行 F2，不再污染表头行）
 //   - 解析 xlsx/xls/csv（★ F-23③：CSV 走 encoding/csv，与 Excel 共用
 //     buildImportRows 纯函数，表头列索引首中即停防长句劫持），
 //     表头：用户名称、姓名、部门、角色、邮箱（角色列可省略，默认普通用户）
-//   - 逐行创建账号：随机初始密码 + 首登强制改密标记（must_change_pwd=1）
-//   - 绑定邮箱并向导入用户发送《账号开通通知》（含登录地址、账号、初始密码）；
-//     回执按「邮件是否真的寄出」分两版中文文案（★ F-23④，不向管理员虚假承诺），
+//   - ★★ R9：逐行**不再创建账号、不再随机初始密码、不再打首登强制改密标记**。
+//     每一行走 issueInviteLink 发一枚一次性专属邀请链接（与管理台建号同一把尺子）：
+//     有邮箱 ⇒ 走《企业邀请链接通知》邮件（模板 code=invite_link，正文里只有链接、没有任何口令）；
+//     无邮箱 ⇒ 链接进该行回执（results[].invite_url），由管理员自行转给本人。
+//     旧形态三段都在转手凭据：管理员/系统设一个口令 → 口令进邮件正文 → 当事人首登被迫改一次。
+//     现在口令只由本人在他自己点开的页面上产生，管理员全程接触不到。
+//   - 回执按「邀请邮件是否真的寄出」分两版中文文案（★ F-23④，不向管理员虚假承诺），
 //     寄出版只说「已提交发送，稍后送达」（入队≠送达，★ F-54）
 //   - ★ F-54：邮箱列过 importEmailRejection 两道闸（格式＋RFC 2606 示例保留域），
-//     模板示例行落在 example.invalid ⇒「下载模板不改一字上传」不再会建号发信
+//     模板示例行落在 example.invalid ⇒「下载模板不改一字上传」不会再发出任何邀请
 //
 // =============================================
 package api
 
 import (
-	"crypto/rand"
 	"encoding/csv"
 	"fmt"
-	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 
@@ -38,7 +42,7 @@ type importUserRow struct {
 	DisplayName string // 显示名称（缺省回退用户名）
 	OrgName     string // 部门/组织名称（缺省挂根组织）
 	Role        string // 角色（管理员/普通用户 等中英文）
-	Email       string // 邮箱（绑定用于收账号通知）
+	Email       string // 邮箱（★ R9：作为链接的预绑邮箱，并决定邀请发到哪个收件箱）
 }
 
 // normalizeImportRole 将 Excel 角色列归一为系统角色常量。
@@ -51,17 +55,6 @@ func normalizeImportRole(raw string) string {
 	default:
 		return store.RoleUser
 	}
-}
-
-// randomImportPassword 生成 10 位随机初始密码（大小写+数字，避免易混淆字符）。
-func randomImportPassword() string {
-	const alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789"
-	buf := make([]byte, 10)
-	for i := range buf {
-		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(alphabet))))
-		buf[i] = alphabet[n.Int64()]
-	}
-	return string(buf)
 }
 
 // handleUserImportTemplate 下载批量导入 Excel 模板（带表头与示例行，含填写说明）。
@@ -105,7 +98,7 @@ func buildUserImportTemplate() *excelize.File {
 	_ = f.SetCellStr(sheet, "D2", "普通用户")
 	_ = f.SetCellStr(sheet, "E2", "sample@example.invalid")
 	// 填写说明（★ F-23② 挪出表头行，挂示例行 F2；解析器只认 A-E 五列，不会读到它）
-	_ = f.SetCellStr(sheet, "F2", "填写说明：第 2 行是示例行，提交前请删除或整行替换为真实信息；用户名称必填（同租户可重名，邮箱是登录标识）；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送账号开通通知，必须是可以收信的真实邮箱（example.com／*.invalid 等示例保留域会被拒收）")
+	_ = f.SetCellStr(sheet, "F2", "填写说明：第 2 行是示例行，提交前请删除或整行替换为真实信息；用户名称必填（同租户可重名，邮箱是登录标识）；角色可留空=普通用户（可填 普通用户/管理员/部门管理员/租户管理员）；部门须与现有组织名称一致，留空挂根组织；邮箱用于发送企业邀请链接通知，必须是可以收信的真实邮箱（example.com／*.invalid 等示例保留域会被拒收）")
 	// 表头浅灰填充 + 加粗，示例行便于识别
 	if style, e := f.NewStyle(&excelize.Style{Fill: excelize.Fill{Type: "pattern", Color: []string{"F2F2F2"}, Pattern: 1}, Font: &excelize.Font{Bold: true}}); e == nil {
 		_ = f.SetCellStyle(sheet, "A1", "E1", style)
@@ -113,9 +106,18 @@ func buildUserImportTemplate() *excelize.File {
 	return f
 }
 
-// handleUserBulkImport 租户 Excel 批量导入用户接口。
+// handleUserBulkImport 租户 Excel/CSV 批量导入成员接口（★ R9：批量发邀请链接，不建号）。
 // 权限：租户管理员及以上（部门管理员不可批量导入）。
-// body: multipart，含 file（xlsx）；返回逐行导入结果（成功/失败与原因）。
+// body: multipart，含 file（xlsx/xls/csv）；返回逐行结果（成功/失败与原因、成功行的邀请链接）。
+//
+// 三条 B3-c 口径：
+//  1. 必须落在具体企业（tid<=0 一律 400）——平台上下文没有预算墙也没有归属企业，
+//     「批量导入」这个动作的语义就是给一家企业添人；issueInviteLink 里也有一道同判据，
+//     这里提前收口是为了给管理员一句「批量导入只用于企业成员」而不是逐行失败。
+//  2. 一行一枚链接，走 issueInviteLink（与管理台建号同一把尺子：角色白名单、权限梯、
+//     部门归属、随机码失败口径全部共用）。
+//  3. 邮箱占用按**本租户**判（D3 邮箱租户内唯一）：旧形态用全局 GetUserByEmail 拦一道，
+//     多身份改造后那一拦会挡死「同一个人在第二家企业入职」这条新模型明确要放开的合法路径。
 func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireTenantAdmin(r)
 	if err != nil {
@@ -124,6 +126,10 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tid := s.effTenant(r, u)
+	if tid <= 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "批量导入只用于企业成员：请先切换到具体企业再上传文件"))
+		return
+	}
 	// 解析并落盘上传的 xlsx（白名单与大小限制复用 KB 导入）
 	if err := parseUpload(r, kbUploadMax, map[string]bool{".xlsx": true, ".xls": true, ".csv": true}); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, publicErrMessage(r.Context(), err)))
@@ -165,15 +171,16 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type rowResult struct {
-		Username string `json:"username"`
-		OK       bool   `json:"ok"`
-		Message  string `json:"message"`
+		Username  string `json:"username"`
+		OK        bool   `json:"ok"`
+		InviteURL string `json:"invite_url,omitempty"` // ★ R9：成功行的专属邀请链接（无邮箱时管理员只能从这里拿链接）
+		Message   string `json:"message"`
 	}
 	results := make([]rowResult, 0, len(rows))
-	created := 0
+	invited := 0
 	for _, row := range rows {
 		rr := rowResult{Username: row.Username}
-		// 用户名必填（同租户可重名；CreateUser 不再按用户名唯一索引兜底）
+		// 用户名必填（同租户可重名；链接的 bound_username 就是受邀人注册页的预填名）
 		if strings.TrimSpace(row.Username) == "" {
 			rr.Message = "用户名称不能为空"
 			results = append(results, rr)
@@ -186,66 +193,63 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 				orgID = id
 			}
 		}
-		// ★ F-54（批 I-6）：邮箱格式与示例保留域闸——放在建号**之前**，
+		// ★ F-54（批 I-6）：邮箱格式与示例保留域闸——放在发链接**之前**，
 		// 旧实现任何字符串都照收，模板示例行（example.com）因此能被原样上传并真发一封含初始密码的邮件。
 		if reason := importEmailRejection(row.Email); reason != "" {
 			rr.Message = reason
 			results = append(results, rr)
 			continue
 		}
-		// 邮箱唯一预检
+		// 邮箱占用按本租户判：同一邮箱在本企业已是成员 ⇒ 这枚链接注册时必然撞「你已在该企业中」，
+		// 在源头就拒掉，管理员看到的是「已经是成员」而不是「邀请发了却进不来」。
 		if row.Email != "" {
-			if other, e := s.Store.GetUserByEmail(strings.ToLower(strings.TrimSpace(row.Email))); e == nil && other != nil {
-				rr.Message = "邮箱已被其他账号绑定"
+			if other, e := s.Store.GetUserByEmailInTenant(row.Email, tid); e == nil && other != nil {
+				rr.Message = "该邮箱已是本企业成员，无需重复邀请"
 				results = append(results, rr)
 				continue
 			}
 		}
 		// ★ 收口（2026-09-16 安全整改）：批量导入禁止创建 tenant_id>0 的超管级角色
 		//   （admin/super_admin 必须平台级归属，与 users/create 不变量对齐）。
-		if auth.RoleLevel(row.Role) >= 4 && tid > 0 {
+		if auth.RoleLevel(row.Role) >= 4 {
 			rr.Message = "超管级角色不能归属具体租户，请在本租户内使用 dept_admin/tenant_admin 等角色"
 			results = append(results, rr)
 			continue
 		}
-		initPwd := randomImportPassword()
-		nu, cerr := s.Store.CreateUser(tid, strings.TrimSpace(row.Username), auth.PasswordHash(initPwd), row.DisplayName, row.Role, u.ID, orgID)
-		if cerr != nil {
-			rr.Message = "创建失败: " + cerr.Error()
+		// ★ R9：一行一枚邀请链接（不建 users 行、不生成任何口令）
+		link, url, apiErr := s.issueInviteLink(r, u, tid, inviteLinkSpec{
+			Username: row.Username, Role: row.Role, OrgID: orgID, Email: row.Email,
+		})
+		if apiErr != nil {
+			rr.Message = publicErrMessage(r.Context(), apiErr)
 			results = append(results, rr)
 			continue
 		}
-		// 绑定邮箱（失败不阻断建号）
-		if row.Email != "" {
-			if e := s.Store.SetUserEmail(nu.ID, tid, row.Email); e == nil {
-				nu.Email = row.Email
-			}
-		}
-		// 首登强制改密 + 审计
-		_ = s.Store.SetMustChangePwd(nu.ID, tid, 1)
-		s.Store.LogAudit(tid, u.ID, "user_bulk_import", "users", row.Username)
-		// 发送《账号开通通知》：登录地址 + 账号 + 初始密码
-		// ★ F-23④+：先经 mailLive() 判通道真实可用再承诺「已通知」——Noop 兜底
+		// 发送《企业邀请链接通知》：正文只有链接与有效期，没有任何口令
+		// ★ F-23④+：先经 mailLive() 判通道真实可用再承诺「已寄出」——Noop 兜底
 		//   （MAIL_ENABLED≠1 且队列不可用）下 Send 返回 nil 但邮件永远不会出门，
 		//   以「Send 无错」为成功口径同样是虚假承诺。
 		mailSent := false
-		if nu.Email != "" && s.mailLive() {
-			// ★ F-17（批E）：导入账号未经历过注册界面选语种（preferred_lang 恒空），语种传空=中文链路
-			mailSent = s.sendTemplatedMail(nu.Email, "user_import", "", map[string]string{
-				"username":  nu.Username,
-				"password":  initPwd,
-				"login_url": importLoginURL(r),
+		if row.Email != "" && s.mailLive() {
+			// ★ F-17（批E）：导入成员未经历过注册界面选语种（preferred_lang 恒空），语种传空=中文链路
+			mailSent = s.sendTemplatedMail(row.Email, "invite_link", "", map[string]string{
+				"username":   strings.TrimSpace(row.Username),
+				"invite_url": url,
+				"expires_at": inviteExpiryLabel(link.ExpiresAt),
 			}) == nil
 		}
-		created++
+		invited++
 		rr.OK = true
+		rr.InviteURL = url
 		rr.Message = importSuccessMessage(mailSent)
 		results = append(results, rr)
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true,
-		"created": created,
-		"failed":  len(rows) - created,
+		// ★ R9 改名：这一档数的不再是「建了几个号」（一个都没建），是「发出了几枚邀请链接」。
+		//   留着 created 这个名字会让下一个读代码的人以为 users 表真多了几行。
+		"invited": invited,
+		"failed":  len(rows) - invited,
 		"total":   len(rows),
 		"results": results,
 	})
@@ -253,7 +257,7 @@ func (s *Server) handleUserBulkImport(w http.ResponseWriter, r *http.Request) {
 
 // importEmailRejection 校验导入行的邮箱是否可用（★ F-54 批 I-6）。
 // 返回非空字符串＝该行应被拒绝并把这个原因回给管理员；返回 ""＝放行（含「邮箱留空」——
-// 留空是合法形态：不绑邮箱、不发通知，走「线下转告初始密码」回执）。
+// 留空是合法形态：链接照样生成、只是不发信，由管理员把链接线下转给本人）。
 //
 // 两道闸的由来：
 //  1. 格式闸：复用注册/换绑同一份 emailRe（口径不分叉）。旧实现把任何字符串都当邮箱收下，
@@ -302,28 +306,27 @@ func (s *Server) mailLive() bool {
 // 只证明「已受理/已入队」（enqueueMail 入队即 return nil），真正投递要等 worker、还可能永久滞留，
 // 所以文案不许写成完成的「已通过邮件通知」，改为「已提交发送，稍后送达」＋未收到的兜底指引。
 // （与记忆里那条纪律一致：发码 success ≠ 投递。）
+// ★ R9（2026-10-24 B3-c）文案主体换轨：线下转告的内容从「初始密码」变成「邀请链接」——
+//
+//	系统已经不产任何口令了，回执再写「把初始密码线下转告」就是承诺一件根本不存在的东西。
 func importSuccessMessage(mailSent bool) string {
 	if mailSent {
-		return "导入成功（开通邮件已提交发送，稍后送达；若长时间未收到，请把初始密码线下转告本人并提醒首登改密）"
+		return "邀请链接已提交发送（稍后送达；若长时间未收到，可复制本行链接转给本人）"
 	}
-	return "导入成功（未绑定邮箱或邮件发送失败，请把初始密码线下转告本人并提醒首登改密）"
+	return "邀请链接已生成（未绑定邮箱或邮件发送失败）：请复制本行链接转给本人，他点开即可自行设置邮箱与密码"
 }
 
-// importLoginURL 构造登录地址（优先当前请求 Host 对应的主站，兜底品牌基础域）。
-func importLoginURL(r *http.Request) string {
-	host := r.Host
-	if host == "" {
-		// ★ B11：兜底不再代码明文品牌域——取主站配置，未配置退回本地开发地址
-		if h := brandPrimaryHost(); h != "" {
-			host = h
-		} else {
-			host = "127.0.0.1:8787"
-		}
+// inviteExpiryLabel 把链接到期时间（RFC3339 UTC）折成邮件里给人看的日期。
+// 解析失败就原样返回：宁可让客户看到一串带时分秒的 UTC，也不要在邮件渲染处编一个日期。
+func inviteExpiryLabel(expiresAt string) string {
+	v := strings.TrimSpace(expiresAt)
+	if v == "" {
+		return ""
 	}
-	if i := strings.Index(host, ":"); i >= 0 {
-		host = host[:i]
+	if t, err := time.Parse(time.RFC3339, v); err == nil {
+		return t.Format("2006-01-02")
 	}
-	return "https://" + host + "/login"
+	return v
 }
 
 // readImportRows 按扩展名分发解析导入表（★ F-23③：白名单里有 .csv，解析就必须真支持 csv，

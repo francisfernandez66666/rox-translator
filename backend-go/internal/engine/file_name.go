@@ -290,3 +290,32 @@ func targetUsesCJKScript(langCode string) bool {
 	}
 	return false
 }
+
+// artifactLangSuffix 译文产物语言后缀（★ 2026-10-24 用户令：统一 `-<lang>`，如 uat_sample-en.txt）。
+// artifact_lang_suffix=0 时回退旧分隔符 `_`（应急，只影响新产物；历史文件不重命名）。
+func (e *Engine) artifactLangSuffix(lc string) string {
+	sep := "-"
+	if e != nil && e.St != nil {
+		// TrimSpace 后再比：管理台保存链路不保证剥空格，而这一枚是**应急开关**——
+		// 「库里写了 ' 0' 但开关按不下去」与「配了不生效」在现场长得一模一样。
+		// 其余任何值（含脏值）都保持新档 `-`：回退只在显式 0 时发生。
+		if v, _ := e.St.GetConfig("artifact_lang_suffix"); strings.TrimSpace(v) == "0" {
+			sep = "_"
+		}
+	}
+	return sep + lc
+}
+
+// DeliverableBaseName 下载时展示的文件名：优先用产物真实 basename（含 `-<lang>`），
+// 只有旧产物仍带内部时间戳前缀 / 空路径时才回落 fallback（源文件名）。
+// ★ 由 api 层薄委托，避免把 internalNameMarkRe 再抄一份（同 §一·11 多把尺子）。
+func DeliverableBaseName(resultPath, fallback string) string {
+	base := strings.TrimSpace(filepath.Base(resultPath))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		return fallback
+	}
+	if internalNameMarkRe.MatchString(base) {
+		return fallback
+	}
+	return base
+}

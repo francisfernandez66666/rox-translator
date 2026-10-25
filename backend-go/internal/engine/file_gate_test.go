@@ -1,5 +1,6 @@
-// 漏译率硬闸与写回交付形态的纯函数测试（2026-09-09 可靠性改造回归）：
-//   - leakedLang：某语言未译出段数 >50% 返回语言代码（工单失败），否则 ""
+// 漏译率判定与写回交付形态的纯函数测试：
+//   - leakedLang：某语言未译出段数占比 >5%（2026-10-24 用户令：50%→5%）返回语言代码，
+//     作为「触发缺失段补译」的信号；补不回也不判失败（见 HandleFile 收尾）。
 //   - writebackDelivery：srt/vtt/json/yaml/yml 走 xlsx 对照表，其余走原格式写回
 package engine
 
@@ -37,8 +38,9 @@ func TestProtectSourceByLang(t *testing.T) {
 	}
 }
 
-// TestLeakedLang 漏译率硬闸判定：超 50% 触发、恰 50% 不触发、0 不触发、负数不触发
+// TestLeakedLang 漏译率判定：>5% 触发、恰 5% 不触发、0 不触发、total=0 不触发。
 func TestLeakedLang(t *testing.T) {
+	t.Setenv("FILE_LEAK_REPAIR_RATIO", "0.05")
 	cases := []struct {
 		name   string
 		lang   string
@@ -47,9 +49,10 @@ func TestLeakedLang(t *testing.T) {
 		want   string
 	}{
 		{"全部未译出触发", "en", 18, 18, "en"},
-		{"超过50%触发", "ar", 11, 20, "ar"},
-		{"恰50%不触发", "ru", 10, 20, ""},
-		{"低于50%不触发", "ja", 9, 20, ""},
+		{"10%触发", "ar", 2, 20, "ar"},
+		{"恰5%不触发", "ru", 1, 20, ""},
+		{"4%不触发", "ja", 4, 100, ""},
+		{"6%触发", "ja", 6, 100, "ja"},
 		{"remain为0不触发", "ko", 0, 10, ""},
 		{"total为0不触发", "en", 0, 0, ""},
 	}
@@ -136,5 +139,28 @@ func TestWritebackDeliveryAgreesWithFormatSource(t *testing.T) {
 	// ② 两个集合都必须非空（否则"谓词恒假 + 分类恒 inplace"这一对能一起骗过上面每一条）。
 	if len(wantImage) == 0 || len(wantAudio) == 0 {
 		t.Fatalf("媒体集合为空：image=%d audio=%d ⇒ 谓词已失明", len(wantImage), len(wantAudio))
+	}
+}
+
+// TestLeakRatioExceeded F-01 服务层「质检存疑」判据：与 leakedLang 同阈值（5%）。
+func TestLeakRatioExceeded(t *testing.T) {
+	t.Setenv("FILE_LEAK_REPAIR_RATIO", "0.05")
+	cases := []struct {
+		name string
+		un   map[string]int
+		tot  int
+		want bool
+	}{
+		{"恰5%不标记", map[string]int{"en": 1}, 20, false},
+		{"10%标记", map[string]int{"en": 2}, 20, true},
+		{"多语言任一超限即标记", map[string]int{"en": 0, "ja": 6}, 100, true},
+		{"零缺失不标记", map[string]int{}, 20, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := LeakRatioExceeded(c.un, c.tot); got != c.want {
+				t.Fatalf("LeakRatioExceeded(%v,%d)=%v, want %v", c.un, c.tot, got, c.want)
+			}
+		})
 	}
 }

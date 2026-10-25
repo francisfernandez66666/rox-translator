@@ -23,7 +23,21 @@ type InviteCode struct {
 	OrgID     int64  `json:"org_id"`     // ★ 绑定组织（四期）：受邀用户归入该组织层级（0=不绑定）
 	Revoked   int    `json:"revoked"`    // ★ G9（2026-10-19）：撤销状态 0=未撤销 / 1=已撤销
 	RevokedAt string `json:"revoked_at"` // ★ G9：撤销时间（未撤销为空字符串）
-	Status    string `json:"status"`     // ★ G9：派生展示状态 active/used/revoked（只读，不回库）
+	Status    string `json:"status"`     // ★ G9：派生展示状态 active/used/revoked/expired（只读，不回库）
+	// ★ 多身份方案 B3 §八·6（R9 邀请链接建号）以下五列。
+	// Kind 凭据形态：code=管理员手输的码（现状）/ link=系统生成的一次性专属链接。
+	// 刻意**不另建一张 invite_links 表**：链接与码是同一台状态机
+	// （active→used/revoked、一次性烧码、撤销不删行、used_by 留痕），
+	// 另建一张表就得再写一份烧码/撤销/并发抢占，那正是「同一件事写两遍迟早漂」的落点。
+	Kind string `json:"kind"`
+	// BoundUsername 链接预绑的用户名（管理员只录用户名+部门/角色时落在这里；手输码为空）。
+	BoundUsername string `json:"bound_username"`
+	// BoundEmail 链接预绑的邮箱：非空 ⇒ 注册邮箱必须等于它（最强绑定，防链接被转发后旁人冒领）。
+	BoundEmail string `json:"bound_email"`
+	// Role 链接预绑的角色（空=按注册口默认 user）；权限梯与 handleAdminUserCreate 同源。
+	Role string `json:"role"`
+	// ExpiresAt 到期时刻（UTC RFC3339；空=不过期，兼容存量码——存量行为逐字节不变的关键）。
+	ExpiresAt string `json:"expires_at"`
 }
 
 // CreateInviteCode 生成一条邀请码记录。

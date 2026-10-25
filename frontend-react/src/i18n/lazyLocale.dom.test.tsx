@@ -84,6 +84,9 @@ async function freshEnModule() {
 
 beforeEach(() => {
   cleanup()
+  // ★ DEF-06：setLang 现在会把 ?lang 写回地址栏（SEO 语言版本），用例之间必须复位，
+  //   否则上一条 D1 留下的 ?lang=ru 会压过本条 localStorage=pt（新特性的测试隔离）。
+  window.history.replaceState(null, '', '/')
   vi.resetModules()
 })
 afterEach(() => {

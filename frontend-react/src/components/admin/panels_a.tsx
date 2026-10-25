@@ -14,7 +14,9 @@ import {
   API_BASE, authHeaders, getAuthToken, getActiveTenantId, handleUnauthorized,
   request, bizResp, // ★ G9：邀请码撤销（后端端点尚缺，前端按契约先接；失败走诚实错误提示）
   type OrgInfo,
+  type InviteLinkCreateResult, // ★ B4-c：企业建号回执（与管理台建号/邀请面板共用同一形态）
 } from '@/api'
+import { InviteLinkCard, InviteLinkSecurityNote } from './InviteLinkCard' // ★ B4-c：邀请链接转发卡片 + §6.5 安全警示的唯一实现
 import { useAdmin, roleName } from '@/stores/admin'
 import { Panel, Field, toastResp } from './parts'
 import { fmtTime, fmtNum } from '@/lib/ui'
@@ -194,7 +196,15 @@ export function UsersP() {
   // 创建用户弹窗开关
   const [dlg, setDlg] = useState(false)
   // 新建用户表单
-  const [uForm, setUForm] = useState<Any>({ username: '', password: '', display_name: '', role: 'user', tenant_id: 1, org_id: 0 })
+  // ★ B4-c（R9）：password 一格只在**平台档**出现并必填；企业档改成一格可选邮箱
+  //   （预绑给受邀人），提交后后端不建号、只回一枚一次性专属邀请链接。
+  const [uForm, setUForm] = useState<Any>({ username: '', password: '', email: '', display_name: '', role: 'user', tenant_id: 1, org_id: 0 })
+  // 刚生成的邀请链接回执（非空 ⇒ 打开转发卡片）+ 受邀人邮箱（卡片「发邮件」预填用）
+  const [issued, setIssued] = useState<InviteLinkCreateResult | null>(null)
+  const [issuedEmail, setIssuedEmail] = useState('')
+  // 判据与后端 auth.go 的 tid 分派**同一把尺**：只有 super_admin/admin 会落到平台档（tid=0）并要口令。
+  // 刻意不用「租户/组织是否为空」判——那两条为空时后端仍按生效租户走企业档，那是合法形态。
+  const isPlatformGrant = isSuper && (uForm.role === 'admin' || uForm.role === 'super_admin')
 
   /** 加载用户列表 */
   const load = useCallback(async () => {
@@ -250,12 +260,35 @@ export function UsersP() {
     }
   }
 
-  /** 创建用户并清空表单 */
+  /** 创建用户：企业档提交后展示邀请链接（不建号），平台档才直建账号并清空表单 */
   async function createUser() {
-    if (!uForm.username || !uForm.password) { void toastWarn(t('users.required')); return }
-    const r = await adminUserCreate({ ...uForm } as never)
+    const uname = String(uForm.username || '').trim()
+    if (!uname) { void toastWarn(t('org.userNameRequired')); return }
+    if (isPlatformGrant && (String(uForm.password || '').length ?? 0) < 6) { void toastWarn(t('org.pwdMinLength')); return }
+    const body: Any = {
+      username: uname,
+      role: uForm.role,
+      org_id: Number(uForm.org_id) || undefined,
+      tenant_id: Number(uForm.tenant_id) || undefined,
+      email: String(uForm.email || '').trim() || undefined,
+      // 显示名只有平台档认（企业档由受邀人注册时自填，后端忽略这一格）
+      display_name: isPlatformGrant ? (String(uForm.display_name || '').trim() || uname) : undefined,
+    }
+    // 企业档刻意**不带** password 字段（后端见非空口令直接 400）；传空串虽能过，
+    // 但会把「这一档不收口令」这件事在下一次改动里抹平。
+    if (isPlatformGrant) body.password = uForm.password
+    const r = await adminUserCreate(body)
     if (!r.success) { toastError(r.message); return }
-    setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 })
+    if (r.invite) {
+      // 这一趟没有创建任何账号，只有链接：文案不能说「已开通」，
+      // 否则管理员会以为当事人现在已经能登录。
+      setIssuedEmail(String(uForm.email || '').trim())
+      setIssued(r.invite)
+      toastSuccess(tpl('org.inviteIssued', { name: uname }))
+    } else {
+      toastSuccess(tpl('org.userCreated', { name: uname }))
+    }
+    setUForm({ username: '', password: '', email: '', display_name: '', role: uForm.role, tenant_id: uForm.tenant_id, org_id: uForm.org_id })
     setDlg(false); void load()
   }
 
@@ -286,6 +319,19 @@ export function UsersP() {
     void adminUserResetPassword(Number(u.id), pwd).then((r) => { if (!r.success) toastError(r.message) })
   }
 
+  /**
+   * 移除成员（★ 2026-10-24 B4-d，R8+R2 拍板）：确认框**只落在这一个动作函数里**。
+   * 旧形态是行内 `<Link onClick={async () => { await adminUserDelete(...) }}>`＝零确认直接删，
+   * 而这一条按新模型删的**不是账号**，是「这个人在本企业的那一份身份」——
+   * 文案必须把"数据留在企业、个人账号不受影响"说出来（说错了管理员会以为把人整个删了，
+   * 反过来当事人以为自己被删号），这也是 `org.deleteUserConfirm` 与 OrgP 侧共用一把尺子的原因。
+   */
+  async function removeMember(u: Any) {
+    if (!(await confirmDialog({ body: tpl('org.deleteUserConfirm', { name: String(u.username ?? '') }), danger: true }))) return
+    toastResp(await adminUserDelete(Number(u.id)), t('common.delete'))
+    void load()
+  }
+
   return (
     <Panel title={t('users.title')}
       extra={<Button variant="primary" onClick={() => { setUForm({ username: '', password: '', display_name: '', role: 'user', tenant_id: activeTenantId || 1, org_id: 0 }); setDlg(true) }}>{t('users.create')}</Button>}>
@@ -311,7 +357,7 @@ export function UsersP() {
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
               <Link onClick={() => resetPwd(row)}>{t('users.resetPwd')}</Link>
               <Link tone="danger" onClick={async () => { await toggleUser(row) }}>{row.status === 'active' ? t('users.disable') : t('users.enable')}</Link>
-              <Link tone="danger" onClick={async () => { toastResp(await adminUserDelete(Number(row.id)), t('common.delete')); void load() }}>{t('common.delete')}</Link>
+              <Link tone="danger" onClick={() => { void removeMember(row) }}>{t('users.removeMember')}</Link>
             </div>
           ) },
         ]}  />
@@ -320,8 +366,17 @@ export function UsersP() {
       <Dialog open={dlg} onCancel={() => setDlg(false)} title={t('users.create')}
         onConfirm={async () => { await createUser() }}>
         <Field label={t('users.usernamePlaceholder')}><input className="lc-input" value={String(uForm.username || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, username: e.target.value }))} /></Field>
-        <Field label={t('users.passPlaceholder')}><input className="lc-input" type="password" autoComplete="new-password" value={String(uForm.password || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, password: e.target.value }))} /></Field>
-        <Field label={t('users.displayNamePlaceholder')}><input className="lc-input" value={String(uForm.display_name || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, display_name: e.target.value }))} /></Field>
+        {/* ★ B4-c（R9）：企业档不收口令——改一格**可选**邮箱（预绑后只有该邮箱能完成注册）。
+            显示名也只在平台档录：企业档由受邀人注册时自填，留这一格会让管理员以为名字已定。 */}
+        {isPlatformGrant
+          ? <Field label={t('users.passPlaceholder')}><input className="lc-input" type="password" autoComplete="new-password" value={String(uForm.password || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, password: e.target.value }))} /></Field>
+          : <Field label={t('users.emailOptionalPlaceholder')}><input className="lc-input" type="email" autoComplete="off" value={String(uForm.email || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, email: e.target.value }))} /></Field>}
+        {isPlatformGrant && (
+          <Field label={t('users.displayNamePlaceholder')}><input className="lc-input" value={String(uForm.display_name || '')} onChange={(e) => setUForm((p: Any) => ({ ...p, display_name: e.target.value }))} /></Field>
+        )}
+        <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 10px' }}>
+          {t(isPlatformGrant ? 'users.createHintPlatform' : 'users.createHintEnterprise')}
+        </p>
         {/* 超管可选择租户 */}
         {isSuper && (
           <Field label={t('users.colOrg')}>
@@ -340,6 +395,14 @@ export function UsersP() {
             {cascadeRoles.map((r) => <option key={r} value={r}>{t('users.role.' + r)}</option>)}
           </select>
         </Field>
+      </Dialog>
+
+      {/* ★ B4-c：企业建号的成功回执就是一枚链接（账号要等本人设置口令后才存在）。
+          §6.5 的安全警示由卡片自带，与邀请管理页常驻条同一份实现，这里不再另写一句。 */}
+      <Dialog open={!!issued} onCancel={() => setIssued(null)}
+              title={t('org.inviteIssuedTitle')} confirmText={t('inviteLink.close')}
+              onConfirm={() => setIssued(null)}>
+        {issued && <InviteLinkCard link={issued} email={issuedEmail} />}
       </Dialog>
     </Panel>
   )
@@ -839,10 +902,22 @@ export function InvitesP() {
     <Panel title={t('invites.title')}
       extra={<Button variant="primary" onClick={() => { setCode(''); setTenantId(0); setDlg(true) }}>{t('invites.create')}</Button>}>
       <p className="ad-hint" style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '0 0 8px' }}>{t('invites.hint')}</p>
+      {/* ★ §6.5 第 5 条（2026-10-25 对账批）：手输码与专属链接**同一风险面**（后端共用 invite_codes
+          那一台状态机，见 store/invite.go 的 Kind 注释），所以警示条必须也出在这一面。
+          组件调用点，不抄文案字面量——警示语只允许有 InviteLinkSecurityNote 一个出处。 */}
+      <InviteLinkSecurityNote />
       {/* 邀请码列表表格 */}
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[
-          { key: 'code', title: t('invites.colCode') },
+          { key: 'code', title: t('invites.colCode'), render: (row) => (
+            // §6.5 之三同口径：只有**还没花掉**的凭据才需要挂"这是一条凭据"（已用/已撤销的行不再提示）
+            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span>{String(row.code ?? '')}</span>
+              {Number(row.used) !== 1 && !row.revoked && (
+                <StatusPill tone="warn">{t('inviteLink.riskTag')}</StatusPill>
+              )}
+            </span>
+          ) },
           { key: 'tenant_id', title: t('invites.colTenant'), width: 110, render: (row) => row.tenant_id > 0 ? `#${row.tenant_id}` : t('invites.newOrg') },
           { key: 'used', title: t('invites.colStatus'), width: 90, render: (row) => {
             // ★ G9：三态——已撤销 > 已使用 > 未使用（撤销只作废未使用的码，已使用的码保留追溯）

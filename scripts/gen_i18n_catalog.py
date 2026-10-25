@@ -622,6 +622,72 @@ T.update({
 "免费体验额度已在新用户注册时自动发放，无需重复领取": "Free trial credit is granted automatically at sign-up; no need to claim it again",
 })
 
+# —— 多身份账号批 B2/B3（2026-10-24）：邀请链接建号面与注册口汇流新增的对外文案。
+#   前一组由 TestAPICnMessageLiteralsCovered 当场报缺（写死在 apierrors.New 的第二实参）；
+#   后一组是**按变量/函数返回值**出栈的 message（凭据分档文案、注册成功语），
+#   那条正则扫不到，但 lang_middleware 的 translateJSONMessages 在运行期按整句字节替换，
+#   所以词条键必须与返回值**逐字**一致——漏一条＝英文访客在注册成功页看到一句中文。
+T.update({
+# B2 邀请链接生成/校验面
+"请使用 GET 或 POST 请求": "Please use a GET or POST request",
+"用户名不能为空": "Username must not be empty",
+"无法确定链接归属的企业": "Could not determine which company this link belongs to",
+"部门管理员未绑定部门，无法生成邀请链接": "Department admins have no bound department; cannot generate an invite link",
+"无权在非本部门下生成邀请链接": "You may not generate invite links under another department",
+"部门管理员必须绑定部门：请先生成到具体部门下": "Department admins must be bound to a department: generate the link under a specific department first",
+"生成邀请链接失败，请稍后重试": "Failed to generate the invite link; please retry later",
+"邀请链接创建冲突，请重试或联系管理员": "Invite link creation conflict; please retry or contact your administrator",
+# B3 注册口汇流（§6.1/§6.3）
+"个人注册不能使用企业邀请码": "Personal sign-up cannot use a company invite code",
+"注册校验失败，请稍后重试": "Registration check failed; please retry later",
+"该邀请码未绑定企业，无法用于加入": "This invite code is not bound to a company and cannot be used to join",
+"该邀请链接只能由指定邮箱注册，请更换邮箱或向管理员重新获取": "This invite link is limited to the designated email; use that address or ask your administrator for a new link",
+# B3 凭据分档文案（credentialRejectText 的返回值；fromLink 那一支复用 inviteLinkReasonText 那四句）
+"该邀请码已被使用，请向企业管理员重新获取": "This invite code was already used; ask your company administrator for a new one",
+"该邀请码已被管理员撤销，请向企业管理员重新获取": "This invite code was revoked by an administrator; ask your company administrator for a new one",
+"该邀请码已过期，请向企业管理员重新获取": "This invite code has expired; ask your company administrator for a new one",
+# B2 邀请链接落地页四档（inviteLinkReasonText 的返回值，同一把尺子在两个面上出栈）
+"该邀请链接已被使用（一枚链接只能开通一个账号），请向企业管理员重新获取": "This invite link was already used (one link opens exactly one account); ask your company administrator for a new one",
+"该邀请链接已被管理员撤销，请向企业管理员重新获取": "This invite link was revoked by an administrator; ask your company administrator for a new one",
+"该邀请链接已过期，请向企业管理员重新获取": "This invite link has expired; ask your company administrator for a new one",
+"邀请链接无效，请检查链接是否完整或向企业管理员重新获取": "Invalid invite link; check that the full link was copied, or ask your company administrator for a new one",
+# B3 加入分流文案（joinOccupiedError 的返回值）
+"账号注销宽限期内，暂不能加入企业": "Your account is in the deletion grace period and cannot join a company yet",
+"你已在该企业中，可直接切换身份": "You already belong to this company; switch identity instead",
+# B3 注册成功语（R5：企业身份不发额度，文案不许再承诺「额度已发放」）
+"注册成功，已加入企业": "Signed up successfully; you have joined the company",
+"注册成功，试用额度已发放": "Signed up successfully; trial credit has been granted",
+})
+
+# —— 多身份账号批 B3-c（2026-10-24，R9 管理台建号/批量导入改邀请链接同口径）。
+#   前四条是 apierrors.New / writeJSON "message" 里的写死中文（覆盖闸当场报缺）；
+#   后两条是 importSuccessMessage() 的**返回值**（正则扫不到，但 translateJSONMessages
+#   运行期按整句字节替换，漏一条＝英文界面的管理台里批量导入回执是一句中文）。
+#   ★ 这一族文案里刻意不出现「密码」以外的承诺、也不出现「已发送/已通知」的完成时：
+#     入队 ≠ 投递（同 F-54②「回执不许替系统许诺」那条纪律），英文稿同样照此口径。
+T.update({
+"已生成专属邀请链接（尚未创建账号）：请把链接转给本人，他自行设置邮箱与密码后即成为该企业成员；链接使用一次即失效":
+    "A personal invite link has been generated (no account exists yet): forward it to the person, who will set their own email and password to join this company; the link works only once",
+"企业成员建号不再录入初始口令：请留空 password，系统改为发送一次性专属邀请链接，由本人自行设置密码":
+    "Company member accounts no longer take an initial password: leave password empty and the system sends a one-time invite link so the person can set their own password",
+"该邮箱已是本企业成员，无需再生成邀请链接": "That email already belongs to a member of this company; no invite link is needed",
+"批量导入只用于企业成员：请先切换到具体企业再上传文件": "Bulk import is for company members only: switch to a specific company before uploading a file",
+"邀请链接已提交发送（稍后送达；若长时间未收到，可复制本行链接转给本人）":
+    "Invite link queued for sending (it may take a moment; if it never arrives, copy the link in this row and send it yourself)",
+"邀请链接已生成（未绑定邮箱或邮件发送失败）：请复制本行链接转给本人，他点开即可自行设置邮箱与密码":
+    "Invite link generated (no email bound, or the mail could not be sent): copy the link in this row and forward it; the person can open it to set their own email and password",
+})
+
+# —— 多身份账号批 B4（2026-10-25，邀请链接二维码出图面 handleInviteLinkQrcode）。
+#   三条都写死在 apierrors.New 的第二实参，覆盖闸 TestAPICnMessageLiteralsCovered 当场报缺；
+#   英文访客点「生成二维码」若撞这三条，漏词条＝界面上直接是一句中文（不是报错，是漏翻译）。
+T.update({
+"请使用 GET 请求获取二维码": "Use a GET request to fetch the QR code",
+"该邀请链接已不可用（已使用／已撤销／已过期），请重新生成后再发二维码":
+    "This invite link is no longer usable (already used, revoked, or expired); generate a new one before sharing a QR code",
+"二维码生成失败": "QR code generation failed",
+})
+
 exact = dict(T)
 pats = []
 for zh, en in DYN.items():

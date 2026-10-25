@@ -94,7 +94,25 @@ func ChatLegFixedTokens(sourceLang, targetLang, uiLang string) (initial, review 
 	}
 	rev := fmt.Sprintf(reviewPromptFmt, langName, "", "", "", contractNoteZh())
 	review = ScriptTokens(rev)
+	// ★ 2026-10-24 N-01：文化规则块按上限进 prompt，预估必须把它计入，否则「预估 24、实扣 103」
+	//   的偏离永远存在（AGENTS §一·5④ 同一把尺子）。上限默认 2000 字符，按目标语书写体系折算。
+	allow := CulturePromptAllowanceTokens(targetLang)
+	initial += allow
+	review += allow
 	return initial, review
+}
+
+// CulturePromptAllowanceTokens 文化规则块进 prompt 的 token 预估（按默认上限 2000 字符）。
+// 规则文本是**目标语**：CJK/西里尔/阿拉伯/泰文等宽体约 1 字符 1 token，拉丁约 4 字符 1 token。
+// 只用于预估；运行时上限由 culture_rules_max_chars 控制。
+func CulturePromptAllowanceTokens(targetLang string) int64 {
+	const maxChars = 2000
+	sample := "字"
+	switch strings.ToLower(strings.TrimSpace(targetLang)) {
+	case "en", "fr", "de", "es", "pt", "it", "nl", "sv", "id_lang", "vi", "tl", "ms":
+		sample = "a"
+	}
+	return ScriptTokens(strings.Repeat(sample, maxChars))
 }
 
 // EstimateChatTokens 预估一次即时翻译的**真实 token** 消耗区间（未乘 markup、未折积分）。

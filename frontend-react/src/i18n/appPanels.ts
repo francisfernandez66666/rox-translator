@@ -50,6 +50,7 @@ import * as pMybill from './panels/mybilling'
 import * as pReconcile from './panels/reconcile'
 import * as pCoupons from './panels/coupons'
 import * as pAssist from './panels/assist'
+import * as pInviteLink from './panels/invitelink'
 
 /** 面板词条的统一形状：扁平 key → 译文（懒加载词典与入口词典共用同一形状） */
 type Dict = Record<string, string>
@@ -60,7 +61,7 @@ export const zh: Dict = {
   ...pWorkflow.zh, ...pApiKeys.zh, ...pWebhooks.zh, ...pSdk.zh, ...pHub.zh, ...pTickets.zh,
   ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh, ...pInvites.zh, ...pPackages.zh, ...pFeedback.zh,
   ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh,
-  ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pCoupons.zh, ...pAssist.zh,
+  ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pCoupons.zh, ...pAssist.zh, ...pInviteLink.zh,
 }
 
 /** 懒加载面板的英文词条（与 zh 同键，对等性由 parity.test.ts 管） */
@@ -69,5 +70,5 @@ export const en: Dict = {
   ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en, ...pSdk.en, ...pHub.en, ...pTickets.en,
   ...pBilling.en, ...pUsage.en, ...pAlerts.en, ...pInvites.en, ...pPackages.en, ...pFeedback.en,
   ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en,
-  ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pCoupons.en, ...pAssist.en,
+  ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pCoupons.en, ...pAssist.en, ...pInviteLink.en,
 }

@@ -7,7 +7,7 @@
 // ★B3（方案 A2）：主流程挂载逐段事件回调 emit（segment_done/segment_final/segments_sealed），
 // 让 SSE 通道边翻边上屏；发射器与协议见 file_events.go，工单/非流式路径 emit=nil 零开销。
 // ★ 2026-09-22 三处主链整改（本文件是落点）：
-//   - 译文可用性判定收口到 translation_guard.go 的 IsTranslationUsable（KB/模型/硬闸 5 个写入点同一口径）；
+//   - 译文可用性判定收口到 translation_guard.go 的 fileTranslationUsable（KB/模型/硬闸 5 个写入点同一口径）；
 //   - 产物文件名按目标语言翻译（file_name.go，失败一律回落原名，扩展名永不参与）；
 //   - 写回后做结构指纹保真比对 + 透出未译段清单（file_fidelity.go → Data.GateWarnings / UntranslatedSegments）。
 //
@@ -160,20 +160,79 @@ func anydocSourceExt(ext string) bool {
 	return fileproc.AnydocFormats[ext] || ext == ".pdf"
 }
 
-// leakedLangFailRatio 漏译率判失败的阈值比例。**当前维持 2026-09-09 用户决策的 50% 不变**，
-// 抽成常量的目的是让「收紧口径」成为一次可评审的单点改动而不是改代码逻辑：
-// 实测本工单漏译 20.8% 仍被判「已完成」，说明 0.5 偏松（建议见汇报），但阈值一旦下调会
-// 让存量工单大面积转失败（用户已扣积分），必须与产品/运营对齐并跑全量 UAT 后再动。
-const leakedLangFailRatio = 0.5
+// leakedLangRepairRatio 漏译率触发「缺失段补译」的阈值比例。
+//
+// ★ 2026-10-24 用户令：50% → 5%。语义同时改变：
+//   - 旧口径：>50% 直接判工单失败（客户拿不到产物）；
+//   - 新口径：>5% 触发**缺失段补译**并补回；补不回也**不判失败、不退款**，
+//     完成 + 显式缺失标记（untranslated/untranslated_segments/quality_flagged）。
+//
+// 严格大于：20 段缺 1 段=5% 不触发；10 段缺 1 段=10% 触发。
+// 运行期可由 system_config.file_leak_repair_ratio 覆盖（回滚设 0.5）。
+const leakedLangRepairRatio = 0.05
 
-// leakedLang 漏译率硬闸判定（纯函数，便于单测）：
-// 某语言未译出段数占比 > leakedLangFailRatio（当前 50%）时返回该语言代码（触发工单失败）；否则返回 ""。
+// leakedRatio 读取当前漏译触发比例（env/system_config 覆盖，非法值回退默认）。
+func leakedRatio() float64 {
+	if v := strings.TrimSpace(os.Getenv("FILE_LEAK_REPAIR_RATIO")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			return f
+		}
+	}
+	return leakedLangRepairRatio
+}
+
+// leakedLang 漏译率判定（纯函数，便于单测）：
+// 某语言未译出段数占比 > 当前阈值（默认 5%）时返回该语言代码（触发补译/标记）；否则返回 ""。
 // remain 为未译出段数、total 为源文总段数；remain==0 或 total==0 不触发。
 func leakedLang(lang string, remain, total int) string {
-	if remain > 0 && total > 0 && float64(remain)/float64(total) > leakedLangFailRatio {
+	return leakedLangAt(lang, remain, total, leakedRatio())
+}
+
+// leakedLangAt 与 leakedLang 同判据，但比例由调用方给（便于 Engine 读 system_config）。
+func leakedLangAt(lang string, remain, total int, ratio float64) string {
+	if remain > 0 && total > 0 && float64(remain)/float64(total) > ratio {
 		return lang
 	}
 	return ""
+}
+
+// LeakRatioExceeded 供服务层判断「本单是否需打质检存疑」：任一语言缺失比例超过当前阈值。
+// 与 leakedLangAt 同判据（不另写 0.05 字面量），保证 5% 口径只有一处。
+func LeakRatioExceeded(untranslated map[string]int, total int) bool {
+	for _, n := range untranslated {
+		if leakedLangAt("x", n, total, leakedRatio()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// LeakRatioExceeded 实例方法：按本引擎的 system_config 阈值判断（服务层用这个，
+// 避免服务层只读 env 而漏掉管理台调档）。
+func (e *Engine) LeakRatioExceeded(untranslated map[string]int, total int) bool {
+	for _, n := range untranslated {
+		if leakedLangAt("x", n, total, e.fileLeakRatio()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// fileLeakRatio 运行期阈值：env > system_config.file_leak_repair_ratio > 默认 0.05。
+func (e *Engine) fileLeakRatio() float64 {
+	if v := strings.TrimSpace(os.Getenv("FILE_LEAK_REPAIR_RATIO")); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f > 0 && f <= 1 {
+			return f
+		}
+	}
+	if e != nil && e.St != nil {
+		if v, _ := e.St.GetConfig("file_leak_repair_ratio"); strings.TrimSpace(v) != "" {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && f > 0 && f <= 1 {
+				return f
+			}
+		}
+	}
+	return leakedLangRepairRatio
 }
 
 // fetchBrandTerms 查询该租户 KB 中全部 module=brand + layer=1 术语，
@@ -388,10 +447,10 @@ const minimalInstrRescueMarker = "MINIMAL_INSTR_SEG_RESCUE_V1"
 // 为什么要单独一条腿（★ 2026-10-19，现网工单 107 实证）：
 // 正常腿（批量 / 逐段，system 里带「币种保真」「输出纯度」两条中文尾注）对**短段**会退化——
 // 纯翻译模型（tencent/Hunyuan-MT-7B）把 system 里那两条中文尾注当成待译内容，产出
-// `and`（注记的连词尾巴）或整段注记英译；`IsTranslationUsable` 据实判其不可用 ⇒ 该段每一轮都失败，
+// `and`（注记的连词尾巴）或整段注记英译；`fileTranslationUsable` 据实判其不可用 ⇒ 该段每一轮都失败，
 // 最终 `金额`、`当前：全部允许·仓位留空/0 =使用全局单票金额` 这类真中文原样留在成品与译图里。
 // 实测：同一 12 段带尾注 11/12 出 `and`，换成「骨架+契约」这一档 12/12 正确。
-// ★ 本函数**只产候选、不做采纳判定**——采纳仍由调用点的 `IsTranslationUsable` 一把尺子说了算
+// ★ 本函数**只产候选、不做采纳判定**——采纳仍由调用点的 `fileTranslationUsable` 一把尺子说了算
 //
 //	（与 file.go 其余写入点同形，写入点守护的机械闸门据此仍认得这一处）。
 func (e *Engine) translateSegmentMinimal(ctx context.Context, seg, lc string) (string, bool) {
@@ -600,7 +659,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	modelHitsMu := sync.Mutex{}
 	addTrans := func(lc, orig, translated string) {
 		// ★ 裸写入器：本函数**不做**可用性判定（S8 敏感拦截段要直接预填占位交付，
-		//   见 sensitiveBlockedSegments）。因此所有调用方必须先过 IsTranslationUsable
+		//   见 sensitiveBlockedSegments）。因此所有调用方必须先过 fileTranslationUsable
 		//   再写入——「键存在」= 「已译出」是硬闸与 untranslated 统计的共同前提（P0 整改 RC-2）。
 		translationMu.Lock()
 		defer translationMu.Unlock()
@@ -712,13 +771,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						defer func() { <-semKB }()
 						r, err := e.TranslateOne(ctx, t, []string{lc}, true, config.StageKBMatch)
 						if err == nil {
-							// ★ P0 整改 RC-2：命中判定与模型路径同口径走 IsTranslationUsable，
+							// ★ P0 整改 RC-2：命中判定与模型路径同口径走 fileTranslationUsable，
 							//   **不能只判非空**——KB/TM 里「源文=译文」的脏行会把中文当成
 							//   「命中的译文」写进成品，且键一旦写入，硬闸按「键存在即已译出」
 							//   会永久跳过该段（不重试、不计 untranslated、不告警）。
 							//   判不过 = 不算命中 ⇒ 该段落入 needModelIdx 走模型补漏。
 							if v, ok := r.Translations[lc]; ok {
-								if IsTranslationUsable(t, v) {
+								if e.fileTranslationUsable(ctx, t, v, lc) {
 									kbHitIdx[i] = true
 									kbVal[i] = v
 									se.done(lc, t, v) // ★B3：KB 直译命中即推（A2 挂载点1，替代攒齐屏障的上屏时延）
@@ -736,9 +795,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					}(i, t)
 				}
 				wgKB.Wait()
-				// ★ 命中/补漏分派收口到纯函数 collectKBPass（内部再走一次 IsTranslationUsable，
+				// ★ 命中/补漏分派收口到纯函数 collectKBPass（内部再走一次 fileTranslationUsable，
 				//   写入点判定优先于上游并行判定，杜绝「只判非空」的旧口径复活）。
-				kbAccepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, preFilled)
+				kbAccepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, preFilled,
+					func(src, out string) bool { return e.fileTranslationUsable(ctx, src, out, lc) })
 				for _, i := range kbAccepted {
 					addTrans(lc, texts[i], kbVal[i])
 					addKBHit()
@@ -764,13 +824,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 							func(done, total int) { prog("file_translate|校对|"+lc, done, total) })
 					}
 					for i, idx := range needModelIdx {
-						// ★ 回显检测统一走 IsTranslationUsable（原此处手写 3 个不等式）：
+						// ★ 回显检测统一走 fileTranslationUsable（原此处手写 3 个不等式）：
 						//   空/失败占位/与源文同文/指令回显残留任一命中即视为未译出，
 						//   留给硬闸重试并计入 untranslated，绝不静默写进成品。
 						if i >= len(batch) {
 							continue
 						}
-						if IsTranslationUsable(texts[idx], batch[i]) {
+						if e.fileTranslationUsable(ctx, texts[idx], batch[i], lc) {
 							addTrans(lc, texts[idx], batch[i])
 							addModelHit()
 							se.final(lc, texts[idx], batch[i], "reviewed") // ★B3：审校后终稿（同文自动去重）
@@ -815,7 +875,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★ 回显检测（与 KB 路径同一口径，见 translation_guard.go）：模型原样返回源文
 				// = 未翻译，视为缺失走重试，否则非中文目标时源文会被当成「译文」静默写入成品。
 				if i < len(batch) {
-					if IsTranslationUsable(t, batch[i]) {
+					if e.fileTranslationUsable(ctx, t, batch[i], lc) {
 						addTrans(lc, t, batch[i])
 						addModelHit()
 						if !fast {
@@ -842,11 +902,35 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   ③ 每轮先小批量（bs=10，<sN> 显式配对）重译——对超短段（「无/有/日期」）
 	//      的抗回显性显著优于逐段单发，且吞吐高一个量级；批量后仍缺的段再逐段兜底。
 	untranslated := map[string]int{} // 语言 → 硬闸结束后仍未译出段数（进 Data 供审批/QA 可见）
+	// F-01：硬闸收尾阶段的补译/缺失告警先收在这里，等 applySegmentGates 之后再并入 gateWarnings
+	// （gateWarnings 的声明在写回前，不能提前引用）。
+	leakWarnings := []string{}
 	// ★ P1 整改（漏译静默通过）：只给数量等于什么都没给——审批/QA 无从定位是哪几段。
 	//   同口径把「仍未译出的源文段清单」一并透出（上限见 untranslatedSegmentsCap，防爆 payload）。
 	untranslatedSegments := map[string][]string{}
+	// ★ N-01（2026-10-25 对账补腿）：token 成本预算线（判据与档位见 file_token_budget.go）。
+	//   上面那条墙钟预算只拦「跑得久」，拦不住「每一次都很贵」——UAT 工单 115 正是
+	//   0.2KB／4 行文件在 600s 内跑掉约 20 行 × 2.06 万 token，实扣 1,037 积分（预估的 24 倍）。
+	//   基准取**此刻的首翻实际用量**：文件链逐批重发指令，整篇公式估算会结构性低估它。
+	//   只约束下面的重试/补译腿，首翻已经跑完，不受任何影响；无计量口径＝不判（fail-open）。
+	firstPassTokens, hasUsage := collectorTokens(ctx)
+	repairBudget := int64(-1)
+	if hasUsage {
+		repairBudget = e.repairTokenBudgetCap(ctx, firstPassTokens)
+	}
+	// 到线即停：出一行 WARN（运维）＋一句进 leakWarnings（审批台与客户面）。
+	// 「按现有降级链交付」在界面上与"全部译出"长得一样，所以这一句是唯一的可见出口。
+	// 判定与出声收在这一个闭包里（三个复核点位共用），调用方只问「停不停」。
+	stopForTokenBudget := func(lc string, remaining int) bool {
+		over, spent := e.repairBudgetSpent(ctx, repairBudget)
+		if !over {
+			return false
+		}
+		leakWarnings = append(leakWarnings, e.warnRepairBudgetStopped(ctx, lc, spent, repairBudget, remaining))
+		return true
+	}
 	for _, lc := range finalLangs {
-		// ★ missingSegments 与写入点判定（IsTranslationUsable）配对：不可用译文不写入 ⇒ 键存在
+		// ★ missingSegments 与写入点判定（fileTranslationUsable）配对：不可用译文不写入 ⇒ 键存在
 		//   严格等价于已译出，故 KB 脏行不再「既不算命中也不被统计」地凭空消失（RC-2 落点）。
 		missing0 := missingSegments(texts, langTranslations[lc])
 		if len(missing0) == 0 {
@@ -874,6 +958,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译", lc, elapsed.Round(time.Second), len(still))
 				break
 			}
+			// ★ N-01：轮首复核 token 预算（与墙钟预算并列，两条各拦一种失控形态）。
+			if stopForTokenBudget(lc, len(still)) {
+				break
+			}
 			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
 			// 轮间间隔防打爆供应商；可被取消打断（不再无条件睡死 500ms）
 			select {
@@ -890,11 +978,17 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx))
 			for i, m := range still {
-				// ★ 硬闸写入点同样走 IsTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
+				// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
 				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
 				if i < len(batch) {
-					if IsTranslationUsable(m, batch[i]) {
+					if e.fileTranslationUsable(ctx, m, batch[i], lc) {
 						addTrans(lc, m, batch[i])
+						// ★ 2026-10-25：硬闸这一轮同样是**模型**译出的段，必须计进 model_hits。
+						//   改之前只 addTrans 不计数 ⇒ 初翻全被判回显、靠硬闸救回整篇的单，
+						//   工单读数写「模型翻译 0 段」而成品里每一行都是模型译文（命中计数与实际
+						//   写入脱钩，同 addTrans 裸写入器那条注释针对的形态）。补译段不重复计：
+						//   still 只含此刻仍缺失的段，初翻已写入的段进不了这个循环。
+						addModelHit()
 					} else {
 						noteRefusal(lc, m, batch[i]) // ★ M1：硬闸这一轮仍是回绝 ⇒ 记账
 					}
@@ -909,17 +1003,54 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if time.Since(loopStart) > budget {
 					break
 				}
+				// ★ N-01：逐段之间同样复核 token 预算（与上面那条墙钟复核同位）——
+				//   一轮内部的逐段兜底可以是几十次整块调用，只在轮首判等于给一轮开了无限额度。
+				if stopForTokenBudget(lc, len(missingSegments(texts, langTranslations[lc]))) {
+					break
+				}
 				if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok {
-					if !IsTranslationUsable(m, v) {
+					if !e.fileTranslationUsable(ctx, m, v, lc) {
 						noteRefusal(lc, m, v) // ★ M1：逐段兜底仍是回绝 ⇒ 记账
 						continue
 					}
 					addTrans(lc, m, v)
+					addModelHit()     // ★ 同上：极简腿救回的段也是模型译文，计数必须跟着写入走
 					se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
 					// 观测腿：这条日志既是"极简腿真被走到"的现场读数，也是 minimalInstrRescueMarker
 					// 的运行期引用点（没有它，常量会被内联/优化掉，发布件特征串两向都不可信）。
 					// 只出语言与标记，**不出段文本**（工单内容属客户资料，日志不留原文）。
 					observability.Info(ctx, "文件翻译：极简指令兜底腿救回未译段", "lang", lc, "mark", minimalInstrRescueMarker)
+				}
+			}
+		}
+		// ★ F-01（2026-10-24 用户令）：5% 阈值。硬闸 5 轮后仍超阈值 ⇒ 再做定向补译，
+		//   只送缺失段（极简指令腿），补回即止；不判失败、不退款、不自动整单重发。
+		if lang := leakedLangAt(lc, len(missingSegments(texts, langTranslations[lc])), len(texts), e.fileLeakRatio()); lang != "" {
+			calls := 0
+			maxCalls := e.fileRepairMaxCalls()
+			for round := 1; round <= e.fileRepairMaxRounds(); round++ {
+				still := missingSegments(texts, langTranslations[lc])
+				if len(still) == 0 {
+					break
+				}
+				if ctx.Err() != nil || calls >= maxCalls {
+					break
+				}
+				// ★ N-01：追加补译同样受 token 预算约束（次数上限只管"打几次"，管不住"每次多大"）。
+				if stopForTokenBudget(lc, len(still)) {
+					break
+				}
+				log.Printf("[file-repair] lang=%s round=%d 定向补译 %d 段（阈值 %.0f%%）", lc, round, len(still), e.fileLeakRatio()*100)
+				for _, m := range still {
+					if ctx.Err() != nil || calls >= maxCalls {
+						break
+					}
+					calls++
+					if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok && e.fileTranslationUsable(ctx, m, v, lc) {
+						addTrans(lc, m, v)
+						addModelHit() // ★ 同上一处：定向补译也是模型译文，计数跟着写入走（still 只含仍缺失段 ⇒ 不重复计）
+						se.done(lc, m, v)
+					}
 				}
 			}
 		}
@@ -931,6 +1062,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			log.Printf("[tm-hardgate] lang=%s 结束：仍有 %d/%d 段未译出（已写入工单 Untranslated 供人工补译）", lc, len(missList), len(texts))
 			untranslated[lc] = len(missList)
 			untranslatedSegments[lc] = limitUntranslatedSegments(missList)
+			if leakedLangAt(lc, len(missList), len(texts), e.fileLeakRatio()) != "" {
+				leakWarnings = append(leakWarnings, fmt.Sprintf(
+					"%s 仍有 %d/%d 段未译出（超过 %.0f%% 阈值，已尝试定向补译但仍缺失；请人工检查）",
+					config.LangNames[lc], len(missList), len(texts), e.fileLeakRatio()*100))
+			}
 		}
 	}
 	// ★ M1 收尾：把「模型回绝过、且最终仍未补译成功」的段收成读数。
@@ -950,14 +1086,13 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 	prog("第2步/3：翻译完成", 2, 3)
 
-	// ★ 漏译率硬闸（2026-09-09 用户决策：硬闸必须生效）：文件管线此前对「译文键与源文键
-	//   不匹配/模型整单失败」（untranslated 全额，如工单 T20260909205438QJH 312/312）仅记
-	//   警告仍 completed 输出残缺产物。现在：某语言未译出比例 >50% 直接置工单失败返回错误
-	//   （用户重新发起即可），绝不把大面积漏译的产物交付给用户；≤50% 维持既有警告口径。
+	// ★ 漏译阈值（★ 2026-10-24 用户令：50%→5%，超阈值补译而非判失败）：
+	//   超阈值的语言已在硬闸收尾段做过定向补译；这里不再返回错误/判失败。
+	//   仍缺失的段通过 untranslated/untranslated_segments/gate_warnings 显式可见，
+	//   工单继续完成（不退款、不自动整单重发）。
 	for _, lc := range finalLangs {
-		if lang := leakedLang(lc, untranslated[lc], len(texts)); lang != "" {
-			log.Printf("[file-gate] %s 漏译 %d/%d 段（超 50%%），置工单失败", lang, untranslated[lc], len(texts))
-			return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 翻译失败：%d/%d 段未能译出（模型调用异常或译文键不匹配），请稍后重新发起", config.LangNames[lang], untranslated[lc], len(texts))}
+		if lang := leakedLangAt(lc, untranslated[lc], len(texts), e.fileLeakRatio()); lang != "" {
+			log.Printf("[file-gate] %s 漏译 %d/%d 段（超 %.0f%%），已按补译/标记口径交付", lang, untranslated[lc], len(texts), e.fileLeakRatio()*100)
 		}
 	}
 
@@ -977,6 +1112,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		log.Println(result)
 	}
 	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
+	gateWarnings = append(gateWarnings, leakWarnings...)
 	// ★ G4（2026-10-19 D5）：品牌名是不可译常量，工单/文件链此前没有挂件那道 guardReplyBrand。
 	//   译文里品牌名逐字缺失 ⇒ 出声 + 记账（客户与审批台可见）。名单取不到时 checkFileBrandPresence
 	//   内部 fail-soft 返回 0（拿不到清单＝不知道品牌名，不误报）。
@@ -1064,7 +1200,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	dubTranslatedAudio := func(lc string, lines []string) ([]string, string) {
 		paths := map[string]string{}
 		synth := func(container string) error {
-			suffix := fmt.Sprintf("_%s%s", lc, container)
+			suffix := e.artifactLangSuffix(lc) + container
 			p := filepath.Join(outputDir, artifactBase(lc, suffix)+suffix)
 			if serr := fileproc.SpeakLines(ctx, lines, lc, p); serr != nil {
 				return serr
@@ -1089,7 +1225,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 	// writeTextMd 生成某语言的纯文案 .md 产物（按提取顺序输出；未译段保留原文）。
 	writeTextMd := func(lc string) (string, error) {
-		suffix := fmt.Sprintf("_%s_text.md", lc)
+		suffix := e.artifactLangSuffix(lc) + "-text.md"
 		p := filepath.Join(outputDir, artifactBase(lc, suffix)+suffix)
 		return p, fileproc.WriteTranslationMd(p, texts, langTranslations[lc])
 	}
@@ -1101,7 +1237,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if len(tr) == 0 {
 				continue
 			}
-			suffix := fmt.Sprintf("_%s.md", lc)
+			suffix := e.artifactLangSuffix(lc) + ".md"
 			outPath := filepath.Join(outputDir, artifactBase(lc, suffix)+suffix)
 			var aerr error
 			switch {
@@ -1122,7 +1258,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	} else if isXlsxInput {
 		// ★ 产物名（RC-4）：xlsx 是「一份文件含全部语言」的合并交付，无单一语言可归属，
 		//   按首目标语言翻 base（单语言场景本就是该语言；多语言场景取首语言名，与 Sheet 名=语言码一致）。
-		xlsxSuffix := "_translated.xlsx"
+		xlsxSuffix := "-multi.xlsx"
+		if len(finalLangs) == 1 {
+			xlsxSuffix = e.artifactLangSuffix(finalLangs[0]) + ".xlsx"
+		}
 		xlsxBase := baseName
 		if len(finalLangs) > 0 {
 			xlsxBase = artifactBase(finalLangs[0], xlsxSuffix)
@@ -1132,7 +1271,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		xlsxHits := -1 // ★ G17：-1＝本轮无命中数口径（多语言多 Sheet 路径）
 		if len(finalLangs) == 1 {
 			// ★ 单目标语言：原地替换单元格为译文，产物文件即译文本身
-			// （符合「把文件翻成 X 语」的预期；原文件保持不变，下载的 _translated.xlsx 为译文）。
+			// （符合「把文件翻成 X 语」的预期；原文件保持不变，下载的 base-<lang>.xlsx 为译文）。
 			// 此前多 Sheet 模式会把原文 Sheet 留在首位、译文放新增 Sheet，Excel 默认打开原文 Sheet
 			// 造成「还是中文」的误解（实际译文在 en Sheet 中已正确生成）。
 			xlsxHits, aerr = fileproc.ApplyXlsx(filePath, outPath, langTranslations[finalLangs[0]])
@@ -1188,9 +1327,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			// ★ 产物名（RC-4）：base 已按该语言翻译，后缀（"_en.docx"）保持既有口径不动。
 			//   对照表交付形态的真实文件名多带一层 ".xlsx"，故把它一并计入后缀做字节预留。
-			nameSuffix := fmt.Sprintf("_%s%s", lc, ext)
+			nameSuffix := e.artifactLangSuffix(lc) + ext
 			if writebackDelivery(ext) == "xlsx" {
-				nameSuffix += ".xlsx"
+				// 对照表产物：base-en.xlsx（不再把原扩展名叠进文件名）
+				nameSuffix = e.artifactLangSuffix(lc) + ".xlsx"
 			}
 			outPath := filepath.Join(outputDir, artifactBase(lc, nameSuffix)+nameSuffix)
 			// ★ 2026-09-09 产品决策：无原格式回写能力的格式（srt/vtt/json/yaml）以 xlsx 对照表
@@ -1206,7 +1346,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// ★ P1a：图片格式（经 OCR 投喂翻译）无原格式可原位回写，交付形态为译文 .md 文档。
 			// 产物名 {base}_{lang}.md（与 md 源码翻译同源 WriteTranslationMd，按提取顺序输出译文段）。
 			if writebackDelivery(ext) == "image" {
-				imgSuffix := fmt.Sprintf("_%s.md", lc)
+				imgSuffix := e.artifactLangSuffix(lc) + ".md"
 				imgPath := filepath.Join(outputDir, artifactBase(lc, imgSuffix)+imgSuffix)
 				if ierr := fileproc.WriteTranslationMd(imgPath, texts, tr); ierr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], ierr.Error())}
@@ -1216,7 +1356,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★ P4「图片原位翻译」：在**同一份 OCR 坐标**上把译文画回原图，随 .md 一起交付。
 				//   它是**择优产出**：渲染不出来（缺中文字体 / 坐标没缓存住 / 行长溢出）就退回
 				//   “只有译文 .md”的既有形态——译文已经翻好，绝不能让“图没画出来”把整单判死。
-				inPlaceSuffix := fmt.Sprintf("_%s%s", lc, ext)
+				inPlaceSuffix := e.artifactLangSuffix(lc) + ext
 				inPlacePath := filepath.Join(outputDir, artifactBase(lc, inPlaceSuffix)+inPlaceSuffix)
 				// ★ G2/G18（2026-10-19）：原位回填失败不再只写一行日志——档位名进 GateWarnings，
 				//   该语言同时进 degraded（交付形态实为「仅译文 .md」，与话术口径一致）。
@@ -1250,7 +1390,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			//      每一语种都拷一份是本末倒置（同一份字节 × N 语言），只拷一次。
 			if writebackDelivery(ext) == "audio" {
 				cues := fileproc.AudioCues(filePath)
-				srtSuffix := fmt.Sprintf("_%s.srt", lc)
+				srtSuffix := e.artifactLangSuffix(lc) + ".srt"
 				srtPath := filepath.Join(outputDir, artifactBase(lc, srtSuffix)+srtSuffix)
 				if serr := fileproc.WriteTranslationSrt(srtPath, cues, texts, tr); serr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 字幕产物生成失败：%s", config.LangNames[lc], serr.Error())}
@@ -1259,7 +1399,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				if len(cues) == 0 {
 					degraded = append(degraded, lc) // 时间轴未带上：srt 退化为无时间轴编号（译文不丢）
 				}
-				mdSuffix := fmt.Sprintf("_%s.md", lc)
+				mdSuffix := e.artifactLangSuffix(lc) + ".md"
 				audPath := filepath.Join(outputDir, artifactBase(lc, mdSuffix)+mdSuffix)
 				if merr := fileproc.WriteTranslationMd(audPath, texts, tr); merr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], merr.Error())}
@@ -1603,10 +1743,45 @@ func hardGateBudget() time.Duration {
 	return 10 * time.Minute
 }
 
+// fileRepairMaxRounds 5% 触发后的追加补译轮数（env > system_config > 默认 3）。
+func (e *Engine) fileRepairMaxRounds() int {
+	if v := strings.TrimSpace(os.Getenv("FILE_REPAIR_MAX_ROUNDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	if e != nil && e.St != nil {
+		if v, _ := e.St.GetConfig("file_repair_max_rounds"); strings.TrimSpace(v) != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 3
+}
+
+// fileRepairMaxCalls 单文件补译的最大 LLM 调用次数（防止 5% 阈值把成本放大；
+// env > system_config > 默认 40）。
+func (e *Engine) fileRepairMaxCalls() int {
+	if v := strings.TrimSpace(os.Getenv("FILE_HARDGATE_MAX_CALLS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	if e != nil && e.St != nil {
+		if v, _ := e.St.GetConfig("file_hardgate_max_calls"); strings.TrimSpace(v) != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 40
+}
+
 // writeMultiSheetXlsx xlsx 多 Sheet 模式：复制原始文件后，每个目标语言新增一个 Sheet，
 // 遍历该语言译文逐格替换。Sheet 名=语言代码。
 func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, langTranslations map[string]map[string]string) error {
-	outPath := filepath.Join(outputDir, baseName+"_translated.xlsx")
+	outPath := filepath.Join(outputDir, baseName+"-multi.xlsx")
 	f, err := excelize.OpenFile(srcPath)
 	if err != nil {
 		return err

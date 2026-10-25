@@ -11,8 +11,10 @@
 // 三条硬口径（改本件前必读）：
 //   ① 点导航项一律经 pickNav：先跳转、再在移动档收起抽屉。只靠「路由变即收」
 //      兜不住「点的是当前那一项」（path 没变、effect 不触发），抽屉会赖在屏上。
-//   ② AccountMenu / SiteFooter 以「组件」形式注入（壳侧 React.lazy 持有）：
-//      本件若静态 import 它们，会把这两份字节拉进前台入口包（本仓有体积闸门）。
+//   ② AccountMenu / SiteFooter / IdentitySwitcher 以「组件」形式注入（壳侧 React.lazy 持有）：
+//      本件若静态 import 它们，会把这几份字节拉进前台入口包（本仓有体积闸门）。
+//      ★ B4 起 IdentitySwitcher 是**可选**注入：未登录门面与既有测试夹具没有身份概念，
+//        必传会逼每个调用点凑一个假件；不传＝品牌行右侧没有切换入口（与改造前形态一致）。
 //   ③ 类名与结构是 e2e 判据靶子（.fs-mob-brand / .fs-foot-fold / .lc-side-item--active …），
 //      改形态时同步 e2e/mobile_uat.spec.ts 与 FrontShell.layout.lock.test.ts，别只改一处。
 // ============================================================================
@@ -72,6 +74,10 @@ export interface FrontSideNavProps {
   AccountMenu: ComponentType<FrontAccountMenuProps>
   /** 页脚件（同上；移动档以 bare 档挂进抽屉折叠块） */
   SiteFooter: ComponentType<FrontFooterProps>
+  /** ★ 多身份方案 B4：身份切换器件（同上懒加载注入，挂在租户身份徽标右侧）。
+   *  可选而非必传：单身份账户下它自己 return null，而未登录/旧测试夹具挂载外壳时没有身份概念，
+   *  必传会逼所有调用点都凑一个假件；不传＝这一栏没有切换入口（形态与改造前一致）。 */
+  IdentitySwitcher?: ComponentType
 }
 
 /**
@@ -81,7 +87,7 @@ export interface FrontSideNavProps {
 export default function FrontSideNav({
   isMobile, open, onClose, path, onTab, onRoute,
   tenantTag, pkgLine, isPersonal, canUploadKb, onUploadKb, roleLevel,
-  AccountMenu, SiteFooter,
+  AccountMenu, SiteFooter, IdentitySwitcher,
 }: FrontSideNavProps) {
   const [, t] = useT()
   const branding = useBranding()
@@ -132,6 +138,10 @@ export default function FrontSideNav({
                 ? <><Icon n="building" style={{ verticalAlign: '-3px', marginInlineEnd: 4 }} />{tenantTag.length > 10 ? tenantTag.slice(0, 10) + '…' : tenantTag}</>
                 : <>{t('app.personalPlan')}</>}
             </div>
+            {/* ★ 多身份方案 B4：身份切换入口（单身份时该件自身不渲染，故此格不占位）。
+                放在身份徽标**右侧**是方案 §十 R8 的拍板形态——切换的是"我是谁"，
+                所以入口跟着身份走，不跟着账号菜单走。 */}
+            {IdentitySwitcher ? <IdentitySwitcher /> : null}
           </span>
         </div>
 

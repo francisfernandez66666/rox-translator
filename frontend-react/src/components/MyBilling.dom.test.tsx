@@ -9,6 +9,10 @@
 //   TZ=Asia/Shanghai  npx vitest run src/components/MyBilling.dom.test.tsx
 // （用例按 Intl resolvedOptions().timeZone 选档；未钉 TZ 的机器时区下双 TZ 等值
 //   自动跳过，仅保留渲染自证与「旧裸切片字样不再上屏」的负向锁。）
+//
+// ★ O-02（2026-10-24 修复批，2026-10-25 补腿）：另锁「用量趋势卡的 UTC 日界说明在位」——
+//   那一批的决策是**保留 UTC 日界、只补一句文案**，所以这句文案就是该决策唯一可读的面；
+//   摘掉它界面零异常，因此必须有一条在位断言（见最后一个 describe）。
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -101,5 +105,33 @@ describe('账单中心 · 用量台账时间列', () => {
     // 等值锁：整串数字序列 == 纯 Date 取值器算出的本地 yyyymmddHHMM
     expect(digitsOnly(cell)).toBe(localDigits(UTC_ISO))
     expect(digitsOnly(cell)).not.toBe(`${wrongDay}${zone === 'Asia/Shanghai' ? '1830' : '0230'}`)
+  })
+})
+
+// ★ O-02（2026-10-24 云端 UAT 修复批）：账单时间口径**保留 UTC**、只补一句说明。
+// 决策落点是文案而非日界，所以"这句说明还在不在屏幕上"就是这条决策唯一的可观测面：
+// 摘掉 <p>{t('ss2.trendHint')}</p> 那一行，界面照常、数据照常、零报错，
+// 而用户又会把「按 UTC 日统计」当成「按本地日统计」来对账（当初报障的本体）。
+// 判据因此按**卡片归属**问，不按整页 textContent 问——说明被挪到别的卡片/页脚也照样"在页面上"，
+// 那就退回成一句无关的文案，抓不到"趋势图自己没解释自己的横轴"这一族缺陷。
+describe('账单中心 · 用量趋势图的 UTC 日界说明（O-02）', () => {
+  it('趋势卡片内必须同时出现标题与 UTC 日界说明，且两者在同一张卡', async () => {
+    const { container } = render(<BillingCenter />)
+    // 链路自证：趋势图取数已回、卡片已渲染（先排除"整张卡没挂上"造成的假绿）
+    await vi.waitFor(() => { expect(mocks.myOverview).toHaveBeenCalled() })
+    const cards = Array.from(container.querySelectorAll('.mb-card'))
+    const trend = cards.find((c) => (c.textContent ?? '').includes(t('ss2.trendTitle')))
+    expect(trend, '趋势卡片未渲染（trendTitle 不在任何 .mb-card 里），后续断言无对象').toBeTruthy()
+    // 等值锁：说明文案逐字上屏，且与标题同卡（12 语种词典由 locales.core.test.ts 全量键锁保证，
+    // 这里只保证**这一个消费点**存在——缺键会显裸 key、缺消费点会什么都不显，两种都要红）
+    expect(trend!.textContent).toContain(t('ss2.trendHint'))
+    // 说明必须排在标题之后：它是"读这张图之前先看的一句话"，跑到卡片外面就不是这个语义了
+    const body = trend!.textContent ?? ''
+    expect(body.indexOf(t('ss2.trendTitle'))).toBeLessThan(body.indexOf(t('ss2.trendHint')))
+    // 负向锁：不许把说明降级成 title 属性这类鼠标悬停才看得见的面（按属性逐个查，
+    // 不用 [title*=…] 选择器——文案里有括号/分号/空格，拼进选择器就是在给判据埋转义坑）
+    const hint = t('ss2.trendHint')
+    const hiddenOnly = Array.from(trend!.querySelectorAll('[title]')).some((el) => (el.getAttribute('title') ?? '').includes(hint))
+    expect(hiddenOnly, 'UTC 日界说明被降级成悬停 title：访客看不见就等于没写').toBe(false)
   })
 })

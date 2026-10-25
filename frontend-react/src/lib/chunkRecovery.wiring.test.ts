@@ -68,12 +68,35 @@ function appWiringViolations(src: string, name: string): string[] {
   const out: string[] = []
   const code = stripComments(src)
   // 派生式判据：逐个页面级 Suspense 都要被 RouteBoundary 包着（不写死「有几处」）
-  const wrapped = code.match(/<RouteBoundary>\s*<Suspense fallback=\{<[A-Za-z]+ \/>\}>/g) || []
+  // ★ 边界标签**带属性**也算包住（AGENTS §三④「判据的靶子搬了家」本批真踩）：
+  //   多身份 B4 给工作台那一处加了 `key={id:tenant_id}`（切身份必须重挂页面），
+  //   旧正则只认裸 `<RouteBoundary>`，于是"包裹还在、只是带了 key"被判成没包住——
+  //   实现是对的、判据红。放宽到 `[^>]*` 后，摘掉边界仍然红（见下面的反证）。
+  const wrapped = code.match(/<RouteBoundary[^>]*>\s*<Suspense fallback=\{<[A-Za-z]+ \/>\}>/g) || []
   const nakedAll = code.match(/<Suspense fallback=\{<[A-Za-z]+ \/>\}>/g) || []
   if (nakedAll.length === 0) out.push(`${name} 页面级 Suspense 锚点数 0，本锁已失明`)
   if (wrapped.length === 0) out.push(`${name} 没有任何页面级 Suspense 被 RouteBoundary 包住`)
   if (wrapped.length < nakedAll.length) {
     out.push(`${name} 页面级 Suspense ${nakedAll.length} 处，只有 ${wrapped.length} 处被包住`)
+  }
+  return out
+}
+
+/** ★ 多身份 B4（2026-10-24）加的一维：工作台的路由边界必须按「身份」而不是只按用户重挂。
+ *  切身份只换 store 里的 user、不重挂页面 ⇒ 页面级数据（工单、会话、知识库）继续是上一家的
+ *  （表现是"切了没生效、刷新才好"，最难归因的一种），所以这一维必须被机械钉住：
+ *   ① 至少一处 `<RouteBoundary key=…>`（表达式键，按身份维派生）；
+ *   ② 那个键里必须**同时**有 user 与 tenant 两维——只按 id 时「同一人换租户」
+ *      （被移除成员后回个人版／超管切生效租户）不会重挂，而它正是同一族缺陷的第二个形态。
+ *  ⚠️ 取键表达式按**整行**匹配（`[^\n]*` 直到 `}>`），不许写成 `\{[^}]*\}`：
+ *     模板串里的 `${user.id}` 自带 `}`，那种写法在这里结构性匹配不到，锁会静默失明。 */
+function identityKeyViolations(src: string): string[] {
+  const out: string[] = []
+  const keyed = stripComments(src).match(/<RouteBoundary key=\{[^\n]*\}>/g) || []
+  if (keyed.length === 0) out.push('没有一处路由边界按身份维（key）重挂')
+  for (const k of keyed) {
+    if (!/user\.id/.test(k)) out.push('路由边界的 key 没有用户维')
+    if (!/tenant_id/.test(k)) out.push('路由边界的 key 没有租户维（同一人换租户不会重挂）')
   }
   return out
 }
@@ -93,13 +116,25 @@ describe('E 接线在位（守卫级）', () => {
   it('PublicRoot.tsx（★ 批 B 新入口）：每一处页面级懒加载都在路由级边界内', () => {
     expect(appWiringViolations(pub, 'PublicRoot.tsx'), 'PublicRoot.tsx 接线：\n').toEqual([])
   })
+  it('App.tsx：路由边界按身份维重挂（★ 多身份 B4，切身份不重挂＝继续看到上一家的数据）', () => {
+    expect(identityKeyViolations(app), 'App.tsx 身份键：\n').toEqual([])
+    // 反证：把键退化成只按用户 id（今天真实形态去掉 tenant 那一段）——必须报租户维缺失。
+    // 不这么钉的话，"有个 key"会被读成"按身份换"，而真实缺陷恰好是少了租户那一维。
+    const degraded = app.replace('${user.tenant_id ?? 0}', '${0}')
+    expect(identityKeyViolations(degraded), '键退化成只按 id 必须报违规').toContain(
+      '路由边界的 key 没有租户维（同一人换租户不会重挂）',
+    )
+    // 反证：整条 key 摘掉（回到改造前的裸边界）也必须报违规。
+    expect(identityKeyViolations(app.replace(/<RouteBoundary key=\{[^\n]*\}>/, '<RouteBoundary>')).length,
+      '摘掉身份键必须报违规').toBeGreaterThan(0)
+  })
   it('RouteBoundary：定义在位、走 nav 最小接口、不引 react-router', () => {
     expect(boundaryViolations(boundary), 'RouteBoundary 接线：\n').toEqual([])
   })
   it('反证：摘掉调用／摘掉包裹／边界改用 router —— 各自必须判红', () => {
     expect(mainWiringViolations(main.replace('installChunkRecovery()', '')).length, '摘掉调用必须报违规').toBeGreaterThan(0)
-    expect(appWiringViolations(app.replace(/<RouteBoundary>/g, ''), 'App.tsx').length, '摘掉包裹必须报违规').toBeGreaterThan(0)
-    expect(appWiringViolations(pub.replace(/<RouteBoundary>/g, ''), 'PublicRoot.tsx').length, '公开面摘掉包裹必须报违规').toBeGreaterThan(0)
+    expect(appWiringViolations(app.replace(/<RouteBoundary[^>]*>/g, ''), 'App.tsx').length, '摘掉包裹必须报违规').toBeGreaterThan(0)
+    expect(appWiringViolations(pub.replace(/<RouteBoundary[^>]*>/g, ''), 'PublicRoot.tsx').length, '公开面摘掉包裹必须报违规').toBeGreaterThan(0)
     expect(boundaryViolations(boundary.replace('resetKey={pathname}', '')).length, '摘掉 resetKey 必须报违规').toBeGreaterThan(0)
     expect(boundaryViolations(boundary + "\nimport { useLocation } from 'react-router-dom'\n").length,
       '边界引 react-router 必须报违规').toBeGreaterThan(0)

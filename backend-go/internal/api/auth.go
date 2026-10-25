@@ -168,7 +168,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		legacyCounter.Add(1)
 		log.Printf("[auth] legacy 口令透明升级 uid=%d tid=%d（累计 %d 次）", u.ID, u.TenantID, legacyCounter.Load())
 		// ★ 2026-10-21 P0-2：ResetPassword 现在出行数——0 行不再当"升级成功"（内存副本也就不能跟着翻）
-		if n, err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.Password)); err == nil && n != 0 {
+		// ★ 2026-10-24 多身份 D5：口令写点收口到 setAccountPassword（永远只写家行，见 auth_identity.go）。
+		//   这里传 keepForceChange=true：透明升级**不是**用户亲手换口令，只是把同一句口令换个哈希形态存，
+		//   「首登强制改密」那把闸必须原样留着——否则一次登录就把批量导入/管理员重置的强制改密洗掉了。
+		if n, err := s.setAccountPassword(u, auth.PasswordHash(req.Password), true); err == nil && n != 0 {
 			u.PasswordHash = auth.PasswordHash(req.Password)
 			// ★ B2 联动修正：ResetPassword 会递增库内 token_version，内存副本必须同步，
 			//   否则下方 auth.Sign 携带旧版本号、签发即被 authUser 判为已撤销。
@@ -248,18 +251,27 @@ func (s *Server) brandRedirectFor(r *http.Request, u *store.User) (string, strin
 
 // writeLoginResponse 登录成功的唯一出口：密码腿（handleLogin）与邮箱验证码腿（finishLogin）都走这里。
 // ★ P0-3 口径：需要跨子域跳转时不返回裸 token，仅返回一次性 sso_code。
+// ★ 多身份方案 B2（2026-10-24）：两条腿都带 identities（该账户全部身份），
+//
+//	前端据此决定顶栏那枚身份徽标要不要出现切换 icon——单身份账户拿到的是一条，不渲染。
+//	加这个字段只改这里：它是唯一出口，两腿共用（同一件事写两遍必然漂，见上面注释那条教训）。
 func (s *Server) writeLoginResponse(w http.ResponseWriter, r *http.Request, u *store.User, tok string) {
+	// ★ 2026-10-25 多身份方案 R4：纯企业账户（家行在企业租户、账户名下没有个人身份）登录时，
+	//   顺手补建一家个人版。放在这个唯一出口，两条登录腿（口令／邮箱验证码）才共用同一判据；
+	//    identities 出栈走 identitiesFor（现读库），所以补出来的那一行会直接出现在本次响应的身份列表里。
+	//   失败只记 WARN——口令已经验过，不许把登录本身打失败（缺一次下次登录自愈）。
+	s.ensurePersonalIdentityOnLogin(r.Context(), u)
 	brandHost, brandSSOCode := s.brandRedirectFor(r, u)
 	if brandHost != "" && brandSSOCode != "" {
 		writeJSON(w, 200, map[string]interface{}{
 			"success": true, "brand_host": brandHost, "sso_code": brandSSOCode,
-			"user": loginUserPayload(u),
+			"user": loginUserPayload(u), "identities": s.identityListOrEmpty(u),
 		})
 		return
 	}
 	writeJSON(w, 200, map[string]interface{}{
 		"success": true, "token": tok, "brand_host": brandHost,
-		"user": loginUserPayload(u),
+		"user": loginUserPayload(u), "identities": s.identityListOrEmpty(u),
 	})
 }
 
@@ -440,6 +452,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	//   公开找回/重置已下线后，已登录用户仍可凭绑定邮箱的验证码改密，避免仅持 OTP 会话
 	//   而无原密码的账号被锁在改密入口外。发码口已强制校验当前会话，验证码只能发给本人邮箱。
 	emailCodeProvided := strings.TrimSpace(req.EmailCode) != ""
+	// ★ 2026-10-24 多身份 D4：成员行的口令哈希是空的（凭证只存家行），
+	//   所以"验原密码"必须拿家行那一份来验——否则企业身份里改密的人会被告知"请先获取邮箱验证码"，
+	//   而他明明有口令（方案 §四「登录永远家优先验口令」在改密口的同一延伸）。
+	cred := s.credentialRowFor(u)
 	if emailCodeProvided {
 		// ★ 2026-10-22 P0-14 补落地：这里改用「验证但**不消费**」的那把尺子。
 		//   旧形态 verifyEmailCodeFor 验证通过即删码，而下面 ResetPassword 还可能 err / 0 行——
@@ -449,10 +465,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱验证码错误或已过期"))
 			return
 		}
-	} else if strings.TrimSpace(u.PasswordHash) == "" {
+	} else if strings.TrimSpace(cred.PasswordHash) == "" {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请先获取邮箱验证码"))
 		return
-	} else if !auth.CheckPassword(u.PasswordHash, req.OldPassword) {
+	} else if !auth.CheckPassword(cred.PasswordHash, req.OldPassword) {
 		// F-64②：原密码错误＝提交的载荷不对 → 400 VALIDATION_ERROR。
 		// ★ 这里严禁取 ErrUnauthorized(401)：本接口是**已登录态**动作，而前端 core.ts 的 request()
 		//   一见 401 就清 token 并踢回登录页（只对 /api/auth/login、/api/auth/register 豁免），
@@ -463,7 +479,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	// 仅允许修改自己租户下的账号（u.ID 绑定 u.TenantID，防跨租户篡改）
 	// ★ 2026-10-21 P0-2/P0-3：① 强度走 `auth.ValidatePassword` 那一把尺子（旧形态只判非空 ⇒ 一位密码合法）；
 	//   ② 0 行影响必须判失败（旧形态 `err==nil` 就当成功，用户看到"已修改"而库里一字未动）。
-	n, err := s.Store.ResetPassword(u.ID, u.TenantID, auth.PasswordHash(req.NewPassword))
+	// ★ 2026-10-24 多身份 D5：自助改密走 setAccountPassword —— 口令只写这个账户的**家行**（D4），
+	//   keepForceChange=false：用户此刻是亲手设新口令，强制改密闸当场关（下面那条 SetMustChangePwd
+	//   清的是本行的标记，两半合起来与改造前"改密即清闸"逐字等价）。
+	n, err := s.setAccountPassword(u, auth.PasswordHash(req.NewPassword), false)
 	if err != nil {
 		// F-64②：写库失败是本进程之外的服务端故障 → 500（同上：绝不 401，免得清掉正当会话）
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
@@ -646,9 +665,25 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
 }
 
-// handleAdminUserCreate 创建用户接口（超管可指定归属租户；租户管理员限本租户；部门管理员限本部门子树）。
-// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 username/password/display_name/role/tenant_id）。
-// 返回: success=true 时携带新用户（密码哈希已置空）。
+// handleAdminUserCreate 管理台「给企业添一个成员」接口（★ 多身份方案 R9／B3-c，2026-10-24 改造）。
+// 参数 w: HTTP 响应写入器；r: HTTP 请求（body 含 username/display_name/role/tenant_id/org_id/email）。
+//
+// 形态变化（《多身份账号方案_20261023.md》§6.2、§十一 锁 12）——**企业内建号不再录入初始口令**：
+//   - 有归属企业（tid>0）：本接口不建 users 行，改为走 issueInviteLink 发一枚一次性专属邀请链接，
+//     受邀人点链接自己填邮箱＋口令，注册成功链接即失效；管理员全程接触不到任何口令
+//     （旧形态「管理员设一个初始密码 → 邮件把明文密码寄出去 → 首登强制改密」整条退休：
+//     三段里每一段都是凭据在被人转手，密码进过管理员的剪贴板、进过邮件正文、进过日志风险）。
+//   - password 在企业档**非空即 400**，不是静默忽略。静默忽略会让调用方以为「设了个弱口令但没生效」，
+//     而这里真正发生的事是「一个账号都没建出来」——回执必须自己说清楚（AGENTS 反「假成功」）。
+//   - 平台级高角色（super_admin/admin ⇒ tid=0）**保留原直建形态**：邀请链接口按设计拒 tid<=0
+//     （没有企业就没有预算墙，注册时也进不了任何租户），而平台账号是企业之外的另一族，
+//     R9 的语义只覆盖「租户/部门建号」。★ 这一分支还顺带保住 P0-3 那条锁的射程
+//     （iam_redo_p0_test.go 按 AST 数「哪个写口调了 auth.ValidatePassword」）：
+//     建号口仍然是一个口令写口，只是写口缩到平台级这一档，锁不需要翻转。
+//
+// 回执：企业档 {success, invite:{id,code,url,expires_at,status}, message}（无 user 字段——没建号）；
+//
+//	平台档 {success, user}（旧形态，密码哈希出栈前置空）。
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireDeptAdmin(r)
 	if err != nil {
@@ -658,60 +693,31 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	var req struct {
 		Username    string `json:"username"`     // 用户名（展示/检索用，同租户可重名；登录标识是邮箱）
-		Password    string `json:"password"`     // 初始密码（存储前转哈希）
-		DisplayName string `json:"display_name"` // 显示名称
-		Role        string `json:"role"`         // 角色：user/tenant_admin/super_admin/approver/admin
+		Password    string `json:"password"`     // 初始密码（★ R9：仅平台级直建分支还认它）
+		DisplayName string `json:"display_name"` // 显示名称（★ R9：企业档由受邀人注册时自填）
+		Role        string `json:"role"`         // 角色：user/dept_admin/tenant_admin/super_admin/approver/admin
 		TenantID    int64  `json:"tenant_id"`    // 归属租户（仅超管可指定，默认生效租户）
 		OrgID       int64  `json:"org_id"`       // 所属组织 ID（0=根组织/未分配）
-		Email       string `json:"email"`        // 联系邮箱（找回密码验证码接收）
+		Email       string `json:"email"`        // 联系邮箱（企业档＝链接的预绑邮箱）
 	}
 	decErr := json.NewDecoder(r.Body).Decode(&req)
 	if decErr != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("请求格式错误: %v", decErr)))
 		return
 	}
-	if req.Username == "" || req.Password == "" {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户名和密码不能为空"))
+	if strings.TrimSpace(req.Username) == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户名不能为空"))
 		return
 	}
-	// ★ 2026-10-22 一致性核查补漏（P0-3「强度闸一处定义」）：
-	//   管理台建号是四个口令写口之一，此前**只判非空**，于是超管/租户管理员可代客设 1 位密码，
-	//   与注册（register.go:130）、重置（:948）、改密（:413）、资料补全（profile_setup.go:51）
-	//   四把尺子不一致。方案 §9.1 P0-3 宣称"四个写口全调它"，实测只有三处，本处补齐。
-	if !auth.ValidatePassword(req.Password) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
+	// 角色缺省 + 白名单 + 权限梯（★ B3-c：与邀请链接口共用 inviteGrantGuard，两个面同一把尺子）。
+	role, grantErr := inviteGrantGuard(u, req.Role)
+	if grantErr != nil {
+		s.writeError(w, r, grantErr)
 		return
 	}
-	// 角色默认普通用户
-	if req.Role == "" {
-		req.Role = store.RoleUser
-	}
-	// 角色白名单校验（四级：user/dept_admin/tenant_admin/super_admin + 兼容旧值）
-	switch req.Role {
-	case store.RoleUser, store.RoleDeptAdmin, store.RoleTenantAdmin, store.RoleSuperAdmin, store.RoleApprover, store.RoleAdmin:
-	default:
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "角色无效"))
-		return
-	}
-	// 权限校验：仅超级管理员可创建超级管理员/管理员等高权限角色；租户管理员可创建部门管理员/普通用户
-	if auth.RoleLevel(req.Role) >= 4 && !auth.IsSuperAdmin(u) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅超级管理员可分配该角色"))
-		return
-	}
-	if auth.RoleLevel(req.Role) >= 3 && !auth.IsTenantAdmin(u) {
-		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "权限不足：仅租户管理员及以上可分配该角色"))
-		return
-	}
-	// ★ F-31（闸 1/2，2026-09-25 批F）：dept_admin 必须绑定部门——
-	//   org_id=0 的部门管理员会在建号/成员操作等入口被「部门管理员未绑定部门」守卫反锁（死角色），
-	//   必须在创建源头卡死，而不是造出一个无法履职的账号再让当事人报障。
-	if req.Role == store.RoleDeptAdmin && req.OrgID <= 0 {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "部门管理员必须绑定部门：请先在组织列表中选择所属部门"))
-		return
-	}
-	// 归属租户判定：超管创建超管时平台级(0)；否则租户管理员限本租户、超管用所选/指定租户
+	// 归属租户判定：超管创建超管/管理员时平台级(0)；否则租户管理员限本租户、超管用所选/指定租户
 	tid := s.effTenant(r, u)
-	if req.Role == store.RoleSuperAdmin || req.Role == store.RoleAdmin {
+	if role == store.RoleSuperAdmin || role == store.RoleAdmin {
 		tid = 0
 	} else if auth.IsSuperAdmin(u) {
 		// 超管开通账号的租户解析优先级：所属组织归属租户 > 显式 tenant_id > 生效租户
@@ -724,6 +730,65 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			tid = req.TenantID
 		}
 	}
+	// ============ 企业档（tid>0）：发邀请链接，不建号 ============
+	if tid > 0 {
+		if strings.TrimSpace(req.Password) != "" {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+				"企业成员建号不再录入初始口令：请留空 password，系统改为发送一次性专属邀请链接，由本人自行设置密码"))
+			return
+		}
+		// ★ 邮箱占用预检按**本租户**判（D3 邮箱租户内唯一，不是全局唯一）：
+		//   旧形态在这里用全局 GetUserByEmail 拦一道，多身份改造后那一拦会把
+		//   「同一个人在第二家企业入职」这条合法路径挡死——那是新模型明确要放开的形态。
+		//   同租户里已经是成员 ⇒ 再生成一枚链接毫无意义（注册时必然撞「你已在该企业中」），
+		//   所以在源头就拒，回执给管理员一句可行动的话。
+		if e := strings.ToLower(strings.TrimSpace(req.Email)); e != "" {
+			if row, oerr := s.Store.GetUserByEmailInTenant(e, tid); oerr == nil && row != nil {
+				s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该邮箱已是本企业成员，无需再生成邀请链接"))
+				return
+			}
+		}
+		link, url, apiErr := s.issueInviteLink(r, u, tid, inviteLinkSpec{
+			Username: req.Username, Role: role, OrgID: req.OrgID, Email: req.Email,
+		})
+		if apiErr != nil {
+			s.writeError(w, r, apiErr)
+			return
+		}
+		name, _ := s.tenantBriefFor(tid, nil)
+		// 审计只有 invite_link_create 一条（issueInviteLink 内部落）：这里**不**再补一条 user_create——
+		// 这一次操作没有创建任何 users 行，留一条「创建用户」的审计就是替系统记一件没发生的事。
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true,
+			"invite": inviteLinkCreateResp{
+				Success: true, ID: link.ID, Code: link.Code, URL: url,
+				TenantID: tid, TenantName: name.name, ExpiresAt: link.ExpiresAt, Status: link.Status,
+			},
+			"message": "已生成专属邀请链接（尚未创建账号）：请把链接转给本人，他自行设置邮箱与密码后即成为该企业成员；链接使用一次即失效",
+		})
+		return
+	}
+	// ============ 平台档（tid=0，仅 super_admin/admin）：保留原直建形态 ============
+	if req.Password == "" {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户名和密码不能为空"))
+		return
+	}
+	// ★ 2026-10-22 一致性核查补漏（P0-3「强度闸一处定义」）：
+	//   管理台建号是四个口令写口之一，此前**只判非空**，于是超管/租户管理员可代客设 1 位密码，
+	//   与注册（register.go:130）、重置（:948）、改密（:413）、资料补全（profile_setup.go:51）
+	//   四把尺子不一致。方案 §9.1 P0-3 宣称"四个写口全调它"，实测只有三处，本处补齐。
+	// ★ B3-c（2026-10-24）射程缩到平台档：企业档不再收口令（R9），平台档仍是口令写口，这一判不许摘。
+	if !auth.ValidatePassword(req.Password) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, auth.PasswordTooShortMsg))
+		return
+	}
+	// ★ F-31（闸 1/2，2026-09-25 批F）：dept_admin 必须绑定部门——
+	//   org_id=0 的部门管理员会在建号/成员操作等入口被「部门管理员未绑定部门」守卫反锁（死角色），
+	//   必须在创建源头卡死，而不是造出一个无法履职的账号再让当事人报障。
+	if role == store.RoleDeptAdmin && req.OrgID <= 0 {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "部门管理员必须绑定部门：请先在组织列表中选择所属部门"))
+		return
+	}
 	// 组织归属校验：非平台级用户组织必须属于归属租户
 	if tid > 0 {
 		if err := s.validateOrg(tid, req.OrgID); err != nil {
@@ -731,24 +796,10 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// 部门管理员范围：目标组织必须在其本部门及子部门树内（否则拒绝创建）
-	if auth.RoleLevel(u.Role) == 2 {
-		if u.OrgID <= 0 {
-			s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "部门管理员未绑定部门，无法开通账号"))
-			return
-		}
-		if req.OrgID > 0 {
-			inTree, e := s.Store.IsOrgInSubtree(tid, u.OrgID, req.OrgID)
-			if e != nil || !inTree {
-				s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "无权在非本部门下开通账号"))
-				return
-			}
-		}
-	}
-	// ★ 邮箱唯一预检（oneid 账户体系）：管理员建号此前绕过全局判重——补齐。
-	//   目标邮箱正被其他账号持有则拒绝创建（避免建出无邮箱残号）。
-	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：原回 400，与下面邮箱撞库的 409 是同一次
-	//   提交里的两条撞库守卫，却取了两个码；也与自助注册/换绑邮箱的口径不一致（统一 409）。
+	// ★ 邮箱唯一预检（oneid 账户体系）：平台级账号的邮箱仍按全局判重——
+	//   平台档没有「同一个人可以在多家企业各有一行」这一说（tid=0 只有一族归属），
+	//   撞车就是撞车。企业档的按租户判重在上面那条腿里。
+	// ★ F-64② 收尾定夺（2026-09-26 批 I-10）：与下面邮箱撞库的 409 同一次提交里的两条守卫曾取了两个码；
 	//   邮箱被他人持有＝与库里既有记录冲突，管理员可修的动作是「换一个邮箱」而非「改请求格式」，
 	//   故取 409 CONFLICT。严禁 401：管理员此刻是登录态，401 会被 core.ts 清 token 踢回登录页。
 	if req.Email != "" {
@@ -757,7 +808,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	nu, err := s.Store.CreateUser(tid, req.Username, auth.PasswordHash(req.Password), req.DisplayName, req.Role, u.ID, req.OrgID)
+	nu, err := s.Store.CreateUser(tid, strings.TrimSpace(req.Username), auth.PasswordHash(req.Password), req.DisplayName, role, u.ID, req.OrgID)
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG 泄漏约束名/SQLSTATE，双方言文案漂移）
 		if store.IsUniqueViolation(err) {
@@ -932,6 +983,16 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	// 结构化变更轨迹：记录 before/after diff（★ F-35：after 记合并后真实写库值，不记请求原样）
 	before := map[string]string{"role": target.Role, "status": target.Status, "display_name": target.DisplayName}
 	beforeJSON, _ := json.Marshal(before)
+	// ★ 2026-10-24 多身份 §6.2（B2）：把状态改成"不可用"＝管理台移除成员（R8 拍板：退出企业只能由管理员做）。
+	//   停用前必须先搬家——若被移除的这行正是该账户的**家行**（纯企业用户：他的企业行就是家行），
+	//   直接停用会让这个账户"有可用行却没有家行"，而 D2 不变式要求家行恒存，
+	//   家优先解析随之无行可取（表现＝这个人再也登不进来）。
+	//   数据一律保留不删（R2 拍板：只撤身份，其 Key/工单/用量/文件留在企业）。
+	removal := finalStatus != target.Status &&
+		(finalStatus == store.UserDisabled || finalStatus == store.UserDeactivating)
+	if removal {
+		s.promoteHomeBeforeRemoval(r.Context(), target)
+	}
 	if err := s.Store.UpdateUser(req.ID, tid, finalDisplay, finalRole, finalStatus, orgID); err != nil {
 		// F-64②：越权（403）、目标不存在（404）、终态不合法（400）都在上方逐条拦掉了，
 		// 走到这里仍是失败＝写库故障 → 500。
@@ -944,6 +1005,14 @@ func (s *Server) handleAdminUserUpdate(w http.ResponseWriter, r *http.Request) {
 	afterJSON, _ := json.Marshal(map[string]string{"role": finalRole, "status": finalStatus, "display_name": finalDisplay})
 	// 写入审计 diff（审计留痕：记录角色/状态变更前后值）
 	s.Store.LogAuditDiff(tid, u.ID, "user_update", "users", before["display_name"], string(beforeJSON), string(afterJSON))
+	// ★ 2026-10-24 多身份 §九：移除成员单独出一条 tenant_leave 轨迹。
+	//   刻意**不替换**上面那条 user_update——管理员改状态这件事的既有审计口径不能被我这次改动改掉；
+	//   加这一条是为了让「谁在什么时候被撤出企业」能按动作名直接查（方案 §九 新审计动作清单）。
+	//   detail 里点名被撤的账号，审计页读得出对象；数据保留这条事实也写在轨迹里（R2 拍板）。
+	if removal {
+		s.Store.LogAudit(tid, u.ID, "tenant_leave", "users",
+			fmt.Sprintf("移除成员 %s 的企业身份（仅撤身份，其数据保留在企业）", target.Username))
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true})
 }
 
@@ -1039,7 +1108,10 @@ func (s *Server) handleAdminUserResetPassword(w http.ResponseWriter, r *http.Req
 		return
 	}
 	// 租户隔离：仅重置生效租户下的用户
-	n, err := s.Store.ResetPassword(req.ID, tid, auth.PasswordHash(req.Password))
+	// ★ 2026-10-24 多身份 D5：管理台代客重置走 setAccountPassword（口令只写家行），
+	//   keepForceChange=true —— 这次不是用户亲手设口令，家行原有的「首登强制改密」闸必须原样留着
+	//   （批量导入的初始口令正是靠那把闸兜住的；旧形态 ResetPassword 根本不碰标记，收口后由这里补回）。
+	n, err := s.setAccountPassword(target, auth.PasswordHash(req.Password), true)
 	if err != nil {
 		// F-64②：管理员重置他人与否的判据都过了，写库仍失败＝存储故障 → 500。
 		// 严禁 401：管理员此刻在后台会话里，前端 request() 吃 401 会直接把他踢回登录页
@@ -1141,6 +1213,9 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// ★ 2026-10-24 多身份 §6.2：删号与停用同属"撤掉这一行身份"，删的正是家行时同样先搬家，
+	//   否则这个账户其余身份行会一起失去家（D2 不变式、家优先解析都建立在"有且仅有一枚家行"上）。
+	s.promoteHomeBeforeRemoval(r.Context(), target)
 	if err := s.Store.DeleteUser(req.ID, tid); err != nil {
 		// F-64②：目标已在上方按 ID 定位过（查不到就是 404），走到这里仍失败＝写库故障
 		// 或并发删除（0 行受影响时 iam 回业务错误「用户不存在」）→ 500 兜底。

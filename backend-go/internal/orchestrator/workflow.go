@@ -105,6 +105,9 @@ type ticketPayload struct {
 	QAReport            *qa.Report             `json:"qa_report,omitempty"`             // 确定性 QA 质检报告
 	RetryCount          map[string]int         `json:"retry_count,omitempty"`           // 语言 → 硬闸自动重译次数
 	GateHints           map[string]string      `json:"gate_hints,omitempty"`            // 语言 → 最近一次硬闸打回原因（供审批参考）
+	// ★ 2026-10-24 DEF-02 的整单重发计数**不在这里**：它落 `tickets.repair_attempts` 列
+	//   （§10.1.2；判据见 Workflow.StructureRetryNeeded）。原先写成载荷字段会被任何一次
+	//   「整段重写载荷」的路径抹回 0，于是上限变软、坏单无限重发并每轮真扣费。
 }
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
@@ -129,6 +132,37 @@ func (w *Workflow) savePayload(t *store.Ticket, p *ticketPayload) {
 	data, _ := json.Marshal(p)
 	t.FinalResult = string(data)
 	_ = w.Store.UpdateTicket(t)
+}
+
+// usefulTermSource 过滤「泛词/过短词」：子串命中不该把中文/验收/翻译这类通用词当术语例句。
+// CJK 至少 2 字、拉丁至少 3 字母；再排除常见泛词。只是**读取侧过滤**，不改 KB 数据。
+func usefulTermSource(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	runes := []rune(s)
+	if len(runes) < 2 {
+		return false
+	}
+	latinOnly := true
+	for _, r := range runes {
+		if r > 127 {
+			latinOnly = false
+			break
+		}
+	}
+	if latinOnly && len(runes) < 3 {
+		return false
+	}
+	generic := map[string]bool{
+		"中文": true, "验收": true, "翻译": true, "内容": true, "文本": true, "语言": true,
+		"产品": true, "服务": true, "公司": true, "客户": true, "销售": true, "系统": true,
+		"平台": true, "管理": true, "数据": true, "信息": true, "质量": true, "价格": true,
+		"订单": true, "用户": true, "功能": true, "支持": true, "时间": true, "工作": true,
+		"项目": true, "团队": true, "市场": true,
+	}
+	return !generic[s]
 }
 
 // runKBMatch 知识库匹配。
@@ -186,10 +220,18 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 				if term == nil || strings.TrimSpace(term.SourceText) == "" {
 					continue
 				}
+				// ★ O-04（2026-10-24）：子串命中会带出「中文/验收/翻译」这类泛词与 40+ 条跨语种噪声。
+				//   只保留真正像术语的（去泛词/短词），并封顶 30 条；prompt 侧另有 5 条上限。
+				if !usefulTermSource(term.SourceText) {
+					continue
+				}
 				if seen[term.SourceText+"|"+term.TargetLang] {
 					continue
 				}
 				seen[term.SourceText+"|"+term.TargetLang] = true
+				if len(p.Examples) >= 30 {
+					break
+				}
 				p.Examples = append(p.Examples, &kb.Row{
 					Zh:     term.SourceText,
 					Module: term.Module,
@@ -296,6 +338,15 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		return nil
 	}
 
+	// ★ DEF-02（2026-10-24）：文本工单逐行翻译/增量补译。
+	//   - 首次：按 \n 切行，非空行批量翻译，行数保持；
+	//   - 重发：读回旧 payload，正确行复用，只把缺失/错误行送模型；
+	//   - 单段或配置 text_ticket_per_line=0 时返回 false，走下方旧整篇路径。
+	if w.translateTextPerLine(ctx, p) {
+		w.savePayload(t, p)
+		return nil
+	}
+
 	// 正常流程：只翻译缺失语言（★ 治本整改：把 kb_match 阶段收集的 KB 命中例句注入初翻，
 	// 使模型在翻译时沿用知识库标准术语译法——此前传 nil，KB 部分命中从未进入 prompt）
 	var need []string
@@ -309,6 +360,51 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	}
 	w.savePayload(t, p)
 	return nil
+}
+
+// StructureRetryNeeded 文本工单结构失败时决定是否自动整单重发。
+// 返回 true 表示**计数已在库里加过一格**，调用方应 requeue + enqueue。
+// 只认 qa 的 `structure` error；其他 QA error（数字/占位符）不触发整单重发（由既有硬闸/重译链处理）。
+//
+// ★ 2026-10-25 对账（§10.1.2）：计数从载荷字段换成 `tickets.repair_attempts` 列，四条理由：
+//
+//	① 运维一句 `WHERE repair_attempts>=3` 就能数出「哪些单在被打」，不必解析 final_result JSON；
+//	② 计数与译文挤在同一段 blob 里 ⇒ 任何一次「整段重写载荷」（人工重跑、驳回重翻、补译）
+//	   都会顺手把它抹回 0，上限变软、坏单无限重发真扣钱；
+//	③ 列是唯一事实源，载荷里那个字段已随本次改动删除（不留第二把尺子）；
+//	④ 读不到/加不上就**不重发**：这一支的失败语义必须是「停止花钱」，
+//	   「计数写不上还照发」等于把上限摘掉后继续扣费，比少发一单严重。
+func (w *Workflow) StructureRetryNeeded(t *store.Ticket) bool {
+	if w.Store == nil || t == nil || t.ID == 0 {
+		return false // 没有 store 就没有计数口，宁可不发也不发一条没人记账的单
+	}
+	p := w.loadPayload(t)
+	if p == nil || p.Translations == nil {
+		return false
+	}
+	// 先判问题类型再看次数：非 structure 的 error 一律不许吃掉一格预算。
+	rep := qa.Check(p.SourceText, p.Translations)
+	hit := false
+	for _, iss := range rep.Issues {
+		if iss.Rule == "structure" {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		return false
+	}
+	// 0 是一档**真实档位**（＝不重发，应急回退开关），所以走 ConfigIntAllowZero 而不是
+	// ConfigInt——后者把 ≤0 读成"没配"并回落默认，运营在管理台填 0 也按不下这个按钮。
+	max := w.Store.ConfigIntAllowZero("ticket_repair_max", 3)
+	cur, err := w.Store.TicketRepairAttempts(t.ID)
+	if err != nil || cur >= max {
+		return false
+	}
+	if _, err = w.Store.IncTicketRepairAttempts(t.ID); err != nil {
+		return false
+	}
+	return true
 }
 
 // runEvalsInitial 初翻评估。
@@ -349,6 +445,11 @@ func (w *Workflow) runEvalsInitial(ctx context.Context, t *store.Ticket) error {
 func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 	p := w.loadPayload(t)
 	if p == nil {
+		return nil
+	}
+	// ★ DEF-02：文本工单逐行审校（保留行数）；单段/关闭开关时走下方旧整篇 review。
+	if w.reviewTextPerLine(ctx, p) {
+		w.savePayload(t, p)
 		return nil
 	}
 	for lc, tr := range p.Translations {
@@ -611,6 +712,12 @@ func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 			}
 			p.Culture = c
 			reason := fmt.Sprintf("语言文化闸门打回 [%s]: %s", lc, strings.Join(c.Reasons, ";"))
+			// ★ 2026-10-24：同一原因连续两次即停——确定性失败（某个避雷词模型每轮都踩）
+			//   重译 8 次只会烧钱，不会再改结果。首次失败照常把原因写入 hint，第二轮相同即停。
+			if attempt > 0 && p.GateHints[lc] == reason {
+				p.GateHints[lc] = reason + "（同一原因重复，停止自动重译）"
+				return fmt.Errorf("%s（同一原因重复，已停止自动重译）", reason)
+			}
 			p.GateHints[lc] = reason
 			if attempt >= maxRetry {
 				return fmt.Errorf("%s（已自动重译 %d 次仍不通过）", reason, maxRetry)

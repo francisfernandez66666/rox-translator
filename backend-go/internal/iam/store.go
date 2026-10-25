@@ -18,7 +18,11 @@ import (
 
 // userCols 用户表查询列清单（Scan 顺序契约；email/deactivate_at/agreed_at/job_role 为老库可空列，COALESCE 兜底）。
 // ★ 补列必须同步全部 Scan 目标（行式 Scan 有 4 处复制此清单，漏改会静默吞行——2026-08-26 事故口径）。
-const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0), COALESCE(job_role,''), COALESCE(profile_setup_required,0)"
+// ★ 2026-10-24 多身份方案 B1：尾部追加 account_id/is_home 两列（同样 COALESCE 兜底，
+//
+//	因为存量库这两列由 MultiIdentityMigrate 幂等补出，缺列/空值都必须读成「空账户号 + 非家行」而不是让整行 Scan 失败）。
+//	列数与 Scan 目标数的等值由 user_scan_columns_gate_test.go 机械钉住（漏改一处＝当场红，不靠人记）。
+const userCols = "id, tenant_id, username, password_hash, display_name, role, status, created_by, last_login_at, org_id, COALESCE(email,''), created_at, updated_at, COALESCE(deactivate_at,''), COALESCE(agreed_at,''), COALESCE(must_change_pwd,0), COALESCE(token_version,0), COALESCE(job_role,''), COALESCE(profile_setup_required,0), COALESCE(account_id,''), COALESCE(is_home,0)"
 
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
 // orgCols 组织表查询列清单（token_limit 为老库可空列，COALESCE 兜底）。
@@ -49,9 +53,9 @@ func (s *Store) withWriteMu(fn func()) {
 	fn()
 }
 
-// write 串行化执行写操作（事务/Exec 统一入口）。
-// ★ 现役零调用点（2026-10-11 grep 全量核实，历史多语句序列都已改自管事务）；
-// 保留而不删除：收窄判据仍由 withWriteMu 统一供给，将来出现"必须串行"的新写段时它是对的落点。
+// write 串行化执行写操作（事务/Exec 统一入口，多语句必须原子的段用它）。
+// ★ 2026-10-24 多身份 B1：PromoteHomeRow 的"摘旧家 + 立新家"两条 UPDATE 是第一个现役调用点
+// （保留它的理由正是这一族——将来出现"必须串行"的新写段时这里是对的落点）。
 func (s *Store) write(fn func() error) error {
 	var err error
 	s.withWriteMu(func() { err = fn() })
@@ -86,9 +90,16 @@ func NewStore(db *sql.DB) *Store {
 // scanUser 从单行结果扫描用户对象（列顺序与 userCols 严格一致）。
 func scanUser(row *sql.Row) (*User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired)
-	if err != nil {
+	if err := u.assign(row); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+// scanUserRow 从多行游标扫描用户对象（列顺序契约与 scanUser 同一份，见 User.assign）。
+func scanUserRow(rows *sql.Rows) (*User, error) {
+	var u User
+	if err := u.assign(rows); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -96,64 +107,143 @@ func scanUser(row *sql.Row) (*User, error) {
 
 // ============ 用户 ============
 
-// CreateUser 创建用户（初始 active）。参数 tid=租户(0=平台级)，orgID=所属组织。返回新用户。
-func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy, orgID int64) (*User, error) {
-	now := time.Now().Format(time.RFC3339)
-	id, err := s.execWID(
-		"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-		tid, username, passHash, displayName, role, UserActive, createdBy, orgID, now, now)
-	if err != nil {
-		// ★ 2026-10-21 IAM 重做：用户名不再是登录标识，也不再要求同租户唯一。
-		//   这里不再把唯一索引错误翻译成「用户名已存在」——那是旧语义的残留；
-		//   撞车只可能来自尚未迁移完的历史库，交给迁移闸门报警，不在这里替它猜。
-		return nil, err
-	}
-	return s.GetUser(id, tid)
+// ============ 建身份行（★ 2026-10-24 多身份方案 B1：三条建号腿共用一份落库形态） ============
+
+// identitySpec 建一条 users 身份行的入参。
+//
+// 为什么要把 CreateUser / CreateUserWithEmail / CreateIdentityRow 收成同一份 spec：
+// 多身份体系里"新建一行"的**不变式**有三个（status=active、邮箱按租户查重、账户号与家标记必须自洽），
+// 分散在三条腿里写迟早分叉——分叉的表现是"某条腿建出来的行没有家标记"，
+// 而那种行登录后家优先取不到它，用户表现为"我明明注册成功了却登不进"。
+type identitySpec struct {
+	TenantID     int64
+	Username     string
+	PasswordHash string // 空=不持口令（成员行/OTP 账号，D4 口令只存家行）
+	DisplayName  string
+	Role         string
+	CreatedBy    int64
+	OrgID        int64
+	Email        string // 只接受已归一化的小写值；空串=暂不绑定（管理台/SSO 兼容路径）
+	AgreedAt     string // 空=未签协议；自动建号必须传真实时间，禁止静默置真
+	// ProfileSetupRequired=1 时登录响应会提醒补全资料（可跳过，不阻断）。
+	ProfileSetupRequired int
+	// AccountID 空 ⇒ 这是一条**新账户**的行：落库后把账户号钉成自身 id、家标记置 1；
+	// 非空 ⇒ 同一人已有的账户，本行是它的**又一个身份行**（调用方决定 IsHome）。
+	AccountID string
+	IsHome    int
 }
 
-// CreateUserWithEmail 在**一个事务里**创建用户并绑定邮箱/协议/首登资料标记。
+// createIdentity 在**一个事务里**建一条身份行（邮箱占用判定、账户号/家标记落定都在同一事务内）。
 //
-// 为什么必须是一个入口：旧注册链先 CreateUser 再 SetUserEmail，第二步失败被 `_ =` 吞掉，
+// 为什么必须是一个事务：旧注册链先 CreateUser 再 SetUserEmail，第二步失败被 `_ =` 吞掉，
 // 于是"账号建成了、邮箱没绑上"既回 success 又让人永远收不到验证码（AGENTS §一·8② 同族）。
-// 本函数把两件事放在同一事务里：邮箱被占用则整笔回滚，不会留下半个人。
 //
-// 参数约定：
-//   - email 只接受已归一化的小写值；空串表示暂不绑定（管理台/SSO 兼容路径）。
-//   - agreedAt 为空表示未签协议；自动建号必须传真实时间，禁止静默置真。
-//   - profileSetupRequired=1 时登录响应会提醒补全资料（可跳过，不阻断）。
-func (s *Store) CreateUserWithEmail(tid int64, username, passHash, displayName, role string, createdBy, orgID int64, email, agreedAt string, profileSetupRequired int) (*User, error) {
+// 邮箱查重口径（★ 多身份方案 D3）：**按租户**——同一人可在多个租户各持一行同邮箱，
+// 但同一租户内一邮箱至多一行（DB 层另有 idx_users_email_lower_active_tenant 部分唯一索引兜底）。
+// 参数：spec=建行走的入参。返回：新建的行（查询回读失败即回错误，不返回半成品）。
+func (s *Store) createIdentity(spec identitySpec) (*User, error) {
 	now := time.Now().Format(time.RFC3339)
-	email = strings.ToLower(strings.TrimSpace(email))
+	email := strings.ToLower(strings.TrimSpace(spec.Email))
 	var id int64
 	var err error
 	s.withWriteMu(func() {
-		tx, txErr := s.db.Begin()
-		if txErr != nil {
-			err = txErr
+		var tx *sql.Tx
+		if tx, err = s.db.Begin(); err != nil {
 			return
 		}
 		defer func() { _ = tx.Rollback() }()
+		d := db.CurrentDialect()
 		if email != "" {
+			// 只认仍占用该邮箱的行（active/deactivating）；停用/已注销的旧行不再是占用方（2026-10-21 口径）。
 			var owner int64
-			if qerr := db.QueryRow(tx, db.CurrentDialect(),
-				"SELECT id FROM users WHERE lower(trim(email))=? AND status IN (?,?) LIMIT 1",
-				email, UserActive, UserDeactivating).Scan(&owner); qerr == nil && owner > 0 {
-				err = fmt.Errorf("该邮箱已被其他账号绑定")
+			var ownerAccount string
+			qerr := db.QueryRow(tx, d,
+				"SELECT id, COALESCE(account_id,'') FROM users WHERE tenant_id=? AND lower(trim(email))=? AND status IN (?,?) LIMIT 1",
+				spec.TenantID, email, UserActive, UserDeactivating).Scan(&owner, &ownerAccount)
+			if qerr == nil && owner > 0 {
+				// 文案分两档，因为调用方拿这句是要**直接回给用户**的：
+				// 同一账户在本租户已有行 ⇒ 说"你已在该企业中"（§6.1 第五档），
+				// 别的账户持有 ⇒ 说"已被其他账号绑定"（防枚举口径由 API 层统一措辞，这里只提供事实）。
+				if spec.AccountID != "" && ownerAccount == spec.AccountID {
+					err = fmt.Errorf("该账户在本租户已有身份")
+				} else {
+					err = fmt.Errorf("该邮箱已被其他账号绑定")
+				}
 				return
 			}
 		}
-		id, err = db.InsertID(tx, db.CurrentDialect(), "id",
-			"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, email, agreed_at, profile_setup_required, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-			tid, username, passHash, displayName, role, UserActive, createdBy, orgID, email, agreedAt, profileSetupRequired, now, now)
+		id, err = db.InsertID(tx, d, "id",
+			"INSERT INTO users (tenant_id, username, password_hash, display_name, role, status, created_by, org_id, "+
+				"email, agreed_at, profile_setup_required, account_id, is_home, created_at, updated_at) "+
+				"VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+			spec.TenantID, spec.Username, spec.PasswordHash, spec.DisplayName, spec.Role, UserActive,
+			spec.CreatedBy, spec.OrgID, email, spec.AgreedAt, spec.ProfileSetupRequired, spec.AccountID, spec.IsHome, now, now)
 		if err != nil {
+			// ★ 2026-10-21 IAM 重做：用户名不再是登录标识，也不再要求同租户唯一，
+			//   所以这里**不**把唯一索引错误翻译成「用户名已存在」——那是旧语义的残留；
+			//   能撞上的唯一索引只有按租户邮箱那条（D3），占用判定已在上面前置过，索引只兜底并发。
 			return
+		}
+		// 新账户：账户号取自身 id 文本、本行即家行。CAST(id AS TEXT) 在两种方言都成立，
+		// 且必须**在事务里**做——留到事务外就成了"行建了、账户号没钉"的半态。
+		if spec.AccountID == "" {
+			if _, err = db.Exec(tx, d, "UPDATE users SET account_id=CAST(id AS TEXT), is_home=1 WHERE id=?", id); err != nil {
+				return
+			}
 		}
 		err = tx.Commit()
 	})
 	if err != nil {
 		return nil, err
 	}
-	return s.GetUser(id, tid)
+	return s.GetUser(id, spec.TenantID)
+}
+
+// CreateUser 创建用户（初始 active）。参数 tid=租户(0=平台级)，orgID=所属组织。返回新用户。
+//
+// ★ 2026-10-24 多身份方案 B1：新行落库后账户号钉成自身 id 文本、is_home=1（这一行的家）。
+// 「一人一行」的现状下这两个值就是迁移回填会给的东西，所以对存量行为逐字节等价；
+// 等一个人经邀请码/邀请链接长出第二行时，第二行走 CreateIdentityRow 显式带既有账户号且 is_home=0。
+func (s *Store) CreateUser(tid int64, username, passHash, displayName, role string, createdBy, orgID int64) (*User, error) {
+	return s.createIdentity(identitySpec{
+		TenantID: tid, Username: username, PasswordHash: passHash, DisplayName: displayName,
+		Role: role, CreatedBy: createdBy, OrgID: orgID,
+	})
+}
+
+// CreateUserWithEmail 在一个事务里创建用户并绑定邮箱/协议/首登资料标记（列含义见 identitySpec）。
+//
+// ★ 2026-10-21 IAM 重做：自动建号唯一入口，禁止调用方再拆成 CreateUser + SetUserEmail（后者失败会被吞）。
+// ★ 2026-10-24 多身份 B1：邮箱占用判定从**全局**收到**按租户**（D3）；
+// 调用方（注册/验证码登录）仍在 API 层按"邮箱跨租户唯一"这一对外契约出 409，
+// 所以现网可观察行为不变，放开的是"同一个人经邀请加入另一租户"这条新路径（B3 接线）。
+func (s *Store) CreateUserWithEmail(tid int64, username, passHash, displayName, role string, createdBy, orgID int64, email, agreedAt string, profileSetupRequired int) (*User, error) {
+	return s.createIdentity(identitySpec{
+		TenantID: tid, Username: username, PasswordHash: passHash, DisplayName: displayName,
+		Role: role, CreatedBy: createdBy, OrgID: orgID,
+		Email: email, AgreedAt: agreedAt, ProfileSetupRequired: profileSetupRequired,
+		IsHome: 1, // 这是账户的第一行，也就是家行
+	})
+}
+
+// CreateIdentityRow 为**已存在的账户**新建一条身份行（多身份方案 §6.1：受邀加入企业的成员行）。
+//
+// 三条与"新建账户"不同的硬口径：
+//   - accountID 必须传既有账户号 ⇒ 本行 is_home=0，**不是**家（家行仍在那条既有行上）；
+//   - 口令留空（D4：口令只存家行，成员行是纯身份记录、不含凭证）；
+//   - must_change_pwd 与 profile_setup_required 都不置位——这两条闸都挂在家行验口令那一刻，
+//     成员行带上它们只会让用户在切换后莫名被要求"先改密码"。
+//
+// 参数：accountID=既有账户号（不可空，空则报错）；其余同建号入参。返回：新建的成员行。
+func (s *Store) CreateIdentityRow(accountID string, tid int64, username, displayName, role string, createdBy, orgID int64, email string) (*User, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return nil, fmt.Errorf("新建身份行必须带既有账户号（空账户号请走 CreateUserWithEmail）")
+	}
+	return s.createIdentity(identitySpec{
+		TenantID: tid, Username: username, DisplayName: displayName, Role: role,
+		CreatedBy: createdBy, OrgID: orgID, Email: strings.ToLower(strings.TrimSpace(email)),
+		AccountID: accountID, IsHome: 0,
+	})
 }
 
 // GetUser 按 ID+租户查询用户（租户隔离校验）。
@@ -167,13 +257,55 @@ func (s *Store) GetUserByUsername(tid int64, username string) (*User, error) {
 }
 
 // GetUserByEmail 跨租户按邮箱查询（找回密码用；邮箱小写归一化）。
+//
+// ★ 2026-10-24 多身份方案 B1 §四「家优先解析」：同一个人现在可以在多个租户各持一行同邮箱，
+// 所以取哪一行不再是"随便挑一个"——排序改成
+//
+//	is_home 优先 → status（active 先于 deactivating）→ tenant_id → id
+//
+// 「一人一行」的现状下 is_home 恒为 1（迁移回填），这个排序与改造前逐字同效；
+// 只有长出多身份行之后它才开始发挥作用：登录永远定位到家行（口令只存家行，D4）。
 func (s *Store) GetUserByEmail(email string) (*User, error) {
 	// ★ 2026-10-21 IAM 重做：邮箱是登录外部标识，**只认当前仍占用它的账号**
 	// （active/deactivating）。停用/已注销的旧账号不再是占用方，其邮箱可被新空白账号复用；
 	// 这里若把 disabled 行也返回，验证码登录会把「邮箱可复用」判成「账号已停用」而永久挡住新号。
 	return scanUser(db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT "+userCols+" FROM users WHERE lower(trim(email))=? AND status IN (?,?) ORDER BY CASE WHEN status=? THEN 0 ELSE 1 END, tenant_id, id LIMIT 1",
+		"SELECT "+userCols+" FROM users WHERE lower(trim(email))=? AND status IN (?,?) ORDER BY COALESCE(is_home,0) DESC, CASE WHEN status=? THEN 0 ELSE 1 END, tenant_id, id LIMIT 1",
 		strings.ToLower(strings.TrimSpace(email)), UserActive, UserDeactivating, UserActive))
+}
+
+// GetUserByEmailInTenant 按「租户 + 邮箱」取人（多身份方案 §6.1 注册分流用）。
+//
+// 为什么要有这一条而不复用 GetUserByEmail：跨租户取回的是**家行**，而分流要先回答
+// 「这个邮箱在**这个企业租户**里是不是已经有人了」——那是按租户的那把尺子（D3）。
+// 用跨租户的结果去判按租户的冲突，会把"别人在自家租户用这个邮箱"读成"他已经在这企业里"。
+func (s *Store) GetUserByEmailInTenant(email string, tid int64) (*User, error) {
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT "+userCols+" FROM users WHERE tenant_id=? AND lower(trim(email))=? AND status IN (?,?) ORDER BY id LIMIT 1",
+		tid, strings.ToLower(strings.TrimSpace(email)), UserActive, UserDeactivating))
+}
+
+// ListAccountsByEmail 列出仍占用该邮箱的**全部**租户行（active/deactivating，家行在前）。
+// 给身份列表与防枚举文案共用：它问的是"这个邮箱背后有哪几个身份"，不是"哪一个"。
+func (s *Store) ListAccountsByEmail(email string) ([]*User, error) {
+	e := strings.ToLower(strings.TrimSpace(email))
+	if e == "" {
+		return nil, nil
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT "+userCols+" FROM users WHERE lower(trim(email))=? AND status IN (?,?) ORDER BY COALESCE(is_home,0) DESC, tenant_id, id",
+		e, UserActive, UserDeactivating)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		if u, err := scanUserRow(rows); err == nil {
+			out = append(out, u)
+		}
+	}
+	return out, nil
 }
 
 // DeactivateSelf 自助注销：仅普通用户且 active 可发起；置 deactivating + 请求日期。
@@ -196,23 +328,53 @@ func (s *Store) FinalizeDeactivation(id, tid int64) {
 }
 
 // SetUserEmail 设置联系邮箱。
-// ★ 账户体系语义（2026-08-26 修正）：id 为不可变主键；email 是「同一时刻全局唯一」的
 //
-//	绑定属性——目标邮箱正被其他账号持有时拒绝（前置查重 + idx_users_email 部分唯一索引兜底）；
-//	本人换绑不受限（新旧邮箱双验证由 API 层完成）。空邮箱视为解绑，不做唯一校验。
+// ★ 2026-10-24 多身份方案 B1（§十一「SetUserEmail 同步全 account」）：邮箱属于**人**不属于某一行，
+// 所以换绑要把该账户的全部可用行一起改写——只改家行会留下"家行是新邮箱、企业行还挂着旧邮箱"，
+// 而旧邮箱随即可以被别人注册，那个人从此在企业租户里也能被验证码登录命中（同族"多把尺子"缺陷）。
+//
+// 判据两档，按 account_id 是否已回填分派：
+//   - 已回填 ⇒ 撞库检查只在**本账户有行的那些租户**里查别的账户（D3 按租户唯一）；
+//     写法同步全账户的可用行（active/deactivating）；
+//   - 未回填（历史库还没跑迁移，或迁移失败）⇒ 逐字退回改造前的单行行为，
+//     绝不写 `WHERE account_id=”`（那会把库里**所有**未迁移行一起改掉，是比缺陷更坏的事）。
+//
+// 空邮箱=解绑（不做唯一校验）。参数：id=行主键，tid=该行租户（租户隔离校验），email=目标邮箱。
 func (s *Store) SetUserEmail(id, tid int64, email string) error {
+	d := db.CurrentDialect()
 	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
-		_, err := s.execW("UPDATE users SET email='' WHERE id=? AND tenant_id=?", id, tid)
+	var accountID string
+	// 取本行的账户号：读不到（行不存在/列缺失）就当"未迁移"，走老写法。
+	_ = db.QueryRow(s.db, d, "SELECT COALESCE(account_id,'') FROM users WHERE id=? AND tenant_id=?", id, tid).Scan(&accountID)
+	if accountID == "" {
+		if email == "" {
+			_, err := s.execW("UPDATE users SET email='' WHERE id=? AND tenant_id=?", id, tid)
+			return err
+		}
+		var owner int64
+		if err := db.QueryRow(s.db, d,
+			"SELECT id FROM users WHERE lower(trim(email))=? AND status IN (?,?) AND id<>? LIMIT 1",
+			email, UserActive, UserDeactivating, id).Scan(&owner); err == nil && owner != id {
+			return fmt.Errorf("该邮箱已被其他账号绑定")
+		}
+		_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
 		return err
 	}
-	var owner int64
-	if err := db.QueryRow(s.db, db.CurrentDialect(),
-		"SELECT id FROM users WHERE lower(trim(email))=? AND status IN (?,?) AND id<>? LIMIT 1",
-		email, UserActive, UserDeactivating, id).Scan(&owner); err == nil && owner != id {
-		return fmt.Errorf("该邮箱已被其他账号绑定")
+	if email != "" {
+		// 本账户在每个租户各有一行，所以"新邮箱在别处已被占用"只要命中**其中任一租户**就必须整体拒绝：
+		// 部分成功会造出"同一个人在两个租户是两个邮箱"，而登录按邮箱取家行——家行落在哪个租户就此不确定。
+		var owner int64
+		if err := db.QueryRow(s.db, d,
+			`SELECT u.id FROM users u
+			 WHERE lower(trim(u.email))=? AND u.status IN (?,?) AND u.account_id<>?
+			   AND u.tenant_id IN (SELECT tenant_id FROM users WHERE account_id=?) LIMIT 1`,
+			email, UserActive, UserDeactivating, accountID, accountID).Scan(&owner); err == nil && owner > 0 {
+			return fmt.Errorf("该邮箱已被其他账号绑定")
+		}
 	}
-	_, err := s.execW("UPDATE users SET email=? WHERE id=? AND tenant_id=?", email, id, tid)
+	// 同步写全账户可用行。停用行不跟着改：它们已经不是邮箱占用方（2026-10-21 口径），
+	// 给它们写新邮箱等于把"这个人退出过的那家企业"重新和一个活邮箱关联上。
+	_, err := s.execW("UPDATE users SET email=? WHERE account_id=? AND status IN (?,?)", email, accountID, UserActive, UserDeactivating)
 	return err
 }
 
@@ -230,12 +392,10 @@ func (s *Store) GetUserByUsernameGlobal(username string) ([]*User, error) {
 	defer rows.Close()
 	var out []*User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
-			continue
+		// 列→字段映射只有一处口径（User.assign），补列时不必再逐条追平复制清单
+		if u, err := scanUserRow(rows); err == nil {
+			out = append(out, u)
 		}
-		out = append(out, &u)
 	}
 	return out, nil
 }
@@ -249,13 +409,13 @@ func (s *Store) ListUsers(tid int64) ([]*User, error) {
 	defer rows.Close()
 	var out []*User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
+		// 列→字段映射只有一处口径（User.assign）；列表类返回一律脱敏口令哈希
+		u, err := scanUserRow(rows)
+		if err != nil {
 			continue
 		}
 		u.PasswordHash = ""
-		out = append(out, &u)
+		out = append(out, u)
 	}
 	return out, nil
 }
@@ -300,13 +460,13 @@ func (s *Store) ListUsersByOrg(tid int64, orgIDs []int64) ([]*User, error) {
 	defer rows.Close()
 	var out []*User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
+		// 列→字段映射只有一处口径（User.assign）；列表类返回一律脱敏口令哈希
+		u, err := scanUserRow(rows)
+		if err != nil {
 			continue
 		}
 		u.PasswordHash = ""
-		out = append(out, &u)
+		out = append(out, u)
 	}
 	return out, nil
 }
@@ -336,6 +496,107 @@ func (s *Store) ResetPassword(id, tid int64, passHash string) (int64, error) {
 		return -1, nerr
 	}
 	return n, nil
+}
+
+// SetPasswordForAccount 把口令写到该账户的**家行**（★ 2026-10-24 多身份方案 D5；D4 口令只存 home 行）。
+//
+// 这是「一个人一个口令」的机械落点：profileSetup / 改密 / 找回密码 / 管理台重置四条写口令的腿
+// 一律改走这里，**禁止**再按 (id,tid) 各写一遍——按行写会造出"家行新哈希、成员行旧哈希"，
+// 而旧哈希还留在库里就是登录 legacy 腿的一条可用凭证（方案 §十三 R1 备选 A 的病根）。
+//
+// 三条附带口径：
+//   - 同步清掉家行的 must_change_pwd 与 profile_setup_required：用户刚亲手设过口令，
+//     这两把闸都该当场关（方案 D4「成员行口令空、强制改密标记为 0、待补全标记清零」在家行侧的镜像）；
+//   - token_version 只在家行 +1（D7 拍板：改密撤销家行会话，企业行会话不受影响，换设备重登即可）；
+//   - 返回值沿用 P0-2 的显式行数判据，0 行＝这个账户没有家行（迁移没跑或数据被并坏），
+//     调用方必须当失败，不许回 success。
+//
+// 参数：accountID=账户号（不可空）；passHash=bcrypt 哈希。返回：受影响行数（合法值恒 0 或 1）。
+func (s *Store) SetPasswordForAccount(accountID, passHash string) (int64, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return 0, fmt.Errorf("改口令必须带账户号")
+	}
+	now := time.Now().Format(time.RFC3339)
+	res, err := s.execW(
+		"UPDATE users SET password_hash=?, must_change_pwd=0, profile_setup_required=0, token_version=token_version+1, updated_at=? "+
+			"WHERE account_id=? AND is_home=1", passHash, now, accountID)
+	if err != nil {
+		return 0, err
+	}
+	n, nerr := res.RowsAffected()
+	if nerr != nil {
+		// 与 ResetPassword 同一口径：驱动不回行数时把错误带出去，由调用方的存在性前置出判决。
+		return -1, nerr
+	}
+	return n, nil
+}
+
+// GetHomeRow 取账户的家行（登录定位、口令写入、身份列表默认身份都用这一条）。
+// 参数：accountID=账户号。返回：sql.ErrNoRows 表示该账户没有家行（迁移未覆盖，调用方按"无账户"处理）。
+func (s *Store) GetHomeRow(accountID string) (*User, error) {
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT "+userCols+" FROM users WHERE account_id=? AND is_home=1 ORDER BY id LIMIT 1", strings.TrimSpace(accountID)))
+}
+
+// ListIdentitiesByAccount 列出一个账户的全部身份行（家行在前，其余按租户、ID 升序）。
+// 给 GET /api/auth/identities 与登录响应的 identities 数组用；口令哈希一律不出 IAM 层。
+func (s *Store) ListIdentitiesByAccount(accountID string) ([]*User, error) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return nil, nil
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(),
+		"SELECT "+userCols+" FROM users WHERE account_id=? ORDER BY COALESCE(is_home,0) DESC, tenant_id, id", accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		// 列→字段映射只有一处口径（User.assign）；身份列表不含凭证
+		u, err := scanUserRow(rows)
+		if err != nil {
+			continue
+		}
+		u.PasswordHash = ""
+		out = append(out, u)
+	}
+	return out, nil
+}
+
+// PromoteHomeRow 把指定行提升为该账户的家行，并摘掉该账户其它行的家标记（§6.2 移除成员时用）。
+//
+// 成立场景很具体：纯企业用户（管理台邀请的新邮箱，企业行就是家行）被管理员移除 ⇒
+// 停用的正是家行，必须先立一个新的家（个人行），否则这个账户从此没有家行，
+// 而 D2 不变式规定「只要有 active 行就必须有且仅有一个家行」——家优先解析也就无行可取。
+//
+// 判据按**账户**不按租户，所以这一步只在同一人的行之间挪标记，绝不会把别账户的行抬成家。
+// 参数：accountID=账户号；rowID=要成为家的行（必须属于该账户）。返回：写库错误或"行不属于该账户"。
+func (s *Store) PromoteHomeRow(accountID string, rowID int64) error {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return fmt.Errorf("提升家行必须带账户号")
+	}
+	var owner string
+	if err := db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COALESCE(account_id,'') FROM users WHERE id=?", rowID).Scan(&owner); err != nil {
+		return fmt.Errorf("待提升的身份行不存在: %w", err)
+	}
+	if owner != accountID {
+		return fmt.Errorf("待提升的身份行不属于该账户")
+	}
+	// s.write 是「必须串行的多语句写」段的既有入口（SQLite 单写者模型下与写入口共用同一把锁；
+	// PostgreSQL 下直接执行——两条 UPDATE 各自原子，家标记的中间态只可能出现在同一连接的两次语句之间，
+	// 而按租户/按账户的唯一性都由索引与调用方前置保证，不依赖这段的原子性）。
+	return s.write(func() error {
+		d := db.CurrentDialect()
+		if _, err := db.Exec(s.db, d, "UPDATE users SET is_home=0 WHERE account_id=? AND is_home<>0", accountID); err != nil {
+			return err
+		}
+		_, err := db.Exec(s.db, d, "UPDATE users SET is_home=1 WHERE id=? AND account_id=?", rowID, accountID)
+		return err
+	})
 }
 
 // TouchLogin 记录最近登录时间（失败静默）。
@@ -721,13 +982,13 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	defer rows.Close()
 	var out []*User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
+		// 列→字段映射只有一处口径（User.assign）；列表类返回一律脱敏口令哈希
+		u, err := scanUserRow(rows)
+		if err != nil {
 			continue
 		}
 		u.PasswordHash = ""
-		out = append(out, &u)
+		out = append(out, u)
 	}
 	return out, nil
 }

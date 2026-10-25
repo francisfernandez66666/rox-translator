@@ -45,6 +45,7 @@ import * as pCost from './panels/cost'
 import * as pAuth from './panels/auth'
 import * as pCoupons from './panels/coupons'
 import * as pAssist from './panels/assist'
+import * as pInviteLink from './panels/invitelink'
 import { baseEn } from './dicts.en'
 import { CORE_PREFIXES } from './index'
 
@@ -59,7 +60,7 @@ const en: Dict = {
   ...pModels.en, ...pWorkflow.en, ...pApiKeys.en, ...pWebhooks.en,
   ...pTickets.en, ...pBilling.en, ...pUsage.en, ...pAlerts.en,
   ...pInvites.en, ...pChat.en, ...pPackages.en, ...pFeedback.en,
-  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en, ...pCost.en,
+  ...pReferral.en, ...pTasks.en, ...pSdk.en, ...pHub.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en, ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pLanding.en, ...pAuth.en, ...pCoupons.en, ...pAssist.en, ...pInviteLink.en, ...pCost.en,
 }
 
 // 核心集键清单（按 CORE_PREFIXES 从英文全量词典筛出、排序冻结）：locales 覆盖测试与

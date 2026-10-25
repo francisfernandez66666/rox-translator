@@ -423,6 +423,53 @@ func TestWorkflowCultureGateRejectsThenRetranslates(t *testing.T) {
 	}
 }
 
+// TestWorkflowCultureGateStopsOnRepeatedReason 文化闸「同因两停」（★ 2026-10-24 N-02 补锁）：
+// 模型每一轮都踩同一个避雷词（确定性失败）时，第二次拿到**同一句**打回原因即停止自动重译，
+// 绝不把 gate_retry_max（默认 8）那一档烧满。
+// 为什么单独测「次数」而不是只测「有没有报错」：这条判据的代价是钱——
+// 旧形态八轮重译每轮一次上游调用，而第八轮的产物与第一轮逐字相同；
+// 只有「上游被问了几次」能把「停住了」与「停了但已经烧完预算」分开（AGENTS §三：成功类判据要同时问内容）。
+// 改坏了会怎样：同因判定被摘掉 ⇒ 每轮相同原因一路重译到 max（成本 ×8，结论完全一样）；
+// 判定被写反（首轮即停）⇒ 一次性抖动（模型偶尔踩雷）也再不给第二次机会，本可翻正的产物被直接判死。
+func TestWorkflowCultureGateStopsOnRepeatedReason(t *testing.T) {
+	// retrans=pwRude：重译环节把带避雷词的同一句原样再吐回来（确定性失败的真实形态）。
+	h := pwSetup(t, pwReply{retrans: pwRude, fallback: pwRude}.fn())
+	pwSeedKB(t, h, pwSource, "en", pwRude)
+	tk := pwTicket(t, h, pwSource, "en")
+	// 上限刻意留默认档之上：只有「远早于 max 就停」才叫同因两停，压到 2 就测不出这一条了。
+	if err := h.St.SetConfig("gate_retry_max", "8"); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+	err := h.W.Executor.Execute(context.Background(), tk, nil)
+	if err == nil {
+		t.Fatalf("每一轮都踩同一避雷词的形态必须判失败（不许刷成成功交付）")
+	}
+	if !strings.Contains(err.Error(), "同一原因重复") {
+		t.Fatalf("失败原因应点明「同一原因重复，已停止自动重译」，实得 %v", err)
+	}
+	// 钱的那一半：重译只许被问一次（第一次打回 → 重译 → 第二次同因即停）。
+	if n := h.Stub.asked("修正重译"); n != 1 {
+		t.Errorf("同因两停应只重译一次，实得上游被问 %d 次（gate_retry_max=8）", n)
+	}
+	// 「为什么停」必须留在**轨迹**里：闸门失败时载荷不落库（runCultureGate 的提前 return
+	// 在 savePayload 之前），审批台/排障读的是步骤轨迹那一句失败原因——与上面
+	// TestWorkflowGateStillFailing 那条「重译次数要写进失败原因」同一把尺子。
+	states := pfStateMap(t, h.St, tk.ID)
+	var found string
+	for k, s := range states {
+		if s != nil && strings.Contains(s.Payload, "同一原因重复") {
+			found = k
+			break
+		}
+	}
+	if found == "" {
+		t.Errorf("步骤轨迹应有一行点明「同一原因重复，已停止自动重译」，实得 %+v", states)
+	}
+	if s := pwStatus(t, h, tk.ID); s == store.TicketCompleted || s == store.TicketPendingAppr {
+		t.Errorf("同因两停不许把工单刷成待审批/已完成，实得 %s", s)
+	}
+}
+
 // TestWorkflowQAErrorsDoNotChangeTicketOutcome
 // 确定性质检（qa.Check）只出报告与摘要计数，**绝不判死工单**：
 // error 级问题（数字丢失/漏译）存在时，流程照样走到 pending_approval。

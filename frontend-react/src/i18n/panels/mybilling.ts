@@ -3,6 +3,7 @@
 // =============================================
 export const zh: Record<string, string> = {
   'ss2.trendTitle': '近 30 天用量趋势（UTC 日）',
+  'ss2.trendHint': '用量按 UTC 日统计（与北京时间相差 8 小时）；当日数据在 UTC 零点结算。',
   'ss2.trendMax': '单日峰值',
   'ss2.unitCnt': ' 笔',
   'ss2.colPoints': '积分',
@@ -61,6 +62,7 @@ export const zh: Record<string, string> = {
 // 英文文案字典（与 zh 同 key 对齐，parity.test.ts 守护双语一致性）
 export const en: Record<string, string> = {
   'ss2.trendTitle': 'Usage trend, last 30 days (UTC)',
+  'ss2.trendHint': 'Usage is grouped by UTC calendar day (8 hours behind Beijing time); today\'s data closes at UTC midnight.',
   'ss2.trendMax': 'Daily peak',
   'ss2.unitCnt': ' ops',
   'ss2.colPoints': 'Credits',

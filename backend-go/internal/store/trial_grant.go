@@ -14,6 +14,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 	"time"
 
 	"translator/internal/db"
@@ -82,6 +83,36 @@ func (s *Store) userTrialGranted(uid int64) (bool, error) {
 	var one int
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT 1 FROM user_trial_grants WHERE user_id=?", uid).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// AccountHasRealTrialGrant 问「这一个账户（跨全部身份行）有没有拿到过**真实**体验补贴」。
+//
+// ★ 2026-10-25 多身份方案 R4 补腿：纯企业账户登录时会自动补建一条个人身份行，
+// 那一行要不要发体验额度，判据不能只看新行自己（它必然没领过），要问**账户级**事实。
+//
+// 「真实补贴」＝台账里 tokens>0 的那一行。两档占位不算拿到过：
+//   - 'backfill'（启动迁移给存量账号写的 tokens=0 占位）；
+//   - 'membership_no_trial'（企业身份不送额度那条款记的 tokens=0 占位）。
+//
+// ⚠️ 这一条与上面 userTrialGranted 不同：那个是「这一行有没有台账记录」（含占位），
+// 本函数是「这个账户有没有真领过钱」。它依然**只是补贴去重读数**，不是并发闸门——
+// 同一行的发放原子性仍由 `user_trial_grants.user_id` 主键保证（GrantUserTrialOnce 里先插后写）。
+// 账户号空 ⇒ 直接 false（不拿空串去比，避免把历史 account_id 未回填的行误判成同一个账户）。
+func (s *Store) AccountHasRealTrialGrant(accountID string) (bool, error) {
+	if strings.TrimSpace(accountID) == "" {
+		return false, nil
+	}
+	var one int
+	err := db.QueryRow(s.db, db.CurrentDialect(),
+		`SELECT 1 FROM user_trial_grants g JOIN users u ON u.id=g.user_id
+		  WHERE u.account_id=? AND g.tokens>0 LIMIT 1`, strings.TrimSpace(accountID)).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}

@@ -22,12 +22,16 @@ import {
   changePassword,
   setAuthToken, setActiveTenantId,
   ssoProviders, ssoLoginUrl, type AuthUser, type SSOProvider,
+  // ★ 2026-10-24 多身份 B4-d：受邀落地页（?invite=<code>）匿名校验这条链接是否还活着
+  inviteLinkPublic,
 } from '@/api'
 import { t, useT } from '@/i18n'
 import { LangSelect } from '@/components/LangSelect' // ★ #23：12 语种语言下拉
 // ★ 2026-10-22：密码可见切换的唯一实现挪到独立文件（原注释声称"四处共用"，
 //   而强制改密窗 import 不到它 ⇒ 那个必过的弹窗三个密码框全是盲输）。
 import PwdEye from '@/components/PwdEye'
+// ★ 2026-10-24 多身份 B4-d：受邀落地告知块（登录卡与注册卡共用同一份实现）
+import InviteJoinNotice, { type InvitePeek } from '@/components/InviteJoinNotice'
 import { useBranding, BrandLoginShell, DEFAULT_BRAND_NAME } from '@/branding'
 import { roleLevel } from '@/stores/auth'
 import { industryCodeOf, industryOptions } from '@/lib/industries'
@@ -78,6 +82,18 @@ export default function Login({ mode, onLogin }: Props) {
   // 提到组件顶层而非在提交前现取：注册表单、传统注册提交、AI 接管流三处都要读；
   // 认证页存活期间地址栏 query 不变，故不必 useMemo
   const ref = new URLSearchParams(window.location.search).get('ref') || ''
+  // ★ 2026-10-24 多身份 B4-d：企业专属邀请链接的落地参数 `?invite=<code>`（方案 §6.3/§6.5 第 4 条）。
+  //   与上面 `ref`（好友裂变个人码）**语义不同、字段也不同**（§6.4 命名隔离：码 vs 链接不得同文），
+  //   所以这里单独一份读数，禁止把它塞进 ref 或让 ref 覆盖它。
+  //   URL 由服务端拼（host 取法见 api/invites.ts），前端只认 `?invite=` 这一种写法。
+  const inviteCode = new URLSearchParams(window.location.search).get('invite') || ''
+  // 链接校验回执：null＝还没拿到（在飞或请求失败），valid=false 才是"服务端判死"——
+  // 两者文案分开（checkFail vs r*），把一次网络抖动说成"链接无效"会把人引去催管理员重发。
+  const [invitePeek, setInvitePeek] = useState<InvitePeek | null>(null)
+  const [inviteChecking, setInviteChecking] = useState(!!inviteCode)
+  // 这一档参与渲染门控：主站 unified 下注册卡默认不可达，唯一开门的合法理由就是
+  // **拿到了一枚服务端认过的邀请链接**（不是"地址栏里有 invite 字样"——死链不许开门）。
+  const inviteJoining = !!inviteCode && invitePeek?.valid === true
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   // ★ 2026-10-21 IAM 重做：邮箱验证码登录是主流程；密码降为备用登录方式。
@@ -171,6 +187,42 @@ export default function Login({ mode, onLogin }: Props) {
     } catch { /* ignore */ }
   }, [mode, ref, unified])
 
+  // ★ 2026-10-24 多身份 B4-d：`?invite=<code>` 落地校验（匿名可达，未注册的人也得先看清"加入哪家"）。
+  //   三条口径：
+  //   ① 后端对死链回 **200 + valid=false**（不是报错页），所以这里不设"失败分支"——
+  //      catch 只在链路真断时走，回执留 null，告知块据此出 checkFail 而不是"链接无效"；
+  //   ② 卸载/换码后不许回写旧状态（`alive` 闸门），否则上一枚链接的回执会盖到下一枚上；
+  //   ③ 只在 mode==='home' 拉：后台登录卡（admin）不是入职面，受邀人不会从 /admin 进来。
+  useEffect(() => {
+    if (mode !== 'home' || !inviteCode) return
+    let alive = true
+    setInviteChecking(true)
+    inviteLinkPublic(inviteCode)
+      .then((r) => { if (alive) setInvitePeek(r as InvitePeek) })
+      .catch(() => { if (alive) setInvitePeek(null) })
+      .finally(() => { if (alive) setInviteChecking(false) })
+    return () => { alive = false }
+  }, [mode, inviteCode])
+
+  // 链接合法 ⇒ 落到「企业 · 普通成员」这一支并预填（方案 §6.3：预选企业成员分支 + 预填用户名）。
+  // 预填的不是可编辑的邀请码——那一格直接锁定：链接本身就是一次性凭证，
+  // 让人改掉它等于把"加入哪家企业"重新变成手输参数。
+  useEffect(() => {
+    if (!inviteJoining || !invitePeek) return
+    setView('register')
+    setTypeChoice('enterprise')
+    setRoleChoice('member')
+    // 管理员建号时就写了受邀人用户名（R9：账号名由管理员定，邮箱与密码由本人设）
+    if (invitePeek.username) setUsername(invitePeek.username)
+    setForm((f) => ({
+      ...f,
+      invite: inviteCode,
+      // 预绑邮箱（email_locked）时把邮箱一起钉上：后端会拒绝别的地址，
+      // 让人填了才发现＝一次白跑，不如一开始就不给填
+      email: invitePeek.email_locked && invitePeek.bound_email ? invitePeek.bound_email : f.email,
+    }))
+  }, [inviteJoining, invitePeek, inviteCode])
+
   // 加载注册配置（邮箱验证 / 人机验证 / 行业字典）
   // ★ 2026-10-23 修（用户报障：/admin「无法调起 cloudflare 认证，报错：请完成人机验证」）：
   //   admin 档也必须拉这份配置。/admin 未登录时落的是 LoginFace mode="admin"，而 2026-10-22
@@ -205,6 +257,10 @@ export default function Login({ mode, onLogin }: Props) {
   // 注册屏：进入后传统表单闪烁三次 → 整页 120ms 退出 → AI 接管（尊重 prefers-reduced-motion）
   useEffect(() => {
     if (view !== 'register' || mode !== 'home') return
+    // ★ 2026-10-24 多身份 B4-d：受邀人**不走 AI 接管流**——他是被点名叫来的，
+    //   要填的只剩用户名/密码/邮箱三格（企业、部门、角色、邮箱绑定都在链接里已经定了），
+    //   而接管流是按"从零聊出企业资料"设计的：让它接管会把预填抹平、还会追问已经确定的东西。
+    if (inviteJoining) { setRegPhase('form'); return }
     // matchMedia 必须带守卫：jsdom / 老旧 WebView 没有 window.matchMedia，裸调会在 effect 阶段直接抛错
     const reduced = typeof window !== 'undefined' && !!window.matchMedia
       && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -221,7 +277,7 @@ export default function Login({ mode, onLogin }: Props) {
     const id2 = window.setTimeout(() => setRegPhase('exiting'), 1300 + 920)
     const id3 = window.setTimeout(() => setRegPhase('ai'), 1300 + 920 + 130)
     return () => { window.clearTimeout(id1); window.clearTimeout(id2); window.clearTimeout(id3) }
-  }, [view, mode])
+  }, [view, mode, inviteJoining])
 
   // F-07（2026-09-25 发布前 UAT）：AI 接管会把传统表单整支卸载，Turnstile 挂件随 DOM 一起销毁；
   // 点 × 退回后容器重挂成空壳，但 mountCaptcha 只在启动配置回调里调过一次（133 行）——
@@ -443,8 +499,11 @@ export default function Login({ mode, onLogin }: Props) {
     // ★ P0-6：形状不对当场出声（旧形态只判非空，写漏 @ 要等"验证码错误"那一步才发现）
     if (!isEmailShape(form.email)) { setRegMsg(t('auth.emailBad')); return }
     if (emailVerifyOn && (!form.emailCode.trim() || !form.email.trim())) { setRegMsg(t('auth.codeRequired')); return }
-    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.code.trim()) { setRegMsg(t('auth.orgCodeRequired')); return }
-    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && !form.name.trim()) { setRegMsg(t('auth.orgNameRequired')); return }
+    // ★ 2026-10-24 多身份 B4-d：这两格属于**新建企业**（管理员档），旧形态按"企业"整档必填，
+    //   而成员档根本不渲染它们（成员只填 form.invite）⇒ 受邀成员提交必吃一句「请填写企业邀请码」，
+    //   指的还是一张表单上看不见的字段。判据跟着**渲染面**走：只有 admin 档才要 code/name。
+    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && roleChoice === 'admin' && !form.code.trim()) { setRegMsg(t('auth.orgCodeRequired')); return }
+    if (!branding.dedicatedRegister && typeChoice === 'enterprise' && roleChoice === 'admin' && !form.name.trim()) { setRegMsg(t('auth.orgNameRequired')); return }
     if (captchaOn && !captchaTokenRef.current) { setRegMsg(t('auth.captchaRequired')); return }
     const regType = (!branding.dedicatedRegister ? typeChoice : 'enterprise')
     // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：普通成员须凭企业邀请码加入
@@ -454,6 +513,10 @@ export default function Login({ mode, onLogin }: Props) {
       : (regType === 'enterprise' && roleChoice === 'member' ? (form.invite.trim() || undefined) : undefined)
     if (branding.dedicatedRegister && !entInvite) { setRegMsg(t('auth.dedicatedInviteRequired')); return }
     if (regType === 'enterprise' && roleChoice === 'member' && !entInvite) { setRegMsg(t('auth.inviteRequired')); return }
+    // ★ §6.4（2026-10-25 对账批）：个人档那格「好友邀请码」是**能手输的**（不只是 ?ref= 链接带进来的），
+    //   旧形态把 entInvite 判成 undefined 后就再没人读 form.invite ⇒ 用户敲了码、点了注册、
+    //   推荐奖励归属一声不响地没发生（假输入框）。手填优先于地址栏，两者都没有才不下发。
+    const friendRef = (!branding.dedicatedRegister && regType === 'personal' && form.invite.trim()) ? form.invite.trim() : ref
     setLoading(true); setRegMsg('')
     try {
       const r = await authRegister({
@@ -471,7 +534,7 @@ export default function Login({ mode, onLogin }: Props) {
         job_role: form.jobRole || undefined,
         brand_name: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandName.trim() || undefined) : undefined),
         brand_name_en: (regType === 'enterprise' && roleChoice === 'admin' ? (form.brandNameEn.trim() || undefined) : undefined),
-        ref,
+        ref: friendRef,
         agreed,
         landing_path: window.location.pathname, ...readUtm(), // S4 归因：落地页捕获的 UTM 随注册一次性上报
       })
@@ -504,7 +567,11 @@ export default function Login({ mode, onLogin }: Props) {
   // ★ 2026-10-22 统一登录批：`|| unified` 是防御性兜底——主站的 view 只能停在 'signin'
   //   （两个置 'register' 的入口都已门控），这句保证即使将来新增入口也落回登录屏，
   //   注册表单在主站永不可达。
-  if (view === 'signin' || unified) {
+  // ★ 2026-10-24 多身份 B4-d 开的第一条例外：**一枚服务端认过的企业邀请链接**（inviteJoining）。
+  //   主站被取消的是"任何人都能自助注册试用"，不是"被企业点名叫来的那个人来入职"——
+  //   后者由一次性链接授权（§6.5：链接＝API Key 级凭证），门该开在**回执 valid=true** 上，
+  //   而**不是**"地址栏里有 invite 字样"：死链/查不到一律不开门，人停在登录屏并看见那句原因。
+  if (view === 'signin' || (unified && !inviteJoining)) {
     return (
       <BrandLoginShell>
         <AuthCard
@@ -530,6 +597,9 @@ export default function Login({ mode, onLogin }: Props) {
             </>
           )}
         >
+          {/* ★ B4-d：带 ?invite= 时告知块必须在登录屏也出一份——死链与"暂时查不到"都落在这里，
+              否则受邀人点开链接看到的是一张与他那句"我在加入哪家企业"毫无关系的登录卡。 */}
+          {inviteCode && <InviteJoinNotice checking={inviteChecking} peek={invitePeek} />}
           {loginMode === 'otp' ? (
             <>
               {/* ★ 2026-10-23（用户令「邮箱、验证码字段的显示还有输入框里的提示词，都对齐主站」）：
@@ -672,19 +742,26 @@ export default function Login({ mode, onLogin }: Props) {
           </>
         )}
       >
-           {branding.dedicatedRegister ? (
-          <Field label={t('auth.orgInvite')}>
-            <Input value={form.invite} onChange={(e) => setForm({ ...form, invite: e.target.value })} placeholder={t('auth.orgInvite')} />
+          {/* ★ B4-d 受邀落地告知块（§6.5 第 4 条）：企业名/部门/锁定邮箱/可见范围必须出现在**提交之前**。 */}
+          {inviteCode && <InviteJoinNotice checking={inviteChecking} peek={invitePeek} />}
+          {branding.dedicatedRegister ? (
+          <Field label={t('auth.orgInviteCode')}>
+            <Input value={form.invite} readOnly={inviteJoining} onChange={(e) => setForm({ ...form, invite: e.target.value })} placeholder={t('auth.orgCodeStaffPlaceholder')} />
           </Field>
         ) : (
           <>
             {/* 个人 / 企业 分段 */}
-            <div className="auth-seg-row">
-              <button type="button" className={'auth-seg' + (typeChoice === 'personal' ? ' auth-seg--on' : '')} onClick={() => setTypeChoice('personal')}>{t('auth.tabPersonal')}</button>
-              <button type="button" className={'auth-seg' + (typeChoice === 'enterprise' ? ' auth-seg--on' : '')} onClick={() => setTypeChoice('enterprise')}>{t('auth.tabEnterprise')}</button>
-            </div>
+            {/* ★ B4-d：受邀人不给选身份——链接里已经写死了"哪家企业/什么角色"，
+                再摆一枚"个人"胶囊等于邀请他放弃入职（且切走后 form.invite 会被个人档复用成好友码，
+                §6.4 两套字段语义就串了）。 */}
+            {!inviteJoining && (
+              <div className="auth-seg-row">
+                <button type="button" className={'auth-seg' + (typeChoice === 'personal' ? ' auth-seg--on' : '')} onClick={() => setTypeChoice('personal')}>{t('auth.tabPersonal')}</button>
+                <button type="button" className={'auth-seg' + (typeChoice === 'enterprise' ? ' auth-seg--on' : '')} onClick={() => setTypeChoice('enterprise')}>{t('auth.tabEnterprise')}</button>
+              </div>
+            )}
             {/* 企业用户：管理员（建企业）/ 成员（凭邀请码加入）角色 */}
-            {typeChoice === 'enterprise' && (
+            {typeChoice === 'enterprise' && !inviteJoining && (
               <div className="auth-seg-row">
                 <button type="button" className={'auth-seg' + (roleChoice === 'admin' ? ' auth-seg--on' : '')} onClick={() => setRoleChoice('admin')}>{t('auth.roleAdmin')}</button>
                 <button type="button" className={'auth-seg' + (roleChoice === 'member' ? ' auth-seg--on' : '')} onClick={() => setRoleChoice('member')}>{t('auth.roleStaff')}</button>
@@ -697,13 +774,16 @@ export default function Login({ mode, onLogin }: Props) {
         {typeChoice === 'enterprise' && !branding.dedicatedRegister && (
           <>
                 {roleChoice === 'member' && (
-              <Field label={t('auth.orgCode')}>
-                <Input value={form.invite} onChange={(e) => setForm({ ...form, invite: e.target.value })} placeholder={t('auth.orgCodeStaffPlaceholder')} />
+              <Field label={t('auth.orgInviteCode')}>
+                {/* 受邀人这一格是**链接带来的凭证**，只读；手输码的老形态仍保留（无 ?invite= 时可编辑）。
+                    ★ §6.4（2026-10-25 对账批）：这一格过去挂 auth.orgCode「组织编码（新建组织时必填）」，
+                    与管理员那格逐字同文，而成员手里拿的是**邀请码**、不是企业代号（byd 案例同族混淆）。 */}
+                <Input value={form.invite} readOnly={inviteJoining} onChange={(e) => setForm({ ...form, invite: e.target.value })} placeholder={t('auth.orgCodeStaffPlaceholder')} />
               </Field>
             )}
                 {roleChoice === 'admin' && (
               <>
-                <Field label={t('auth.orgCode')}><Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder={t('auth.orgCode')} /></Field>
+                <Field label={t('auth.orgCode')}><Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder={t('auth.orgCodeAdminPlaceholder')} /></Field>
                 <Field label={t('auth.orgNameCn')}><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('auth.orgNameCn')} /></Field>
                 <Field label={t('auth.orgNameEn')}><Input value={form.orgEn} onChange={(e) => setForm({ ...form, orgEn: e.target.value })} placeholder={t('auth.orgNameEn')} /></Field>
                 <Field label={t('auth.industry')}>
@@ -733,7 +813,10 @@ export default function Login({ mode, onLogin }: Props) {
           />
         </Field>
         <Field label={t('auth.fieldEmail')}>
-          <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={t('auth.fieldEmail')} />
+          {/* ★ B4-d：链接预绑邮箱时这一格只读——后端 register 对 email_locked 会直接拒别的地址，
+              让人填完再报错等于白跑一趟（还顺手吃掉一次验证码消费）。 */}
+          <Input value={form.email} readOnly={inviteJoining && !!invitePeek?.email_locked}
+            onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder={t('auth.fieldEmail')} />
         </Field>
         {/* 职业角色（2026-09-19）：个人/企业所有分支共用——角色只绑用户不绑企业，
             选填（后端对未知/空 code 静默忽略），注册后可在账号菜单随时改（转岗） */}

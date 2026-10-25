@@ -52,7 +52,7 @@ func TestSpaPreloadLinks(t *testing.T) {
 		if !strings.Contains(got, "<"+entry+">; rel=preload; as=script; crossorigin") {
 			t.Fatalf("[%s] Link 头没带入口 script 预加载：%q", order, got)
 		}
-		if !strings.Contains(got, "<"+css+">; rel=preload; as=style") {
+		if !strings.Contains(got, "<"+css+">; rel=preload; as=style; crossorigin") {
 			t.Fatalf("[%s] Link 头没带样式表预加载：%q", order, got)
 		}
 		// favicon 不在射程内（只认 rel=stylesheet 的 link）

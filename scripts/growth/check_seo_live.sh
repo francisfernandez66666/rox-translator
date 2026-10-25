@@ -8,11 +8,14 @@
 #     页面被收录了、sitemap 也提交了，但搜索引擎抓到的是 SPA 空壳，
 #     零内容、零排名，而且**全程没有任何报错**。
 #
-# 三重判据（缺一不可）：
+# 四重判据（缺一不可）：
 #   ① HTTP 200
 #   ② 响应体不含 SPA 兜底标记 window.__BRANDING__
 #   ③ canonical 存在且指向本页自己的 /g/<slug>.html
 #      （SPA 兜底的 canonical 指向首页，这一条能把它和第二条一起坐实）
+#   ④ ★ og:image 存在且是绝对 URL（2026-10-25 补腿）
+#      —— 页面收录了、也 200 了，但被转发时社交端没有卡片，这件事在界面上**没有任何症状**，
+#      只有把「卡片图」当成一条上线判据才不会漏（方案 §2.2 承诺项）。
 #
 # 另检：sitemap.xml / robots.txt 可访问；CF-Cache-Status 是否 HIT（缓存 poisoning 排查）
 #
@@ -34,7 +37,10 @@ curl() { command curl --noproxy 127.0.0.1,localhost "$@"; }
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${HERE}/../.." && pwd)"
-PUBLIC="${ROOT}/frontend-react/public"
+# ★ 页面来源目录可用 env 覆盖（SEO_LIVE_PUBLIC）：自证段④要把**整个脚本**指向一个只有
+#   两枚 canary 的临时目录，从而端到端跑到真判据，而不是在自证里内联复算一份假判据。
+#   日常发版不配这个 env，读的就是仓库里的 public/g。
+PUBLIC="${SEO_LIVE_PUBLIC:-${ROOT}/frontend-react/public}"
 PAGE_DIR="g"
 
 BASE=""
@@ -96,6 +102,14 @@ check_one() {
     echo "NO_CANONICAL|${slug}|canonical 缺失或未指向本页"
     return
   fi
+  # ④ ★ 分享卡图（方案 §2.2「og:image，分享时不裸奔」的现网那一腿）
+  #    判据只问「有没有一条**绝对 URL** 的 og:image」，不问 host 是否等于当前 base：
+  #    自证段用本地静态服务复跑同一套页面，页面里写死的是主站域名，按 host 等值判会让自证恒红。
+  #    相对路径在这里算不合格——社交爬虫不解相对路径，等于没有卡图，而页面照常 200、零症状。
+  if ! printf '%s' "${body}" | grep -Eq '<meta property="og:image" content="https?://[^"]+"'; then
+    echo "NO_OG_IMAGE|${slug}|缺 og:image 或不是绝对 URL（转发出去没有卡片）"
+    return
+  fi
   echo "OK|${slug}|"
 }
 
@@ -120,7 +134,7 @@ run_check() {
     return 3
   fi
 
-  local slugs n=0 ok=0 non200=0 spa=0 nocan=0
+  local slugs n=0 ok=0 non200=0 spa=0 nocan=0 noimg=0
   slugs="$(slug_list)"
   if [ -z "${slugs}" ]; then
     err "✖ 本地 ${PUBLIC}/${PAGE_DIR} 里没有页面，先跑 build_seo_pages.py"
@@ -145,6 +159,7 @@ run_check() {
       NON200)       non200=$((non200 + 1)); fail_list="${fail_list}✖ ${st} ${sl} ${msg}\n" ;;
       SPA_FALLBACK) spa=$((spa + 1));       fail_list="${fail_list}✖ ${st} ${sl} ${msg}\n" ;;
       NO_CANONICAL) nocan=$((nocan + 1));   fail_list="${fail_list}✖ ${st} ${sl} ${msg}\n" ;;
+      NO_OG_IMAGE)  noimg=$((noimg + 1));   fail_list="${fail_list}✖ ${st} ${sl} ${msg}\n" ;;
     esac
   done <<EOF
 ${slugs}
@@ -162,10 +177,11 @@ EOF
 
   log "────────────────────────────────────────"
   log "抽查页面数：${n}"
-  log "  通过（三重判据全绿）：${ok}"
+  log "  通过（四重判据全绿）：${ok}"
   log "  非 200           ：${non200}"
   log "  ★ SPA 兜底      ：${spa}"
   log "  canonical 缺失  ：${nocan}"
+  log "  ★ og:image 缺失 ：${noimg}"
   log "sitemap.xml：HTTP ${sm_code}  ${sm_type}"
   log "robots.txt ：HTTP ${rb_code}"
   log "────────────────────────────────────────"
@@ -175,7 +191,7 @@ EOF
     return 2
   fi
   # ★ 「抽查到 0 个」和「抽查到但全是 SPA 兜底」必须是两种失败，不能都归成 FAIL 一句话
-  if [ "${spa}" -gt 0 ] || [ "${nocan}" -gt 0 ] || [ "${non200}" -gt 0 ]; then
+  if [ "${spa}" -gt 0 ] || [ "${nocan}" -gt 0 ] || [ "${non200}" -gt 0 ] || [ "${noimg}" -gt 0 ]; then
     log ""
     log "问题明细（前 20 条）："
     printf '%b' "${fail_list}" | head -20
@@ -185,6 +201,14 @@ EOF
       log "  含义：路径没被静态直出，请求落进了 spa.go 的 index.html 回退。"
       log "  排查：① 文件是否真在 dist 里 ② Caddy 的 file_server 是否覆盖 /${PAGE_DIR}/ "
       log "        ③ 是否被 Cloudflare 缓存了换源前的 404（真被毒死时只能 CACHE_BUST 换入口名）"
+    fi
+    if [ "${noimg}" -gt 0 ]; then
+      log ""
+      log "★ ${noimg} 个页面没有绝对 URL 的 og:image。"
+      log "  含义：页面收录与排名不受影响，但**被转发时社交端不出卡片**——这一族没有任何界面症状，"
+      log "        只有这一条判据会说出来。"
+      log "  排查：① 生成侧跑 python3 scripts/growth/build_og_image.py --check（卡文件在不在）"
+      log "        ② build_seo_pages.py 的 OG_IMAGE_URL 常量 ③ 换源后 /og-image.png 是否真落盘"
     fi
     if [ "${sm_code}" != "200" ]; then
       log ""
@@ -284,11 +308,66 @@ selftest() {
     fail=1
   fi
 
+  # ④ 判据自证：og:image 那一腿必须有射程。
+  #    两个样本都**过了前三重判据**（200／无 __BRANDING__／canonical 自指），只差卡图这一维：
+  #    缺 og:image 的那个必须被拒、带绝对 URL 的那个必须放行——
+  #    只测"缺了会红"会漏掉"正则写死成恒不匹配"（那时光样本也红，判据等于没在工作）。
+  log "④ 判据自证：og:image 腿必须双向有射程"
+  local img_dir
+  img_dir="$(mktemp -d)"
+  mkdir -p "${img_dir}/${PAGE_DIR}"
+  printf '%s' '<!doctype html><html><head><title>无卡图页</title>
+<link rel="canonical" href="https://langcross.lexicorn.cn/g/no-img-canary.html"></head><body>page</body></html>' \
+    > "${img_dir}/${PAGE_DIR}/no-img-canary.html"
+  printf '%s' '<!doctype html><html><head><title>有卡图页</title>
+<link rel="canonical" href="https://langcross.lexicorn.cn/g/has-img-canary.html">
+<meta property="og:image" content="https://langcross.lexicorn.cn/og-image.png"></head><body>page</body></html>' \
+    > "${img_dir}/${PAGE_DIR}/has-img-canary.html"
+  local port3=18801 pid3 out3 rc3
+  ( cd "${img_dir}" && python3 -m http.server "${port3}" >/dev/null 2>&1 ) &
+  pid3=$!
+  waited=0
+  while [ "${waited}" -lt 40 ]; do
+    if curl -sS --max-time 2 -o /dev/null "http://127.0.0.1:${port3}/" 2>/dev/null; then break; fi
+    sleep 0.25; waited=$((waited + 1))
+  done
+  # 直接问 check_one 的两个判据形态：把**整个脚本**的页面来源指向这个临时目录
+  # （SEO_LIVE_PUBLIC 就是为这一条开的口），这样端到端走的是真判据，不是自证里内联复算的一份假判据。
+  local out3 rc3
+  out3="$(SEO_LIVE_PUBLIC="${img_dir}" bash "$0" --base "http://127.0.0.1:${port3}" 2>&1)"; rc3=$?
+  kill "${pid3}" 2>/dev/null; wait "${pid3}" 2>/dev/null
+  if ! printf '%s' "${out3}" | grep -q '抽查页面数：2'; then
+    err "   ✖ canary 站点只抽查到 2 页之外的数量——SEO_LIVE_PUBLIC 没生效，这一腿测的不是临时目录"
+    printf '%s\n' "${out3}" | tail -8
+    fail=1
+  fi
+  if printf '%s' "${out3}" | grep -q 'NO_OG_IMAGE no-img-canary'; then
+    log "   ✔ 缺 og:image 的 canary 被判 NO_OG_IMAGE"
+  else
+    err "   ✖ 缺 og:image 的 canary 没被判出来——这一腿空转"
+    printf '%s\n' "${out3}" | tail -8
+    fail=1
+  fi
+  if printf '%s' "${out3}" | grep -q 'NO_OG_IMAGE has-img-canary'; then
+    err "   ✖ 带绝对 URL og:image 的 canary 也被判缺——正则写死了，正向对照不存在"
+    fail=1
+  else
+    log "   ✔ 带 og:image 的 canary 未被误判（正向对照在位）"
+  fi
+  # 这一整段只放了两个 canary，缺图那个必然判红 ⇒ 退出码必须是 1；判 0 说明整条链没跑
+  if [ "${rc3}" = "0" ]; then
+    err "   ✖ 只含一个缺图页的站点被判成通过（rc=0）——og:image 腿没进最终裁决"
+    fail=1
+  else
+    log "   ✔ 缺图站点整体判 FAIL（rc=${rc3}，这一腿抬进了发版判据）"
+  fi
+  rm -rf "${img_dir}"
+
   if [ "${fail}" -ne 0 ]; then
     err "SELFTEST FAIL"
     return 1
   fi
-  log "SELFTEST PASS  （负向 / 正向 / 判据 三向自证）"
+  log "SELFTEST PASS  （负向 / 正向 / SPA 判据 / og:image 判据 四向自证）"
   return 0
 }
 

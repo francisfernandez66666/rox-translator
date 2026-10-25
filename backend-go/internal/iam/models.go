@@ -48,7 +48,32 @@ type User struct {
 	// 取值 = 平台角色包（kb_packages.pack_type='persona'）的 code；空=未选角色。
 	// ★ 仅绑定用户层级，不与企业耦合：退出企业仍存在，个人用户可自行维护（转岗/转行语义）。
 	JobRole string `json:"job_role"`
+	// AccountID 「人」的抽象键（★ 2026-10-24 多身份方案 D1）：同一个人的所有 users 行共享同一个值。
+	// ⚠️ 刻意**不**用邮箱当人键——handleUpdateEmail 会改邮箱，拿邮箱当人键等于一次换绑把一个人劈成两个。
+	// 迁移回填＝cast(id as text)（一人一行时自洽）；新建身份行时由调用方带上既有账户号。
+	AccountID string `json:"account_id"`
+	// IsHome 本行是否该账户的「家行」（1=家 / 0=成员身份行；★ 多身份方案 D2）。
+	// 不变式：账户只要有 active 行，就必须有且仅有一个家行。
+	// 口令只存家行（D4）：登录永远家优先定位家行验口令，成员行是纯身份记录、不含凭证。
+	IsHome int `json:"is_home"`
 }
+
+// assign 按 userCols 的列顺序把一行 users 记录装载进结构体——**列→字段的唯一映射口**。
+//
+// ★ 为什么收成一个方法而不是各处复制 Scan 清单：2026-08-26 的事故口径写着「补列必须同步全部
+// Scan 目标，漏改会静默吞行」（行式 Scan 曾在 4 处复制同一份清单）。多身份方案又补了两列，
+// 复制面越多越容易漏，所以这里把映射收成一处：userCols 变一次只改这一处，
+// 等值由 store 侧闸门按「userCols 列数 == 本方法目标数」机械钉住。
+// 参数：row=任意带 Scan 的结果（*sql.Row 或 *sql.Rows）。
+func (u *User) assign(row interface{ Scan(dest ...any) error }) error {
+	return row.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
+		&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt,
+		&u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole,
+		&u.ProfileSetupRequired, &u.AccountID, &u.IsHome)
+}
+
+// IsHomeRow 本行是否该账户的家行（is_home=1）。
+func (u *User) IsHomeRow() bool { return u != nil && u.IsHome == 1 }
 
 // EffectiveUserStatus 计算生效状态：deactivating（注销宽限期）在次日起降级为 disabled。
 // 参数：status=库内状态，deactivatedAt=注销请求日期（2006-01-02）；返回生效状态。

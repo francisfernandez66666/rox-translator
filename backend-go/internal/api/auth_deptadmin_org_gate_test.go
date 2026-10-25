@@ -17,8 +17,11 @@
 //
 // 四向锁 + 合并锁：
 //
-//	A) create 无部门 dept_admin → 400（含「必须绑定部门」文案与结构化 code 字段）；
-//	B) create 带部门 dept_admin → 成功且落库 org_id/role 等值；
+//	A) create 无部门 dept_admin → 400（含「必须绑定部门」文案与结构化 code 字段），users 与 invite_codes 都零行；
+//	B) create 带部门 dept_admin → 成功发出链接，且 kind/role/org_id/tenant_id/预填名/有效期逐项等值；
+//	   ★ R9（2026-10-24 B3-c）企业档不再建 users 行，本条的落库等值对象从 users 换成 invite_codes；
+//	B2) create 企业档还带 password → 400「不再录入初始口令」（R9 复现锁：拒绝发生在写库之前，
+//	   不许「口令被静默丢掉但链接照发」那种假成功形态）；
 //	C) update 终态两路降级各 400：①存量 user（org=0）直接升角 dept_admin 且不带 org；
 //	   ②dept_admin 在位时把 org_id 摘 0；
 //	D) update 正常改名（只传 display_name）→ role/status/org_id 全部原样保留；
@@ -115,12 +118,17 @@ func callUserUpdate(t *testing.T, s *Server, tok string, body map[string]interfa
 }
 
 // TestUATBatchF_DeptAdminCreateGate 锁 A/B：create 侧「dept_admin 必绑部门」源头闸。
+// ★ R9（2026-10-24 B3-c）企业档换轨：本租户（tid>0）建号已不录口令、不建 users 行，
+//
+//	而是走 issueInviteLink 发一枚专属链接——F-31 闸 1 的判据一字未动（它就在 issueInviteLink 里），
+//	所以这两条锁只是把「落库等值」的对象从 users 行换成 invite_codes 行，并新增一条
+//	「不许再录初始口令」的源头锁（R9 的复现锁：谁把口令写回这一档，它当场红）。
 func TestUATBatchF_DeptAdminCreateGate(t *testing.T) {
 	s, tid, tok, orgID := newF31Probe(t)
 
 	// A) 无部门 dept_admin → 400 结构化错误（writeError：body 含 code 字段），不落库
 	rec := callUserCreate(t, s, tok, map[string]interface{}{
-		"username": "dead_da", "password": "pw123456", "role": "dept_admin",
+		"username": "dead_da", "role": "dept_admin",
 	})
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "必须绑定部门") {
 		t.Fatalf("无部门 dept_admin 建号应 400「必须绑定部门」，实得 %d: %s", rec.Code, rec.Body.String())
@@ -131,21 +139,79 @@ func TestUATBatchF_DeptAdminCreateGate(t *testing.T) {
 	if ds, _ := s.Store.GetUserByUsernameGlobal("dead_da"); len(ds) != 0 {
 		t.Fatalf("被拒建号不得落库")
 	}
+	// 被拒那一行也不该留下任何邀请凭据（闸 1 卡在写库之前，不是「先发了链接再报错」）
+	if ls, e := s.Store.ListInviteLinks(tid); e != nil || len(ls) != 0 {
+		t.Fatalf("被拒建号不得落邀请链接: n=%d err=%v", len(ls), e)
+	}
 
-	// B) 带部门 dept_admin → 成功，且 role/org_id 等值落库
+	// B) 带部门 dept_admin → 成功发出链接，且 kind/role/org_id/tenant_id 等值落库
+	// ★ R9：断言主体从「users 表多一行」翻成「users 表零行 + invite_codes 恰一行」——
+	//   这正是「不建号」这一设计纪律（设计纪律 ①）的机械防线。
 	ok := callUserCreate(t, s, tok, map[string]interface{}{
-		"username": "live_da", "password": "pw123456", "role": "dept_admin", "org_id": orgID,
+		"username": "live_da", "role": "dept_admin", "org_id": orgID,
 	})
 	if ok.Code != http.StatusOK || !strings.Contains(ok.Body.String(), `"success":true`) {
-		t.Fatalf("带部门 dept_admin 建号应成功，实得 %d: %s", ok.Code, ok.Body.String())
+		t.Fatalf("带部门 dept_admin 建号应成功（发链接），实得 %d: %s", ok.Code, ok.Body.String())
 	}
-	us, e := s.Store.GetUserByUsernameGlobal("live_da")
-	if e != nil || len(us) != 1 {
-		t.Fatalf("live_da 应恰有一行落库: %v", e)
+	var out struct {
+		Success bool `json:"success"`
+		Invite  struct {
+			Code     string `json:"code"`
+			URL      string `json:"url"`
+			TenantID int64  `json:"tenant_id"`
+		} `json:"invite"`
 	}
-	if us[0].Role != store.RoleDeptAdmin || us[0].OrgID != orgID || us[0].TenantID != tid {
-		t.Fatalf("落库等值锁失败: role=%q org=%d tid=%d", us[0].Role, us[0].OrgID, us[0].TenantID)
+	if e := json.Unmarshal(ok.Body.Bytes(), &out); e != nil {
+		t.Fatalf("邀请链接响应解码失败: %v (%s)", e, ok.Body.String())
 	}
+	if !out.Success || out.Invite.Code == "" || !strings.HasPrefix(out.Invite.URL, "http") {
+		t.Fatalf("响应必须带出邀请链接（code+url），实得: %s", ok.Body.String())
+	}
+	if ds, e := s.Store.GetUserByUsernameGlobal("live_da"); e != nil || len(ds) != 0 {
+		t.Fatalf("R9 后建号口不得创建 users 行（受邀人注册时才落库）: n=%d err=%v", len(ds), e)
+	}
+	links, e := s.Store.ListInviteLinks(tid)
+	if e != nil || len(links) != 1 {
+		t.Fatalf("应恰有一枚链接落库: n=%d err=%v", len(links), e)
+	}
+	l := links[0]
+	if l.Role != store.RoleDeptAdmin || l.OrgID != orgID || l.TenantID != tid || l.Kind != "link" {
+		t.Fatalf("链接落库等值锁失败: role=%q org=%d tid=%d kind=%q", l.Role, l.OrgID, l.TenantID, l.Kind)
+	}
+	if l.BoundUsername != "live_da" || l.ExpiresAt == "" {
+		t.Fatalf("链接必须带预填用户名与有效期: bound=%q expires=%q", l.BoundUsername, l.ExpiresAt)
+	}
+
+	// B2) ★ R9 源头锁：企业档仍带初始口令 ⇒ 400，且一行凭据都不许多出来
+	//    （旧形态在这里会静默忽略入参、把口令丢掉——管理员以为设了密码，实际没设，
+	//     那是「假成功」那一族；现在明确拒绝，让调用方改表单而不是让系统装没看见。）
+	before := len(mustListLinks(t, s, tid))
+	pw := callUserCreate(t, s, tok, map[string]interface{}{
+		"username": "pw_row", "password": "pw123456", "role": "user",
+	})
+	if pw.Code != http.StatusBadRequest || !strings.Contains(pw.Body.String(), "不再录入初始口令") {
+		t.Fatalf("企业档带口令应 400（R9），实得 %d: %s", pw.Code, pw.Body.String())
+	}
+	if !strings.Contains(pw.Body.String(), "code") {
+		t.Fatalf("口令拒绝须走 writeError 结构化错误体: %s", pw.Body.String())
+	}
+	if len(mustListLinks(t, s, tid)) != before {
+		t.Fatalf("口令拒绝不得留下链接凭据（拒绝就是拒绝，不是先发了再报错）")
+	}
+	if ds, _ := s.Store.GetUserByUsernameGlobal("pw_row"); len(ds) != 0 {
+		t.Fatalf("口令拒绝不得建号")
+	}
+}
+
+// mustListLinks 取本租户链接行（失败即 Fatal）：B2 段要做「前后计数等值」，
+// 把 err 分支摊开在断言里会让读数淹没在长行里。
+func mustListLinks(t *testing.T, s *Server, tid int64) []*store.InviteCode {
+	t.Helper()
+	ls, err := s.Store.ListInviteLinks(tid)
+	if err != nil {
+		t.Fatalf("列邀请链接失败: %v", err)
+	}
+	return ls
 }
 
 // TestUATBatchF_DeptAdminUpdateFinalStateGate 锁 C：update 侧终态判据两条降级路径。

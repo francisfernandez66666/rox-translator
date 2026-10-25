@@ -108,6 +108,17 @@ jobs:
       - name: unit tests
         run: npx vitest run
         working-directory: frontend-react
+      # ★ 2026-10-25 SEO 内容合规闸门（og:image 收口批同时补上）。
+      #   为什么必须进 CI 而不是"每次生成时跑一次"：对外文案的红线（不点名贬低对手、不泄漏成本口径、
+      #   12 语种逐键齐备、分享卡图绝对 URL 且文件真落盘）判的是**仓库里躺着的那 106 个页面 + route_meta.json**。
+      #   一次性生成脚本跑过一次就退役，此后的手工改动、以及 route_meta 与已生成页之间的漂移都无人再看；
+      #   而这些缺陷的现网症状全是"零症状"（页面照常 200、界面照常渲染），只有这道闸门会红。
+      - name: SEO 内容合规闸门（竞品文案四条红线 + og:image + 工厂自证）
+        run: |
+          python3 scripts/growth/build_seo_pages.py --selftest
+          python3 scripts/growth/build_seo_pages.py --check
+          python3 scripts/growth/build_og_image.py --check
+          bash scripts/growth/check_seo_live.sh --selftest
 
   e2e:
     runs-on: ubuntu-latest

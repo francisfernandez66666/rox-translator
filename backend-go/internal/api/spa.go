@@ -187,10 +187,20 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path str
 		writeJSON(w, 500, map[string]string{"error": "读取前端入口失败"})
 		return
 	}
-	html := injectBrandingScript(s.brandingPayload(r), string(raw))
+	bp := s.brandingPayload(r)
+	html := injectBrandingScript(bp, string(raw))
 	// ★ 〇-Z 站点门面标记：只在「主页对访客关闭」时落这一字节段，开放时上面那行已是终点
 	//（保持主站首页字节数判据不动，理由见 site_flags.go 文件头）。
 	html = injectSiteFlagsScript(s.siteFlagsPayload(r), html)
+	// ★ DEF-06（2026-10-24）：服务端 SEO 注入（12 语种 route meta）。
+	//   只处理前端已知路由；/g/*、/blindtest/、未知 404、后端直出页不受影响。
+	if s.seoRouteMetaEnabled() {
+		if meta, isApp, ok := seoMetaForPath(r.URL.Path); ok {
+			html = injectRouteMeta(html, meta, seoLangFromRequest(r), seoBrandForRequest(bp),
+				seoScheme(r), r.Host, r.URL.Path, isApp)
+			w.Header().Set("Vary", "Accept-Language")
+		}
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	// ★ 2026-10-18 慢链路批（#1「国内加载慢」）：关键资源提前声明（RFC 8288 Link）。
@@ -230,7 +240,7 @@ func criticalAssetLinks(html string) string {
 		href = m[1]
 	}
 	if strings.HasPrefix(href, "/assets/") {
-		links = append(links, "<"+href+">; rel=preload; as=style")
+		links = append(links, "<"+href+">; rel=preload; as=style; crossorigin")
 	}
 	return strings.Join(links, ", ")
 }

@@ -641,3 +641,19 @@ func (s *Store) RequeueStalledTickets(stale time.Duration) (int64, error) {
 	//   ④ 取消场景的重复执行防护 = runTicket 收尾守卫（cancelled 即放弃计费/完成态）。
 	return n, nil
 }
+
+// RequeueTicketForRepair 把 in_progress 的文本工单重新置为 queued（DEF-02 结构失败自动重发）。
+// 只允许 in_progress→queued（终态/取消态不动）；调用方负责随后 EnqueueTicketRun 建新 job。
+// 返回 true=确实重排了一行；false=状态已变（被取消/其他 worker 接管），调用方不得再入队。
+func (s *Store) RequeueTicketForRepair(id int64) (bool, error) {
+	res, err := db.Exec(s.db, db.CurrentDialect(),
+		// 允许 in_progress / pending_approval / approved：结构失败发生在 qa 之后，
+		// pro 档的 approval 步骤可能已把状态推到 pending_approval，也必须能重排回 queued。
+		"UPDATE tickets SET status='queued', updated_at=? WHERE id=? AND status IN ('in_progress','pending_approval','approved')",
+		time.Now().Format(time.RFC3339), id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}

@@ -144,7 +144,8 @@ func TestB4CultureRulesOrderedById(t *testing.T) {
 		t.Fatalf("插入安全句失败: %v", err)
 	}
 	e := &Engine{St: s, Cfg: config.Default()}
-	text, rules := e.cultureRules(context.Background(), 7, "de")
+	rules := e.cultureRules(context.Background(), 7, "de")
+	text := e.renderCultureBlock(rules, "", "de")
 	if len(rules) != 2 {
 		t.Fatalf("期望 2 条规则，实际 %d:\n%s", len(rules), text)
 	}

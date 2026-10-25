@@ -34,6 +34,8 @@ import BootLoading from './components/BootLoading'
 // ★ 2026-10-21 IAM P1-7：登录面与 App 树共用同一个调用点（不再各写一份 mode/onLogin/挂件）
 import { LoginFace } from './components/LoginFace'
 import { useNav } from '@/lib/nav'
+import { useLang } from '@/i18n'
+import { syncRouteMeta } from '@/seo/routeMeta'
 
 // 与 App.tsx 同为 lazy：这四份都是"按路径才需要"的页面（首页访客不必下定价/比价页）
 // 官网首页（未登录门面主力页）
@@ -90,6 +92,11 @@ function PublicRoutes() {
   // ★ 2026-10-23 租户定制页门面：`tenantId > 0` 的域名（客户品牌子域/演示站）对访客不展示
   //   平台营销落地页，打开 `/` 直接进登录——判据本体在 lib/siteFlags.ts（两条腿的说明也在那）。
   const branding = useBranding()
+  const lang = useLang()
+  // ★ DEF-06：公开面无 react-router，直接按 pathname 同步 route meta（与服务端注入同源）。
+  useEffect(() => {
+    syncRouteMeta(path, lang, branding.brandName || branding.tenantName || '')
+  }, [path, lang, branding.brandName, branding.tenantName])
 
   // 定价页属营销门面：未登录访客同样可直接访问（否则会落到登录页）
   if (path === '/pricing') {

@@ -40,3 +40,12 @@
 # 一次性部署/复查脚本留下的读数与日志快照（.log/.out/.txt 读数件属取证，不是运行代码）
 :(exclude)*.log
 :(exclude)*.out
+# ★ 2026-10-25 对账批补六条：同族「取证资产进了本地分支」的新形态，逐类各一条。
+#   口径判据（AGENTS §一·9）：干跑清单里凡不属于 backend-go/frontend-react/sdk/extension/scripts/CI 的路径，
+#   先停下来问"这是代码还是取证"，是取证就补到这里——不补就会随纯代码提交被推上公开仓库。
+:(exclude)UAT_云端E2E_*
+:(exclude)品牌资产/
+:(exclude)红果短剧_*
+:(exclude)短视频分镜_*.html
+:(exclude)coding_daily_*.html
+:(exclude)vibe_images/

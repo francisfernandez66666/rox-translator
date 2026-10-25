@@ -174,6 +174,27 @@
 #          在字节上无法区分）＋那句英文回译不得出口；② 初翻腿自带尾段回译且无上一版可退 ⇒ 只剥尾段、
 #          中文句号必须留下（④ 首跑真踩）；③ /metrics 的 purity 计数按 (lang,action) **就地取基线比增量**，
 #          每档恰好 +1、另一档 0；④ 第三条无触发器的对照请求两条计数**一动不动**（过度拦截哨）。
+#   T72 2026-10-24/25 批 HTTP 面收口（多身份 R4/R5/R9 ＋ 服务端 SEO ＋ 产物文件名）：
+#       ① R9 企业档建号带 password 显式 400「不再录入初始口令」（不是静默忽略）且**一个 users 行都不建**；
+#          无 password 发 `inv_<32hex>` 一次性链接、仍不建号；入职后再对同邮箱生成 → 409「已是本企业成员」；
+#       ② 注册口汇流：预绑邮箱不符 → 400 且**不烧码**（used 仍 0）；空码/未知码各回一句可行动的话；
+#          正码注册 → 200＋token＋恰好一行且 is_home=1、account_id 已回填；同码二次使用拒且 used=1；
+#       ③ R5 钱的口径：企业身份那一行是 `membership_no_trial`/tokens=0 的占位账，企业租户不得出现
+#          kind='trial' 的额度行；首次登录补建个人身份（R4）后**全账户只有 1 份真实补贴**，
+#          且那一份落在补建出来的个人租户（`pa_<account_id>`、is_personal=1、二次登录不长出第三行）；
+#       ④ 身份清单/切换：家在前、恰好一家一个个人版；切到个人 tid → 200＋新 token＋/api/me 落该租户；
+#          跨账户 tid → 403、缺 tid → 400、匿名 → 401（三种越权同一句文案＝防枚举）；审计落**目标**租户
+#          且 detail 含 `tid=…→tid=…`；单身份老用户对照组只回一行（前端据此不渲染切换器）；
+#       ⑤ 服务端 SEO 12 语种：/pricing 的 ja/en/ar 标题**现读 route_meta.json 逐语等值**且三者互不相同
+#          （射程自证）；canonical/og:url 指当前语言版；12＋x-default＝13 条 hreflang 且 BCP47（zh-Hans/zh-Hant）；
+#          分享卡图整族（og:image 绝对 URL＋1200/630＋twitter:image 恰一枚＋summary_large_image）且 /og-image.png
+#          取到的是 PNG 魔数不是 SPA 兜底页；/tickets 为 noindex 且零 hreflang；未知语种回落 x_default_lang；
+#          库档 `seo_route_meta=0` 整族摘掉、删键后恢复（运维不发版就能关的那条出路）；
+#       ⑥ 产物文件名 `-<lang>`（Content-Disposition 真含 t72a-en.txt）；`artifact_lang_suffix=0` 应急档
+#          回吐 `t72b_en` 且不再出现短横名（跑完删键复原）；
+#       ⑦ 源码级防回退（同 T44 取向，行为侧已在各 Go 单测锁住）：英语避雷只拦 kind=forbidden＋中性词豁免表在位、
+#          文化规则块上限 2000 字/30 条及其两个配置键读点、工单整单重发上限 3、文件漏译比例只有一处定义；
+#       ⑧ 收尾按**显式 id** 摘干净（users/tenants/invite_codes/trial 台账/额度行/Key/包/审计/工单/限流/两枚配置键）。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -188,9 +209,16 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-Admin@1234}"
 J='Content-Type: application/json'
 source "$(dirname "$0")/dblib.sh"   # 双方言断言层（sqlite/PG）
+source "$(dirname "$0")/member_fixture.sh"   # 企业成员「邀请链接入职」工装（★ 2026-10-24 B3-c/R9）
 PASS=0; FAIL=0; START=$(date +%s)
 
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
+# ★ 字面量版（本批补）：ck 走 grep -E，源码锁里的 `(`/`)` 会被当成**捕获组**而不是字面圆括号，
+#   于是「源码明明有这一行、锁却恒红」（本批 T72-src-ticket-repair-max-three /
+#   T72-src-leak-ratio-single-definition 两条红的真身——实现对、判据错，同 AGENTS §三 那族
+#   「实现对、判据错」形态）。凡锁的是**整行源码字面量**（含括号、引号、`{`）一律用 ckF，
+#   需要正则交替（`a|b`）时才用 ck。
+ckF(){ if printf '%s' "$3" | grep -qF "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
 tok(){ curl -s $B/api/auth/login -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
 sq(){ dbq "$1"; }
@@ -262,10 +290,17 @@ T5=$(tok uatuser_e uatpass123); H5="Authorization: Bearer $T5"
 T6=$(tok uatuser_d uatpass123); H6="Authorization: Bearer $T6"
 [ ${#AT} -lt 10 ] && echo "FATAL|admin token 失效" && exit 1
 [ ${#T1} -lt 10 ] && echo "FATAL|uatuser_a token 失效（uatuser_a 密码可能被改）" && exit 1
-TAID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
-TBID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_b' LIMIT 1" | tr -d '[:space:]')
-TEID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_e' LIMIT 1" | tr -d '[:space:]')
-TDID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_d' LIMIT 1" | tr -d '[:space:]')
+# ★ 2026-10-25 UAT 红归因批①：这四个租户号一律取**家行**（is_home=1）。
+#   多身份批之后每个种子用户名都有两条 users 行（家行 + 登录时补建的 `pa_` 个人行），
+#   PostgreSQL 对"无 ORDER BY 的 LIMIT 1"实测回的是**非家行**（个人租户），而上面 `tok` 登录得到的
+#   token 归并到**家行**（iam/account.go 的代表行规则）。偏差一出现，本段所有写路径都按错租户落库、
+#   所有读路径都按错租户读：T2/T9/T21/T23/T42/T43/T49/T56/T59/T65 共 40+ 条腿整片翻红，
+#   读数统一是「订单不存在／包不存在／空结果」——是夹具取错行，不是产品账本错
+#   （逐条核对见 2026-10-25 归因记录：库里同一批事实在家行租户下全部齐备且口径正确）。
+TAID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+TBID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_b' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+TEID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_e' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+TDID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_d' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 
 echo "=== T 阶段：功能与交易专项深度 UAT ==="
 
@@ -369,7 +404,7 @@ E_AFTER=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TEID")
 post "$AH" "{\"id\":$OID4,\"tenant_id\":$NTID}" /api/admin/orders/pay >/dev/null
 E_AFTER2=$(sq "SELECT balance FROM balance_accounts WHERE tenant_id=$TEID")
 [ "$E_AFTER" = "$E_AFTER2" ] && { PASS=$((PASS+1)); echo "PASS|T4-reward-idempotent"; } || { FAIL=$((FAIL+1)); echo "FAIL|T4-reward-idempotent($E_AFTER->$E_AFTER2)"; }
-R=$(sq "SELECT COUNT(*) FROM referral_rewards WHERE inviter_uid=(SELECT id FROM users WHERE username='uatuser_e') AND invitee_uid=(SELECT id FROM users WHERE username='$NEWINV') AND type='paid_perm'")
+R=$(sq "SELECT COUNT(*) FROM referral_rewards WHERE inviter_uid=(SELECT id FROM users WHERE username='uatuser_e' AND is_home=1) AND invitee_uid=(SELECT id FROM users WHERE username='$NEWINV') AND type='paid_perm'")
 [ "$R" = "1" ] && { PASS=$((PASS+1)); echo "PASS|T4-reward-ledger(paid_perm row)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T4-reward-ledger($R)"; }
 ck T4-referral-my '"success":true' "$(get "$H5" /api/referral/my)"
 
@@ -506,13 +541,13 @@ ck T15-status-degraded '"degraded":(true|false)' "$R"
 # ② 驱动错误脱敏：重复邮箱/重复租户码不得泄漏 pq:/JSON1/约束名等内部细节
 #   ★ 2026-10-21 IAM 重做后用户名可重名，故脱敏靶子改用**仍唯一**的邮箱（uat_a@test.com 已被占用），
 #   用户名这一维另在 A3-dup-username-allowed 里按新方案判「允许」。
-UA_TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND tenant_id>0 LIMIT 1")
-#   ★ 2026-10-22 工装同步：password 由 "x" 改为合法口令。本用例的靶子是「重复邮箱脱敏」
-#   （下一行的 ckn + ck），而 2026-10-22 给管理台建号补上了强度闸（B-2）——
-#   "x" 只有 1 位，会在**强度闸**就被拦成「密码至少 6 位」，根本走不到邮箱重复那一步，
-#   于是 ck 判据（期望 CONFLICT/已存在）被换成强度闸的判据（假红且定位偏）。
-#   改密码而不是放宽强度闸：闸是本次要立的，用例的靶子才是"脱敏"。
-DUPU=$(post "$AH" "{\"username\":\"uat_dup_t15\",\"password\":\"uatpass123\",\"name\":\"d\",\"email\":\"uat_a@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
+# ★ 2026-10-25 归因批①：同 TAID，钉家行（多身份下无 ORDER BY 的 LIMIT 1 会取到个人 pa_ 行）。
+UA_TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1")
+#   ★ 2026-10-24 多身份 B3-c（R9）：password 字段整段去掉——企业档建号不再收初始口令，
+#   带着 password 会在**入参闸**就被 400「企业成员建号不再录入初始口令」拦掉，
+#   同样走不到邮箱重复那一步（与 2026-10-22 那次「强度闸把靶子换成合法口令」同因不同档）。
+#   去掉后这一腿的判定顺序正好：角色闸 → 邮箱占用预检（409）→ 才会发链接。
+DUPU=$(post "$AH" "{\"username\":\"uat_dup_t15\",\"email\":\"uat_a@test.com\",\"tenant_id\":$UA_TID}" /api/admin/users/create)
 ckn T15-sanitize-user 'pq:|SQL logic|UNIQUE constraint|42601|23505|lib/pq|json_extract' "$DUPU"
 ck T15-sanitize-user-msg '"code":"CONFLICT"|绑定|已存在' "$DUPU"
 DUPC=$(post "$AH" "{\"code\":\"$(dbq "SELECT code FROM tenants LIMIT 1")\",\"name\":\"d\"}" /api/tenant/create)
@@ -578,9 +613,17 @@ TKID=$(echo "$R" | pv '.get("ticket",{}).get("id") or 0')
 ck T17-ticket-create '"success":true' "$R"
 ck T17-owner-view '"success":true' "$(get "$H1" "/api/tickets/detail?id=$TKID")"
 PEER="uatpeer_a_$(date +%s)"
-R=$(post "$AH" "{\"username\":\"$PEER\",\"password\":\"uatpass123\",\"display_name\":\"同租户同事\",\"role\":\"user\",\"tenant_id\":$TAID}" /api/admin/users/create)
-ck T17-peer-create '"success":true' "$R"
-PT=$(tok $PEER uatpass123); HP="Authorization: Bearer $PT"
+# ★ 2026-10-24 多身份 B3-c（R9）：同事这一行改走「发链接 → 本人凭链接注册 → 登录」整条入职链。
+#   旧写法（建号带初始口令 + 按用户名登录）在新模型下两步都是空的：
+#   带口令 ⇒ 400；不建 users 行 ⇒ 按口令登录必然失败。工装见 scripts/uat/member_fixture.sh。
+PEER_EMAIL="${PEER}@test.com"
+mf_onboard "$AH" "$TAID" "$PEER" "$PEER_EMAIL" uatpass123 user 0
+ck T17-peer-create '"success":true' "$MF_CREATE"
+# 回执给的是**链接**而不是账号：这一刻 users 行还没建（设计纪律 ①，不建 pending 空号）。
+# 判据按「invite 对象里有 inv_ 开头的码」写，不钉字段顺序——出栈结构体加一个键就会让钉顺序的锁变红。
+ck T17-peer-invite '"invite":\{[^}]*"code":"inv_' "$MF_CREATE"
+ck T17-peer-register '"success":true' "$MF_REG"
+HP="Authorization: Bearer $MF_TOKEN"
 R=$(get "$HP" "/api/tickets/detail?id=$TKID")
 ck T17-peer-deny '"success":false' "$R"
 ck T17-peer-deny-msg '无权查看他人工单' "$R"
@@ -762,10 +805,15 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/scim/v2/Users" -H "$SH")
 R=$(post "$H1" '{"code":"uat-h30","name":"H30 test pack","pack_type":"tenant","role":"source"}' /api/admin/kb-packages/create)
 PID30=$(echo "$R" | pv '.get("package",{}).get("id",0)')
 [ "${PID30:-0}" -gt 0 ] 2>/dev/null && { PASS=$((PASS+1)); echo "PASS|T30-pack-created-$PID30"; } || { FAIL=$((FAIL+1)); echo "FAIL|T30-pack-created|got[${R:0:160}]"; }
-MEM_CREATE='{"username":"uatmem-h30","password":"mem123456","display_name":"H30 member","role":"user","tenant_id":'$TAID'}'
-post "$H1" "$MEM_CREATE" /api/admin/users/create >/dev/null
+# ★ 2026-10-24 多身份 B3-c（R9）：H30 成员改走「发链接 → 本人自设口令注册」入职链
+#   （工装 scripts/uat/member_fixture.sh）。旧写法带初始口令建号 + 按用户名登录，
+#   在新模型下两步皆空：带口令 ⇒ 400「企业成员建号不再录入初始口令」，且这一步不建 users 行。
+#   这里的调用头刻意用 $H1（租户管理员 uatuser_a）：顺带锁住「租户管理员能给本企业加人」这一档。
+MEM_EMAIL="uatmem_h30@test.com"
+mf_onboard "$H1" "$TAID" "uatmem-h30" "$MEM_EMAIL" mem123456 user 0
+ck T30-member-invited '"invite":\{[^}]*"code":"inv_' "$MF_CREATE"
 MID30=$(sq "SELECT id FROM users WHERE username='uatmem-h30' LIMIT 1" | tr -d '[:space:]')
-MT=$(tok uatmem-h30 mem123456); MH="Authorization: Bearer $MT"
+MH="Authorization: Bearer $MF_TOKEN"
 ck T30-member-no-grant-403 '只读授权' "$(get "$MH" "/api/admin/kb-entries?package_id=$PID30")"
 GRANT_READ='{"pack_id":'$PID30',"user_id":'$MID30',"role":"read"}'
 ck T30-grant-read '"success":true' "$(post "$H1" "$GRANT_READ" /api/admin/kb-packages/grants)"
@@ -788,7 +836,9 @@ ck T30-terms-target '"target":"server"' "$R"
 ck T30-terms-no-anon 'API Key' "$(curl -s -G "$B/openapi/v1/terms" --data-urlencode "q=服务器")"
 
 # ---------- T31（H12）TMX 导出：成员拒 / 文档结构 / 非法语言 / 匿名拒 ----------
-MEMT=$(tok uatmem-h30 mem123456)
+# ★ B3-c：重拨一次按邮箱的登录，而不是复用几十行之外 mf_onboard 留下的 $MF_TOKEN
+#   （跨段复用全局＝把两段耦在不显式的顺序上，下一次在中间插入的 mf_onboard 会静默改掉它）。
+MEMT=$(mf_token "$MEM_EMAIL" mem123456)
 ck T31-tmx-member-403 '"success":false' "$(get "Authorization: Bearer $MEMT" /api/translation/export-tmx)"
 R=$(curl -s -D /tmp/t31_h.txt "$B/api/translation/export-tmx?lang=en" -H "$H1")
 ck T31-tmx-doc 'tmx version="1.4"' "$R"
@@ -1016,19 +1066,33 @@ echo "--- T37 今日修复回归（org_id=0 越权/auto_charge 收敛/sso_code �
 ORG37=$(post "$AH" "{\"name\":\"T37研发部\",\"type\":\"dept\",\"tenant_id\":$TAID}" /api/admin/orgs/create)
 ck T37-org-create '"success": *true' "$ORG37"
 OID37=$(echo "$ORG37" | pv '.get("org",{}).get("id") or 0')
-post "$AH" "{\"username\":\"t37_dept\",\"password\":\"uatpass123\",\"display_name\":\"T37部门管理员\",\"role\":\"dept_admin\",\"tenant_id\":$TAID,\"org_id\":$OID37}" /api/admin/users/create >/dev/null
-post "$AH" "{\"username\":\"t37_member\",\"password\":\"uatpass123\",\"display_name\":\"T37部门成员\",\"role\":\"user\",\"tenant_id\":$TAID,\"org_id\":$OID37}" /api/admin/users/create >/dev/null
-post "$AH" "{\"username\":\"t37_ta\",\"password\":\"uatpass123\",\"display_name\":\"T37租管对照\",\"role\":\"tenant_admin\",\"tenant_id\":$TAID}" /api/admin/users/create >/dev/null
-TD37=$(tok t37_dept uatpass123); HD37="Authorization: Bearer $TD37"
+# ★ 2026-10-24 多身份 B3-c（R9）：三个账号全部改走「发链接 → 本人凭链接注册」入职链。
+#   角色与部门由**链接预绑**（invite_codes.role/org_id），注册落位时取自凭据（register_identity.go 的
+#   createEnterpriseJoin），与旧「建号时直接写 role/org_id」给出同一组库内事实，本段的判据前提没变。
+#   每段调用后立刻把全局抄进本段专属变量：mf_onboard 会覆写 MF_*，跨段复用＝顺序耦合。
+mf_onboard "$AH" "$TAID" "t37_dept" "t37_dept@test.com" uatpass123 dept_admin "$OID37"
+TD37="$MF_TOKEN"; R37D="$MF_REG"
+HD37="Authorization: Bearer $TD37"
+mf_onboard "$AH" "$TAID" "t37_member" "t37_member@test.com" uatpass123 user "$OID37"
+R37M="$MF_REG"
+mf_onboard "$AH" "$TAID" "t37_ta" "t37_ta@test.com" uatpass123 tenant_admin 0
+R37T="$MF_REG"
 ck T37-dept-login-ok '^.{20,}$' "$TD37"
-MEM37ID=$(sq "SELECT id FROM users WHERE username='t37_member'" | tr -d '[:space:]')
+# 三条注册回执逐一判成：下面「重置/停用」两条判据的前提是「这三行都真在库里且角色/部门如预期」。
+# 少判一条，红就落在「无权操作未分配部门」这类与真实缺陷同形的文案上，定位成本反而更高。
+ck T37-join-dept '"success": *true' "$R37D"
+ck T37-join-member '"success": *true' "$R37M"
+ck T37-join-ta '"success": *true' "$R37T"
+# ★ 多身份批：一个 username 可能有多条身份行，这里要的是「入职时那行家行」的 id
+#   （成员行 is_home=0 只在本人切到个人身份时才有，且角色/部门都记在家行上）。
+MEM37ID=$(sq "SELECT id FROM users WHERE username='t37_member' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 # 子树内正常授权不被误伤：部门管理员重置本部门成员密码仍应成功（防修过头）
 # ★ T37-UAT 脚本修复（2026-09-15）：body 先落变量再传 post —— 内联 \" 转义串在
 #   ck "$(...)" 双层命令替换下偶发解析漂移导致 400「请求格式错误」，非产品缺陷。
 T37BODY="{\"id\":$MEM37ID,\"password\":\"DeptOk@37x\"}"
 ck T37-subtree-still-ok '"success": *true' "$(post "$HD37" "$T37BODY" /api/admin/users/reset-password)"
 # 核心断言：org_id=0 的租户管理员，部门管理员重置/停用必须 403
-TA37ID=$(sq "SELECT id FROM users WHERE username='t37_ta'" | tr -d '[:space:]')
+TA37ID=$(sq "SELECT id FROM users WHERE username='t37_ta' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 R37=$(post "$HD37" "{\"id\":$TA37ID,\"password\":\"Hijack@37x\"}" /api/admin/users/reset-password)
 ck T37-p0x-reset-org0-403 '未分配部门|无权|权限不足' "$R37"
 R37b=$(post "$HD37" "{\"id\":$TA37ID,\"status\":\"disabled\"}" /api/admin/users/update)
@@ -1172,12 +1236,18 @@ import sys, zipfile
 try:
     z = zipfile.ZipFile(sys.argv[1])
     names = z.namelist()
-    print(f"{len(names)}|{'Y' if any('_en' in n for n in names) else 'N'}|{'Y' if any('_ja' in n for n in names) else 'N'}")
+    # ★ 语言码判据按 `-<lang>`（★ 2026-10-24 用户令「译文产物统一 -lang」，AGENTS §一·18）。
+    #   旧写法判 `_en`/`_ja`——那是 O-03 之前的历史形态，改名后这两条**恒红**而 zip 完全正常，
+    #   属于 AGENTS §三④ 那一族「实现对、判据的靶子搬了家」；改判据、不动产品。
+    print(f"{len(names)}|{'Y' if any('-en' in n for n in names) else 'N'}|{'Y' if any('-ja' in n for n in names) else 'N'}|" + ",".join(names[:8]))
 except Exception as e:
-    print(f"0|N|N")
+    print(f"0|N|N|<zip 读取失败:{e}>")
 EOF
 )
 ZC39="${ZINFO%%|*}"; ZEN39=$(echo "$ZINFO" | cut -d'|' -f2); ZJA39=$(echo "$ZINFO" | cut -d'|' -f3)
+# 红字必须自带**条目实际名**：这一条分不清「zip 里没有语言后缀」与「后缀换了形状」，
+# 光看 want[N] 下一条只能人肉重新解包（判据失败信息要直接点明病因，同 §一 那族纪律）。
+echo "INFO|T39-zip-names|${ZINFO#*|*|*|}"
 [ "${ZC39:-0}" -ge 2 ] && { PASS=$((PASS+1)); echo "PASS|T39-zip-entries"; } || { FAIL=$((FAIL+1)); echo "FAIL|T39-zip-entries($ZINFO)"; }
 ck T39-zip-has-en '\|Y\|' "|$ZEN39|"
 ck T39-zip-has-ja 'Y$' "$ZJA39"
@@ -1243,12 +1313,25 @@ N40=$(printf '%s' "$R40S" | grep -oE '预估需约 [0-9]+ 积分' | grep -oE '[0
 if [ -z "$N40" ]; then
   FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-allowed-after-topup(文案里没解析出预估积分，resp=$(echo "$R40S" | head -c 160))"
 else
-  T40TID=$(dbq "SELECT tenant_id FROM users WHERE username='$T40U'" | tr -dc '0-9')
-  G40=$(( (N40 + 1000) * RATE ))
-  NOW40=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  dbq "INSERT INTO quota_grants (tenant_id,kind,total,\"left\",expires_at,source,ref_id,created_at) VALUES ($T40TID,'uat',$G40,$G40,'2099-12-31T23:59:59Z','uat_t40_topup',0,'$NOW40')" >/dev/null
-  R40T=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
-  ck T40-pdf-allowed-after-topup '"success":true' "$R40T"
+  # ★ 租户号问**这一把令牌自己的会话**（/api/auth/me 的 user.tenant_id），不按用户名查库。
+  #   理由（★ 2026-10-24 多身份批后 run7 实测）：同一个 username 在库里可以有**多行**
+  #   （家行 is_home=1 ＋ 个人 `pa_` 身份行），旧写法 `SELECT tenant_id FROM users WHERE username=… | tr -dc '0-9'`
+  #   把多行数字**粘成一个不存在的租户号**（如 12 与 34 → 1234），额度插进查不到的租户 ⇒
+  #   重试照旧报「当前余额约 1100 积分」。红的是夹具不是产品，而钱确实一分没到账，所以这里
+  #   既换尺子（会话自己报租户）又加一条落库验证（额度必须落在那一个租户名下）。
+  T40TID=$(get "Authorization: Bearer $T40TK" /api/auth/me | pv ".get('user',{}).get('tenant_id','')" | tr -dc '0-9')
+  if [ -z "$T40TID" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-allowed-after-topup(会话取不到 tenant_id，无法给该租户补额度)"
+  else
+    G40=$(( (N40 + 1000) * RATE ))
+    NOW40=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    dbq "INSERT INTO quota_grants (tenant_id,kind,total,\"left\",expires_at,source,ref_id,created_at) VALUES ($T40TID,'uat',$G40,$G40,'2099-12-31T23:59:59Z','uat_t40_topup',0,'$NOW40')" >/dev/null
+    ckq T40-grant-landed-in-session-tenant 1 "$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$T40TID AND source='uat_t40_topup'" | tr -dc '0-9')"
+    R40T=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
+    ck T40-pdf-allowed-after-topup '"success":true' "$R40T"
+    # 收尾：把自己插的那份额度撤掉，别把它留给后面的段当余额（同文件 T40 之后还有超支判据）。
+    dbq "DELETE FROM quota_grants WHERE tenant_id=$T40TID AND source='uat_t40_topup'" >/dev/null
+  fi
 fi
 # 大文件：积分余额×现读汇率×13 字节（预检按内部 token 估算，/12/1.3×1.5 后仍超余额）；封顶 35MB（<40MB 上传上限）
 T40BIG=$(( T40BAL * RATE * 13 )); [ "$T40BIG" -gt 36700160 ] && T40BIG=36700160
@@ -1498,7 +1581,9 @@ echo "$R" | grep -q 'alipay://precreate' && { FAIL=$((FAIL+1)); echo "FAIL|T43-a
 # ① users/update 把租户内账号提升为 admin → 400（create 侧不变量的 update 侧收口）
 #   注意：macOS 自带 bash 3.2 对 "$(...)" 内再嵌 \" 的解析有缺陷（body 会被拆坏），
 #   断言一律用「两段式」（先 R=$(post …) 再 ck … "$R"），与 T1 段口径一致。
-BID43=$(sq "SELECT id FROM users WHERE username='uatuser_b' LIMIT 1" | tr -d '[:space:]')
+# ★ 2026-10-25 归因批①：钉家行——多身份下这条 id 若取到个人 pa_ 行，下面那句 SQL 强插旧角色
+#   会落在一条"不属于登录 token"的行上，T43 三条腿于是测不到预期的 RBAC 拒绝分支（判据恒真/恒假）。
+BID43=$(sq "SELECT id FROM users WHERE username='uatuser_b' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 R=$(post "$AH" "{\"id\":$BID43,\"role\":\"admin\"}" /api/admin/users/update)
 ck T43-update-promote-reject '仅可分配给平台级账号|tenant_id=0' "$R"
 # ② SQL 强插违规行模拟存量数据 → 该账号（旧角色 admin 但挂具体租户）：
@@ -1698,7 +1783,8 @@ ck T49-seed-invite-paid "^$(( 1000 * RATE ))\|0\|event$" "$(dbq "SELECT reward_t
 ck T49-seed-kb "^$(( 600 * RATE ))\|0\|once$" "$(dbq "SELECT reward_tokens||'|'||valid_days||'|'||period FROM user_tasks WHERE task_key='kb_upload'")"
 
 # ① 登录事件钩子：再登录一次 uatuser_a → 应落一笔 task/100 积分 临时台账，且同日不重复发放
-UAID=$(sq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -dc '0-9')
+# ★ 2026-10-25 归因批①：同 TAID，钉家行（登录 token 落在这一行，任务奖励也记在这一行）。
+UAID=$(sq "SELECT id FROM users WHERE username='uatuser_a' AND is_home=1 LIMIT 1" | tr -dc '0-9')
 : $(tok uatuser_a uatpass123)
 ck T49-login-grant "^$(( 100 * RATE ))\|task:login_daily$" "$(dbq "SELECT total||'|'||source FROM quota_grants WHERE tenant_id=$TAID AND kind='task' AND source='task:login_daily' ORDER BY id DESC LIMIT 1")"
 : $(tok uatuser_a uatpass123)
@@ -2698,10 +2784,13 @@ B60TEN="{\"tenant_id\":$TBID,\"points\":200,\"money\":0}"
 req3 POST "" /api/admin/orders/create "$B60TEN"; ck3 T60-adminorder-anon-401 401 UNAUTHORIZED '未登录'
 req3 POST "$H60A" /api/admin/orders/create "$B60TEN"; ck3 T60-adminorder-cross-tenant-403 403 FORBIDDEN '权限不足'
 U60="uatmem60$(date +%s)"
-B60USER="{\"username\":\"$U60\",\"password\":\"uatpass123\",\"display_name\":\"T60普通用户\",\"role\":\"user\",\"tenant_id\":$TAID}"
-post "$AH" "$B60USER" /api/admin/users/create >/dev/null
-M60=$(tok $U60 uatpass123); H60="Authorization: Bearer $M60"
-ck T60-member-login '^.{20,}$' "$M60"
+# ★ 2026-10-24 多身份 B3-c（R9）：普通成员改走「发链接 → 注册」入职链；用户名每轮带时间戳，
+#   邮箱也跟着带（同租户邮箱唯一，固定邮箱在第二轮 run_uat 复用同一库时会撞「已是本企业成员」）。
+E60="${U60}@test.com"
+mf_onboard "$AH" "$TAID" "$U60" "$E60" uatpass123 user 0
+ck T60-member-invited '"invite":\{[^}]*"code":"inv_' "$MF_CREATE"
+H60="Authorization: Bearer $MF_TOKEN"
+ck T60-member-login '^.{20,}$' "$MF_TOKEN"
 req3 POST "$H60" /api/pay/create "$B60MOCK"; ck3 T60-create-member-403 403 FORBIDDEN '权限不足'
 req3 POST "$H60" /api/coupon/preview "$B60CP"; ck3 T60-coupon-preview-member-403 403 FORBIDDEN '权限不足'
 req3 POST "" /api/coupon/preview "$B60CP"; ck3 T60-coupon-preview-anon-401 401 UNAUTHORIZED '未登录'
@@ -3503,7 +3592,7 @@ U69M="uatuser_t69m$SFX69"; B69M=$(t69invitebody "$U69M" "$CODE69" "$DEV69A")
 req3 POST "" /api/auth/register "$B69M"; cks T69-invite-join-ok 200
 ckq T69-invite-no-platform-seat "$G0_69" "$(t69cnt reg_day global)"
 ckq T69-invite-no-device-progress "$D0_69" "$(t69cnt reg_dev "$DEV69A")"
-TID69M=$(dbq "SELECT tenant_id FROM users WHERE username='$U69M'" | tr -d '[:space:]')
+TID69M=$(dbq "SELECT tenant_id FROM users WHERE username='$U69M' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 ckq T69-invite-into-coder-tenant "$TAID" "$TID69M"
 
 # ④ 脏设备号：不 400（对外契约），但照记平台账、且脏值不得进限流账本
@@ -3689,6 +3778,46 @@ ckq T70-cleanup-config-empty 0 "${CK70:-0}"
 #      （同 §一·12「就绪判据不许吃零值」）。
 # ============================================================================
 echo "=== T71 语音与图片三件套（OCR/ASR/TTS）"
+
+# ★ 夹具自伤防线（本段与 T72 各拨一次，实现收在 zero_daily_usage 一个函数里）：
+#   矩阵在前面几十段里把演练租户的「今日已用」累计压过了产品默认日限额（ops 档位 20000），
+#   于是本段任何要**真发起一次翻译**的腿都会先撞上「已达到今日用量上限」——
+#   红的是**累计用量**，不是本批改的东西（同 AGENTS §一·10「UAT 矩阵必须把防薅档开大」那一族）。
+#   口径：这里清的是**计数器**（usage_daily.total），不动档位、不动流水（usage_ledger 一字不删——
+#   它对账证据与退款核算都要用，删了就是把缺陷藏进记账层）。
+#   ⚠️ 必须用 UPDATE 置 0 而不是 DELETE：DailyUsage 在「当日行缺失」时会回退到 usage_ledger 的
+#   当日 LIKE 聚合（store/billing.go 的 C5 存在性判定），删行等于把拦源从计数器换成流水，
+#   清不干净。留行为 0 才是这条链真正的"今日没用过"形态。
+zero_daily_usage(){
+  local day; day=$(date -u +%Y-%m-%d)  # day 主键由后端按 UTC 写（AGENTS §一·18「账单时间口径保留 UTC」）
+  dbq "UPDATE usage_daily SET total=0 WHERE day='$day'" >/dev/null
+}
+zero_daily_usage
+
+# ★ 夹具自清（本段与 T72 各自建的个人版演练账号必须连**自己那一家租户**一起摘掉，
+#   不许留 orphan：注册口会给个人版发体验额度（quota_grants/user_trial_grants），
+#   只删 users 行就把一家"库里没人认领、界面上看不见"的空租户留在了测试数据里。
+#   口径沿用 T53/T54 那两段的显式读数删除（按 username 现读 tenant_id，不按时序/前缀批量删）。
+# drop_fixture_user <用户名>：把夹具账号在库里留下的行清干净（★ 2026-10-24 多身份批配套）。
+# ★ 两个判据级坑（本批实测后写死在这里，别改回"看起来更简洁"的形态）：
+#   ① **租户必须逐行取**：同一个 username 现在可以有**多行**（家行 ＋ 个人 `pa_` 身份行），
+#      旧写法 `SELECT tenant_id … | tr -dc '0-9'` 把两行数字粘成一个不存在的租户号
+#      （12 与 34 → 1234），于是六条 DELETE 全部删不到东西而**不报错**——夹具残留长期隐身。
+#   ② 用户维度的表走**子查询**而不是先取 id 再拼：多身份下 user_trial_grants 可能一行有多个 user_id。
+#   另：`usage_ledger` 与 `usage_daily` **刻意不清**（账本是不可变事实，清理口径见 AGENTS §一·18）。
+drop_fixture_user(){ local un="$1" line tid
+  dbq "DELETE FROM user_trial_grants WHERE user_id IN (SELECT id FROM users WHERE username='$un')" >/dev/null
+  for line in $(dbq "SELECT DISTINCT tenant_id FROM users WHERE username='$un'" | tr -cd '0-9 \n'); do
+    tid=$(printf '%s' "$line" | tr -dc '0-9'); [ -n "$tid" ] || continue
+    dbq "DELETE FROM quota_grants WHERE tenant_id=$tid" >/dev/null
+    dbq "DELETE FROM api_keys WHERE tenant_id=$tid" >/dev/null
+    dbq "DELETE FROM packages WHERE tenant_id=$tid" >/dev/null
+    dbq "DELETE FROM tickets WHERE tenant_id=$tid" >/dev/null
+    dbq "DELETE FROM tenants WHERE id=$tid" >/dev/null
+  done
+  dbq "DELETE FROM users WHERE username='$un'" >/dev/null
+  dbq "DELETE FROM rate_limits WHERE key LIKE '$un%'" >/dev/null
+}
 
 # bool71 <json文本> <键> → "true" / "false" / 空串（键缺失或值不是布尔一律回空）
 #   分成"空"而不是把缺失压成 false：缺失＝这个二进制里**压根没有这一档**，
@@ -3936,7 +4065,366 @@ TK71WAV=${TK71WAV:-0}
 dbq "DELETE FROM tickets WHERE id IN ($TK71IMG,$TK71WAV)" >/dev/null
 R71TK=$(dbq "SELECT COUNT(*) FROM tickets WHERE id IN ($TK71IMG,$TK71WAV)" | tr -d '[:space:]')
 ckq T71-cleanup-tickets 0 "${R71TK:-0}"
+# 演练账号连自己那一家租户一起摘掉（见段头 drop_fixture_user 的口径），并回验库里真的一条不剩。
+drop_fixture_user "$T71U"
+ckq T71-cleanup-fixture-user-zero 0 "$(dbq "SELECT COUNT(*) FROM users WHERE username='$T71U'" | tr -dc '0-9')"
 rm -rf "$TMPD71"
+
+# ----------------------------------------------------------------------------
+# ---------- T72 2026-10-24/25 批：多身份 R4/R5/R9 ＋ 服务端 SEO ＋ 产物文件名 ----------
+#
+# 为什么单独开一段而不是塞进各功能段：本批的六件事（管理台建号改邀请链接、凭链接入职、
+# 纯企业账户登录补建个人身份、身份清单/切换、12 语种服务端 SEO、译文产物 `-<lang>`）
+# 是**一条链**——邀请链接建出来的那个身份，正是"登录后要补建个人身份、要能切换、
+# 且全账户只能拿一份体验补贴"的那个账号。拆成六段各起各的夹具，等于每段都要重放
+# 一遍入职，而夹具越厚、断言越测不到真接线（AGENTS §三「判据级代替不了守卫级」）。
+#
+# 三条施工纪律：
+#   ① **HTTP 面优先，库里读数只做证据**：能被接口回吐的（token、identities、Content-Disposition、
+#      `<title>`）一律先打接口；只有接口不出的事实（占位账 tokens=0、审计归属租户）才直读库。
+#   ② **不写死档位数字**：SEO 的期望标题从 `frontend-react/src/seo/route_meta.json` **现读**，
+#      文案改了断言跟着改不了（那是事实源变了，不是判据坏了）。
+#   ③ **清理只按本段自己的显式 id**：邀请码、账号号（account_id）、补建出来的个人租户各删各的，
+#      不许按时间/前缀批量删（AGENTS §一·4 那条「恒失败的 DELETE」同族风险）。
+# ----------------------------------------------------------------------------
+# 本段令牌就地重登：前段 T6 改过 admin 口令、T57 起多处轮换过 $H1（文件头那条老坑）。
+# 日计数器再清一次：T71 那一段自己也要真译几单，累计到本段又会顶穿日限额（判据见 T71 段头）。
+zero_daily_usage
+T72AT=$(tok "$ADMIN_USER" "$ADMIN_PASS"); T72AH="Authorization: Bearer $T72AT"
+T72U="uat72member"
+T72E="uat72member@t72.uat"
+T72P="Uat72@Pass!"
+# 本段专用助手（只服务 T72，命名带 72 前缀防与别段撞名）
+# t72ids：把 identities 数组折成 `tid|P|E|H|-` 的行序列——切换器的契约是"哪一行是家、
+#          哪一行是个人版"，比整段 JSON 做子串匹配稳（同 §一·3 那条"取那一个字段做等值"）。
+t72ids(){ python3 -c 'import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    d = {}
+for i in (d.get("identities") or []):
+    print("%s|%s|%s|%s" % (i.get("tid"), "P" if i.get("is_personal") else "E",
+                           "H" if i.get("is_home") else "-", i.get("uid")))' 2>/dev/null; }
+# t72cnt：HTML 里某个形态出现几次（hreflang 13 条、twitter:image 1 条这类**计数**判据）。
+t72cnt(){ printf '%s' "$1" | grep -oE "$2" | wc -l | tr -d '[:space:]'; }
+# t72title：取 <title> 文本并**做实体解码**（标题锁比的是最终出栈形态，不是"有没有注入"）。
+#   必须先 html.unescape 再比：直出面按 HTML 规范把 `&` 写成 `&amp;`（这是**正确**的出栈形态，
+#   浏览器与 Google 都按实体解回 `&`），而事实源 route_meta.json 存的是字面 `Pricing & Plans`；
+#   不剥实体就永远「want=Pricing & Plans / got=Pricing &amp; Plans」，红的是判据的读法，不是注入。
+t72title(){ printf '%s' "$1" | python3 -c 'import sys, re, html
+m = re.search(r"<title[^>]*>(.*?)</title>", sys.stdin.read(), re.S)
+print(html.unescape(m.group(1)) if m else "")' 2>/dev/null; }
+# t72ucount：该用户名下的 users 行数（R9 的判据是"这一步**不产生**可登录账号"，
+#              光看接口回 success 不够——旧形态建了行也照样回成功）。
+t72ucount(){ dbq "SELECT COUNT(*) FROM users WHERE username='$T72U'" | tr -dc '0-9'; }
+
+# ① R9：企业档建号**不再录入初始口令**——带 password 必须被显式拒，而不是被静默忽略后发链接。
+#    静默忽略的坏形态是"管理员以为自己设的口令生效了"，而本人注册时自设的是另一句。
+B72PWD=$(printf '{"username":"%s","email":"%s","password":"%s","role":"user","tenant_id":%s}' "$T72U" "$T72E" "$T72P" "$TAID")
+req3 POST "$T72AH" /api/admin/users/create "$B72PWD"
+ck3 T72-r9-enterprise-password-rejected 400 VALIDATION_ERROR '不再录入初始口令'
+ckq T72-r9-reject-creates-no-user 0 "$(t72ucount)"
+
+# ② 无 password ⇒ 发一枚一次性专属邀请链接；users 行仍然**一个都不建**（"链接 ≠ 账号"）。
+B72NEW=$(printf '{"username":"%s","email":"%s","role":"user","tenant_id":%s}' "$T72U" "$T72E" "$TAID")
+req3 POST "$T72AH" /api/admin/users/create "$B72NEW"
+cks T72-r9-link-create-200 200
+ck T72-r9-link-code-shape '"code":"inv_[0-9a-f]{32}"' "$R3BODY"
+LINK72=$(printf '%s' "$R3BODY" | mf_field invite.code)
+ckq T72-r9-link-create-creates-no-user 0 "$(t72ucount)"
+
+# ③ 预绑邮箱是最强绑定（§6.2）：换邮箱注册必须拒，且**不烧掉**那枚链接
+#    （拒绝发生在 MarkInviteCodeUsed 之前——同 T69「客户自己发的码不占平台名额」那条取向）。
+B72WRONG=$(printf '{"username":"%s","password":"%s","email":"%s","type":"enterprise","role_choice":"member","invite":"%s","agreed":true}' "$T72U" "$T72P" "wrong72@t72.uat" "$LINK72")
+req3 POST "" /api/auth/register "$B72WRONG"
+ck3 T72-bound-email-mismatch 400 VALIDATION_ERROR '只能由指定邮箱'
+USED72A=$(dbq "SELECT used FROM invite_codes WHERE code='$LINK72'" | tr -dc '0-9')
+ckq T72-mismatch-does-not-burn-code 0 "${USED72A:-0}"
+# 脏/不存在的码各回一句可行动的话（旧形态一句"邀请码无效"包打四种病因，
+# 客户既不知道是打错了还是过期了，也不知道该找谁）。
+B72NOCODE=$(printf '{"username":"%s","password":"%s","email":"%s","type":"enterprise","role_choice":"member","invite":"","agreed":true}' "$T72U" "$T72P" "$T72E")
+req3 POST "" /api/auth/register "$B72NOCODE"
+ck3 T72-empty-enterprise-code 400 VALIDATION_ERROR '请填写企业邀请码'
+B72BOGUS=$(printf '{"username":"%s","password":"%s","email":"%s","type":"enterprise","role_choice":"member","invite":"inv_00000000000000000000000000000000","agreed":true}' "$T72U" "$T72P" "$T72E")
+req3 POST "" /api/auth/register "$B72BOGUS"
+ck3 T72-unknown-enterprise-code 400 VALIDATION_ERROR '邀请码无效'
+
+# ④ 本人凭链接注册：拿到会话、恰好建一行、这一行是**家行**且账户号已回填。
+#    先钉企业租户 trial 额度格的**基线读数**：$TAID 是 A 段就建好的老租户，入驻/onboarding 那批
+#    本来就在 quota_grants 里给它发过体验额度，所以本段的判据问的是"这一次入职**没有新增**格子"，
+#    不是"这张表对该租户恒为空"（AGENTS §三「对账类判据必须在同一时刻取基线读数、只比增量」）。
+QGE72B=$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TAID AND kind='trial'" | tr -dc '0-9')
+[ -n "$QGE72B" ] || QGE72B=0
+B72REG=$(printf '{"username":"%s","password":"%s","email":"%s","type":"enterprise","role_choice":"member","invite":"%s","agreed":true}' "$T72U" "$T72P" "$T72E" "$LINK72")
+req3 POST "" /api/auth/register "$B72REG"
+cks T72-register-200 200
+ck T72-register-token '"token":"[^"]' "$R3BODY"
+ckq T72-register-creates-one-user 1 "$(t72ucount)"
+UID72=$(dbq "SELECT id FROM users WHERE username='$T72U'" | tr -dc '0-9')
+HOME72=$(dbq "SELECT is_home FROM users WHERE id=$UID72" | tr -dc '0-9')
+ckq T72-enterprise-row-is-home 1 "${HOME72:-0}"
+ACC72=$(dbq "SELECT account_id FROM users WHERE id=$UID72" | tr -d '[:space:]')
+ckq T72-account-id-backfilled "yes" "$([ -n "$ACC72" ] && echo yes || echo no)"
+# 同一枚码第二次使用必须拒（一次性是这条链的安全边界；用完了还能用＝一枚码招一车人）。
+#    文案按**病因分档**（本批产品侧的改动）：「邀请码无效」只属于脏码/不存在那一档（上面 ③ 的
+#    反向对照锁的就是那一句），用过的链接必须点名"已被使用＋该找谁"，否则客户会反复重试同一枚。
+req3 POST "" /api/auth/register "$B72REG"
+ck3 T72-code-single-use 400 VALIDATION_ERROR '该邀请链接已被使用'
+USED72B=$(dbq "SELECT used FROM invite_codes WHERE code='$LINK72'" | tr -dc '0-9')
+ckq T72-code-marked-used-after-success 1 "${USED72B:-0}"
+#    反向对照（放在入职**之后**才有判别力）：同租户同邮箱再生成邀请链接必须被拒——
+#    "这人已经是成员了"在源头就拒，比先发链接再在注册口撞「你已在该企业中」少烧一枚码、
+#    也少一次"管理员以为是链接坏了"的无效排查。
+req3 POST "$T72AH" /api/admin/users/create "$B72NEW"
+ck3 T72-r9-duplicate-email-rejected 409 CONFLICT '已是本企业成员'
+
+# ⑤ R5（钱的口径）：企业身份那一行落的是 **tokens=0 的"不发放"占位账**，
+#    它是持久事实（补发腿判据是"从没在 user_trial_grants 出现过"，只砍注册那条腿救不了）。
+SRC72=$(dbq "SELECT source FROM user_trial_grants WHERE user_id=$UID72" | tr -d '[:space:]')
+ckq T72-r5-enterprise-no-trial-source membership_no_trial "${SRC72:-<空>}"
+TOK72=$(dbq "SELECT tokens FROM user_trial_grants WHERE user_id=$UID72" | tr -dc '0-9')
+ckq T72-r5-enterprise-no-trial-tokens 0 "${TOK72:-0}"
+#    占位行**不得**给这家企业长出额度格子：企业租户上不该出现由体验发放来的 quota_grants。
+#    判据按 source 现读（不按 user_id——quota_grants 没有那一列，写错会让这句 DELETE/SELECT 恒失败）。
+QGE72=$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$TAID AND kind='trial'" | tr -dc '0-9')
+[ -n "$QGE72" ] || QGE72=0
+ckq T72-r5-enterprise-tenant-gets-no-trial-quota "$QGE72B" "$QGE72"
+
+# ⑥ R4：纯企业账户首次登录 ⇒ 自动补建一家个人版（租户码 pa_<account_id>，唯一索引是并发守卫）。
+#    口令登录走的是 handleLogin 出口，邮箱验证码登录那条腿另有单测——这里只锁真链路。
+T72T=$(mf_token "$T72E" "$T72P"); H72="Authorization: Bearer $T72T"
+ckq T72-login-session "yes" "$([ ${#T72T} -ge 10 ] && echo yes || echo no)"
+PTID72=$(dbq "SELECT tenant_id FROM users WHERE account_id='$ACC72' AND tenant_id<>$TAID" | tr -dc '0-9')
+ckq T72-r4-personal-identity-created "yes" "$([ -n "$PTID72" ] && echo yes || echo no)"
+PCODE72=$(dbq "SELECT code FROM tenants WHERE id=$PTID72" | tr -d '[:space:]')
+ckq T72-r4-personal-tenant-code "pa_${ACC72}" "${PCODE72:-<空>}"
+PISPER72=$(dbq "SELECT is_personal FROM tenants WHERE id=$PTID72" | tr -dc '0-9')
+ckq T72-r4-personal-tenant-flagged 1 "${PISPER72:-0}"
+#    再登一次**不得**长出第二家（幂等腿；时间戳编码在这里会安静长出两家＝一人双份补贴）。
+T72T2=$(mf_token "$T72E" "$T72P")
+PROWS72=$(dbq "SELECT COUNT(*) FROM users WHERE account_id='$ACC72'" | tr -dc '0-9')
+ckq T72-r4-idempotent-two-rows 2 "${PROWS72:-0}"
+#    全账户**只有一份真实补贴**：企业行是占位（tokens=0），补建的个人行才是那一笔。
+REAL72=$(dbq "SELECT COUNT(*) FROM user_trial_grants WHERE tokens>0 AND user_id IN (SELECT id FROM users WHERE account_id='$ACC72')" | tr -dc '0-9')
+ckq T72-r5-one-real-subsidy-per-account 1 "${REAL72:-0}"
+#    正向对照：那一份补贴**落在补建出来的个人租户**上（钱记在个人版那一家，不是企业那一家）。
+QG72=$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$PTID72 AND kind='trial'" | tr -dc '0-9')
+ckq T72-r5-subsidy-lands-on-personal-tenant 1 "${QG72:-0}"
+
+# ⑦ 身份清单：家在前、恰好一个家、恰好一个个人版、企业那一行的 tid 就是入职那家。
+IDS72=$(get "$H72" /api/auth/identities | t72ids)
+ckq T72-identities-two-rows 2 "$(printf '%s\n' "$IDS72" | grep -c .)"
+ckq T72-identities-one-home 1 "$(printf '%s\n' "$IDS72" | grep -c '|H|')"
+ckq T72-identities-one-personal 1 "$(printf '%s\n' "$IDS72" | grep -c '|P|')"
+ck T72-identities-enterprise-tid-matches "$TAID" "$(printf '%s\n' "$IDS72" | grep '|E|' | cut -d'|' -f1)"
+ckq T72-identities-home-is-first-line H "$(printf '%s\n' "$IDS72" | head -1 | cut -d'|' -f3)"
+#    对照组：**新建**一个纯个人版用户，它在切换器里只有一条 ⇒ 前端不渲染切换入口。
+#    ⚠️ 刻意不用 uatuser_a 当对照组（首跑真踩）：那是 A 段共用的老夹具，本批 R4 之后它自己
+#    也长出了"企业 + 补建个人"两行身份，拿它判"单身份"测的是夹具的历史，不是这条判据的射程。
+#    新建的这一个走的是同一条注册链，唯一差别就是没有企业身份 ⇒ 才是那条"一行不渲染切换器"的对照。
+#    ★ 多身份批后「企业 + 补建个人」会长成两行，按用户名数行数会读出 2 ⇒ 这条对照腿必须把
+#      「还没登录过 ⇒ 只有一行」这一前提自己挣回来：下面 INFO 行打印实际行数，两行同现即假对照。
+T72CU="t72c_$(date +%s)$RANDOM"
+curl -s $B/api/auth/register -H "$J" -d '{"username":"'$T72CU'","password":"'$T72P'","type":"personal","name":"T72单身份对照","email":"'$T72CU'@t72.uat","agreed":true}' >/dev/null
+T72CT=$(tok "$T72CU" "$T72P")
+IDS72C=$(get "Authorization: Bearer $T72CT" /api/auth/identities | t72ids)
+ckq T72-identities-single-identity-control 1 "$(printf '%s\n' "$IDS72C" | grep -c .)"
+# INFO 行（不参与判定，只把**前提**打在屏幕上）：这条对照判据按 identitiy 接口数行数，
+# 而接口背后的物理形态是 users 行——若哪天纯个人注册也长出第二行（R4 的补建条件被放宽），
+# 光看接口绿灯看不出来，这一行读数会把「rows=2」摆在同一屏上，下一个人一眼见假对照。
+echo "INFO|T72-single-identity-control-rows=$(dbq "SELECT COUNT(*) FROM users WHERE username='$T72CU'" | tr -dc '0-9')"
+# ★ 多身份批：这条只问「账户号有没有回填」（非空即成），但按用户名数仍要钉一行——
+#   一人多行时 account_id 相同，tr -d 会把两行粘成一个非空串，判据照样绿却测的是夹具形状。
+ACC72C=$(dbq "SELECT account_id FROM users WHERE username='$T72CU' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+ckq T72-identities-control-account-assigned "yes" "$([ -n "$ACC72C" ] && echo yes || echo no)"
+
+# ⑧ 身份切换：同源凭证换身份，不再要口令；守卫只看账户归属（四种失败同一句 403，防枚举）。
+PTID_LINE=$(printf '%s\n' "$IDS72" | grep '|P|' | head -1)
+SWTID72=$(printf '%s' "$PTID_LINE" | cut -d'|' -f1)
+SWUID72=$(printf '%s' "$PTID_LINE" | cut -d'|' -f4)
+req3 POST "$H72" /api/auth/switch-identity "$(printf '{"tid":%s}' "$SWTID72")"
+cks T72-switch-200 200
+ck T72-switch-new-token '"token":"[^"]' "$R3BODY"
+SWUSERTID=$(printf '%s' "$R3BODY" | pv "['user']['tenant_id']")
+ckq T72-switch-user-is-personal "$SWTID72" "${SWUSERTID:-<空>}"
+SWTK72=$(printf '%s' "$R3BODY" | pv "['token']")
+#    新令牌**自己**打一次 /api/auth/me：切换响应里的 user 是后端当场拼的，
+#    而"这一枚令牌后续每一次请求都落在那一个身份"只能由读点自己回答（AGENTS §三
+#    「判"生效"必须由那一个消费方自己读出值来」）。路由口径注意：本仓的会话读点是
+#    /api/auth/me（server.go:305），写成 /api/me 得到的是 SPA 兜底那句「接口不存在」。
+ME72=$(get "Authorization: Bearer $SWTK72" /api/auth/me)
+ck T72-switch-session-carries-personal-tenant "\"tenant_id\":${SWTID72}" "$ME72"
+ck T72-switch-response-identities-array '"identities":\[' "$R3BODY"
+#    四条负向：别人的租户 / 缺 tid / 未登录 / 本账户没有的那一行——三种失败同一句 403 之外，
+#    只有"请求格式错误"分得开（那是入参问题，不是权限探测面）。
+req3 POST "$H72" /api/auth/switch-identity "$(printf '{"tid":%s}' "$TBID")"
+ck3 T72-switch-cross-account-forbidden 403 FORBIDDEN '无权切换到该身份'
+req3 POST "$H72" /api/auth/switch-identity '{}'
+ck3 T72-switch-missing-tid 400 VALIDATION_ERROR '请求格式错误'
+req3 POST "" /api/auth/switch-identity "$(printf '{"tid":%s}' "$SWTID72")"
+ck3 T72-switch-anon-401 401 UNAUTHORIZED '未登录'
+#    审计落在**目标**租户（切进哪家就在哪家留痕），detail 里 from→to 两个读数都要在。
+AUD72=$(dbq "SELECT COUNT(*) FROM audit_logs WHERE action='identity_switch' AND tenant_id=$SWTID72" | tr -dc '0-9')
+ckq T72-switch-audit-on-target-tenant 1 "${AUD72:-0}"
+ck T72-switch-audit-detail-has-pair "tid=[0-9]*→tid=${SWTID72}" "$(dbq "SELECT detail FROM audit_logs WHERE action='identity_switch' AND tenant_id=$SWTID72" | head -1)"
+#    被切换出来的那一行是成员行（is_home=0），它的凭证读点必须回到家行（D4：成员行不含口令）。
+SWHOME72=$(dbq "SELECT is_home FROM users WHERE id=$SWUID72" | tr -dc '0-9')
+ckq T72-switch-target-is-member-row 0 "${SWHOME72:-0}"
+
+# ⑨ 服务端 SEO 注入：12 语种各有自己的标题/canonical/hreflang，内页不再共用一句品牌模板。
+#    期望标题从**事实源**现读（AGENTS §一·18「SEO 服务端注入」那条：route_meta.json 唯一事实源）。
+ROOT72="$(cd "$(dirname "$0")/../.." && pwd)"
+RM72="$ROOT72/frontend-react/src/seo/route_meta.json"
+t72want(){ python3 -c 'import sys, json
+print((json.load(open(sys.argv[1]))["routes"].get(sys.argv[2], {}).get("title", {}) or {}).get(sys.argv[3], ""))' "$RM72" "$1" "$2" 2>/dev/null; }
+W72JA=$(t72want /pricing ja); W72EN=$(t72want /pricing en); W72AR=$(t72want /pricing ar); W72ZH=$(t72want /pricing zh)
+P72JA=$(curl -s --max-time 60 "$B/pricing?lang=ja")
+P72EN=$(curl -s --max-time 60 "$B/pricing?lang=en")
+P72AR=$(curl -s --max-time 60 "$B/pricing?lang=ar")
+ckq T72-seo-title-ja "$W72JA" "$(t72title "$P72JA")"
+ckq T72-seo-title-en "$W72EN" "$(t72title "$P72EN")"
+ckq T72-seo-title-ar "$W72AR" "$(t72title "$P72AR")"
+#    射程自证：三语种标题必须**互不相同**（都空或都相同 ⇒ 注入根本没生效，等值锁会假绿）。
+ckq T72-seo-three-titles-distinct 3 "$(printf '%s\n%s\n%s\n' "$W72JA" "$W72EN" "$W72AR" | sort -u | grep -c .)"
+#    canonical 必须指向**当前语言版本**（旧缺陷＝全站恒指首页，内页无法独立收录）。
+ck T72-seo-canonical-lang-scoped 'rel="canonical" href="https://[^"/]*/pricing\?lang=ja"' "$P72JA"
+ck T72-seo-ogurl-matches-canonical 'property="og:url" content="https://[^"/]*/pricing\?lang=ja"' "$P72JA"
+ck T72-seo-robots-indexable 'name="robots" content="index,follow"' "$P72JA"
+ckq T72-seo-hreflang-12-plus-xdefault 13 "$(t72cnt "$P72JA" 'hreflang="')"
+ck T72-seo-hreflang-bcp47-hans 'hreflang="zh-Hans"' "$P72JA"
+ck T72-seo-hreflang-bcp47-hant 'hreflang="zh-Hant"' "$P72JA"
+ck T72-seo-hreflang-xdefault 'hreflang="x-default"' "$P72JA"
+#    分享卡图族：图是**平台品牌资产**，平台域上必须整族在位（og:image＋配套宽高＋twitter:image＋大卡档）。
+ck T72-seo-og-image-abs-url 'property="og:image" content="https://[^"/]+/og-image\.png"' "$P72JA"
+ck T72-seo-og-image-width 'property="og:image:width" content="1200"' "$P72JA"
+ck T72-seo-og-image-height 'property="og:image:height" content="630"' "$P72JA"
+ck T72-seo-twitter-card-large 'name="twitter:card" content="summary_large_image"' "$P72JA"
+ckq T72-seo-twitter-image-exactly-one 1 "$(t72cnt "$P72JA" 'name="twitter:image"')"
+ckq T72-seo-og-image-exactly-one 1 "$(t72cnt "$P72JA" 'property="og:image"')"
+#    卡图本体必须真能取到（AGENTS §6 托管物口径：200 不够，还要非 HTML 兜底＋魔数）。
+OG72CODE=$(curl -s -o /tmp/uat72og.png -w '%{http_code}' --max-time 60 "$B/og-image.png")
+ckq T72-seo-og-image-200 200 "$OG72CODE"
+ckq T72-seo-og-image-is-png '89504e47' "$(od -An -tx1 -N4 /tmp/uat72og.png 2>/dev/null | tr -d ' \n')"
+rm -f /tmp/uat72og.png
+#    app 面（工作台）：noindex 且**一条 hreflang 都不许发**（发出去＝让爬虫去收录登录墙后面的地址）。
+T72TK=$(curl -s --max-time 60 "$B/tickets")
+ck T72-seo-app-route-noindex 'name="robots" content="noindex,nofollow"' "$T72TK"
+ckq T72-seo-app-route-no-hreflang 0 "$(t72cnt "$T72TK" 'hreflang="')"
+#    未知语种码 ⇒ 回落 x_default_lang（不是打错误页、也不是留空标题）。
+T72XX=$(curl -s --max-time 60 "$B/pricing?lang=xx")
+ckq T72-seo-unknown-lang-falls-back "$W72ZH" "$(t72title "$T72XX")"
+#    库档 kill switch：`seo_route_meta=0` 必须当场摘掉整族注入（运维不发版就能关的那条出路）。
+dbcfg seo_route_meta 0
+sleep 6
+T72OFF=$(curl -s --max-time 60 "$B/pricing?lang=ja")
+ckq T72-seo-killswitch-hreflang-zero 0 "$(t72cnt "$T72OFF" 'hreflang="')"
+ckq T72-seo-killswitch-title-not-replaced "yes" "$([ "$(t72title "$T72OFF")" != "$W72JA" ] && echo yes || echo no)"
+dbq "DELETE FROM system_config WHERE key='seo_route_meta'" >/dev/null
+sleep 6
+T72ON=$(curl -s --max-time 60 "$B/pricing?lang=ja")
+ckq T72-seo-killswitch-restored 13 "$(t72cnt "$T72ON" 'hreflang="')"
+ckq T72-seo-title-restored-after-key-removal "$W72JA" "$(t72title "$T72ON")"
+
+# ⑩ 译文产物文件名：`-<lang>`（用户令「统一短横」），`artifact_lang_suffix=0` 只作应急回落。
+TMPD72=$(mktemp -d)
+printf '译文文件名第一段：这是一个可下载的原位写回件。\n译文文件名第二段：交付名应带语言后缀。\n' > "$TMPD72/t72a.txt"
+cp "$TMPD72/t72a.txt" "$TMPD72/t72b.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD72/t72a.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T72-artifact-create '"success":true' "$R"
+TK72A=$(echo "$R" | pv "['ticket']['id']")
+D72A=$(waittk "$H1" "$TK72A")
+ck T72-artifact-completed '"status":"completed"' "$D72A"
+HD72A=$(curl -s -D - -o /dev/null "$B/api/tickets/download?id=${TK72A:-0}" -H "$H1" --max-time 30 | tr -d '\r')
+# ★ 判据只取**那一个响应头行**再断言（`grep -iE '^content-disposition:'`，同 api_uat.sh:181 既定口径）：
+#   Go 的 net/http 会把头名规范成 `Content-Disposition`（大写 C/D），而 ck 走大小写敏感的 grep -E，
+#   整段响应做 `content-disposition:.*名字` 的两条红**不是产品缺陷**——文件名后缀本来就已经是 `-en`。
+#   取单行还顺带避开第二类脆弱性：grep 按行匹配，整段 blob 上的 `.*` 永远跨不了行。
+CD72A=$(printf '%s' "$HD72A" | grep -iE '^content-disposition:')
+ck T72-artifact-name-dash-lang 't72a-en\.txt' "$CD72A"
+#    应急档：配置键写 0 ⇒ 同一张链长出 `_en`（历史客户脚本按旧名解析，出问题时要有一条不改代码的退路）。
+dbcfg artifact_lang_suffix 0
+sleep 6
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD72/t72b.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+TK72B=$(echo "$R" | pv "['ticket']['id']")
+D72B=$(waittk "$H1" "$TK72B")
+ck T72-artifact-underscore-fallback-completed '"status":"completed"' "$D72B"
+HD72B=$(curl -s -D - -o /dev/null "$B/api/tickets/download?id=${TK72B:-0}" -H "$H1" --max-time 30 | tr -d '\r')
+CD72B=$(printf '%s' "$HD72B" | grep -iE '^content-disposition:')
+ck T72-artifact-name-underscore-emergency 't72b_en\.' "$CD72B"
+ckn T72-artifact-underscore-no-dash-name 't72b-en' "$CD72B"
+dbq "DELETE FROM system_config WHERE key='artifact_lang_suffix'" >/dev/null
+
+# ⑪ 源码级防回退锁（行为侧已由各自的 Go 单测覆盖，这一族锁的是"别把判据改回旧口径"——同 T44）：
+#     · 英语避雷词只拦 kind=forbidden，日常词/情态动词不拦（用户令「收缩」，放开回去＝整站误杀）；
+#     · 文化规则块进 prompt 有上限（2000 字 / 30 条），输出侧仍用全量（截断只影响 prompt）；
+#     · 文本工单整单重发上限 3、文件漏译阈值 5% 都只有一处定义。
+SRC72A="$ROOT72/backend-go/internal/culture/culture.go"
+SRC72B="$ROOT72/backend-go/internal/engine/engine.go"
+SRC72C="$ROOT72/backend-go/internal/orchestrator/workflow.go"
+SRC72D="$ROOT72/backend-go/internal/engine/file.go"
+ck T72-src-culture-kind-gate 'k != "" && k != "forbidden"' "$(<"$SRC72A")"
+ck T72-src-culture-neutral-words 'var neutralEnWords = map' "$(<"$SRC72A")"
+ck T72-src-culture-limit-defaults 'cultureLimit\{MaxChars: 2000, MaxItems: 30' "$(<"$SRC72B")"
+ck T72-src-culture-limit-config-keys 'culture_rules_max_chars.*culture_rules_max_items|culture_rules_max_chars' "$(<"$SRC72B")"
+#  ★ 本批翻转（2026-10-25）：旧写法锁的是 `ConfigInt("ticket_repair_max", 3)` 这一**形状**，
+#    而那把尺子把 ≤0 读成"没配"并回落默认 ⇒ 方案档位表里的 `0＝不重发` 应急开关结构性按不下去
+#    （库里填 0、进程读回 3，日志零线索）。现在读点走 Store.ConfigIntAllowZero，
+#    这条锁随之改锁新尺子：把调用点改回 ConfigInt 会让本条判红，所以它同时是"别改回去"的负向腿。
+ckF T72-src-ticket-repair-max-zero-switch 'ConfigIntAllowZero("ticket_repair_max", 3)' "$(<"$SRC72C")"
+#    同族第二枚（text_ticket_per_line=0＝回退整篇）也锁读点尺子，防"只修了一个开关"：
+ckF T72-src-text-per-line-zero-switch 'ConfigIntAllowZero("text_ticket_per_line", 1)' "$(<"$ROOT72/backend-go/internal/orchestrator/text_lines.go")"
+ckF T72-src-leak-ratio-single-definition 'return leakedLangAt(lang, remain, total, leakedRatio())' "$(<"$SRC72D")"
+
+# ⑪b ★ 2026-10-25 对账补腿（方案 §10.1.2 与档位表另两行）——三条都是**现网方言层**才看得见的那一类：
+#     · tickets.repair_attempts **列真在库里**：Go 单测只跑 SQLite，PG 侧 EnsureColumns 走的是另一条
+#       DDL 分支；缺列时 StructureRetryNeeded 的第一次读就报错并**静默不重发**（界面一切正常、
+#       坏单不再自愈），所以这一腿按方言各问一次 information_schema／pragma_table_info，
+#       而不是只 grep 源码——源码写了不等于库里落了。
+#     · 计数读点**只认列**：workflow.go 里不许再出现载荷字段 `StructureRepairAttempts`
+#       （负向腿；留着就是第二把尺子，一次整段重写载荷就把上限抹回 0）。
+#     · 补列真的挂在启动链上：store.New 必须调用 TicketRepairAttemptsMigrate（同"有迁移没接线"那一族）。
+if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+  RA_COL=$(dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='tickets' AND column_name='repair_attempts'")
+else
+  RA_COL=$(dbq "SELECT COUNT(*) FROM pragma_table_info('tickets') WHERE name='repair_attempts'")
+fi
+ck T72-schema-repair-attempts-column '^1$' "${RA_COL:-0}"
+SRC72E="$ROOT72/backend-go/internal/orchestrator/workflow.go"
+SRC72F="$ROOT72/backend-go/internal/store/store.go"
+SRC72G="$ROOT72/backend-go/internal/engine/instruction_echo.go"
+ckF T72-src-repair-count-reads-column 'w.Store.IncTicketRepairAttempts(t.ID)' "$(<"$SRC72E")"
+ckn T72-src-no-second-ruler-payload-counter 'StructureRepairAttempts' "$(<"$SRC72E")"
+ckF T72-src-repair-migrate-wired-in-new 's.TicketRepairAttemptsMigrate()' "$(<"$SRC72F")"
+#    FILE_ECHO_GUARD 方案写的是 env > system_config > 默认开，而旧实现**只读 env**
+#    ⇒ 运营在管理台填 0 完全不生效（应急开关按不下去，同 ticket_repair_max 那一族）。
+#    这一腿锁"库档那一层在"：把读点改回只 os.Getenv 会让本条判红。
+ckF T72-src-echo-guard-db-tier 'GetConfig("file_echo_guard")' "$(<"$SRC72G")"
+
+# ⑫ 收尾清账：本段写的行按**显式 id**逐颗摘掉（补建出来的个人租户整家删，
+#     企业那一行与它的占位账也删；uatuser_a 名下只有两张本段工单，按 id 删）。
+dbq "DELETE FROM user_trial_grants WHERE user_id IN (SELECT id FROM users WHERE account_id='$ACC72')" >/dev/null
+dbq "DELETE FROM quota_grants WHERE tenant_id=$PTID72" >/dev/null
+dbq "DELETE FROM api_keys WHERE tenant_id=$PTID72" >/dev/null
+dbq "DELETE FROM packages WHERE tenant_id=$PTID72" >/dev/null
+dbq "DELETE FROM audit_logs WHERE tenant_id IN ($PTID72,$TAID) AND user_id IN (SELECT id FROM users WHERE account_id='$ACC72')" >/dev/null
+dbq "DELETE FROM users WHERE account_id='$ACC72'" >/dev/null
+dbq "DELETE FROM tenants WHERE id=$PTID72" >/dev/null
+dbq "DELETE FROM invite_codes WHERE code='$LINK72'" >/dev/null
+dbq "DELETE FROM rate_limits WHERE key='$T72E'" >/dev/null
+TK72A=${TK72A:-0}; TK72B=${TK72B:-0}
+dbq "DELETE FROM tickets WHERE id IN ($TK72A,$TK72B)" >/dev/null
+LEFT72=$(dbq "SELECT COUNT(*) FROM users WHERE account_id='$ACC72' OR username='$T72U'" | tr -dc '0-9')
+ckq T72-cleanup-users-zero 0 "${LEFT72:-0}"
+LEFT72T=$(dbq "SELECT COUNT(*) FROM tenants WHERE id=$PTID72" | tr -dc '0-9')
+ckq T72-cleanup-personal-tenant-zero 0 "${LEFT72T:-0}"
+LEFT72I=$(dbq "SELECT COUNT(*) FROM invite_codes WHERE code='$LINK72'" | tr -dc '0-9')
+ckq T72-cleanup-invite-code-zero 0 "${LEFT72I:-0}"
+#    ⑦ 的对照组账号（新建的纯个人版）同样连租户一起摘；它注册时拿到过体验额度，
+#    只删 users 行会留下一家没人认领的空租户（drop_fixture_user 段头有口径）。
+drop_fixture_user "$T72CU"
+ckq T72-cleanup-control-user-zero 0 "$(dbq "SELECT COUNT(*) FROM users WHERE username='$T72CU'" | tr -dc '0-9')"
+ckq T72-cleanup-config-keys-removed 0 "$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ('seo_route_meta','artifact_lang_suffix')" | tr -dc '0-9')"
+rm -rf "$TMPD72"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

@@ -5,7 +5,11 @@
 // ============================================
 package culture
 
-import "testing"
+import (
+	"testing"
+
+	"translator/internal/store"
+)
 
 // TestForbiddenHitNeutralExemption 验证中性常见词（control/hot）被豁免，不拦截正常英文译文。
 func TestForbiddenHitNeutralExemption(t *testing.T) {
@@ -57,5 +61,57 @@ func TestForbiddenHitBoundary(t *testing.T) {
 		if got := ForbiddenHit(c.target, c.text, c.phrase); got != c.want {
 			t.Errorf("ForbiddenHit(%q,%q,%q)=%v, want %v", c.target, c.text, c.phrase, got, c.want)
 		}
+	}
+}
+
+// TestEnglishCommonWordsNotBlocked ★ 2026-10-24 用户令：正常沟通交流的词不作避雷。
+// 这些词在英语里是语法骨架/日常词；无论 source=manual 还是 llm 都不应拦截。
+func TestEnglishCommonWordsNotBlocked(t *testing.T) {
+	words := []string{"must", "should", "can", "could", "will", "would", "may", "might", "need", "help", "use", "work"}
+	for _, w := range words {
+		sp := &store.KBSafetyPhrase{Lang: "en", Phrase: w, Kind: "forbidden", Source: "manual", Status: "approved"}
+		if IsBlockingForbiddenRule("en", sp) {
+			t.Errorf("日常词 %q 仍被当成拦截级避雷词", w)
+		}
+		if ForbiddenHitRule("en", "we must do this", sp) {
+			t.Errorf("日常词 %q 仍命中正常英文译文", w)
+		}
+	}
+}
+
+// TestAutoSingleWordOnlyObserves 自动采集的单字只观测、不拦截；多词短语仍拦截。
+func TestAutoSingleWordOnlyObserves(t *testing.T) {
+	single := &store.KBSafetyPhrase{Lang: "en", Phrase: "foobar", Kind: "forbidden", Source: "llm", Status: "approved"}
+	if IsBlockingForbiddenRule("en", single) {
+		t.Fatal("自动采集的单字不应拦截")
+	}
+	phrase := &store.KBSafetyPhrase{Lang: "en", Phrase: "sensitive phrase", Kind: "forbidden", Source: "llm", Status: "approved"}
+	if !IsBlockingForbiddenRule("en", phrase) {
+		t.Fatal("自动采集的多词短语仍应拦截")
+	}
+}
+
+// TestStyleAndReplaceNotTreatedAsForbidden style/replace 不是避雷词，不得进入词命中。
+func TestStyleAndReplaceNotTreatedAsForbidden(t *testing.T) {
+	style := &store.KBSafetyPhrase{Lang: "en", Phrase: "must", Kind: "style", Source: "manual", Status: "approved"}
+	replace := &store.KBSafetyPhrase{Lang: "en", Phrase: "must", Kind: "replace", Replacement: "should", Source: "manual", Status: "approved"}
+	if IsBlockingForbiddenRule("en", style) || IsBlockingForbiddenRule("en", replace) {
+		t.Fatal("style/replace 不应参与避雷拦截")
+	}
+}
+
+// TestRunCultureGateUsesRulePolicy 端到端：Run 只对真正的 forbidden 规则报命中。
+func TestRunCultureGateUsesRulePolicy(t *testing.T) {
+	safety := []*store.KBSafetyPhrase{
+		{Lang: "en", Phrase: "must", Kind: "forbidden", Source: "manual", Status: "approved"},
+		{Lang: "en", Phrase: "must", Kind: "style", Source: "manual", Status: "approved"},
+		{Lang: "en", Phrase: "sensitive phrase", Kind: "forbidden", Source: "manual", Status: "approved"},
+	}
+	res := Run("en", "we must finish the sensitive phrase", safety)
+	if res.Pass {
+		t.Fatal("真实多词避雷词应被拦截")
+	}
+	if got := res.Checks[0].Detail; got != "sensitive phrase" {
+		t.Fatalf("只应命中多词敏感词，实得 %q", got)
 	}
 }

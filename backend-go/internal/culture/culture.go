@@ -34,6 +34,45 @@ var neutralEnWords = map[string]bool{
 	"off": true, "on": true, "up": true, "down": true, "over": true, "under": true,
 	"out": true, "in": true, "near": true, "far": true, "hard": true, "soft": true,
 	"wet": true, "dry": true, "clean": true, "dirty": true, "empty": true, "full": true,
+	// ★ 2026-10-24 用户令「正常沟通交流的，不需要避雷」：情态动词与日常功能词一律豁免。
+	//   这几类词在英语里是语法骨架，不是敏感概念；把它们当避雷词会让所有正常译文都命中
+	//   （现网工单 114/115 的 `must,should` 连打 13 次就是这一形态）。
+	"must": true, "should": true, "can": true, "could": true, "will": true,
+	"would": true, "may": true, "might": true, "shall": true, "ought": true,
+	"need": true, "dare": true, "help": true, "use": true, "want": true,
+	"like": true, "work": true, "play": true, "go": true, "come": true,
+	"see": true, "look": true, "say": true, "tell": true, "ask": true,
+	"answer": true, "give": true, "find": true, "think": true, "know": true,
+	"feel": true, "try": true, "call": true, "keep": true, "let": true,
+	"put": true, "bring": true, "buy": true, "sell": true, "pay": true,
+	"read": true, "write": true, "speak": true, "listen": true, "watch": true,
+	"move": true, "turn": true, "show": true, "walk": true, "drive": true,
+	"be": true, "am": true, "is": true, "are": true, "was": true, "were": true,
+	"been": true, "being": true, "have": true, "has": true, "had": true,
+	"do": true, "does": true, "did": true, "done": true,
+	"i": true, "you": true, "he": true, "she": true, "it": true, "we": true,
+	"they": true, "me": true, "him": true, "her": true, "us": true, "them": true,
+	"my": true, "your": true, "his": true, "their": true, "our": true,
+	"this": true, "that": true, "these": true, "those": true,
+	"and": true, "or": true, "but": true, "if": true, "because": true,
+	"when": true, "while": true, "before": true, "after": true, "for": true,
+	"with": true, "without": true, "from": true, "to": true, "of": true,
+	"at": true, "by": true, "as": true, "about": true, "into": true,
+	"between": true, "among": true, "through": true, "during": true,
+	"against": true, "within": true, "upon": true,
+	// ★ 2026-10-24 生产英语 forbidden 盘点后的日常/社会议题词：正常沟通不避雷。
+	//   保留 white power（仇恨口号）与「蕃夷」（历史贬称）等真正的敏感/文化词。
+	"blackmail": true, "stereotype": true, "blasphemy": true, "racist": true,
+	"obnoxious": true, "stupid": true, "sexism": true, "divorce": true,
+	"cheater": true, "colorism": true, "exotic": true, "n/a": true,
+}
+
+// neutralEnPhrases 英语常见多词短语豁免（单字表覆盖不到的组合；同样只对 en 生效）。
+var neutralEnPhrases = map[string]bool{
+	"native language": true, "discriminate against": true, "black friday": true,
+	"christmas tree": true, "racial discrimination": true, "black sheep": true,
+	"politically correct": true, "racial profiling": true, "culture clash": true,
+	"white guy": true,
 }
 
 // IsNeutralForbidden 判断短语是否为应豁免的中性常见词（不作为避雷词拦截）。
@@ -42,7 +81,57 @@ func IsNeutralForbidden(target, phrase string) bool {
 	if target != "en" && target != "en_US" {
 		return false
 	}
-	return neutralEnWords[strings.ToLower(strings.TrimSpace(phrase))]
+	low := strings.ToLower(strings.TrimSpace(phrase))
+	return neutralEnWords[low] || neutralEnPhrases[low]
+}
+
+// IsBlockingForbiddenRule 判断一条安全句是否应参与「避雷拦截」。
+//
+// ★ 2026-10-24 用户令：英语避雷词要收缩，正常沟通交流的词不需要避雷。
+// 三条口径（只对 en 生效，其他语种保持原样）：
+//  1. 只有 kind=forbidden（以及历史 kind 为空的行）参与拦截；style/replace 不再被当成避雷词
+//     （旧 Run 不判 kind，style 里的长句/普通词也会被当 forbidden 子串匹配，是误报来源之一）。
+//  2. 单字来自 LLM/自动采集（source=llm）⇒ 只观测不拦截；人工确认后才升级为拦截。
+//  3. 单字若在常见词/中性词表里 ⇒ 无论来源都不拦截；多词短语、专有名词、真实敏感词保留。
+//
+// 返回 true 才允许进入词命中判定。
+func IsBlockingForbiddenRule(target string, sp *store.KBSafetyPhrase) bool {
+	if sp == nil {
+		return false
+	}
+	return IsBlockingForbiddenFields(target, sp.Kind, sp.Phrase, sp.Source)
+}
+
+// IsBlockingForbiddenFields 与 IsBlockingForbiddenRule 同口径，但接收字段本身——
+// 引擎侧 cultureRule 不带 store 结构体，用这个入口避免两套判定（同 §一·11 多把尺子）。
+func IsBlockingForbiddenFields(target, kind, phrase, source string) bool {
+	if strings.TrimSpace(phrase) == "" {
+		return false
+	}
+	k := strings.ToLower(strings.TrimSpace(kind))
+	if k != "" && k != "forbidden" {
+		return false // style/replace 不参与避雷拦截
+	}
+	if target != "en" && target != "en_US" {
+		return true // 非英语：保持既有行为
+	}
+	low := strings.ToLower(strings.TrimSpace(phrase))
+	if neutralEnWords[low] || neutralEnPhrases[low] {
+		return false
+	}
+	singleWord := !strings.ContainsAny(low, " \t")
+	if singleWord && strings.EqualFold(strings.TrimSpace(source), "llm") {
+		return false // 自动采集的单字只观测
+	}
+	return true
+}
+
+// ForbiddenHitRule 按「规则级」判定译文是否命中避雷词（含 kind/source/常见词策略）。
+func ForbiddenHitRule(target, translation string, sp *store.KBSafetyPhrase) bool {
+	if !IsBlockingForbiddenRule(target, sp) {
+		return false
+	}
+	return wordHit(strings.ToLower(translation), strings.ToLower(strings.TrimSpace(sp.Phrase)))
 }
 
 // wordHit 对拉丁系单词做整词边界匹配，避免 control 命中 controller/controlling 等。
@@ -93,7 +182,9 @@ func Run(target string, translation string, safety []*store.KBSafetyPhrase) *Cul
 		hit := []string{}
 		for _, sp := range safety {
 			if sp.Lang == target && sp.Phrase != "" {
-				if ForbiddenHit(target, tr, sp.Phrase) {
+				// ★ 2026-10-24：规则级判定（kind/source/常见词策略）——style/replace 不再误当避雷词，
+				//   自动采集的单字与日常词只观测不拦截（用户令：正常沟通交流不避雷）。
+				if ForbiddenHitRule(target, tr, sp) {
 					hit = append(hit, sp.Phrase)
 				}
 			}

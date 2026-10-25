@@ -20,6 +20,7 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 ADMIN_PASS="${ADMIN_PASS:-Admin@1234}"
 J='Content-Type: application/json'
 source "$(dirname "$0")/dblib.sh"   # 双方言断言层（sqlite/PG）
+source "$(dirname "$0")/member_fixture.sh"   # 企业成员「邀请链接入职」工装（★ 2026-10-24 B3-c/R9）
 # 落库类断言一律走 dbq/dbjson，禁止在本文件直写 sqlite3 / psql：
 # 直写等于把 PG 方言永久排除在 UAT 之外（is_personal bool、JSON1 缺失这类专属缺陷会全部漏检）。
 # 计数只累加不中断（见上）；报告每行一个 PASS|名称 / FAIL|名称|期望，供 run_uat.sh 抓取汇总。
@@ -39,6 +40,17 @@ ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else 
 reg(){ local extra="${6:-}"; curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\",\"code\":\"$3\",\"name\":\"$4\",\"email\":\"$5\",\"agreed\":true${extra:+,$extra}}"; }
 tok(){ curl -s $B/api/auth/login -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
+# sess_tid <完整 Authorization 头值> — 取「这一会话真正记账的租户号」。
+# ★ 2026-10-24 多身份批（B1/B2）之后，一个 username 可以对应**多条 users 行**（家行／受邀成员行／
+#   登录后自动补建的个人租户行 pa_<account_id>，见 api/auth_identity.go personalTenantCode），
+#   于是 `SELECT tenant_id FROM users WHERE username=…` 会回吐多行，两种收法各自有一种坏：
+#   · 带 `tr -dc '0-9'` 的点把两个租户号**粘成一个库里不存在的号** ⇒ 落库类夹具写进鬼租户，
+#     行为断言恒红却完全看不出原因（api_uat_txn.sh 的 T40 就是这个形态）；
+#   · 不带 tr 的点把多行直接拼进下一句 SQL ⇒ PG 侧退 `Parse error … near "3": syntax error`，
+#     读数变空（run7 的 A7 段实证：Q1/Q2 皆空 ⇒ 净消耗 0）。
+#   `LIMIT 1` **不是修法**：没有 ORDER BY 时取到哪一行取决于存储顺序，今天对明天错。
+#   计量/落库类断言问的都是「这一会话扣的谁的钱」⇒ 唯一尺子＝会话自己 /api/auth/me 的 tenant_id。
+sess_tid(){ curl -s "$B/api/auth/me" -H "$1" | pv ".get('user',{}).get('tenant_id','')" | tr -dc '0-9'; }
 
 echo "=== A 阶段：公开接口 / 认证 / 计费 / 翻译 / 交易 ==="
 # ---------- A1 健康与公开接口 ----------
@@ -225,14 +237,29 @@ ck A3-register-B '"success":true' "$(reg uatuser_b uatpass123 uatcorpB UAT公司
 T2=$(tok uatuser_b uatpass123); H2="Authorization: Bearer $T2"
 # 唯一性分两条测：注册接口这条带重复的「用户名 + 租户码」，期望词把两种拦截形态都兜住
 # （租户创建失败 / UNIQUE / 已存在）；用户名这条按 2026-10-21 新方案**必须允许同租户重名**
-# （用户名不再是登录标识），故用一对专用名字验证两次创建都成功。
-# AID 现查自库：租户 id 取决于建号顺序，写死会在种子数据变化后打到错的租户上（那就成了插新号）。
+# （用户名不再是登录标识），故用一对专用名字走完整入职链，最后按库里那两行数判。
+# 租户码重复这一腿走公开注册（不带邀请码 ⇒ 进「新建租户」分支撞 tenants.code）。
 ck A3-dup-tenantcode '租户创建失败|UNIQUE|已存在' "$(reg uatuser_a uatpass123 uatcorpA 重复 uat_dup@test.com)"
-AID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1" | tr -d '[:space:]')
-DUP_PAYLOAD="{\"username\":\"uat_dup_name\",\"password\":\"uatpass123\",\"display_name\":\"重名甲\",\"role\":\"user\",\"tenant_id\":$AID}"
-ck A3-dup-username-first '"success":true' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD")"
-DUP_PAYLOAD2="{\"username\":\"uat_dup_name\",\"password\":\"uatpass123\",\"display_name\":\"重名乙\",\"role\":\"user\",\"tenant_id\":$AID}"
-ck A3-dup-username-allowed '"success":true' "$(curl -s $B/api/admin/users/create -H "$AH" -H "$J" -d "$DUP_PAYLOAD2")"
+# A3-dup-username（★ 2026-10-21 新方案：用户名不再是登录标识，同租户**允许**重名）
+# ★ 2026-10-24 多身份 B3-c（R9）两处改动，理由不同但都必须跟着改，否则整段判据失效：
+#   ① 载荷去掉 password：企业档建号不再收初始口令（带着它 400 在闸门，两次「成功」都拿不到）。
+#   ② 光看两次 create 都回 success **已经不是这条判据**——R9 之后这一步一个 users 行都不建，
+#      「success 两次」在"根本没插入"和"插入了两行同名"之间完全同形（本仓反复踩的假绿族）。
+#      所以工装把两段走全（发链接 → 本人注册），最后**按库数行**：两行同名且都归这个租户才算「允许重名」。
+# AID 现查自库：租户 id 取决于建号顺序，写死会在种子数据变化后打到错的租户上（那就成了插新号）。
+# ★ 同批修正一处工装自伤：旧写法取的是 users.id 当 tenant_id 用（注释说的是租户 id、SQL 选的是主键），
+#   多身份下同用户名还可能命中多行 ⇒ 一律改按 tenant_id 取，并限定 tenant_id>0。
+# ★ 2026-10-25 UAT 红归因批①：**必须再钉 is_home=1**。多身份批之后同一个用户名有两条行
+#   （家行 + 登录时补建的个人 `pa_` 行），PostgreSQL 对"无 ORDER BY 的 LIMIT 1"实测回的是**非家行**
+#   （个人租户），而登录 token 归并到**家行**（iam/account.go 的代表行规则）——
+#   夹具于是往 A 租户写、断言去 B 租户读，整段链"实现全对、读数全错"（2026-10-25 主矩阵 55 条红同此根因）。
+AID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -d '[:space:]')
+mf_onboard "$AH" "$AID" "uat_dup_name" "uat_dup_name1@test.com" uatpass123 user 0
+ck A3-dup-username-first '"success": *true' "$MF_REG"
+mf_onboard "$AH" "$AID" "uat_dup_name" "uat_dup_name2@test.com" uatpass123 user 0
+ck A3-dup-username-allowed '"success": *true' "$MF_REG"
+DUPROWS=$(dbq "SELECT COUNT(*) FROM users WHERE username='uat_dup_name' AND tenant_id=$AID" | tr -d '[:space:]')
+[ "$DUPROWS" = "2" ] && { PASS=$((PASS+1)); echo "PASS|A3-dup-username-two-rows($DUPROWS)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A3-dup-username-two-rows(got $DUPROWS, want 2 —— 同租户重名必须真落库两行)"; }
 ck A3-bad-login '密码|失败|incorrect|invalid|UNAUTHORIZED' "$(curl -s $B/api/auth/login -H "$J" -d '{"username":"uatuser_a","password":"wrongpass"}')"
 ck A3-no-agree '同意|协议' "$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_x","password":"uatpass123","code":"uatcorpD","name":"X","email":"uat_x@test.com"}')"
 
@@ -362,16 +389,20 @@ echo "INFO|A6-estimate|$A6J"
 #       ② 本次 /api/chat 同时触发「每周发起翻译 +100 积分」自动发放，纯容量差值会被这笔
 #         增量吃掉甚至翻正（实测 330000→359693）。任务发放台账的 total 单调不减，
 #         用它补回增量即可还原真实消耗量（扣费本体仍由 B 阶段流水对账锁死）。
-TID7=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a'")
+TID7=$(sess_tid "$H1")
+# 取不到会话租户＝这条锁的尺子丢了，当场点名判红（绝不带着空号去拼 SQL，那只会得到一个语法错）
+if [ -z "$TID7" ]; then FAIL=$((FAIL+1)); echo "FAIL|A7-metering(/api/auth/me 取不到 tenant_id，净消耗无法核对)"; fi
 cap7(){ NOW7=$(date -u +%Y-%m-%dT%H:%M:%SZ); dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID7 AND expires_at>'$NOW7') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID7)"; }
 gtot7(){ dbq "SELECT COALESCE(SUM(total),0) FROM quota_grants WHERE tenant_id=$TID7 AND kind='task'"; }
-Q1=$(cap7); G1=$(gtot7)
+if [ -n "$TID7" ]; then Q1=$(cap7); G1=$(gtot7); fi
 CH=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"早上好，欢迎使用翻译助手平台。","options":{"target_langs":["en"]}}')
 ck A7-chat-ok 'TranslatedEN' "$CH"
 sleep 5
+if [ -n "$TID7" ]; then
 Q2=$(cap7); G2=$(gtot7)
 NET7=$(( Q1 + G2 - G1 - Q2 ))
 [ "$NET7" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; }
+fi
 ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
 
 # ---------- A7s ★ 即时翻译 SSE 收尾必须已落库（2026-09-22 E2E TF2 抓到的缺陷锁） ----------
@@ -429,8 +460,12 @@ ck A7t-within-limit-done '"type":"done"' "$CH_OK"
 # 两张台账都要清零：容量判定走的是「quota_grants 未过期余额 + balance_accounts 合计」，
 # 只清一张仍会被另一张放过，硬闸就测不到了（这条正是历史上最常见的假绿成因）。
 # 用 userB 而不是 userA：A 还要留给后面的扣费/支付断言，这里必须找个「陪葬」租户。
-BID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_b'")
-dbq "UPDATE balance_accounts SET balance=0 WHERE tenant_id=$BID; UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$BID;"
+BID=$(sess_tid "$H2")
+if [ -n "$BID" ]; then
+  dbq "UPDATE balance_accounts SET balance=0 WHERE tenant_id=$BID; UPDATE quota_grants SET \"left\"=0 WHERE tenant_id=$BID;"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A8-zero-tenant(/api/auth/me 取不到 uatuser_b 的 tenant_id，硬闸夹具无从清零)"
+fi
 CH2=$(curl -s $B/api/chat -H "$H2" -H "$J" --max-time 30 -d '{"message":"这是一条余额不足应当被拦截的翻译请求文本内容","options":{"target_langs":["en"]}}')
 ck A8-insufficient-block '耗尽|不足|insufficient' "$CH2"
 echo "INFO|A8-reply|${CH2:0:200}"
@@ -447,10 +482,15 @@ ck A9-pay-simulate '"success":true' "$(curl -s $B/api/pay/simulate -H "$H1" -H "
 ck A9-pay-status-paid 'paid|success' "$(curl -s "$B/api/pay/status?order_id=$OID" -H "$H1")"
 # 幂等锁：同一订单第二次 simulate 后，余额必须与第一次**完全相等**（不是「不再增加」）。
 # 回调重复投递是支付侧最常见事故，只看增量会把「二次全额到账」漏成绿。
-G1=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
+TIDA9=$(sess_tid "$H1")
+# ★ 2026-10-24 多身份批：这里原来是 `tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')`，
+#   一人多行后 PG 侧会直接报「more than one row returned by a subquery」，于是 G1/G2 双双为空——
+#   而「空 == 空」在旧判据下是**绿灯**（假成功钝化闸门，见 AGENTS §三）。故读数改取会话自身租户，
+#   并加 `[ -n "$G1" ]` 这条正锁：读不到余额行就是没测到，不许当成幂等成立。
+G1=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=$TIDA9")
 curl -s $B/api/pay/simulate -H "$H1" -H "$J" -d "{\"order_id\":$OID}" >/dev/null
-G2=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=(SELECT tenant_id FROM users WHERE username='uatuser_a')")
-[ "$G1" = "$G2" ] && { PASS=$((PASS+1)); echo "PASS|A9-pay-idempotent($G1==$G2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A9-pay-idempotent($G1->$G2)"; }
+G2=$(dbq "SELECT balance FROM balance_accounts WHERE tenant_id=$TIDA9")
+[ -n "$G1" ] && [ "$G1" = "$G2" ] && { PASS=$((PASS+1)); echo "PASS|A9-pay-idempotent($G1==$G2)"; } || { FAIL=$((FAIL+1)); echo "FAIL|A9-pay-idempotent($G1->$G2)"; }
 ck A9-orders-list '"success":true' "$(curl -s "$B/api/billing/orders" -H "$H1")"
 INV_PAYLOAD="{\"order_id\":$OID,\"title\":\"UAT测试发票\",\"tax_no\":\"TAX123456\"}"
 ck A9-invoice '"success"' "$(curl -s $B/api/billing/invoices/create -H "$H1" -H "$J" -d "$INV_PAYLOAD")"
@@ -520,7 +560,7 @@ AUD=$(curl -s "$B/api/system/audit" -H "$H1")
 echo "$AUD" | python3 -c 'import sys,json;d=json.load(sys.stdin);ls=d.get("logs",[]);print("OK" if ls and all(l.get("tenant_id")==ls[0].get("tenant_id") for l in ls) else "BAD")' | grep -q '^OK' && { PASS=$((PASS+1)); echo "PASS|A13-audit-scoped"; } || { FAIL=$((FAIL+1)); echo "FAIL|A13-audit-scoped|$AUD"; }
 
 # ---------- A14 套餐订阅（包绑定用户A租户，mock 即付即到账） ----------
-TAID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
+TAID=$(sess_tid "$H1")
 curl -s $B/api/admin/packages/create -H "$AH" -H "$J" -d "{\"tenant_id\":$TAID,\"code\":\"uat_paid_100k\",\"name\":\"UAT包月10万句\",\"ptype\":\"paid\",\"sentences\":100000,\"price_money\":99,\"duration_days\":30}" >/dev/null
 SUB=$(curl -s $B/api/package/subscribe -H "$H1" -H "$J" -d '{"code":"uat_paid_100k"}')
 ck A14-subscribe '"success"' "$SUB"
@@ -543,7 +583,10 @@ ck A14-me-package '"success":true' "$(curl -s "$B/api/me/package" -H "$H1")"
 #      并且只删自己造的标记行，绝不动 demo_% 受保护账号与其他批次留下的工单/日扫通知。
 #   ⚠️ 排序判据问的是 **id 单调**而不是 created_at：`ListNotifications` 的 ORDER BY 就是 id DESC，
 #      25 条在同一秒灌进去时 created_at 完全相同，拿时间戳判顺序会随机翻红（本套件栽过一次同类）。
-UID_A=$(dbq "SELECT id FROM users WHERE username='uatuser_a' LIMIT 1")
+#   ★ 2026-10-25 归因批①：UID_A 必须取**家行**（is_home=1）。多身份批之后 uatuser_a 有两条行，
+#     PG 对无 ORDER BY 的 LIMIT 1 回的是个人 `pa_` 行，而 token 归并到家行 ⇒ 探针行灌给 A、断言读 B，
+#     四条 A15 腿恒红（has_more=false 其实是"这一页本来就没数据"的正确答案）。
+UID_A=$(dbq "SELECT id FROM users WHERE username='uatuser_a' AND is_home=1 LIMIT 1")
 NOTIF_PROBE_MARK="UAT分页探针"
 for i in $(seq 1 25); do
   dbq "INSERT INTO notifications (user_id,title,body,ref_type,ref_id,read_at,created_at) VALUES ($UID_A,'${NOTIF_PROBE_MARK}$i','占位正文','uat_probe',0,'','2026-10-12T00:00:00Z')" >/dev/null
@@ -701,7 +744,7 @@ echo "==A-PASS=$PASS FAIL=$FAIL=="
 echo "=== B 阶段：运营策略引擎 / P1 / P2 回归 ==="
 # 显式重查一次 TAID（A14 也查过同名变量）：B 段每条都按租户维度落库断言，
 # 取值口径集中在段首，不靠上一段残留的变量往下传——中途增删 A 段用例不会悄悄改变 B 段的租户。
-TAID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' LIMIT 1")
+TAID=$(sess_tid "$H1")
 
 # ---------- B1 运营策略读取/保存（平台级，超管） ----------
 ck B1-ops-policy-get '"success":true' "$(curl -s $B/api/admin/ops/policy -H "$AH")"
@@ -768,7 +811,7 @@ ck B5-reset-limit '上限|已达' "$RST2"
 curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_e","password":"uatpass123","type":"personal","name":"E邀请人","email":"uat_e@test.com","agreed":true}' >/dev/null
 TE=$(tok uatuser_e uatpass123); HE="Authorization: Bearer $TE"
 ECODE=$(curl -s "$B/api/referral/my" -H "$HE" | pv '.get("ref_code","")')
-ETID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_e'")
+ETID=$(sess_tid "$HE")
 E1=$(dbq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
 curl -s $B/api/auth/register -H "$J" -d "{\"username\":\"uatuser_d\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"D受邀\",\"email\":\"uat_d@test.com\",\"agreed\":true,\"ref\":\"$ECODE\"}" >/dev/null
 E2=$(dbq "SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$ETID AND kind='trial'")
@@ -782,8 +825,11 @@ RF=$(curl -s $B/api/auth/register -H "$J" -d '{"username":"uatuser_f","password"
 ck B7-invite-join '"success":true' "$RF"
 # 三个取值都过一遍 tr -d '[:space:]'：dbq 的输出末尾带换行（PG 侧还可能有回车），
 # 不剥干净的话下面的字符串比较恒不等，红得完全看不出原因。
-FTID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
-FROLE=$(dbq "SELECT role FROM users WHERE username='uatuser_f'" | tr -d '[:space:]')
+# ★ 多身份批：这里刻意**不**换成 sess_tid——这一条锁问的就是「受邀注册那行 users 落进了哪个租户」
+#   （落库形态断言，不看接口脸色，见上面注释），而 f 是刚注册的号、只有一行家行；
+#   加 `is_home=1 LIMIT 1` 只是把「一人多行时取哪一行」钉成确定答案，不改变判据语义。
+FTID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_f' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+FROLE=$(dbq "SELECT role FROM users WHERE username='uatuser_f' AND is_home=1" | tr -d '[:space:]')
 FUSED=$(dbq "SELECT used FROM invite_codes WHERE code='JOINUAT001'" | tr -d '[:space:]')
 [ "$FTID" = "$TAID" ] && { PASS=$((PASS+1)); echo "PASS|B7-joined-tenant($FTID==$TAID)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-joined-tenant(f=$FTID a=$TAID)"; }
 [ "$FROLE" = "user" ] && { PASS=$((PASS+1)); echo "PASS|B7-joined-role(user)"; } || { FAIL=$((FAIL+1)); echo "FAIL|B7-joined-role($FROLE)"; }

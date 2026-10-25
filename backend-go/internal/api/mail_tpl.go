@@ -111,7 +111,7 @@ var mailTplMetas = []MailTplMeta{
 			Body:    "Hello,\n\nYour password reset code is: {code}\n\nThis code expires in 10 minutes. Please keep it confidential.\n\n—— {brand}",
 		},
 	},
-	// —— 通知类模板：以下按 企业注册提醒/租户通知/导入账号开通/系统告警/欢迎手册 顺序 ——
+	// —— 通知类模板：以下按 企业注册提醒/租户通知/企业邀请链接/系统告警/欢迎手册 顺序 ——
 	{
 		Code: "enterprise_reg", Name: "企业注册成功提醒",
 		Desc: "企业用户注册成功后，发送给注册人并抄送运营（建议建联）",
@@ -132,12 +132,12 @@ var mailTplMetas = []MailTplMeta{
 		},
 	},
 	{
-		Code: "user_import", Name: "批量导入用户通知",
-		Desc: "租户 Excel 批量导入用户后，发送账号与初始密码（引导首次登录改密）",
-		Vars: []string{"username", "password", "login_url", "brand"},
+		Code: "invite_link", Name: "企业邀请链接通知",
+		Desc: "管理台建号/批量导入后，向受邀人发送一次性专属邀请链接（由本人自设邮箱与密码，★ 2026-10-24 R9 取代旧的初始密码邮件）",
+		Vars: []string{"username", "invite_url", "expires_at", "brand"},
 		Default: MailTpl{
-			Subject: "【{brand}】您的账号已开通",
-			Body:    "您好，\n\n管理员已为您开通 {brand} 账号：\n登录账号：{username}\n初始密码：{password}\n登录地址：{login_url}\n\n出于安全考虑，首次登录后请立即修改密码。\n\n—— {brand}",
+			Subject: "【{brand}】邀请您加入企业",
+			Body:    "您好，\n\n管理员邀请您加入 {brand} 企业：\n邀请账号：{username}\n加入链接：{invite_url}\n链接有效期：{expires_at}\n\n请点开链接自行设置邮箱与密码；链接仅可使用一次，过期或已使用后请联系管理员重新生成。\n\n—— {brand}",
 		},
 	},
 	// —— 运营触达类：告警通知与注册欢迎手册（manual 正文见 manualDefaultBody 常量）——

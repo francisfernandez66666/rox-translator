@@ -306,3 +306,26 @@ func (s *Store) LoadTenantQuotaConfigs() map[int64]TenantQuotaCfg {
 	}
 	return out
 }
+
+// ConfigIntAllowZero 读整型配置，**把 0 当成一个真实档位**（不是"没配"）。
+// 参数：key=配置键；def=缺省档位（键不存在／值空／非整数／负数时回落）。
+// 返回：库里那一个整数，或 def。
+//
+// 为什么要有这一枚，而不用既有的 Store.ConfigInt（在 kbscrape.go，语义是「≤0＝未配置」）：
+// 《修改文档_UAT云端E2E核实与修法_20261024》档位表里 `ticket_repair_max=0＝不重发`、
+// `text_ticket_per_line=0＝回退整篇` 这两条是**应急回退开关**——0 那一档本身就是想按下的按钮。
+// 走 ConfigInt 时运营在管理台填 0，读回来却是默认 3／1，开关**结构性按不下去**
+// （现网表现＝「已经配成 0 了怎么还在重发」，而库里那一行明明是 0，日志零线索）。
+// 判别口径：只有「取不到整数」才回落默认；0 与正整数一律如实返回，负数按脏值回落
+// （负的重发上限／负的每行数没有语义，放行只会把循环打歪）。
+func (s *Store) ConfigIntAllowZero(key string, def int) int {
+	v, err := s.GetConfig(key)
+	if err != nil {
+		return def
+	}
+	n, e := strconv.Atoi(strings.TrimSpace(v))
+	if e != nil || n < 0 {
+		return def
+	}
+	return n
+}

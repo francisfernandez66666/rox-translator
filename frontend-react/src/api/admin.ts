@@ -13,6 +13,9 @@
  */
 
 import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp } from './core'
+// ★ B4（2026-10-24）：管理台建号（企业档）的回执结构体与邀请链接面共用一份定义，
+//   后端两处出栈是同一个 inviteLinkCreateResp，前端也必须只有一份形态。
+import type { InviteLinkCreateResult } from './invites'
 
 /** 下载批量导入用户 Excel 模板（带表头/填写说明/示例行，保存为用户导入模板.xlsx） */
 export async function downloadUserImportTemplate(): Promise<boolean> {
@@ -51,8 +54,24 @@ export async function adminUsers(): Promise<AdminResp> {
   return bizResp(() => request('/api/admin/users', { headers: authHeaders() }))
 }
 
-/** 创建后台用户（可指定组织与角色） */
-export async function adminUserCreate(data: { username: string; password: string; display_name: string; role: string; org_id?: number; email?: string }): Promise<AdminResp> {
+/**
+ * 创建后台用户（可指定组织与角色）。
+ * ★ 多身份方案 B3-c／R9（2026-10-24）：**企业档不再录入初始口令**。
+ *   归属企业（tid>0）时后端不建 users 行，改为回执一枚一次性专属邀请链接（`invite`），
+ *   由受邀人自己设置邮箱与密码；此时带 password 会直接 400（不是静默忽略——
+ *   「设了个弱口令但没生效」和「一个账号都没建出来」是两件事，回执必须自己说清）。
+ *   平台级直建（super_admin/admin ⇒ tid=0）仍要 password，这是 R9 语义覆盖不到的另一族账号。
+ *   所以这里 password 写成可选，调用方按「企业档不传、平台档必传」接线，别在 API 层替他补空串。
+ */
+export async function adminUserCreate(data: {
+  username: string
+  password?: string
+  display_name?: string
+  role: string
+  org_id?: number
+  email?: string
+  tenant_id?: number
+}): Promise<AdminResp & { user?: Record<string, unknown>; invite?: InviteLinkCreateResult }> {
   return bizResp(() => request('/api/admin/users/create', { method: 'POST', headers: authHeaders(), body: JSON.stringify(data) }))
 }
 
@@ -73,10 +92,13 @@ export async function adminUserResetPassword(id: number, password: string): Prom
 
 /**
  * 租户 Excel 批量导入用户（2026-09-02 功能）。
- * 表头：用户名称、姓名、部门、角色、邮箱；建号后首登强制改密 + 邮件通知初始密码。
- * 返回 { created, failed, total, results: [{ username, ok, message }] }
+ * 表头：用户名称、姓名、部门、角色、邮箱。
+ * ★ R9/B3-c：导入**不再建账号、不再发初始密码**——每行改为出栈一枚一次性专属邀请链接：
+ *   行里带了邮箱 ⇒ 后端直接把链接邮件给本人；没带邮箱 ⇒ 链接只能落在 `results[].invite_url`，
+ *   由管理员自行转发。所以这一格前端必须渲染出来，否则「导入成功但拿不到链接」就成了死路。
+ * 返回 { invited, failed, total, results: [{ username, ok, message, invite_url? }] }
  */
-export async function userBulkImport(file: File): Promise<AdminResp & { created?: number; failed?: number; total?: number; results?: Array<{ username: string; ok: boolean; message: string }> }> {
+export async function userBulkImport(file: File): Promise<AdminResp & { invited?: number; created?: number; failed?: number; total?: number; results?: Array<{ username: string; ok: boolean; message: string; invite_url?: string }> }> {
   const fd = new FormData()
   fd.append('file', file)
   return request('/api/admin/users/bulk-import', { method: 'POST', headers: authHeaders(), body: fd })

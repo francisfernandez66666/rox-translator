@@ -18,10 +18,13 @@ import {
   type OrgInfo,
 } from '@/api'
 import { Panel, Field, toastResp, num } from './parts'
+import { InviteLinkCard, copyTextWithFallback } from './InviteLinkCard' // ★ B4-c：企业建号不再回「已创建」，改为出图转发邀请链接
+import type { InviteLinkCreateResult } from '@/api'
 import { fmtPoints } from '@/utils/points' // ★ S1 部门预算积分口径（接口出入参即积分）
 import { fmtTime } from '@/lib/ui'
 import { useAdmin } from '@/stores/admin'
 import { InvitesP, UsersP } from './panels_a' // ★ Tab 精简（2026-09-15）：成员账户并入组织 Hub 子 tab；租户管理移至「计费与套餐」Hub
+import { InviteLinksP } from './InviteLinksP' // ★ B4-c：企业专属邀请链接四档视图（与手输注册码同页分区，§6.4）
 import BrandP from './BrandP' // ★ 2026-10-23 F2：品牌定制从「系统与运维」（超管专属）迁到组织 Hub（租户管理员可见）
 import { t, tpl } from '@/i18n'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
@@ -50,9 +53,15 @@ export function OrgP() {
   const [nameDraft, setNameDraft] = useState<Record<number, string>>({})
   const [parentId, setParentId] = useState(0)
   const [newName, setNewName] = useState('')
-  const [nu, setNu] = useState<Any>({ username: '', password: '', display_name: '', role: 'user' })
+  // ★ B4-c（R9）：企业档建号表单里**没有口令栏**——只录用户名/邮箱/显示名/角色/部门，
+  //   提交后后端出栈一枚一次性专属邀请链接。password 这一格只在「平台档」（角色 admin/super_admin
+  //   ⇒ 后端把 tid 判成 0，走的是 R9 覆盖不到的另一族账号）时才出现并必填。
+  const [nu, setNu] = useState<Any>({ username: '', password: '', email: '', display_name: '', role: 'user' })
   const [nuOrgId, setNuOrgId] = useState(0)
   const [creating, setCreating] = useState(false)
+  // 刚生成的邀请链接回执（非空 ⇒ 打开转发卡片弹窗）+ 受邀人邮箱（卡片「发邮件」预填用）
+  const [issued, setIssued] = useState<InviteLinkCreateResult | null>(null)
+  const [issuedEmail, setIssuedEmail] = useState('')
   const importFileRef = useRef<HTMLInputElement>(null)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importing, setImporting] = useState(false)
@@ -210,21 +219,41 @@ export function OrgP() {
     setSelectedOrg(id); setNuOrgId(id); void loadOrgUsers()
   }
 
-  // 建号：用户名/密码强度预检 → adminUserCreate → 成功后清空表单并整体刷新
+  // 建号：★ B4-c 起分两档（与后端 auth.go 的 tid 判定同尺，见下面注释）
+  //   · 平台档＝角色 admin/super_admin（后端把归属租户判成 0）⇒ 仍要初始口令，直建 users 行；
+  //   · 企业档＝其余全部角色 ⇒ 不传口令，回执一枚一次性邀请链接，账号要等本人注册才落库。
+  //   判据只能看角色，**不许**看"有没有选部门"：超管在平台树里不选部门创建 user，
+  //   后端仍会按生效租户落企业档（那是合法形态），按 org 判就会把该发链接的一档误判成要口令。
+  const isPlatformGrant = nu.role === 'admin' || nu.role === 'super_admin'
   async function createUser() {
-    if (!nu.username?.trim() || (nu.password?.length ?? 0) < 6) { void toastWarn(t('org.userValidation')); return }
+    if (!nu.username?.trim()) { void toastWarn(t('org.userNameRequired')); return }
+    if (isPlatformGrant && (nu.password?.length ?? 0) < 6) { void toastWarn(t('org.pwdMinLength')); return }
     setCreating(true)
     try {
-      const r: any = await adminUserCreate({
+      const body: Any = {
         username: nu.username.trim(),
-        password: nu.password,
-        display_name: nu.display_name?.trim() || nu.username.trim(),
         role: nu.role,
         org_id: nuOrgId || undefined,
-      })
+        email: String(nu.email || '').trim() || undefined,
+        // 显示名只有平台档认（企业档由受邀人注册时自填，后端直接忽略这一格）——
+        // 这里照旧送一份从用户名派生的值没有坏处，但会让下一位读代码的人以为「管理员能定显示名」。
+        display_name: isPlatformGrant ? (nu.display_name?.trim() || nu.username.trim()) : undefined,
+      }
+      // 企业档刻意**不带** password 字段：后端见到非空口令会直接 400（不是静默忽略），
+      // 传空串虽然能过，但会让"这一档不收口令"这件事在下一次改动里被抹平。
+      if (isPlatformGrant) body.password = nu.password
+      const r: any = await adminUserCreate(body)
       if (!r.success) { toastError(r.message); return }
-      toastSuccess(tpl('org.userCreated', { name: nu.username }))
-      setNu({ username: '', password: '', display_name: '', role: 'user' })
+      if (r.invite) {
+        // 企业档：这一趟**没有创建任何账号**，只有链接——所以文案不能说「已创建」，
+        // 而要说「链接已生成、账号要等本人设置口令后才存在」（说错了管理员会以为人已到位）。
+        setIssuedEmail(String(nu.email || '').trim())
+        setIssued(r.invite)
+        toastSuccess(tpl('org.inviteIssued', { name: nu.username }))
+      } else {
+        toastSuccess(tpl('org.userCreated', { name: nu.username }))
+      }
+      setNu({ username: '', password: '', email: '', display_name: '', role: nu.role })
       await loadAll()
     } catch (e) { // ★ E10：创建用户网络错误可见（旧实现 try/finally 静默）
       toastError(e instanceof Error ? e.message : t('common.createFail'))
@@ -239,12 +268,20 @@ export function OrgP() {
       const r: any = await userBulkImport(importFile)
       if (!r.success) { toastError(r.message); return }
       setImportResult(r.results || [])
-      toastSuccess(tpl('org.importDone', { ok: r.created || 0, fail: r.failed || 0 }))
+      // ★ R9：这一档的计数改名 invited（后端不再建号，一个 users 行都没多）。
+      //   继续读 r.created 不会报错——它只会恒为 0，于是「导入了 100 人」显示成「成功 0 个」。
+      toastSuccess(tpl('org.importDone', { ok: r.invited || 0, fail: r.failed || 0 }))
       setImportFile(null)
       await loadAll()
     } catch (e) { // ★ E10
       toastError(e instanceof Error ? e.message : t('common.importFail'))
     } finally { setImporting(false) }
+  }
+
+  // 复制导入结果里某一行的邀请链接（未填邮箱的行只能靠这一格把链接转出去）
+  async function copyImportLink(url: string) {
+    if (await copyTextWithFallback(url)) toastSuccess(t('inviteLink.copied'))
+    else toastError(t('inviteLink.copyFail'))
   }
 
   // 下载批量导入模板（列头与后端解析对齐）
@@ -562,7 +599,7 @@ export function OrgP() {
                        {row.status === 'disabled'
                          ? <Link onClick={() => setStatus(row, 'active')}>{t('org.enable')}</Link>
                          : <Link tone="danger" onClick={() => setStatus(row, 'disabled')}>{t('org.disable')}</Link>}
-                       <Link tone="danger" onClick={() => { void deleteUser(row) }}>{t('common.delete')}</Link>
+                       <Link tone="danger" onClick={() => { void deleteUser(row) }}>{t('users.removeMember')}</Link>
                      </div>
                    ) },
                   ]} />
@@ -570,10 +607,23 @@ export function OrgP() {
 
           <div style={{ marginTop: 16, border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
             <h3 style={{ margin: '0 0 10px' }}>{tpl('org.addUser', { org: addUserHeading })}</h3>
+            {/* ★ B4-c（R9）：两档各说一句自己的话——企业档说「只发链接、不建账号」，
+                平台档说「直接开通」。让管理员在按下按钮**之前**就知道这次会不会建出账号，
+                比事后弹一张卡片少一次误解（现网最容易的误读就是「提示已生成＝人已经能登录」）。 */}
+            <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 8px' }}>
+              {t(isPlatformGrant ? 'org.addUserHintPlatform' : 'org.addUserHintEnterprise')}
+            </p>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
               <input className="lc-input" value={String(nu.username || '')} placeholder={t('org.usernamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, username: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
-              <input className="lc-input" type="password" autoComplete="new-password" value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, password: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
-              <input className="lc-input" value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, display_name: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
+              {/* ★ B4-c（R9）：口令栏只在平台档出现。企业档改成一格**可选**邮箱——
+                  预绑了就只能该邮箱注册（链接被他人点开也用不了），留空则由受邀人自设。
+                  显示名一并去掉：企业档由受邀人注册时自填（后端已忽略这一格），留着会让管理员以为填了就算数。 */}
+              {isPlatformGrant
+                ? <input className="lc-input" type="password" autoComplete="new-password" value={String(nu.password || '')} placeholder={t('org.passPlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, password: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
+                : <input className="lc-input" type="email" autoComplete="off" value={String(nu.email || '')} placeholder={t('org.emailPlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, email: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />}
+              {isPlatformGrant && (
+                <input className="lc-input" value={String(nu.display_name || '')} placeholder={t('org.displayNamePlaceholder')} onChange={(e) => setNu((n: Any) => ({ ...n, display_name: e.target.value }))} style={{ flex: 1, minWidth: 140 }} />
+              )}
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
               <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('org.orgLabel')}</span>
@@ -603,13 +653,26 @@ export function OrgP() {
         </div>
       </div>
 
-          <Dialog open={!!importResult} onCancel={() => setImportResult(null)}
+          {/* ★ B4-c：企业建号的成功回执就是一枚链接——卡片里复制/发信/二维码一次给全，
+          §6.5 的安全警示由卡片自己带（与邀请管理页常驻条同一份实现，不在这里另写一句）。 */}
+      <Dialog open={!!issued} onCancel={() => setIssued(null)}
+              title={t('org.inviteIssuedTitle')} confirmText={t('inviteLink.close')}
+              onConfirm={() => setIssued(null)}>
+        {issued && <InviteLinkCard link={issued} email={issuedEmail} />}
+      </Dialog>
+
+      <Dialog open={!!importResult} onCancel={() => setImportResult(null)}
                   title={`${tpl('org.importResultTitle', { total: importResult?.length || 0 })}`}>
             {/* 数据表格 */}
             <DataTable<any> rowKey={(row) => String(row.username)} rows={importResult || []}
                    columns={[
                      { key: 'username', title: t('org.importResultCol') },
                      { key: 'ok', title: t('org.importResultStatus'), width: 70, render: (row) => row.ok ? <StatusPill tone="success">{t('org.importResultOk')}</StatusPill> : <StatusPill tone="danger">{t('org.importResultFail')}</StatusPill> },
+                     // ★ B4-c（R9）：成功行的专属邀请链接。没填邮箱的行只能从这里拿链接——
+                     // 后端已经不发初始密码了，这一格不渲染就等于「导入成功但什么都没收到」。
+                     { key: 'invite_url', title: t('org.importResultInviteCol'), width: 90, render: (row) => row.invite_url
+                       ? <Link onClick={() => void copyImportLink(String(row.invite_url))}>{t('inviteLink.copy')}</Link>
+                       : <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>—</span> },
                      { key: 'message', title: '', render: (row) => <span style={{ fontSize: 14, color: row.ok ? 'var(--lc-text-3)' : 'var(--lc-danger)' }}>{row.message}</span> },
                   ]} />
           </Dialog>
@@ -659,7 +722,15 @@ export function OrgP() {
         </Panel>
       </>)}
       {/* Tab 面板 */}
-      {tab === 'invite' && <InvitesP />}
+      {/* ★ B4-c（§6.4）：企业专属**链接**（四档状态、可撤销、可重新生成）与手输**注册码**是两套东西，
+          同页上下叠放但各带自己的面板标题与字段说明——混排成一张表就会出现
+          「管理员复制链接、成员拿它当注册码手输」这类用错的形态（两者后端 kind 不同、码形不同）。 */}
+      {tab === 'invite' && (
+        <>
+          <InviteLinksP />
+          <InvitesP />
+        </>
+      )}
       {tab === 'users' && <UsersP />}
       {/* 品牌面板自带 Panel 标题（切换子 tab 即卸载/重挂，与其他子面板同口径） */}
       {tab === 'brand' && <BrandP />}

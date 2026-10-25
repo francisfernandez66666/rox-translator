@@ -183,6 +183,8 @@ func TestSiteFlagsIgnoresTenantScope(t *testing.T) {
 // 相 A 关主页 ⇒ 出口 HTML 含标记；相 B 开放 ⇒ 出口 HTML 与未注入时逐字节等长（不许多一个字节）。
 func TestSiteFlagsServedIndexHTML(t *testing.T) {
 	t.Setenv("LANDING_DISABLED", "")
+	// 本用例只锁门面注入的字节增删；SEO 注入是另一条链（seo_meta_test.go），这里关掉以隔离射程。
+	t.Setenv("SEO_ROUTE_META", "0")
 	st := siteFlagsStore(t)
 	dir := t.TempDir()
 	shell := `<!DOCTYPE html><html><head><title>s</title></head><body><div id="root"></div></body></html>`

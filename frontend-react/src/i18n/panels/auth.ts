@@ -41,6 +41,10 @@ export const zh: Record<string, string> = {
   'auth.sendCode': '发送验证码',
   'auth.codeResend': '{n}s 后重发',
   'auth.orgCode': '组织编码（新建组织时必填）',
+  // ★ §6.4 命名隔离（2026-10-25 对账批）：管理员那一格填的是**企业代号**（落 tenants.code，
+  //   将来还是专属域名前缀），成员那一格填的是**企业邀请码**（落 invite_codes 凭证）。
+  //   两者过去共用 auth.orgCode 一个标签＝byd 案例那一族混淆，placeholder 必须各自明示。
+  'auth.orgCodeAdminPlaceholder': '给企业起一个代号，如 mycompany（这不是邀请码）',
   'auth.orgNameCn': '组织中文名（新建组织时必填）',
   'auth.orgNameEn': '组织英文名（新建组织时必填）',
   'auth.industry': '所属行业（新组织注册时必选）',
@@ -60,6 +64,8 @@ export const zh: Record<string, string> = {
   'auth.needAgree': '请阅读并同意《用户协议》与《隐私协议》',
   'auth.orgCodeRequired': '请填写组织编码',
   'auth.orgInvite': '组织邀请码',
+  // ★ §6.4：成员/受邀人那一格的**唯一**标签口径（必填＋来源明示），与好友邀请码、组织编码三面都不得同文
+  'auth.orgInviteCode': '企业邀请码（必填·向企业管理员获取）',
   'auth.orgNameRequired': '请填写组织中文名',
   'auth.inviteRequired': '普通成员须凭企业邀请码加入，请填写邀请码',
   'auth.dedicatedInfo': '您正通过「{name}」的专属入口注册，将自动加入该企业。',
@@ -212,6 +218,35 @@ export const zh: Record<string, string> = {
   'auth.acpDone': '完善完成',
   // ★ 2026-10-22 统一登录批：主站登录页邮箱框提示词（原 otpDesc 段落仅租户/演示站保留）
   'auth.autoCreateHint': '未注册的邮箱会自动创建空白账号',
+  // —— 多身份切换器（★ 2026-10-24 多身份方案 B4：左栏身份徽标右侧那颗切换钮）——
+  //   「个人版」一词复用既有 app.personalPlan，这里不另立第二套叫法（同 §6.4 命名收口口径）。
+  'auth.id.switch': '切换身份',
+  'auth.id.list': '我的身份',
+  'auth.id.unavailable': '该身份当前不可用',
+  'auth.id.failed': '切换身份失败，请稍后重试',
+  'auth.id.done': '已切换到 {name}',
+  'auth.id.tenant': '企业',
+  // —— 企业邀请链接落地页（★ 2026-10-24 多身份方案 B4-d，§6.2/§6.5）——
+  //   链接形态是 `https://<host>/?invite=<code>`：人还没注册，所以这一面必须匿名可读，
+  //   且**必须把"正在加入哪家企业"读出来**——不然当事人是在盲填一份入职资料。
+  //   四档失效原因各出一条独立文案（而不是共用一句"无效"）：这四面各自指向不同的下一步
+  //   （催管理员重发 / 等等看 / 找管理员确认），后端出栈的中文 message 在这里不适用——
+  //   那是运维面口径，当事人这一面必须拿他自己的语言。
+  'auth.invite.joinOrg': '你正通过邀请链接加入：{org}',
+  'auth.invite.joinDept': '入职部门：{dept}',
+  'auth.invite.lockedEmail': '这条链接已绑定邮箱 {email}，请用该邮箱完成注册',
+  'auth.invite.checking': '正在校验这条邀请链接…',
+  'auth.invite.checkFail': '暂时校验不了这条链接，请稍后重试；仍不行请向企业管理员重新获取',
+  'auth.invite.rInvalid': '这条邀请链接无效，请向企业管理员重新获取',
+  'auth.invite.rUsed': '这条邀请链接已被使用（一枚只能开通一个账号），请向企业管理员重新获取',
+  'auth.invite.rRevoked': '这条邀请链接已被管理员撤销，请向企业管理员重新获取',
+  'auth.invite.rExpired': '这条邀请链接已过期，请向企业管理员重新获取',
+  'auth.invite.selfNote': '这条链接等同一次性的入职凭证：请本人完成注册，不要转发给他人',
+  // §6.5 第 4 条「受邀落地页告知」：数据可见范围必须在**点提交之前**说清楚——
+  //   入职后资料进的是企业，不是个人空间；这一句漏掉就等于让人盲填入职资料。
+  'auth.invite.dataNote': '加入后，你的账号资料对企业管理员可见；企业成员可查看企业知识库并使用企业预算。',
+  // complete 文案（R8 拍板：企业身份不吞掉个人身份，用户要看得见"我没有被并进去"）
+  'auth.invite.switchBack': '加入成功后，你的个人账号照旧保留，可随时切回个人身份',
 }
 
 // 英文口径：与 zh 逐键对应、且键顺序完全一致（便于左右对照与 parity 校错），
@@ -251,6 +286,8 @@ export const en: Record<string, string> = {
   'auth.sendCode': 'Send code',
   'auth.codeResend': 'Resend in {n}s',
   'auth.orgCode': 'Org code (required for new org)',
+  // ★ §6.4 英文侧同口径：管理员那一格是企业代号，成员那一格是企业邀请码，两份标签/占位不许同文
+  'auth.orgCodeAdminPlaceholder': 'A short code for your company, e.g. mycompany (not an invite code)',
   'auth.orgNameCn': 'Organization name (CN, required)',
   'auth.orgNameEn': 'Organization name (EN, required)',
   'auth.industry': 'Industry (required for new org)',
@@ -269,6 +306,8 @@ export const en: Record<string, string> = {
   'auth.needAgree': 'Please read and agree to the Terms of Service and Privacy Policy',
   'auth.orgCodeRequired': 'Please enter the org code',
   'auth.orgInvite': 'Organization invite code',
+  // ★ §6.4：受邀成员/成员那一格唯一的标签口径（必填＋来源明示）
+  'auth.orgInviteCode': 'Company invite code (required — ask your company admin)',
   'auth.orgNameRequired': 'Please enter the organization name',
   'auth.inviteRequired': 'Members must join with an invite code; please enter it',
   'auth.dedicatedInfo': 'You are signing up via the dedicated entry of «{name}» and will auto-join this org.',
@@ -419,4 +458,31 @@ export const en: Record<string, string> = {
   // ★ 2026-10-22 unified sign-in batch: main-site email-field hint (the old otpDesc
   //    paragraph stays on tenant/demo sites only)
   'auth.autoCreateHint': 'An unregistered email creates a blank account automatically',
+  // —— Multi-identity switcher (★ 2026-10-24 plan B4: the toggle right of the identity badge) ——
+  //   "Personal edition" reuses app.personalPlan; no second naming here (§6.4 discipline).
+  'auth.id.switch': 'Switch identity',
+  'auth.id.list': 'My identities',
+  'auth.id.unavailable': 'This identity is currently unavailable',
+  'auth.id.failed': 'Could not switch identity. Try again shortly.',
+  'auth.id.done': 'Switched to {name}',
+  'auth.id.tenant': 'Org',
+  // —— Company invite-link landing (★ 2026-10-24 multi-identity plan B4-d, §6.2/§6.5) ——
+  //   The link is `https://<host>/?invite=<code>`: the visitor is not signed up yet, so this
+  //   face must stay anonymous-readable **and must name the company they are joining**.
+  //   Four distinct dead-link reasons, not one generic "invalid" — each points at a different
+  //   next step. The server's Chinese `message` is ops-facing; this person needs their own language.
+  'auth.invite.joinOrg': 'You are joining: {org}',
+  'auth.invite.joinDept': 'Department: {dept}',
+  'auth.invite.lockedEmail': 'This link is bound to {email} — sign up with that address',
+  'auth.invite.checking': 'Checking this invite link…',
+  'auth.invite.checkFail': 'We could not verify this link right now — try again shortly, or ask your company admin for a new one',
+  'auth.invite.rInvalid': 'This invite link is not valid — ask your company admin for a new one',
+  'auth.invite.rUsed': 'This invite link was already used (one link opens one account) — ask your company admin for a new one',
+  'auth.invite.rRevoked': 'This invite link was revoked by an admin — ask your company admin for a new one',
+  'auth.invite.rExpired': 'This invite link has expired — ask your company admin for a new one',
+  'auth.invite.selfNote': 'This link is a one-time onboarding credential: complete the sign-up yourself, do not forward it',
+  // §6.5 item 4 (landing disclosure): what becomes visible must be stated before the person hits submit
+  'auth.invite.dataNote': 'Once you join, your account details become visible to your company admins; company members can read the shared knowledge base and spend from the company budget.',
+  // completion copy (R8: the company identity does not swallow the personal one)
+  'auth.invite.switchBack': 'Once you join, your personal account stays exactly as it was — switch back anytime',
 }

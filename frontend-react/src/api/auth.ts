@@ -11,6 +11,7 @@
  * - 密码管理：忘记密码、重置密码、自助修改密码
  * - 邮箱管理：发送验证码、绑定/修改邮箱
  * - 账号注销：自助注销账号
+ * - ★ 多身份（B4）：身份清单 identities() 与身份切换 switchIdentity(tid)
  */
 
 // ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
@@ -19,6 +20,23 @@
 import { bizResp, request, authHeaders, API_BASE, currentUiLang, type AdminResp } from './core'
 // ★ F-81（2026-09-28）：注册请求随附浏览器设备号（与免登录试用同一份标识，见 lib/trialDevice.ts 文件头）
 import { trialDeviceID } from '@/lib/trialDevice'
+
+// ★ 多身份方案 B4（2026-10-24，方案 §五/§十）：一个身份的最小出栈读数。
+//   字段与后端 internal/api/auth_identity.go 的 identityPayload 逐项同形（那边是唯一事实源）；
+//   这里不重命名，是为了前端拿到 JSON 直接渲染，不必再为每个字段维护一份映射表——
+//   映射表就是「同一件事写两遍」，字段改名时迟早漂。
+/** Identity 一个可用身份（个人版或某企业成员身份）；tenant_status 用于把不可用的身份置灰 */
+export interface Identity {
+  uid: number
+  tid: number
+  tenant_name: string
+  is_personal: boolean
+  role: string
+  org_name: string
+  is_home: boolean
+  /** active/disabled/expired：非 active 的身份后端一定拒切，前端先置灰少一次失败请求 */
+  tenant_status: string
+}
 
 /** 登录用户信息结构：含 id/用户名/显示名/角色/所属租户 */
 export interface AuthUser {
@@ -44,6 +62,9 @@ export interface LoginResp {
   /** ★ P0-3（2026-09-14）：跨子域跳转用一次性兑换码（60s、单次消费，落地后经 /api/auth/sso/exchange 换 JWT），JWT 不再进 URL */
   sso_code?: string
   user?: AuthUser
+  /** ★ 多身份方案 B2 起，登录/注册即登录/切换身份三条出口都带该账户全部身份（家行在前）。
+   *  后端保证恒为数组（未迁移/单身份也回一条），所以这里可选只做"老响应体没这个键"的形态兜底。 */
+  identities?: Identity[]
 }
 
 /** 账号密码登录，成功返回 JWT token 与用户信息 */
@@ -184,4 +205,29 @@ export async function deactivateAccount(): Promise<AdminResp> {
  */
 export async function logout(): Promise<AdminResp & { revoked?: boolean }> {
   return bizResp(() => request('/api/auth/logout', { method: 'POST', headers: authHeaders() }))
+}
+
+// ============================================================================
+// 多身份（★ 方案 §五 / B4，2026-10-24）
+// 一个人可以同时是「个人版用户」和「若干企业的成员」，每一段身份是库里一行 users。
+// 前端要两件事：① 知道自己一共有几个可切身份（identities）；② 在同源凭证下换到另一个身份
+// （switchIdentity——口令已经验过，这里不再要口令，守卫在后端「目标行是否同 account_id」）。
+// 刻意**没有**自助退出企业：退出只能由租户管理员在管理台移除成员完成（R8 拍板）。
+// ============================================================================
+
+/** identities 取当前账户的全部可用身份（家行在前；单身份账户回一条，前端据此不渲染切换入口）。 */
+export async function identities(): Promise<AdminResp & { identities?: Identity[] }> {
+  return bizResp(() => request('/api/auth/identities', { headers: authHeaders() }))
+}
+
+/**
+ * switchIdentity 把会话切到本账户名下另一个身份。
+ * 成功回执与登录同形（新 token + user + identities），调用方按登录成功那套收尾即可；
+ * 后端对「目标不属于本账户／目标行已停用／目标租户已停用或到期」一律回同一句 403（防枚举口径），
+ * 所以调用方只有一句可行动文案，不要试图按错误码分叉出三种提示。
+ */
+export async function switchIdentity(tid: number): Promise<LoginResp> {
+  return bizResp(() => request('/api/auth/switch-identity', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ tid }),
+  }))
 }

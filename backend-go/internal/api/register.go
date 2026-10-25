@@ -161,10 +161,23 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   ③ 该账号是空白账号（无口令且待补全标记在身）。放行动作见下方唯一腿：先停用
 	//   空白账号释放邮箱，再原样走新建账号+组织。游客注册与租户站注册不带这条边，
 	//   upgradeBlankID 恒为 0，行为逐字节不变；防薅三档（IP/设备/平台名额）照旧占格。
+	caller := s.authUser(r)
 	upgradeBlankID := int64(0)
-	if caller := s.authUser(r); caller != nil && strings.EqualFold(caller.Email, req.Email) &&
+	if caller != nil && strings.EqualFold(caller.Email, req.Email) &&
 		caller.PasswordHash == "" && caller.ProfileSetupRequired == 1 {
 		upgradeBlankID = caller.ID
+	}
+	// ★ 2026-10-24 多身份 B3（§6.1 注册口汇流 + §6.3 删除静默降级）：
+	//   企业凭据（管理台手输邀请码 / 专属邀请链接 / 专属域名码）在这里**一次性解析完**，
+	//   下面整条链只用 `cred` 这一个事实，不再各读一遍 req.Invite——旧形态是「type/role 分派读一次、
+	//   专属域名门禁读一次、烧码读一次、inviteOrgID 再读一次、wasInviteBind 还读一次」五把尺子，
+	//   同一张码在一条链上可以得到五个不同答案（G9 加撤销位、链接加预绑邮箱那次都得跟着改五处，迟早漏一处）。
+	//   位置必须在 IP 档**之前**：R5 定的是「持码加入企业豁免 IP 日限/最小间隔」，判据要拿到凭据才有。
+	//   本调用只读库（不烧码、不建号）；无效/已用/非企业码一律显式 400，绝不再悄悄降级。
+	cred, credErr := s.resolveEnterpriseCredential(r.Context(), req.Invite, req.Type, req.RoleChoice, req.Email, dedicatedTid)
+	if credErr != nil {
+		s.writeError(w, r, credErr)
+		return
 	}
 	// 注册频率护栏：同 IP 24h 内注册次数上限 + 最小间隔（防脚本批量薅试用额度）
 	// ★ F-81（2026-09-28）：这两档改走 configIntTier，与设备档／平台日预算档同口径
@@ -179,8 +192,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   防薅本尊没放：升级仍要过设备档/平台档（reserveFreeAccount——升级确实新建租户并
 	//   发放体验额度）、人机验证、一次性邮箱黑名单，以及「本人空白账号」三条件。
 	//   record 那一步同样跳过（见下方「登记注册成功」处），一次用户动作不扣两次 IP 账。
+	// ★ 2026-10-24 B3（R5）：企业凭据门同样不吃 IP 档——员工入职由**企业自己发的一次性码**限量，
+	//   而不是由平台名额决定一个客户能不能给自己公司加人（同一 NAT 出口 50 人同天入职，
+	//   拿默认 3 次/24h 拦他们等于把企业客户的入职流程打死；这一档与旧 joinWithInvite/dedicatedTid
+	//   豁免同一取向，只是判据从「读 req.Invite」换成「凭据已解析成功」）。
 	ip := clientIP(r)
-	if upgradeBlankID == 0 {
+	if upgradeBlankID == 0 && cred == nil {
 		dailyLimit := configIntTier(s.Store, "REGISTER_IP_DAILY", "register_ip_daily_limit", regIPDailyDefault, false)
 		minInterval := configIntTier(s.Store, "REGISTER_IP_MIN_INTERVAL", "register_ip_min_interval_sec", regIPMinIntervalDef, true)
 		if ok, wait := s.regGuard.allow(ip, dailyLimit, minInterval); !ok {
@@ -198,10 +215,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	if v, _ := s.Store.GetConfig("email_verify_enabled"); v == "1" {
 		verifyOn = true
 	}
+	// emailProven=本次注册已证明邮箱归你（验码通过，或本人 JWT——见 planEnterpriseJoin 的 proven 两半）。
+	// 它只服务一个判据：§6.1 分流能不能说出"你已在该企业中"这句实话。
+	emailProven := false
 	// ★ 升级通道豁免 register-purpose 验码：邮箱归属已由本次登录的 login-purpose 验证码
 	//   证明（同一邮箱、同一会话、间隔分钟级）；补全面板按用户令不再索取邮箱与验证码，
 	//   此处若仍强校验，「完善信息改选企业」在开验部署下必吃 400。其余路径照旧。
-	if verifyOn && req.Invite == "" && upgradeBlankID == 0 {
+	// ★ 2026-10-24 B3（§6.3）：**带企业凭据不再豁免验码**。旧豁免条件是 `req.Invite != ""`，
+	//   于是任何人都能靠"塞一个码串"绕过邮箱归属证明，再从 §6.1 的占用文案里读出
+	//   "这个邮箱已经是某家企业的成员"（P0-9 挪位那一批堵的就是这个枚举面，豁免腿留着等于没堵）。
+	//   现在验码通过即记下 emailProven，分流判定只认这一个事实；未证明时占用分支一律回
+	//   历史那一句 409「该邮箱已被其他账号绑定」，与改造前逐字等价。
+	if verifyOn && upgradeBlankID == 0 {
 		if strings.TrimSpace(req.Email) == "" || strings.TrimSpace(req.EmailCode) == "" {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写邮箱并输入验证码"))
 			return
@@ -210,6 +235,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邮箱验证码错误或已过期"))
 			return
 		}
+		emailProven = true
 	}
 	// 人机验证（captcha_provider=turnstile 时校验；自助注册与受邀加入均拦截）
 	if err := s.verifyCaptcha(r, req.Captcha); err != nil {
@@ -231,7 +257,19 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   代价是"邮箱已被占用"的人白等一封验证码邮件（可接受：他本来就要去登录或换邮箱）。
 	//   ⚠️ 残余风险要如实说：`email_verify_enabled=0` 且 `captcha_provider=none` 时这一腿仍然可被枚举
 	//   ——那是**部署档位**的取舍（《部署指南》§生产档位明写生产应开邮箱验证），不在代码里替他兜。
-	if other, oerr := s.Store.GetUserByEmail(req.Email); oerr == nil && other != nil {
+	// ★ 2026-10-24 B3（§6.1）：**企业凭据门不走这一条全局唯一腿**。邮箱唯一性已从「全局唯一」改成
+	//   「同租户内唯一」（D3），一个人可以在 A 公司做员工、同时在 B 公司做员工；跨租户命中不再是冲突，
+	//   而是要按 §6.1 的六种情形分流（建新家行／补全空白家行／只挂成员行／已在该企业／注销宽限期／他人占用）。
+	//   分流判定本身**只读**——放在烧码之前，任何一条拒绝都不许消耗客户自己发出去的邀请码（AGENTS §一·10）。
+	var joinPlanRes *joinPlan
+	if cred != nil {
+		p, perr := s.planEnterpriseJoin(r.Context(), req.Email, cred.TenantID, caller, emailProven)
+		if perr != nil {
+			s.writeError(w, r, perr)
+			return
+		}
+		joinPlanRes = p
+	} else if other, oerr := s.Store.GetUserByEmail(req.Email); oerr == nil && other != nil {
 		// ★ 升级通道：占用者是调用者本人的空白账号时，先停用它释放邮箱再放行。
 		//   idx_users_email 是**部分唯一索引**（只约束 active/deactivating，见 iam/store.go
 		//   SetUserEmail 注释），置 disabled 即释放；GetUserByEmail/CreateUserWithEmail
@@ -251,14 +289,18 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// ★ 注册类型（个人用户 / 企业用户）：
 	//   personal = 个人用户：自动建个人租户，好友邀请码经 ref 走邀请裂变（个人用户默认可获奖励）；
 	//   enterprise（默认，兼容旧客户端）= 合并原「管理员/普通用户」为单一企业注册，注册人成为企业管理员。
-	//   专属域名场景（dedicatedTid>0）忽略类型选择：强制为普通用户、自动归入该企业。
+	// ★ 2026-10-24 B3（§6.3 删除静默降级）：这里只剩「个人用户要自动起一个个人租户编码」一件事。
+	//   被删掉的两条静默路（都在 resolveEnterpriseCredential 里翻成显式 400）：
+	//     ① role_choice=member + 无效/已用码 → 悄悄降级为个人用户（用户以为自己进了企业，实际建了个个人号）；
+	//     ② 带了码但没写 role_choice → 悄悄清空 req.Invite、另建一家企业（客户自己的员工入职
+	//        变成凭空多出一家公司，还顺手发放一份体验额度）。
+	//   专属域名（dedicatedTid>0）与凭据门（cred!=nil）都不再新建租户，因此整段分派对它们直接跳过。
+	//   ⚠️ req.Invite 从此**不再被本函数改写**：它是原始入参，凭据判定只有一个事实源 cred
+	//      （旧形态一边改它一边在四处重读它，是五把尺子里最容易被下一批改错的一把）。
 	creatingPersonal := false
-	joinWithInvite := false // ★ P1 修复：主站「企业成员凭有效邀请码加入」标记（防止下方被误清空）
-	if dedicatedTid == 0 {
+	if dedicatedTid == 0 && cred == nil {
 		switch strings.ToLower(strings.TrimSpace(req.Type)) {
 		case "personal":
-			// 个人用户：公开注册不凭企业邀请码加入；好友邀请码经 ref 处理
-			req.Invite = ""
 			creatingPersonal = true
 			// 自动生成个人租户编码/名称（前端不填企业信息）
 			req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
@@ -268,52 +310,16 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			if req.Name == "" {
 				req.Name = "个人用户"
 			}
-		default: // enterprise
-			// 企业用户按角色选择区分（需求 7）：
-			//  admin  = 我是管理员（新建企业，注册人成为企业管理员，忽略邀请码）
-			//  member = 我是普通成员（须凭有效企业邀请码加入；无效/非企业码 → 降级为个人用户，需求 2）
-			roleChoice := strings.ToLower(strings.TrimSpace(req.RoleChoice))
-			if roleChoice == "member" {
-				if code := strings.TrimSpace(req.Invite); code != "" {
-					if inv, e := s.Store.GetInviteCodeByCode(code); e == nil && inv.Used == 0 && inv.Revoked == 0 && inv.TenantID > 0 {
-						// 有效企业邀请码：保留 invite，后续走受邀加入（普通成员）
-						joinWithInvite = true
-					} else {
-						// 无效/已用/非企业邀请码：降级为个人用户（强制不得注册该企业用户）
-						req.Invite = ""
-						creatingPersonal = true
-						req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
-						if req.Name == "" {
-							req.Name = req.Username
-						}
-						if req.Name == "" {
-							req.Name = "个人用户"
-						}
-					}
-				} else {
-					// 成员模式但未提供邀请码：降级为个人用户
-					creatingPersonal = true
-					req.Code = fmt.Sprintf("p_%d", time.Now().UnixNano())
-					if req.Name == "" {
-						req.Name = req.Username
-					}
-					if req.Name == "" {
-						req.Name = "个人用户"
-					}
-				}
-			}
-			// admin（或默认）新建企业：忽略邀请码；★ P1 修复：成员凭有效邀请码加入的路径不得清空
-			if !creatingPersonal && !joinWithInvite {
-				req.Invite = ""
-			}
 		}
 	}
 	// ★ F-81（2026-09-28 用户令「注册免费账号也是和免费体验试用一样有防薅限制」）：
 	//   本次要**新建免费账号（自带体验额度）**时，先过设备档与平台日预算档。
 	// 位置收在这里（邀请码尚未被标记消耗之前），三条理由：
-	//   ① 判据要落在「会不会新建租户」这个分支上——受邀加入已有企业（joinWithInvite）与专属域名
-	//      注册（dedicatedTid>0）都不发免费额度，用企业自己发的**一次性邀请码**做闸门，
+	//   ① 判据要落在「会不会新建租户」这个分支上——企业凭据门（cred!=nil，含专属域名注册与
+	//      手输码/链接加入）都不新建租户、不发免费额度，用企业自己发的**一次性邀请码**做闸门，
 	//      把它们算进平台名额会把客户自己的员工入职打成「今日注册名额已满」（50 人同 NAT 出口更是要排三天队）；
+	//      ★ 2026-10-24 B3：旧判据是 `dedicatedTid == 0 && !joinWithInvite`，其中 joinWithInvite
+	//      要靠「再读一次邀请码」才置位（第五把尺子）；现在统一成 `cred == nil`。
 	//   ② 放在 MarkInviteCodeUsed 之前，拒绝时不会连带烧掉一个有效邀请码（烧码＝客户资产损失）；
 	//   ③ 设备号取不到就当没有，**不返 400**：这是公开注册接口的对外契约，老缓存包／脚本客户端／
 	//      管理台代客注册都可能不带这个字段（F-64、F-79 两批"契约改动引发现网故障"的同形教训）。
@@ -325,7 +331,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// regTicket 是本笔在设备档／平台档上占住的格子。声明放在 if 之外：
 	// 后面「额度真发出去了」那一刻要调它 markSpent()，而 defer release() 在这里就挂上。
 	var regTicket *freeAccountTicket
-	if dedicatedTid == 0 && !joinWithInvite {
+	if cred == nil {
 		devLimit := configIntTier(s.Store, "REGISTER_DEVICE_DAILY", "register_device_daily_limit", regDeviceDailyDefault, false)
 		globalLimit := configIntTier(s.Store, "REGISTER_GLOBAL_DAILY", "register_global_daily_limit", regGlobalDailyDefault, false)
 		// ★ 占格子而不是「看一眼够不够」：判据收在带条件的单条 UPDATE 里，
@@ -348,33 +354,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		defer regTicket.release()
 	}
 
-	// 专属域名：自动归入对应租户、强制普通用户；但企业邀请码仍必填，且须绑定该专属租户
-	if dedicatedTid > 0 {
-		invCode := strings.TrimSpace(req.Invite)
-		if invCode == "" {
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请填写企业邀请码后再注册"))
-			return
-		}
-		inv, ierr := s.Store.GetInviteCodeByCode(invCode)
-		if ierr != nil || inv.Used == 1 || inv.Revoked == 1 || inv.TenantID != dedicatedTid {
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效、已使用或不属于该企业"))
-			return
-		}
-		inviteTenantID = dedicatedTid
-		// 保留 req.Invite 供下方「标记已使用」逻辑处理（不在此清空）
-	}
-	if req.Invite != "" {
-		inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite))
-		if err != nil || inv.Used == 1 || inv.Revoked == 1 {
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效或已使用"))
-			return
-		}
-		inviteTenantID = inv.TenantID
-		// ★ 2026-10-21 IAM 重做：用户名不是登录标识，同租户重名合法，
-		//   这里不再用「该租户下用户名已存在」拦注册（否则邀约成员仍被旧唯一语义卡住）。
-		// 标记邀请码已使用（一次性；★ 整改 A4：抢占失败=被并发请求抢先，拒绝本次注册）
-		if claimed, merr := s.Store.MarkInviteCodeUsed(inv.ID, req.Username); merr != nil || !claimed {
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "邀请码无效或已使用"))
+	// ★ 2026-10-24 B3：专属域名门禁（码必填、须属于该企业）与五态判定都已上移到
+	//   resolveEnterpriseCredential（品牌子域那一支），这里不再重读 req.Invite、不再自己比
+	//   used/revoked/expires_at——那三处各判一次是 G9 加撤销位、§6.2 加过期与预绑邮箱时最容易漏改的形态。
+	// 烧码单点：位置在「防薅占格成功 ＋ §6.1 分流判定通过」之后、任何写库之前。
+	//   ★ 整改 A4 沿用：抢占失败＝被并发请求抢先，拒绝本次注册（一张码只放一个人进门）。
+	if cred != nil {
+		inviteTenantID = cred.TenantID
+		if claimed, merr := s.Store.MarkInviteCodeUsed(cred.RowID, req.Username); merr != nil || !claimed {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, credentialRejectText("used", cred.FromLink)))
 			return
 		}
 	}
@@ -462,41 +450,55 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. 创建账号：独立租户 → tenant_admin；受邀加入 → user；专属域名 → 强制普通用户
-	role := store.RoleTenantAdmin
-	if inviteTenantID > 0 && s.wasInviteBind(req.Invite) {
-		role = store.RoleUser
-	}
-	if dedicatedTid > 0 {
-		role = store.RoleUser
-	}
-	// ★ 邀请码绑定组织：受邀用户归入邀请码指定的组织层级（四期）
-	inviteOrgID := int64(0)
-	if req.Invite != "" {
-		if inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(req.Invite)); err == nil {
-			inviteOrgID = inv.OrgID
-		}
-	}
+	// 3. 创建账号
+	//   无凭据 ⇒ 新建独立租户，注册人就是该租户的 tenant_admin（个人用户与企业管理员同形）；
+	//   企业凭据 ⇒ 交给 createEnterpriseJoin 按 §6.1 的三种形态落位，角色与部门取自**凭据本身**
+	//     （旧形态是"绑了租户的码一律降成 user"，管理员发的 tenant_admin 码也把入职者降成普通成员，
+	//      与创建端写进 invite_codes.role 的那一列自相矛盾——读侧与写侧同一把尺子，AGENTS §一·8①）。
+	//   ★ 2026-10-24 B3：这里不再调 wasInviteBind、也不再第二次 GetInviteCodeByCode 取 OrgID，
+	//     凭据的一切读数只有 cred 一份（旧形态在同一条链上把同一张码读了五遍）。
 	regAgreedAt := ""
 	if req.Agreed {
 		regAgreedAt = time.Now().Format(time.RFC3339)
 	}
-	// ★ 2026-10-21 IAM 重做：建号 + 绑邮箱 + 协议时间同一事务。
-	// 旧形态先 CreateUser 再 `_ = SetUserEmail`，第二步失败被吞 ⇒ 回 success 但用户永远收不到验证码。
-	nu, err := s.Store.CreateUserWithEmail(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username, role, 0, inviteOrgID,
-		strings.ToLower(strings.TrimSpace(req.Email)), regAgreedAt, 0)
-	if err != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户创建失败: "+err.Error()))
-		return
+	var nu *store.User
+	if cred != nil {
+		joined, jerr := s.createEnterpriseJoin(r.Context(), cred, joinPlanRes, req.Username, req.Password, req.Email, regAgreedAt)
+		if jerr != nil {
+			s.writeError(w, r, jerr)
+			return
+		}
+		nu = joined
+	} else {
+		// ★ 2026-10-21 IAM 重做：建号 + 绑邮箱 + 协议时间同一事务。
+		// 旧形态先 CreateUser 再 `_ = SetUserEmail`，第二步失败被吞 ⇒ 回 success 但用户永远收不到验证码。
+		fresh, cerr := s.Store.CreateUserWithEmail(inviteTenantID, req.Username, auth.PasswordHash(req.Password), req.Username,
+			store.RoleTenantAdmin, 0, 0, strings.ToLower(strings.TrimSpace(req.Email)), regAgreedAt, 0)
+		if cerr != nil {
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "用户创建失败: "+cerr.Error()))
+			return
+		}
+		nu = fresh
 	}
 	// ★ F-81 坐实点：账号已经建成，这一格从此不再退（额度发放失败由登录路径补发）。
+	//   企业凭据门不占格（cred!=nil ⇒ regTicket 恒 nil），这一句天然空转，保留是给读代码的人看坐实点。
 	if regTicket != nil {
 		regTicket.markSpent()
 	}
-	// ★ 2026-10-21 M3：账号级体验额度自动发放（一个账号仅一次；受邀加入的成员也算新账号）。
-	s.autoGrantUserTrial(r.Context(), nu)
+	// ★ 2026-10-21 M3：账号级体验额度自动发放（一个账号仅一次）。
+	// ★ 2026-10-24 B3（方案 R5）：**企业凭据门建出来的身份不发体验额度**。理由是钱落在哪一边：
+	//   GrantUserTrialOnce 发放时 funded 的是**租户**，给一家公司每加一个员工身份就凭空多一份平台补贴额度，
+	//   而企业侧用量本该走 store/quota_org.go 的部门/组织预算墙。这里给这一行落一笔 tokens=0 的**永久标记**
+	//   （与 UserTrialGrantMigrate 的 'backfill' 占位同一形态），登录/邮箱登录那两条补发腿看到它就不要再发。
+	if cred != nil {
+		s.markTrialNotGranted(r.Context(), nu)
+	} else {
+		s.autoGrantUserTrial(r.Context(), nu)
+	}
 	// 记录协议签署时间（注册勾选即视为同意《用户协议》与《隐私协议》，给后台超管「协议签署」tab 留痕）
-	if req.Agreed {
+	// ★ B3：成员行（joinMemberRow/joinCompleteHome）建出来的那一行不带协议时间（CreateIdentityRow 不写这一列），
+	//   出栈里硬填一个库里没有的值＝把"这个人同意过"写成猜测，只在真落库的形态上回显。
+	if req.Agreed && (cred == nil || joinPlanRes.Action == joinNewHome) {
 		nu.AgreedAt = regAgreedAt // 已在建号事务里落库
 	}
 	// ★ 角色功能（2026-09-19）：注册时选择的职业角色落库（所有注册分支统一在此写入——
@@ -537,8 +539,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// ★ 企业注册提醒（需求 2026-08-27）：企业用户注册成功后，向注册人发送欢迎邮件
 	//   并抄送运营邮箱（抄送地址由 OPS_NOTIFY_EMAIL 环境变量控制，空=不抄送）建联。
-	//   仅「新建企业（非个人、非受邀加入、非专属域名）」触发；个人用户不抄送。
-	if !creatingPersonal && dedicatedTid == 0 && req.Invite == "" && req.Email != "" {
+	//   仅「新建企业（非个人、非企业凭据门）」触发；个人用户不抄送。
+	// ★ 2026-10-24 B3：判据从 `req.Invite == "" && dedicatedTid == 0` 换成 `cred == nil`——
+	//   本函数已不再改写 req.Invite，而 role_choice=admin 带着码（我要新建企业）时 cred 为 nil、
+	//   请求里那个串却非空；沿用旧判据会把这一档新企业的运营建联邮件漏掉。
+	//   语义不变：只有「这次真的凭空建了一家新公司」才给运营抄送一份。
+	if !creatingPersonal && cred == nil && req.Email != "" {
 		// 后台异步发送企业注册欢迎邮件并抄送运营，不阻塞注册响应（★ F-17：语种随注册界面语言）
 		go func(to, name, username, lang string) {
 			_ = s.sendTemplatedMail(to, "enterprise_reg", lang, map[string]string{
@@ -552,7 +558,8 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	//   原「先发 Key 后建号」产生 user_id=0 的孤儿 Key，被 authenticateAPIKey
 	//   「Key 必须归属用户」闸门拦截，新注册租户的 Key 要重启服务（backfill）后才生效。
 	//   专属域名注册视为「加入已有企业」，不签发独立 API Key（与邀请码加入保持一致）。
-	if inviteTenantID > 0 && req.Invite == "" && dedicatedTid == 0 {
+	//   ★ B3 判据同上一条换成 cred==nil：Key 只发给「自己新建的那家公司」的创建人。
+	if inviteTenantID > 0 && cred == nil {
 		defaultKey = s.issueDefaultAPIKeyFor(inviteTenantID, nu.ID, "默认 Key")
 	}
 	// ★ 邀请裂变首绑（白皮书 §5）：携带个人邀请码注册→写入 referred_by（首绑闸门），
@@ -626,28 +633,46 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// 清空密码哈希后返回
 	nu.PasswordHash = ""
 	// 注册审计
-	auditRole := "user"
-	if inviteTenantID == 0 || !s.wasInviteBind(req.Invite) {
-		auditRole = "admin"
-	}
-	if dedicatedTid > 0 {
-		auditRole = "user"
+	// ★ 2026-10-24 B3：判据从「再读一次邀请码判断有没有绑租户」换成 cred——并如实记下这一行的**真实角色**
+	//   （凭据门建出来的可能是 tenant_admin，写死 "user" 会让排障的人按错的角色找逻辑）。
+	auditRole := "admin"
+	if cred != nil {
+		auditRole = nu.Role
 	}
 	s.Store.LogAudit(inviteTenantID, nu.ID, "register", "auth", "自助注册 role="+auditRole)
+	// ★ 2026-10-24 B3（§6.1/§七）：凭据门另记一条 membership_create——它是「一个人多了一份企业身份」
+	//   这件事的唯一留痕（register 那条只说"有人注册了"，说不出他是被哪家公司的哪张码放进来的）。
+	//   动作名已在 12 语种词典补译（auditActionCoverage 基线 32 不动）。
+	if cred != nil {
+		s.Store.LogAudit(cred.TenantID, nu.ID, "membership_create", "user",
+			fmt.Sprintf("凭企业邀请加入（来源=%s 形态=%s 编码=%s）", cred.Source, joinPlanRes.Action, tidLabel(cred.TenantID)))
+	}
 	// 登记注册成功（推进同 IP 频率窗口）
 	// ★ 2026-10-23：升级通道不记 IP 账——这一次转化已经计过 IP（自动建号那次），再记一次
 	//   等于把一次用户动作扣成两次；设备档/平台档的账照记（占格在 reserveFreeAccount）。
-	if upgradeBlankID == 0 {
+	// ★ 2026-10-24 B3（R5）：企业凭据门同样不记——上面已豁免 allow() 判定，这里再 record 一次
+	//   等于"今天没放任何人进门却把这家公司的 IP 格子用完了"，会让同 IP 的下一个自然日注册者白等。
+	if upgradeBlankID == 0 && cred == nil {
 		s.regGuard.record(ip)
 	}
 	// 成功提示（任务2.2：注册即自动发放体验额度，不再有审核等待态）
+	// ★ B3：凭据门不发体验额度（R5），文案不许再承诺"额度已发放"——客户按这句话去查余额会以为平台扣了钱。
 	msg := "注册成功，试用额度已发放"
+	if cred != nil {
+		msg = "注册成功，已加入企业"
+	}
 	regResp := map[string]interface{}{
 		"success":   true,
 		"message":   msg,
 		"user":      nu,
 		"tenant_id": inviteTenantID,
 		"tenant":    tenantInfo,
+	}
+	// ★ 2026-10-24 B3（§6.5 前端切换器）：凭据门建出来的身份天然带账户号，注册响应顺手回一份身份清单，
+	//   前端不必再打一次 /api/auth/identities 才知道自己现在有几个人可切（少一次往返＝少一次弱链路白屏）。
+	//   只在凭据门出栈：普通注册的账户号只有一行，回它是无信息量字段（也不给旧客户端添新键）。
+	if cred != nil {
+		regResp["identities"] = s.identityListOrEmpty(nu)
 	}
 	// ★ 新租户默认 API Key：明文仅此一次随注册响应返回（受邀加入为空串）
 	if defaultKey != "" {
@@ -878,20 +903,6 @@ func (s *Server) seedTenantBrandTerms(tid int64, brandName, brandNameEn, brandNa
 	if len(names) > 0 {
 		_ = s.Store.SeedBrandTerms(tid, names)
 	}
-}
-
-// wasInviteBind 判断是否通过绑定租户的邀请码加入（用于角色判定）。
-// 参数 invite: 邀请码字符串；返回: true 表示该邀请码绑定了具体租户（受邀加入），false 表示未绑定（新建租户）。
-func (s *Server) wasInviteBind(invite string) bool {
-	if invite == "" {
-		return false
-	}
-	inv, err := s.Store.GetInviteCodeByCode(strings.TrimSpace(invite))
-	if err != nil {
-		return false
-	}
-	// 邀请码 TenantID>0 即视为绑定租户
-	return inv.TenantID > 0
 }
 
 // handleInviteCodes 邀请码列表接口（tenant_admin 及以上；企业用户仅看本租户）。

@@ -199,7 +199,18 @@ try { storedRaw = localStorage.getItem('app_lang') } catch { /* 站点数据被�
 //   真裁决在下一行——必须在语种表里命中才算数，野值与 null 一律折回浏览器检测。
 //   分成两步是为了让「唯一一次裸存储读」收在那条 try 里，后续判断都不再碰 localStorage。
 const stored = storedRaw as Lang | null
-let currentLang: Lang = stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang()
+// ★ DEF-06（2026-10-24）：`?lang=xx` 是 SEO 的 12 语种稳定地址。首屏服务端按它注入 meta，
+//   客户端也必须按它起步，否则 HTML 说日文、界面却是中文。
+//   优先级：?lang（合法 12 码）＞ localStorage ＞ 浏览器检测。
+function detectQueryLang(): Lang | null {
+  try {
+    const v = new URLSearchParams(window.location.search).get('lang')
+    return v && LANG_OPTIONS.some((o) => o.code === v) ? (v as Lang) : null
+  } catch { return null }
+}
+// queryLang 首屏 ?lang（12 码）优先于本地存值，保证服务端注入与界面语言一致。
+const queryLang = detectQueryLang()
+let currentLang: Lang = queryLang ?? (stored && LANG_OPTIONS.some((o) => o.code === stored) ? stored : detectBrowserLang())
 
 // ★ F3：RTL 方向接线——document.dir 随语言切换。
 //   ★ #23：阿拉伯语已进 UI 语种表，本钩子正式生效；
@@ -234,6 +245,13 @@ export function setLang(l: Lang) {
   bumpSnapKey() // 语种一变，快照键必须跟着变（快照键唯一写点＝bumpSnapKey，见其定义处）
   applyDir(l)
   try { localStorage.setItem('app_lang', l) } catch { /* ignore */ }
+  // ★ DEF-06：把当前语言写回地址栏（保留 sso_code/ref/utm 等其他参数），
+  //   使可分享链接、canonical、hreflang 与界面语言保持同一版本；不刷新页面。
+  try {
+    const u = new URL(window.location.href)
+    u.searchParams.set('lang', l)
+    history.replaceState(null, '', u.pathname + u.search + u.hash)
+  } catch { /* ignore */ }
   emit() // 先按当前已到手词典重渲染（未到手时这一帧走 en/zh 回退，见 dictFor 上方代价说明）
   void ensureLocale(l) // 再确保该语种词典；到手后 ensureLocale 内部会再 emit() 一次换成母语
 }

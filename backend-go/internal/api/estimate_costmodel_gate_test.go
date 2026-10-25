@@ -144,9 +144,11 @@ func TestEstimateHandlerResponseShapeAndMagnitude(t *testing.T) {
 	if pmin < 1 || pmax < pmin {
 		t.Fatalf("出参积分读数非法: min=%v max=%v", resp["points_min"], resp["points_max"])
 	}
-	// 缺陷本体红线：旧公式在这一条出 30~75（现网截图读数），实收 1 积分
-	if pmin > 8 {
-		t.Fatalf("截图那条输入的预估下限仍是 %v 积分（旧公式 30~75，实收 1）——缺陷未修", pmin)
+	// 缺陷本体红线：旧公式在这一条出 30~75（现网截图读数）。
+	// ★ 2026-10-24 N-01：文化规则块 allowance（zh 上限 2000 token）计入固定项后下限约 9 积分；
+	//   仍是个位数档，且远低于旧公式 30~75。
+	if pmin > 12 {
+		t.Fatalf("截图那条输入的预估下限 %v 积分超出量级档（旧公式 30~75）——缺陷未修", pmin)
 	}
 	// 出参键集合与改造前逐字相同（前端零改动这条判据成立的地方就在键名）
 	want := []string{"success", "sentences", "points_min", "points_max", "cost_sentences_approx",

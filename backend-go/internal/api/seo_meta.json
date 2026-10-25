@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "languages": [
+    "zh",
+    "zh_hant",
+    "en",
+    "ru",
+    "fr",
+    "ar",
+    "es",
+    "pt",
+    "de",
+    "ja",
+    "ko",
+    "th"
+  ],
+  "x_default_lang": "zh",
+  "routes": {
+    "/": {
+      "robots": "index,follow",
+      "title": {
+        "zh": "能言 LangCross · 专业 AI 翻译，原版式交付",
+        "zh_hant": "能言 LangCross · 專業 AI 翻譯，原版式交付",
+        "en": "LangCross · Professional AI Translation, Format-Preserving Delivery",
+        "ru": "LangCross · Профессиональный ИИ-перевод с сохранением форматирования",
+        "fr": "LangCross · Traduction IA professionnelle, mise en forme préservée",
+        "ar": "LangCross · ترجمة احترافية بالذكاء الاصطناعي مع الحفاظ على التنسيق",
+        "es": "LangCross · Traducción profesional con IA y formato original",
+        "pt": "LangCross · Tradução profissional com IA e formato preservado",
+        "de": "LangCross · Professionelle KI-Übersetzung mit originalem Layout",
+        "ja": "LangCross · プロ品質のAI翻訳、レイアウトそのまま",
+        "ko": "LangCross · 전문 AI 번역, 원본 서식 유지",
+        "th": "LangCross · การแปลด้วย AI ระดับมืออาชีพ คงรูปแบบเดิม"
+      },
+      "description": {
+        "zh": "面向跨境电商与出海企业的 AI 翻译平台。和 Google 翻译、DeepL 的差别不在单句，而在把整件事办完：行业术语硬闸、品牌名统一保护、DOCX/PPTX/PDF 原格式写回，积分透明计费。",
+        "zh_hant": "面向跨境電商與出海企業的 AI 翻譯平台。與 Google 翻譯、DeepL 的差別不在單句，而在把整件事辦完：產業術語硬閘、品牌名統一保護、DOCX/PPTX/PDF 原格式寫回，積分透明計費。",
+        "en": "An AI translation platform for cross-border teams. Google Translate and DeepL stop at the sentence; we finish the job: enforced terminology, brand-name protection and DOCX/PPTX/PDF written back in the original layout.",
+        "ru": "ИИ-платформа перевода для трансграничной торговли. Там, где Google Переводчик и DeepL заканчивают на фразе, мы доводим работу до конца: контроль терминов, защита брендов и возврат DOCX/PPTX/PDF в исходной вёрстке.",
+        "fr": "Plateforme de traduction IA pour le e-commerce. Là où Google Traduction et DeepL s'arrêtent à la phrase, nous allons au bout : terminologie imposée, marques protégées et DOCX/PPTX/PDF dans leur mise en page.",
+        "ar": "منصة ترجمة بالذكاء الاصطناعي للتجارة العابرة للحدود والفرق العالمية. حيث يتوقف Google Translate وDeepL عند الجملة، نحن نُنجِز العمل: فرض المصطلحات، حماية الأسماء التجارية، وإعادة DOCX/PPTX/PDF بالتنسيق الأصلي.",
+        "es": "Plataforma de traducción IA para el comercio transfronterizo. Donde Google Translate y DeepL se quedan en la frase, cerramos el trabajo: terminología controlada, marcas protegidas y DOCX/PPTX/PDF con su formato.",
+        "pt": "Plataforma de tradução com IA para e-commerce internacional. Onde o Google Tradutor e o DeepL param na frase, entregamos o trabalho: terminologia controlada, marcas protegidas e DOCX/PPTX/PDF com o formato original.",
+        "de": "KI-Übersetzungsplattform für grenzüberschreitenden E-Commerce. Wo Google Übersetzer und DeepL beim Satz aufhören, liefern wir fertig: erzwungene Terminologie, Markennamen-Schutz und DOCX/PPTX/PDF im Original-Layout.",
+        "ja": "越境ECとグローバルチーム向けのAI翻訳プラットフォーム。Google翻訳やDeepLが一文で終わるところからが仕事です。業界用語の強制適用、ブランド名保護、DOCX/PPTX/PDFの元レイアウト書き戻しまで行います。",
+        "ko": "국경 간 이커머스와 글로벌 팀을 위한 AI 번역 플랫폼. Google 번역과 DeepL이 한 문장에서 멈추는 지점부터 저희 업무입니다: 용어 강제 적용, 브랜드명 보호, DOCX/PPTX/PDF 원본 레이아웃 반영.",
+        "th": "แพลตฟอร์มแปลภาษาด้วย AI สำหรับการค้าข้ามประเทศและทีมระดับโลก ตรงที่ Google Translate และ DeepL หยุดที่ประโยคเดียว เราทำงานให้จบ: บังคับศัพท์เฉพาะ ป้องกันชื่อแบรนด์ เขียน DOCX/PPTX/PDF กลับรูปแบบเดิม"
+      }
+    },
+    "/pricing": {
+      "robots": "index,follow",
+      "title": {
+        "zh": "定价与套餐 · 能言 LangCross",
+        "zh_hant": "定價與套餐 · 能言 LangCross",
+        "en": "Pricing & Plans · LangCross",
+        "ru": "Тарифы и планы · LangCross",
+        "fr": "Tarifs et offres · LangCross",
+        "ar": "الأسعار والخطط · LangCross",
+        "es": "Precios y planes · LangCross",
+        "pt": "Preços e planos · LangCross",
+        "de": "Preise und Pakete · LangCross",
+        "ja": "料金とプラン · LangCross",
+        "ko": "요금 및 플랜 · LangCross",
+        "th": "ราคาและแพ็กเกจ · LangCross"
+      },
+      "description": {
+        "zh": "查看能言 LangCross 的翻译套餐与积分档位：本侧按积分计费、建单前先给出预估；DeepL 与 Google 翻译的 API 与文档档按字符计价，两种口径可以直接对比。",
+        "zh_hant": "查看能言 LangCross 的翻譯套餐與積分檔位：本側按積分計費、建單前先給出預估；DeepL 與 Google 翻譯的 API 與文件檔按字元計價，兩種口徑可以直接對比。",
+        "en": "LangCross plans and point tiers: billed in points, with an estimate before you submit. Google Translate and DeepL bill API and document usage per character — the two models are easy to compare.",
+        "ru": "Тарифы и пакеты баллов LangCross: оплата баллами, расчёт до отправки задания. Google Переводчик и DeepL берут за API и документы по символам — две модели легко сравнить.",
+        "fr": "Offres et paliers de points LangCross : facturation en points, estimation avant soumission. Google Traduction et DeepL facturent l'API et les documents au caractère — deux modèles faciles à comparer.",
+        "ar": "خطط LangCross وشرائح النقاط: فوترة بالنقاط وتقدير قبل الإرسال. يفترض Google Translate وDeepL واجهة API والمستندات حسب الحرف — يمكن مقارنة النموذجين مباشرة.",
+        "es": "Planes y niveles de puntos de LangCross: se facturan en puntos con estimación previa al envío. Google Translate y DeepL cobran la API y los documentos por carácter; los dos modelos se comparan fácil.",
+        "pt": "Planos e faixas de pontos da LangCross: cobrança em pontos com estimativa antes do envio. Google Tradutor e DeepL cobram API e documentos por caractere — dá para comparar os dois modelos.",
+        "de": "LangCross-Pakete und Punktestufen: Abrechnung in Punkten mit Kostenvoranschlag vor dem Absenden. Google Übersetzer und DeepL rechnen API und Dokumente pro Zeichen ab — beide Modelle lassen sich direkt vergleichen.",
+        "ja": "LangCross の料金とポイント段階。当社は送信前に見積もりが出るポイント制で、DeepL や Google 翻訳の API・文書は文字数課金です。二つの料金体系をそのまま比べられます。",
+        "ko": "LangCross 요금과 포인트 단계: 제출 전 견적을 주는 포인트제입니다. DeepL·Google 번역의 API·문서는 문자 단위 과금이라 두 체계를 그대로 비교할 수 있습니다.",
+        "th": "แผนและขั้นคะแนนของ LangCross: คิดเป็นคะแนนและประเมินก่อนส่ง ส่วน Google Translate และ DeepL คิดค่า API กับเอกสารตามจำนวนอักขระ เทียบกันได้ตรง ๆ"
+      }
+    },
+    "/compare": {
+      "robots": "index,follow",
+      "title": {
+        "zh": "比价与算价 · 能言 LangCross",
+        "zh_hant": "比價與算價 · 能言 LangCross",
+        "en": "Compare & Estimate · LangCross",
+        "ru": "Сравнение и расчёт · LangCross",
+        "fr": "Comparer et estimer · LangCross",
+        "ar": "المقارنة والتقدير · LangCross",
+        "es": "Comparar y estimar · LangCross",
+        "pt": "Comparar e estimar · LangCross",
+        "de": "Vergleichen und schätzen · LangCross",
+        "ja": "比較と見積もり · LangCross",
+        "ko": "비교 및 견적 · LangCross",
+        "th": "เปรียบเทียบและประเมินราคา · LangCross"
+      },
+      "description": {
+        "zh": "按源文字符数与目标语种即时估算翻译积分与费用，并与人工翻译价格对照；通用机翻（Google 翻译、DeepL）之后剩下的校对与重排版那两段成本，这里一并算给你看。",
+        "zh_hant": "按來源字元數與目標語種即時估算翻譯積分與費用，並與人工翻譯價格對照；通用機翻（Google 翻譯、DeepL）之後剩下的校對與重排版那兩段成本，這裡一併算給你看。",
+        "en": "Estimate translation points and cost from source length and target languages, set against human pricing — including the proofreading and re-layout that Google Translate or DeepL leave on your side.",
+        "ru": "Оценка баллов и стоимости перевода по объёму и языкам рядом с ценой human-перевода — с учётом вычитки и вёрстки, которые Google Переводчик и DeepL оставляют на вашей стороне.",
+        "fr": "Estimez points et coût de traduction selon le volume et les langues face au tarif humain — relecture et remise en page comprises, celles que Google Traduction ou DeepL laissent de votre côté.",
+        "ar": "قدّر نقاط الترجمة وتكلفتها من طول النص واللغات المستهدفة مقابل سعر الترجمة البشرية — بما في ذلك المراجعة وإعادة التنسيق اللذان يتركهما Google Translate وDeepL عليك.",
+        "es": "Calcula puntos y coste de traducción según longitud e idiomas frente al precio humano, incluida la revisión y el maquetado que Google Translate o DeepL dejan de tu lado.",
+        "pt": "Estime pontos e custo de tradução pelo tamanho e idiomas diante do preço humano — incluindo revisão e diagramação que o Google Tradutor ou o DeepL deixam para você.",
+        "de": "Übersetzungspunkte und -kosten nach Umfang und Sprache, direkt neben dem Humanpreis — inklusive Lektorat und Layout, die Google Übersetzer oder DeepL bei Ihnen lassen.",
+        "ja": "文字数と言語から翻訳ポイントと費用を即時見積もり、人力翻訳の価格と比較できます。Google翻訳やDeepLが自社側に残す校正と組版の二段階のコストまで一画面に出します。",
+        "ko": "원문 글자 수와 대상 언어로 번역 포인트와 비용을 즉시 추정하고 인건비와 비교합니다. Google 번역·DeepL이 사용자에게 남기는 검수와 조판 두 단계 비용까지 함께 보여 드립니다.",
+        "th": "ประเมินคะแนนและค่าใช้จ่ายการแปลจากความยาวและภาษาคู่กับราคางานมนุษย์ — รวมค่าตรวจทานและจัดหน้าที่ Google Translate หรือ DeepL ปล่อยให้คุณทำต่อ"
+      }
+    },
+    "/login": {
+      "robots": "noindex,follow",
+      "title": {
+        "zh": "登录 · 能言 LangCross",
+        "zh_hant": "登入 · 能言 LangCross",
+        "en": "Sign in · LangCross",
+        "ru": "Вход · LangCross",
+        "fr": "Connexion · LangCross",
+        "ar": "تسجيل الدخول · LangCross",
+        "es": "Iniciar sesión · LangCross",
+        "pt": "Entrar · LangCross",
+        "de": "Anmelden · LangCross",
+        "ja": "ログイン · LangCross",
+        "ko": "로그인 · LangCross",
+        "th": "เข้าสู่ระบบ · LangCross"
+      },
+      "description": {
+        "zh": "登录能言 LangCross，继续使用 AI 翻译、文档交付与术语库。",
+        "zh_hant": "登入能言 LangCross，繼續使用 AI 翻譯、文件交付與術語庫。",
+        "en": "Sign in to LangCross to continue with AI translation, document delivery and terminology libraries.",
+        "ru": "Войдите в LangCross, чтобы продолжить работу с ИИ-переводом, документами и глоссариями.",
+        "fr": "Connectez-vous à LangCross pour continuer avec la traduction IA, la livraison de documents et les glossaires.",
+        "ar": "سجّل الدخول إلى LangCross لمتابعة الترجمة بالذكاء الاصطناعي وتسليم المستندات وقواعد المصطلحات.",
+        "es": "Inicia sesión en LangCross para continuar con la traducción con IA, la entrega de documentos y los glosarios.",
+        "pt": "Entre na LangCross para continuar com tradução por IA, entrega de documentos e glossários.",
+        "de": "Melden Sie sich bei LangCross an, um KI-Übersetzung, Dokumentenlieferung und Glossare weiter zu nutzen.",
+        "ja": "LangCross にログインして、AI翻訳・ドキュメント納品・用語集を引き続きご利用ください。",
+        "ko": "LangCross에 로그인하여 AI 번역, 문서 납품, 용어집을 계속 이용하세요.",
+        "th": "เข้าสู่ระบบ LangCross เพื่อใช้การแปลด้วย AI การส่งมอบเอกสาร และคลังศัพท์ต่อไป"
+      }
+    },
+    "/register": {
+      "robots": "noindex,follow",
+      "title": {
+        "zh": "注册 · 能言 LangCross",
+        "zh_hant": "註冊 · 能言 LangCross",
+        "en": "Sign up · LangCross",
+        "ru": "Регистрация · LangCross",
+        "fr": "Inscription · LangCross",
+        "ar": "التسجيل · LangCross",
+        "es": "Crear cuenta · LangCross",
+        "pt": "Criar conta · LangCross",
+        "de": "Konto erstellen · LangCross",
+        "ja": "新規登録 · LangCross",
+        "ko": "회원가입 · LangCross",
+        "th": "สมัครสมาชิก · LangCross"
+      },
+      "description": {
+        "zh": "使用邮箱验证码登录或创建账号，未注册邮箱将自动创建空白账号。",
+        "zh_hant": "使用電子郵件驗證碼登入或建立帳號，未註冊電子郵件將自動建立空白帳號。",
+        "en": "Sign in or create an account with an email code; unregistered emails create a blank account automatically.",
+        "ru": "Войдите или создайте аккаунт по коду из письма; незарегистрированная почта автоматически создаёт пустой аккаунт.",
+        "fr": "Connectez-vous ou créez un compte avec un code par e-mail ; une adresse non inscrite crée automatiquement un compte vide.",
+        "ar": "سجّل الدخول أو أنشئ حسابًا برمز البريد الإلكتروني؛ البريد غير المسجل ينشئ حسابًا فارغًا تلقائيًا.",
+        "es": "Inicia sesión o crea una cuenta con un código de correo; un correo no registrado crea una cuenta vacía automáticamente.",
+        "pt": "Entre ou crie uma conta com código por e-mail; e-mails não registrados criam uma conta vazia automaticamente.",
+        "de": "Melden Sie sich an oder erstellen Sie ein Konto per E-Mail-Code; nicht registrierte E-Mails erzeugen automatisch ein leeres Konto.",
+        "ja": "メール認証コードでログインまたはアカウント作成。未登録のメールは空のアカウントを自動作成します。",
+        "ko": "이메일 인증 코드로 로그인하거나 계정을 만드세요. 미등록 이메일은 빈 계정이 자동 생성됩니다.",
+        "th": "เข้าสู่ระบบหรือสร้างบัญชีด้วยรหัสทางอีเมล อีเมลที่ยังไม่ลงทะเบียนจะสร้างบัญชีว่างโดยอัตโนมัติ"
+      }
+    }
+  },
+  "app": {
+    "robots": "noindex,nofollow",
+    "title_suffix": "LangCross"
+  }
+}

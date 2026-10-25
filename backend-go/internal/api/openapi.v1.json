@@ -206,7 +206,7 @@
         ],
         "responses": {
           "200": {
-            "description": "文件流（attachment）。下载文件名按 RFC 5987 双写：filename=\"<ASCII 兜底名>\" + filename*=UTF-8''<百分号编码真名>，中文名不再乱码。",
+            "description": "文件流（attachment）。下载文件名按 RFC 5987 双写：filename=\"<ASCII 兜底名>\" + filename*=UTF-8''<百分号编码真名>，中文名不再乱码。译文产物的文件名带语言后缀 -<lang>（如 manual-en.docx），多语种 zip 里各语种不再叠成同名文件；后缀取产物真实 basename，客户端无需自己拼。",
             "content": {
               "application/octet-stream": {}
             }

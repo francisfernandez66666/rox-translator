@@ -8,32 +8,9 @@
 // ========================================
 package iam
 
-import (
-	"path/filepath"
-	"testing"
+import "testing"
 
-	"database/sql"
-	_ "modernc.org/sqlite"
-)
-
-// newIAMTestStore 临时文件库 iam.Store。
-func newIAMTestStore(t *testing.T) *Store {
-	t.Helper()
-	conn, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "b2.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { conn.Close() })
-	if _, err := conn.Exec(`CREATE TABLE users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, username TEXT, password_hash TEXT,
-		display_name TEXT, role TEXT, status TEXT, created_by INTEGER, last_login_at TEXT NOT NULL DEFAULT '', org_id INTEGER,
-		email TEXT DEFAULT '', created_at TEXT, updated_at TEXT, deactivate_at TEXT DEFAULT '',
-		agreed_at TEXT DEFAULT '', must_change_pwd INTEGER DEFAULT 0, token_version INTEGER DEFAULT 0,
-		job_role TEXT DEFAULT '', profile_setup_required INTEGER DEFAULT 0)`); err != nil {
-		t.Fatal(err)
-	}
-	return NewStore(conn)
-}
+// users 表夹具与 newIAMTestStore 收在 testdb_test.go（列清单从 userCols 现算，不手抄）。
 
 func TestSignCarriesTokenVersion(t *testing.T) {
 	u := &User{ID: 9, TenantID: 3, Username: "b2", Role: "user", TokenVersion: 7}

@@ -278,6 +278,12 @@ func (s *Server) metricsText() string {
 	sb.WriteString(fmt.Sprintf("translator_llm_stream_calls_total %d\n", obs.StreamCalls))
 	sb.WriteString("# HELP translator_llm_stream_ttft_avg_ms 流式平均首 token 延迟（ms，请求发出→首个非空 delta）\n# TYPE translator_llm_stream_ttft_avg_ms gauge\n")
 	sb.WriteString(fmt.Sprintf("translator_llm_stream_ttft_avg_ms %.1f\n", obs.StreamTtftAvgMs))
+	// ★ N-01（2026-10-25 补腿）：单次 prompt 超阈值的调用数——与 llm 侧那条
+	//   llm_prompt_token_over_threshold 的 WARN 同源（同一个判定点、同一个计数器）。
+	//   这条序列的存在理由：文化规则块／术语表膨胀是**渐进**的，单条日志会被采样丢掉，
+	//   只有计数能在「成本开始失控」那天被看板看见；同样只出监控侧，不进客户面。
+	sb.WriteString("# HELP translator_llm_prompt_over_threshold_total 单次 prompt token 超阈值（默认 8000，env LLM_PROMPT_TOKEN_WARN_THRESHOLD 可调）的调用数\n# TYPE translator_llm_prompt_over_threshold_total counter\n")
+	sb.WriteString(fmt.Sprintf("translator_llm_prompt_over_threshold_total %d\n", obs.PromptLargeCalls))
 
 	// 子进程监控指标（fileproc 包收集）
 	procSnap := fileproc.GetProcMetrics().Snapshot()

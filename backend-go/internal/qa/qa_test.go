@@ -145,3 +145,32 @@ func TestCheckMultiLang(t *testing.T) {
 		t.Fatalf("6 语言全空应计 6 error: %+v", r)
 	}
 }
+
+// TestStructureRule DEF-02：多段源文译文缺段 → structure error；单段/等行数不报。
+func TestStructureRule(t *testing.T) {
+	src := "第一段：这是用于验收的中文原文。\n第二段：请翻译成英文并保留段落结构。"
+	r := Check(src, map[string]string{"en": "This is a Chinese text intended for acceptance."})
+	if r.Pass || r.Errors == 0 {
+		t.Fatalf("两段源文只回一段，应判 structure error，实得 %+v", r)
+	}
+	found := false
+	for _, iss := range r.Issues {
+		if iss.Rule == "structure" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("没有 structure 规则命中：%+v", r.Issues)
+	}
+	ok := Check(src, map[string]string{"en": "Line one.\nLine two."})
+	if !ok.Pass {
+		t.Fatalf("两段源文回两段译文应通过：%+v", ok)
+	}
+	single := Check("只有一段", map[string]string{"en": "Only one paragraph."})
+	if !single.Pass {
+		t.Fatalf("单段源文不应触发结构规则：%+v", single)
+	}
+	if got := MissingLineCounts(src, map[string]string{"en": "one line"}); got["en"] != 1 {
+		t.Fatalf("MissingLineCounts 应报 en 缺 1 段，实得 %v", got)
+	}
+}

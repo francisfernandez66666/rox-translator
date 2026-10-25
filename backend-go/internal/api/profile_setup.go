@@ -56,18 +56,29 @@ func (s *Server) handleProfileSetup(w http.ResponseWriter, r *http.Request) {
 			//   bcrypt 是**随机盐**（两次结果不同但都能验同一口令），功能无差异，
 			//   只是白付一次 ~60ms 的 CPU——资料补全在首登路径上，这一下是能感觉到的。
 			h := auth.PasswordHash(pwd)
-			if _, err := s.Store.ResetPassword(u.ID, u.TenantID, h); err != nil {
+			if _, err := s.setAccountPassword(u, h, false); err != nil {
 				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "密码保存失败"))
 				return
 			}
-			// ResetPassword 递增 token_version：内存副本必须同步，否则重签出来的 token 立即失效。
-			u.TokenVersion++
-			u.PasswordHash = h
+			// ★ 2026-10-24 多身份 D5：口令写的是**家行**（方案 D4「成员行不含凭证」），
+			//   而 must_change_pwd / profile_setup_required 这两把闸也由 SetPasswordForAccount 在家行一并清掉。
+			//   内存副本只有在"本行就是被写那一行"时才跟着翻——
+			//   否则给成员行的会话抬了 token_version，重签出来的 token 与库里的成员行对不上，
+			//   表现是"补完资料立刻被踢下线"（改的是家行、踢的是当前会话，两件事被分开了）。
+			if u.AccountID == "" || u.IsHome == 1 {
+				// ResetPassword/SetPasswordForAccount 都会递增 token_version：内存副本必须同步，
+				// 否则重签出来的 token 立即失效。
+				u.TokenVersion++
+				u.PasswordHash = h
+			}
 			// ★ 2026-10-22 一致性核查修复：这里同样是"改密"，必须与 handleChangePassword
-			//   （auth.go:455-456）同一把尺子——**清了才算改完**。
+			//   （auth.go 那一条腿）同一把尺子——**清了才算改完**。
 			//   此前不清：用户在资料补全屏设好合格密码、重签 token 仍带 mcp=1，
 			//   下一个请求立刻被 428 拦，观感是"我明明改了密码还让我改"。
 			//   写失败只留旧态（用户再走强制改密窗即可），不把已经成功的改密判成失败。
+			//   ★ 多身份：迁移行的这把闸已由 setAccountPassword 在家行清掉，这一腿按行写只是**同值重写**
+			//   （成员行本来 mcp=0，写 0 无差异），但内存副本必须跟着清，
+			//   否则下面 auth.Sign 与出栈 user 还带着 mcp=1，用户观感是"我明明改了密码还让我改"。
 			if u.MustChangePwd > 0 {
 				_ = s.Store.SetMustChangePwd(u.ID, u.TenantID, 0)
 				u.MustChangePwd = 0

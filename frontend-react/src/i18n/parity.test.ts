@@ -45,6 +45,8 @@ import * as pAuth from './panels/auth'
 import * as pCoupons from './panels/coupons'
 // ★ 2026-09-21 #34：AI 助手管理面板词典（原生面板，取代 iframe）
 import * as pAssist from './panels/assist'
+// ★ 2026-10-24 多身份 B4-c：企业专属邀请链接面板（与 invites 手输注册码分两套文案，§6.4 命名隔离）
+import * as pInviteLink from './panels/invitelink'
 // ★ 2026-09-18 缺口修复：index.ts 已合并 sdk / hub / reconcile 三面板，但本守护的
 //   PANELS 表漏收 → 这三份词典的 zh/en 键不对等、空值漏译永远不会被闸门发现。
 import * as pSdk from './panels/sdk'
@@ -77,6 +79,8 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'sdk', mod: pSdk }, { name: 'hub', mod: pHub }, { name: 'reconcile', mod: pReconcile },
   // ★ 〇-X #55：比价/算价页词典（/compare）
   { name: 'cost', mod: pCost },
+  // ★ 多身份 B4-c：企业邀请链接面板
+  { name: 'invitelink', mod: pInviteLink },
 ]
 
 describe('i18n 中英词典键值对等性', () => {

@@ -31,6 +31,7 @@ applyTheme()
 // useBranding 在左栏/移动顶栏那两件里用（品牌位），本文件自 2026-10-23 起也读一次：
 // 未登录分诊要给 landingEnabledForGuest 传 tenantId（租户定制页不展示平台落地页）
 import { BrandingProvider, useBranding } from './branding'
+import { RouteMetaSync } from './seo/RouteMetaSync'
 import ErrorBoundary from './components/ErrorBoundary'
 // ★ 2026-10-21 IAM P1-7：登录面收成唯一调用点（PublicRoot 那一棵树用同一个组件，见其文件头口径①）
 import { LoginFace } from './components/LoginFace'
@@ -102,6 +103,8 @@ const AdminDashboard = lazy(() => import('./components/admin/AdminDashboard'))
 const AccountMenu = lazy(() => import('./components/AccountMenu'))
 // SiteFooter 全站页脚（懒加载分包）
 const SiteFooter = lazy(() => import('./components/SiteFooter'))
+// ★ 多身份方案 B4：身份切换器（懒加载分包；单身份账户它自己 return null，所以绝大多数用户看不到它）
+const IdentitySwitcher = lazy(() => import('./components/frontshell/IdentitySwitcher'))
 // KbUploadDialog 知识库上传对话框（懒加载分包）
 const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
 // AiAssist AI 销售/客服常驻挂件（除登录/注册页外全站显示；★ autosales）
@@ -348,6 +351,7 @@ function FrontShell() {
         roleLevel={roleLevelSafe(user?.role)}
         AccountMenu={AccountMenu}
         SiteFooter={SiteFooter}
+        IdentitySwitcher={IdentitySwitcher}
       />
 
       {/* ★ 元宝式右主列：移动标题栏（S 档）+ 余额横幅 + 路由出口（页脚在左栏尾部）。
@@ -399,7 +403,14 @@ function FrontShell() {
             <p style={{ fontSize: 18, color: 'var(--lc-text-2)' }}>{t('app.starting')}</p>
           </div>
         ) : (
-          <RouteBoundary>
+          // ★ 多身份方案 B4：切换身份后必须**重挂当前页**（不整页刷新）。
+          //   页面级数据（会话列表、工单、知识库、余额条以外的一切）大多只在挂载那一次拉取，
+          //   而它的归属键是 (uid,tid)；只换 store 里的 user 不重挂，切进 B 企业的人
+          //   会在屏幕上继续看到 A 的工单与历史（表现为"切了没生效"，且刷新才好——最难归因的一种）。
+          //   key 用 id+tenant_id 而不是只 id：管理员移除成员后同一 uid 换租户、
+          //   超管在后台切生效租户，都是"同一个人换了一份数据作用域"。
+          //   登录态从无到有同样会重挂，这正是想要的效果（旧形态靠 Root 整棵树切换天然重挂）。
+          <RouteBoundary key={user ? `${user.id}:${user.tenant_id ?? 0}` : 'anon'}>
             <Suspense fallback={<PageLoading />}>
               <Routes>
                 <Route path="/" element={<ChatWindow />} />
@@ -613,6 +624,7 @@ export default function App() {
               <ChatProvider>
                 <AdminProvider>
                   <BrandingProvider>
+                    <RouteMetaSync />
                     <Root />
                   </BrandingProvider>
                 </AdminProvider>

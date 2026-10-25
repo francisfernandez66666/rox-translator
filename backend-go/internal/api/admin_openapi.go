@@ -432,6 +432,10 @@ mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
 - 下载响应头的文件名按 RFC 5987 双写（ASCII 兜底名 + filename*=UTF-8'' 百分号编码真名），
   含中文/非 ASCII 的原名在浏览器里正常显示，脚本按 filename* 解码即可
+- **译文产物的文件名带语言后缀 -<lang>**（如 手册.docx → 手册-en.docx）：
+  多语种任务一次下整个 zip 时，只有原名会把八份译文叠成同名文件（后写的盖掉先写的）；
+  后缀取的是**产物真实 basename**，所以客户端不必自己拼。应急回退旧分隔符下划线（_）
+  只在服务端配 artifact_lang_suffix=0 时生效，**新产物**才受影响（历史件不重命名）
 
 ## 图片与音频（OCR / ASR：识别 → 翻译 → **按原文件格式回写**）
 
@@ -601,6 +605,11 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 - Download via the download endpoint when completed; artifacts are kept for 14 days
 - The download filename is written per RFC 5987 (ASCII fallback name + filename*=UTF-8'' percent-encoded real name),
   so non-ASCII original names display correctly in browsers; scripts can decode filename*
+- **Translated artifacts carry a -<lang> suffix in their filename** (manual.docx → manual-en.docx):
+  one zip of a multi-language task would otherwise collapse eight translations onto the same name.
+  The suffix comes from the artifact's real basename, so clients don't have to build it;
+  the legacy underscore separator only returns if the server is set to artifact_lang_suffix=0,
+  and even then only for **new** artifacts (existing files are never renamed)
 
 ## Images & audio (OCR / ASR: recognise → translate → **write back in the original format**)
 

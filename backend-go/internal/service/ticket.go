@@ -247,6 +247,9 @@ func (s *TicketService) processMailJob(job *queue.Job) error {
 // 工单失败错误码前缀：余额不足（OpenAPI 状态接口据此返回独立出参 error_code）
 const errInsufficientCode = "insufficient_balance"
 
+// errTicketRequeued DEF-02：结构失败已自动重排，当前副本不得走失败收尾/计费完成。
+var errTicketRequeued = errors.New("ticket requeued for structure repair")
+
 // runTicket 执行单个工单的翻译流程并投递通知。
 func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 	t, err := s.Store.GetTicketGlobal(ticketID)
@@ -368,6 +371,10 @@ func (s *TicketService) runTicket(ctx context.Context, ticketID int64) error {
 		runErr = s.runTextTicket(ctx, t)
 	}
 
+	// ★ DEF-02：结构重发是正常调度动作，不是失败；当前 job 直接完成，新 job 会认领 queued 工单。
+	if errors.Is(runErr, errTicketRequeued) {
+		return nil
+	}
 	if runErr != nil {
 		// ★ 取消语义（UAT 修复②配套）：ctx 被取消监视器触发时，状态已是 cancelled——
 		//   保持之，不再覆盖为 rejected、不投失败通知。
@@ -547,6 +554,21 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 	err := wf.Executor.Execute(ctx, t, func(step string, ok bool, errMsg string) {})
 	if err != nil {
 		return err
+	}
+	// ★ DEF-02（2026-10-24）：结构失败 → 整单重新入队（上限 ticket_repair_max=3）。
+	//   重发时 runAIInitial 读回旧译文，正确行复用，只重译缺失/错误行（见 orchestrator/text_lines.go）。
+	if wf.StructureRetryNeeded(t) {
+		ok, rerr := s.Store.RequeueTicketForRepair(t.ID)
+		if rerr != nil || !ok {
+			observability.Warn(ctx, "文本工单结构重排失败，按完成态收尾", "ticket", t.ID, "error", fmt.Sprint(rerr))
+			return nil
+		}
+		if _, eerr := s.EnqueueTicketRun(ctx, t.ID); eerr != nil {
+			observability.Warn(ctx, "文本工单结构重排入队失败，按完成态收尾", "ticket", t.ID, "error", eerr.Error())
+			return nil
+		}
+		observability.Info(ctx, "文本工单结构失败，已自动重新入队", "ticket", t.ID, "max_repair", 3)
+		return errTicketRequeued
 	}
 	// 计费统一在 runTicket 完成态按真实 token 聚合扣减（chargeTokens）
 	return nil
@@ -817,6 +839,13 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				s.bumpTmHitsFromTranslations(t.TenantID, res.Data.Translations) // ★ 自闭环计数（不自动入库）
 				// ★ 漏翻可见性：聚合各文件未译出段数，收尾统一落轨迹+通知
 				unTotal += int64(untranslatedTotal(res.Data.Untranslated))
+				// ★ F-01（2026-10-24）：超过阈值仍缺 ⇒ 打「质检存疑」，不判失败/不退款；
+				//   缺失段清单已在 res.Data.untranslated_segments 与 gate_warnings 中显式可见。
+				if s.Engine != nil && s.Engine.LeakRatioExceeded(res.Data.Untranslated, res.Data.TotalTexts) {
+					if ferr := s.Store.SetTicketQualityFlagged(t.ID); ferr != nil {
+						observability.Warn(ctx, "文件工单质检存疑标记落库失败", "ticket", t.ID, "error", ferr.Error())
+					}
+				}
 			}(f)
 		}
 		wg.Wait()

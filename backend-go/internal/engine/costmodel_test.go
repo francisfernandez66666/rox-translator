@@ -66,13 +66,14 @@ func TestScriptTokensByScript(t *testing.T) {
 // TestChatLegFixedTokensDeriveFromRealPrompts ② 等值腿：固定开销必须等于按真实模板算出来的数。
 func TestChatLegFixedTokensDeriveFromRealPrompts(t *testing.T) {
 	initial, review := ChatLegFixedTokens("", "zh", "zh")
-	wantInitial := ScriptTokens(translateInstruction("", "zh", "zh")+outputContractNote("zh")) + ScriptTokens("【原文】")
+	allow := CulturePromptAllowanceTokens("zh")
+	wantInitial := ScriptTokens(translateInstruction("", "zh", "zh")+outputContractNote("zh")) + ScriptTokens("【原文】") + allow
 	if initial != wantInitial {
-		t.Fatalf("初翻腿固定开销不再等于真实指令的长度（提示词改了但预估抄了旧字面量？）: got %d want %d", initial, wantInitial)
+		t.Fatalf("初翻腿固定开销不再等于真实指令+文化 allowance 的长度（提示词改了但预估抄了旧字面量？）: got %d want %d", initial, wantInitial)
 	}
-	wantReview := ScriptTokens(fmt.Sprintf(reviewPromptFmt, config.LangNames["zh"], "", "", "", contractNoteZh()))
+	wantReview := ScriptTokens(fmt.Sprintf(reviewPromptFmt, config.LangNames["zh"], "", "", "", contractNoteZh())) + allow
 	if review != wantReview {
-		t.Fatalf("校对腿固定开销不再等于 reviewPromptFmt 的长度: got %d want %d", review, wantReview)
+		t.Fatalf("校对腿固定开销不再等于 reviewPromptFmt+文化 allowance 的长度: got %d want %d", review, wantReview)
 	}
 	// 量级哨兵：两条腿的指令开销都在百 token 档。
 	// 下界抓「有人把开销算成 0／漏拼一段模板」，上界抓「有人把整份术语表塞进固定开销」。
@@ -80,8 +81,10 @@ func TestChatLegFixedTokensDeriveFromRealPrompts(t *testing.T) {
 		name string
 		v    int64
 	}{{"initial", initial}, {"review", review}} {
-		if tc.v < 50 || tc.v > 2000 {
-			t.Fatalf("%s 腿固定开销 %d 超出百 token 量级档（50~2000），请先交代证据", tc.name, tc.v)
+		// 上限 3000：真实指令约百 token + 文化 allowance（zh 上限 2000）——
+		// 仍能抓住「把整份术语表塞进固定开销」，但不会把 N-01 的合法 allowance 判成异常。
+		if tc.v < 50 || tc.v > 3000 {
+			t.Fatalf("%s 腿固定开销 %d 超出量级档（50~3000），请先交代证据", tc.name, tc.v)
 		}
 	}
 	// 语言名查不到时回落代码本身（与 ReviewTranslation 同一取法）：不许因为回落而漏拼模板。
@@ -100,7 +103,7 @@ var costModelLockSpec = []struct {
 	anchor  string   // 函数声明锚点（找不到即判「锁失明」）
 	mustRef []string // 函数体代码行里必须出现的引用（真实提示词／折算腿）
 }{
-	{"func ChatLegFixedTokens", []string{"ScriptTokens(", "translateInstruction(", "outputContractNote(", "reviewPromptFmt"}},
+	{"func ChatLegFixedTokens", []string{"ScriptTokens(", "translateInstruction(", "outputContractNote(", "reviewPromptFmt", "CulturePromptAllowanceTokens("}},
 	{"func EstimateChatTokens", []string{"ScriptTokens(", "ChatLegFixedTokens("}},
 }
 
@@ -133,11 +136,13 @@ func TestCostModelDerivesFromRealPrompts(t *testing.T) {
 func TestEstimateScreenshotCaseMagnitude(t *testing.T) {
 	minTok, maxTok := EstimateChatTokens(screenshotText, []string{"zh"}, "pro", "", "zh")
 	// 下限必须远小于旧公式的 12,000（这是缺陷本体的量级），也必须大于 0。
-	if minTok < 100 || minTok > 2000 {
-		t.Fatalf("截图案的预估下限 %d 不在 100~2000 档（旧公式在这里出 12000）", minTok)
+	// N-01 后文化 allowance（zh 上限 2000）计入固定项：下限约 2.2k、上限约 6.8k 属合法；
+	// 旧公式的 12k/30k 仍是反面对照。
+	if minTok < 100 || minTok > 4000 {
+		t.Fatalf("截图案的预估下限 %d 不在 100~4000 档（旧公式在这里出 12000）", minTok)
 	}
-	if maxTok < minTok || maxTok > 6000 {
-		t.Fatalf("截图案的预估上限 %d 不在 %d~6000 档（旧公式在这里出 30000）", maxTok, minTok)
+	if maxTok < minTok || maxTok > 10000 {
+		t.Fatalf("截图案的预估上限 %d 不在 %d~10000 档（旧公式在这里出 30000）", maxTok, minTok)
 	}
 	// 积分口径等值：汇率常数从 store 现读（**禁止在本文件抄第二份 400**，
 	// 同 §一·11「同一份成本两处读数」那一族；库里可调的那一档由 api 侧闸门覆盖）。
@@ -213,8 +218,11 @@ func TestEstimateScalesWithLangsAndSegments(t *testing.T) {
 	// 长文本单调：10 倍源文的下限必须显著抬高（防「固定项吃掉一切、字数再长也不变」）
 	base := EstimateChatTokensMin(screenshotText)
 	mlong, _ := EstimateChatTokens(strings.Repeat(screenshotText, 10), []string{"zh"}, "pro", "", "zh")
-	if mlong <= 3*base {
-		t.Fatalf("源文 ×10 后预估下限只从 %d 涨到 %d，长文本被固定项吃满", base, mlong)
+	// N-01：文化 allowance 是固定项，会稀释「源文 ×10」的相对涨幅；比较**扣掉 allowance 的源文腿**，
+	// 否则这条锁会把「固定项计入预估」误判成「字数不进成本」。
+	allow := CulturePromptAllowanceTokens("zh")
+	if mlong-allow <= 3*(base-allow) {
+		t.Fatalf("源文 ×10 后源文腿只从 %d 涨到 %d（已扣 allowance=%d），长文本被固定项吃满", base-allow, mlong-allow, allow)
 	}
 }
 

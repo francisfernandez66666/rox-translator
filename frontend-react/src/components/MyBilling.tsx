@@ -55,7 +55,9 @@ function TrendCard() {
   const W = 600; const H = 120; const bw = W / days
   return (
     <div className="mb-card">
-      <h3 style={{ margin: '4px 0 10px', fontSize: 17 }}>{t('ss2.trendTitle')}</h3>
+      <h3 style={{ margin: '4px 0 6px', fontSize: 17 }}>{t('ss2.trendTitle')}</h3>
+      {/* ★ 2026-10-24 用户令：账单时间口径保留 UTC，只补一句说明（不改后端日界） */}
+      <p style={{ margin: '0 0 10px', fontSize: 12, color: 'var(--lc-text-3)' }}>{t('ss2.trendHint')}</p>
       {ov ? (
         // viewBox 高度额外留 18px 给底部的首/末日标签，宽度交给 CSS 100% 自适应
         <svg viewBox={`0 0 ${W} ${H + 18}`} style={{ width: '100%', height: 'auto', display: 'block' }} role="img" aria-label={t('ss2.trendTitle')}>

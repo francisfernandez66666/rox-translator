@@ -307,6 +307,9 @@ export function BrandingProvider({ tenantId, children }: { tenantId?: number; ch
   // ★ 2026-09-24 后台去写死中文：「智能翻译平台」后缀不再硬编码，走 app.brandTitle 键按界面语言取词；
   //   lang 进依赖，切语言即时刷新标题（此前只随品牌数据变化）
   useEffect(() => {
+    // ★ DEF-06：路由级 meta 已接管标题时不再覆盖（子级 RouteMetaSync 的 effect 先于本 effect），
+    //   否则内页标题会被父级无条件改回全站品牌模板。
+    if (typeof document !== 'undefined' && document.documentElement.dataset.routeMeta === '1') return
     const name = b.brandName || b.tenantName
     document.title = name ? tpl('app.brandTitle', { name }) : DEFAULT_BRAND_NAME
   }, [b, lang])

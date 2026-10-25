@@ -17,6 +17,7 @@
 package iam
 
 import (
+	"fmt"
 	"strings"
 
 	"translator/internal/db"
@@ -107,6 +108,67 @@ const (
 	AccountByNothing = ""               // 一条腿都没命中
 )
 
+// collapseToAccounts 把"同一账户的多条身份行"收成**一条候选**，收完仍是"每个账户一条"。
+//
+// 为什么必须在取人这一层收（★ 2026-10-25 多身份 B 批补腿，现网形态＝**登录一次之后就再也登不进去**）：
+// R4 的补建个人身份会在同账户下再插一条**同名、同邮箱、口令为空**的身份行（D4：口令只存家行），
+// 于是按用户名取回的候选集从 1 条变 2 条，调用方那条"重名 ⇒ 不猜人"的既有分支
+// 会把同一个人的两个身份读成"两个不相干的人撞了名"，直接回「账号或密码错误」。
+// 那条分支本身是对的（**不同**账户重明确实不能猜），错的是没先按账户归一。
+//
+// 三条口径：
+//  1. 归并键＝account_id；account_id 为空的历史行按**行自身 id** 各成一组——
+//     "没有账户号"不等于"它们同属一个账户"，把空号并成一组会把两个不相干的人合成一个。
+//  2. 每组代表行＝凭证行：家行（is_home=1）优先；组内没有家行时取**带口令哈希**那一行
+//     （口令只存家行是设计，但"家行标记丢了而口令还在"时不能反过来把人挡在门外）；
+//     两者都无则取最小 id——数据异常也要给出**确定的**一个，不许回空让调用方误判"账号不存在"。
+//  3. 只归并、不判状态、不判口令：判据仍在登录 handler 的既有闸上（同本文件顶部那条分工）。
+func collapseToAccounts(us []*User) []*User {
+	if len(us) < 2 {
+		return us
+	}
+	// 按首次出现顺序分组：候选集原本的顺序（ORDER BY tenant_id）就是排障时读到的顺序，归并不改变它
+	var order []string
+	groups := map[string][]*User{}
+	for _, u := range us {
+		if u == nil {
+			continue
+		}
+		key := strings.TrimSpace(u.AccountID)
+		if key == "" {
+			key = fmt.Sprintf("row:%d", u.ID)
+		}
+		if _, seen := groups[key]; !seen {
+			order = append(order, key)
+		}
+		groups[key] = append(groups[key], u)
+	}
+	if len(order) == len(us) {
+		return us // 一个账户一行：没有可归并的，原样交回（含"每行各自一个账户"的重名场景）
+	}
+	out := make([]*User, 0, len(order))
+	for _, key := range order {
+		rows := groups[key]
+		pick := rows[0]
+		for _, r := range rows {
+			if r.IsHomeRow() {
+				pick = r
+				break
+			}
+		}
+		if !pick.IsHomeRow() {
+			for _, r := range rows {
+				if strings.TrimSpace(r.PasswordHash) != "" {
+					pick = r
+					break
+				}
+			}
+		}
+		out = append(out, pick)
+	}
+	return out
+}
+
 // FindAccountForLogin 登录/找回/重置共用的账号定位腿，返回候选集与命中的那一条腿。
 //
 // 三条腿的**顺序**就是判据，不许调换：
@@ -115,6 +177,9 @@ const (
 //  2. 大小写不敏感：**仅在全平台唯一命中**时采纳。撞车（同一个人两种写法落在不同租户）
 //     一律不猜，把候选集原样交回调用方按"多租户重名"既有分支处理；
 //  3. 邮箱形态串按 lower 查（跨租户唯一口径同 GetUserByEmail）。
+//
+// ★ 候选集的粒度是**账户**，不是**行**（collapseToAccounts）：多身份下同一个人有多条 users 行，
+// 它们必须归并成一条候选，否则调用方的"重名不猜人"分支会把同一个人的两个身份读成两个人。
 //
 // ⚠️ 本函数**不判状态、不判密码、不签发任何东西**——那些仍留在登录 handler 的既有闸上，
 //
@@ -134,8 +199,9 @@ func (s *Store) FindAccountForLogin(_ int64, account string) ([]*User, string, e
 	// 腿 1：用户名精确等值——★ 用户名已不唯一，必须先把**全部**同名候选交回调用方；
 	// 旧写法先按 (tenant_id,username) 取一行，同租户重名时会静默选中其中任意一个，
 	// 于是"用用户名登录"仍能登进某个账号（用户名不是登录标识，这条腿只作存量兼容）。
+	// ★ 2026-10-25 多身份补腿：交回之前先按**账户**归一（同一个人的多个身份行不是"多个候选"）。
 	if us, err := s.GetUserByUsernameGlobal(account); err == nil && len(us) > 0 {
-		return us, AccountByExact, nil
+		return collapseToAccounts(us), AccountByExact, nil
 	}
 	// 腿 2：大小写不敏感，且**必须唯一命中**才采纳
 	if us, err := s.GetUserByUsernameGlobalCI(account); err == nil {
@@ -143,8 +209,8 @@ func (s *Store) FindAccountForLogin(_ int64, account string) ([]*User, string, e
 			return us, AccountByCI, nil
 		}
 		if len(us) > 1 {
-			// 多命中：交回调用方走"重名要求走租户入口"那条既有分支（不猜人）
-			return us, AccountByCI, nil
+			// 多命中：先按账户归一，剩下的才真是"不同人撞名"，交回调用方走既有分支（不猜人）
+			return collapseToAccounts(us), AccountByCI, nil
 		}
 	}
 	return nil, AccountByNothing, nil
@@ -162,12 +228,10 @@ func (s *Store) GetUserByUsernameGlobalCI(username string) ([]*User, error) {
 	defer rows.Close()
 	var out []*User
 	for rows.Next() {
-		var u User
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.Username, &u.PasswordHash, &u.DisplayName, &u.Role, &u.Status,
-			&u.CreatedBy, &u.LastLoginAt, &u.OrgID, &u.Email, &u.CreatedAt, &u.UpdatedAt, &u.DeactivatedAt, &u.AgreedAt, &u.MustChangePwd, &u.TokenVersion, &u.JobRole, &u.ProfileSetupRequired); err != nil {
-			continue
+		// 列→字段映射只有一处口径（User.assign），补列时不必再逐条追平复制清单
+		if u, err := scanUserRow(rows); err == nil {
+			out = append(out, u)
 		}
-		out = append(out, &u)
 	}
 	return out, nil
 }

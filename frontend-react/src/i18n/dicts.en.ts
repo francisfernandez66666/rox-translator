@@ -369,6 +369,10 @@ export const baseEn: Record<string,string> = {
   'audit.action.user_update': 'Update user',
   'audit.action.user_delete': 'Delete user',
   'audit.action.user_reset_pwd': 'Reset password',
+  'audit.action.identity_switch': 'Switch identity',
+  'audit.action.invite_link_create': 'Create invite link',
+  'audit.action.membership_create': 'Join company membership',
+  'audit.action.tenant_leave': 'Remove company member',
   'audit.action.org_create': 'Create org',
   'audit.action.org_rename': 'Rename org',
   'audit.action.org_delete': 'Delete org',
@@ -455,7 +459,10 @@ export const baseEn: Record<string,string> = {
   'audit.action.webhook_delete': 'Delete webhook',
   'audit.action.webhook_save': 'Save webhook',
   'audit.action.webhook_test': 'Test webhook',
-  'org.deleteUserConfirm': 'Delete account {name}? This cannot be undone.',
+  // ★ 2026-10-24 多身份 B4-d（R8+R2）：这里删的是**企业身份**，不是账号。
+  //   旧文案 "Delete account ...? This cannot be undone." 会把管理员读成"注销此人"，
+  //   而事实是译文/工单/用量都留在企业、他的个人账号照旧能登录——判据必须说清这一层。
+  'org.deleteUserConfirm': 'Remove {name} from this company? Only the company identity is removed: the translations, tickets and usage records they created all stay with the company, and their personal account is untouched and can still sign in. You can invite them back later.',
   'admin.backWorkspace': 'Translation Workspace',
   'admin.forbid': 'No admin permission. Please sign in with an admin account.',
 'admin.overview':'Dashboard',

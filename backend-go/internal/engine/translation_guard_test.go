@@ -158,7 +158,7 @@ func TestIsTranslationUsableRejectsLengthExplosion(t *testing.T) {
 	// collectKBPass 同口径：爆炸候选不算命中、进补漏队列、未写入即计入未译清单。
 	texts := []string{"产品方案书", "支持多格式文件翻译"}
 	kbVal := []string{f38MailGarbage, "Multi-format file translation is supported"}
-	accepted, needModelIdx := collectKBPass(texts, []bool{true, true}, kbVal, nil)
+	accepted, needModelIdx := collectKBPass(texts, []bool{true, true}, kbVal, nil, IsTranslationUsable)
 	if len(accepted) != 1 || accepted[0] != 1 {
 		t.Fatalf("爆炸候选不得算命中：accepted=%v", accepted)
 	}
@@ -236,7 +236,7 @@ func TestCollectKBPassRejectsDirtyRow(t *testing.T) {
 	kbHitIdx := []bool{true, true} // 两段都「命中」了
 	kbVal := []string{"产品方案书 v5.1", "Multi-format file translation is supported"}
 
-	accepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, nil)
+	accepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, nil, IsTranslationUsable)
 	if len(accepted) != 1 || accepted[0] != 1 {
 		t.Fatalf("脏行不得算命中：accepted=%v，want [1]", accepted)
 	}
@@ -259,7 +259,7 @@ func TestCollectKBPassRejectsDirtyRow(t *testing.T) {
 func TestCollectKBPassBlockedSegmentNotRetried(t *testing.T) {
 	texts := []string{"违规内容段", "正常段落"}
 	accepted, needModelIdx := collectKBPass(texts, []bool{false, false}, []string{"", ""},
-		map[string]bool{"违规内容段": true})
+		map[string]bool{"违规内容段": true}, IsTranslationUsable)
 	if len(accepted) != 0 {
 		t.Fatalf("无命中时 accepted 应为空，got %v", accepted)
 	}

@@ -73,9 +73,51 @@ func (s *Store) GetUserByEmail(email string) (*User, error) {
 	return s.iam.GetUserByEmail(email)
 }
 
-// SetUserEmail 委托 iam.Store
+// SetUserEmail 委托 iam.Store。
+// ★ 2026-10-24 多身份 B1：邮箱属于**人**不属于某一行，换绑/解绑同步该账户全部可用行
+// （判据与降级档位见 iam/store.go 那一条）。
 func (s *Store) SetUserEmail(id, tid int64, email string) error {
 	return s.iam.SetUserEmail(id, tid, email)
+}
+
+// ============ ★ 2026-10-24 多身份方案 B1：身份行与口令的账户级入口（全部薄委托 iam.Store） ============
+
+// GetUserByEmailInTenant 委托 iam.Store：按「租户 + 邮箱」取人（§6.1 注册分流的按租户那把尺子）。
+func (s *Store) GetUserByEmailInTenant(email string, tid int64) (*User, error) {
+	return s.iam.GetUserByEmailInTenant(email, tid)
+}
+
+// ListAccountsByEmail 委托 iam.Store：列出仍占用该邮箱的全部租户行（家行在前）。
+func (s *Store) ListAccountsByEmail(email string) ([]*User, error) {
+	return s.iam.ListAccountsByEmail(email)
+}
+
+// CreateIdentityRow 委托 iam.Store：为既有账户新建一条身份行（成员行，无口令、is_home=0）。
+// ★ 这是"个人号加入企业"唯一的建行入口；**禁止**调用方改用 CreateUser/CreateUserWithEmail
+// 给同一个人再建一行（那会凭空多出一个家，D2 不变式当场破）。
+func (s *Store) CreateIdentityRow(accountID string, tid int64, username, displayName, role string, createdBy, orgID int64, email string) (*User, error) {
+	return s.iam.CreateIdentityRow(accountID, tid, username, displayName, role, createdBy, orgID, email)
+}
+
+// GetHomeRow 委托 iam.Store：取账户的家行（口令与登录定位都在这一行）。
+func (s *Store) GetHomeRow(accountID string) (*User, error) {
+	return s.iam.GetHomeRow(accountID)
+}
+
+// ListIdentitiesByAccount 委托 iam.Store：列出一个账户的全部身份行（切换器数据源）。
+func (s *Store) ListIdentitiesByAccount(accountID string) ([]*User, error) {
+	return s.iam.ListIdentitiesByAccount(accountID)
+}
+
+// SetPasswordForAccount 委托 iam.Store：把口令写到家行（D5 口令写入收口）。
+// 返回真实受影响行数（0 行＝该账户没有家行，调用方必须当失败，不许回 success）。
+func (s *Store) SetPasswordForAccount(accountID, passHash string) (int64, error) {
+	return s.iam.SetPasswordForAccount(accountID, passHash)
+}
+
+// PromoteHomeRow 委托 iam.Store：把某行提升为账户的家行并摘掉旧家（§6.2 移除家行成员前必做）。
+func (s *Store) PromoteHomeRow(accountID string, rowID int64) error {
+	return s.iam.PromoteHomeRow(accountID, rowID)
 }
 
 // UserDeactivating 注销宽限期状态（当日仍可用，次日等效停用）。

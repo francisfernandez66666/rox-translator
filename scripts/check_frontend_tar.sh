@@ -29,6 +29,9 @@
 #   T7 部署期补拉的大模型资产（`sherpa-onnx-wasm-main-asr.data`，199 MB）**不得进包**——
 #      它 gitignore、由部署机 `scripts/fetch_sherpa_assets.sh` 就地拉取；本机 public/ 落过盘时
 #      vite build 会把它拷进 dist ⇒ tar 从 ~6.6 MB 变 ~215 MB，而界面照常、无任何症状（★ 2026-10-15 WASM 批）。
+#   T8 入口 raw ≤ 420,000 B（首屏轻量化批：公开面与后台面板确实在入口之外）＋ T8b 边界自证。
+#   T9 SEO 路由 meta 内容闸（`scripts/gen_seo_meta.mjs --check`：12 语种键齐／无空串／同语种 title 不重复
+#      ＋后端 //go:embed 副本 sha 等值）＋ T9b 判据自证（★ 2026-10-25 DEF-06 收口批）。
 # ============================================================================
 set -uo pipefail
 
@@ -330,6 +333,29 @@ if entry_size_split_ok "$ENTRY_SIZE_MAX_SPLIT" \
   echo "  OK   T8b 入口体积判据自证（=${ENTRY_SIZE_MAX_SPLIT} 放行／=$((ENTRY_SIZE_MAX_SPLIT + 1)) 判死／2,633,000 判死／空值判死）"
 else
   echo "  BAD  T8b 入口体积判据自证没过 ⇒ T8 这一档的射程不可信"; RC=1
+fi
+
+# T9 SEO 路由 meta 内容闸（★ 2026-10-25 DEF-06 收口批）。
+#   为什么要挂在换源前而不是只靠 Go 单测：`route_meta.json` 是 12 语种**唯一事实源**，
+#   它缺一个语种的 description、或某页 title 被抄成另一页，界面**照常渲染**、构建照常绿、
+#   现网唯一的症状是搜索引擎里两页长得一模一样——没有任何一层既有闸门看得见（"静默失败"那一族）。
+#   T9 判内容形状＋两份副本 sha；T9b 判据自证＝把七种坏形态喂给同一个 validate 函数，
+#   必须逐项被抓（"闸门跑绿"与"闸门失明"在这里长得一模一样）。
+#   没有 node 时**判红不判跳过**（同 T6 口径）：跳过＝这条闸门在换源链上不存在而没人知道。
+REPO_ROOT_FOR_SEO="$(cd "$(dirname "$0")/.." && pwd)"
+if ! command -v node >/dev/null 2>&1; then
+  echo "  BAD  T9 本机没有 node ⇒ SEO 内容闸整段没跑（不许当成通过；同 T6 口径）"; RC=1
+else
+  if node "$REPO_ROOT_FOR_SEO/scripts/gen_seo_meta.mjs" --check; then
+    echo "  OK   T9 route_meta.json 12 语种内容闸通过，且后端 //go:embed 副本与其逐字节同步"
+  else
+    echo "  BAD  T9 SEO 路由 meta 缺语种/空串/重复 title，或后端副本不同步 ⇒ 跑 bash scripts/sync_seo_meta.sh"; RC=1
+  fi
+  if node "$REPO_ROOT_FOR_SEO/scripts/gen_seo_meta.mjs" --selftest; then
+    echo "  OK   T9b SEO 判据自证（七种坏形态全部被抓，合法文档零误报）"
+  else
+    echo "  BAD  T9b SEO 判据自证没过 ⇒ T9 的射程不可信"; RC=1
+  fi
 fi
 
 echo

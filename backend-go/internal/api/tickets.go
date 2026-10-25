@@ -45,6 +45,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/billing"
 	"translator/internal/config"
+	"translator/internal/engine"
 	apierrors "translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/orchestrator"
@@ -931,7 +932,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 				if f.ID == fid && f.ResultPath != "" {
 					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
 						defer fh.Close()
-						w.Header().Set("Content-Disposition", contentDisposition(f.FileName))
+						w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(f.ResultPath, f.FileName)))
 						http.ServeContent(w, r, f.FileName, time.Now(), fh)
 						return
 					}
@@ -947,7 +948,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 			if f.ResultPath != "" {
 				if _, serr := os.Stat(f.ResultPath); serr == nil {
 					paths = append(paths, f.ResultPath)
-					names = append(names, resultFileName(f))
+					names = append(names, engine.DeliverableBaseName(f.ResultPath, resultFileName(f)))
 				}
 			}
 		}
@@ -987,7 +988,7 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		f, ferr := os.Open(t.ResultPath)
 		if ferr == nil {
 			defer f.Close()
-			w.Header().Set("Content-Disposition", contentDisposition(baseName+filepath.Ext(t.ResultPath)))
+			w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(t.ResultPath, baseName+filepath.Ext(t.ResultPath))))
 			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
 			return
 		}
@@ -1068,7 +1069,13 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "生成 xlsx 失败"))
 		return
 	}
-	w.Header().Set("Content-Disposition", contentDisposition(baseName+".xlsx"))
+	xlsxName := baseName + ".xlsx"
+	if ls := strings.Split(strings.TrimSpace(t.TargetLangs), ","); len(ls) == 1 && strings.TrimSpace(ls[0]) != "" {
+		xlsxName = baseName + "-" + strings.TrimSpace(ls[0]) + ".xlsx"
+	} else {
+		xlsxName = baseName + "-multi.xlsx"
+	}
+	w.Header().Set("Content-Disposition", contentDisposition(xlsxName))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	_, _ = w.Write(buf.Bytes())
 }
@@ -1360,7 +1367,8 @@ func (s *Server) serveOneFile(w http.ResponseWriter, r *http.Request, path, dlNa
 	http.ServeContent(w, r, dlName, time.Now(), fh)
 }
 
-// textDeliverableName 纯文案产物下载名：源文件主名_译文.md（旁路为多语言 zip 时保留 .zip 后缀）。
+// textDeliverableName 纯文案产物下载名：优先用产物真实 basename（base-<lang>-text.md），
+// 旧产物才回落源文件主名-translated。<lang> 由 engine 命名层统一加（2026-10-24）。
 func textDeliverableName(f *store.TicketFile) string {
 	base := strings.TrimSuffix(f.FileName, filepath.Ext(f.FileName))
 	if base == "" {
@@ -1370,7 +1378,10 @@ func textDeliverableName(f *store.TicketFile) string {
 	if p == "" {
 		p = f.ResultPath
 	}
-	return base + "_译文" + filepath.Ext(p)
+	if n := engine.DeliverableBaseName(p, ""); n != "" {
+		return n
+	}
+	return base + "-translated" + filepath.Ext(p)
 }
 
 // handleTicketDelete 删除已完成工单及其关联文件（创建者或超管；弹窗确认由前端负责）。

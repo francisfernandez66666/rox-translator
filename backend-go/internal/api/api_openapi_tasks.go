@@ -637,7 +637,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 				if f.ID == fid && f.ResultPath != "" {
 					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
 						defer fh.Close()
-						w.Header().Set("Content-Disposition", contentDisposition(f.FileName))
+						w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(f.ResultPath, f.FileName)))
 						http.ServeContent(w, r, f.FileName, time.Now(), fh)
 						return
 					}
@@ -652,7 +652,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 			if f.ResultPath != "" {
 				if _, serr := os.Stat(f.ResultPath); serr == nil {
 					paths = append(paths, f.ResultPath)
-					names = append(names, resultFileName(f))
+					names = append(names, engine.DeliverableBaseName(f.ResultPath, resultFileName(f)))
 				}
 			}
 		}
@@ -689,7 +689,7 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 	if t.ResultPath != "" {
 		if f, ferr := os.Open(t.ResultPath); ferr == nil {
 			defer f.Close()
-			w.Header().Set("Content-Disposition", contentDisposition(baseName+filepath.Ext(t.ResultPath)))
+			w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(t.ResultPath, baseName+filepath.Ext(t.ResultPath))))
 			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
 			return
 		}

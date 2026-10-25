@@ -40,6 +40,11 @@ from dataclasses import dataclass, fields
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(HERE, "out", "keywords.csv")
 
+# ★ 品牌英文名只有一份（build_seo_pages.py 从这里 import，禁止再抄第二份）。
+#   L5 竞品对标页的 "{c} vs LangCross" 措辞由矩阵生成，页面渲染又要拿它加 title 后缀，
+#   两处各写一个品牌名迟早长出一句「vs 一个不存在的名字」。
+BRAND_EN = "LangCross"
+
 # =============================================================================
 # 常量区 ——★ 全部可直接手改，改完重跑即可
 # =============================================================================
@@ -50,6 +55,11 @@ INTENT_WEIGHT = {
     "L2": 3.0,  # 格式保真型：我要翻完版式还在（★ 本产品最强战场）
     "L3": 2.2,  # 场景型：我有一份合同/Listing 要翻
     "L4": 1.0,  # 信息型：我想知道怎么做（引流 + 外链 + GEO 引用）
+    # ★ L5 竞品对标型（2026-10-24 用户令「和竞品做对标，作出差异性来」）：
+    #   搜 "deepl alternative" / "google translate vs" 的人**已经在选工具**，只差一个理由，
+    #   所以成交意图仅次于交易型；而这类大词的需求量与竞争度都高，
+    #   靠 COMPETITION_FACTOR 给一点长尾溢价（不是整档下移，同 L2 那条理由）。
+    "L5": 2.6,
 }
 
 # 需求档 / 竞争档
@@ -176,9 +186,32 @@ MOD_L4 = "how to"                             # 信息型
 # 竞争度修正：加了修饰后 query 变长尾，竞争显著下降。
 # ★ 用连续因子而不是「整档往下挪」——档位触底时（low→low）整档挪会挪不动，
 #   导致 L2 与 L1 同分、长尾修饰失去溢价（自证里那条单调性断言就是为它设的）。
-COMPETITION_FACTOR = {"L1": 1.0, "L2": 0.5, "L3": 0.7, "L4": 0.7}
+COMPETITION_FACTOR = {"L1": 1.0, "L2": 0.5, "L3": 0.7, "L4": 0.7, "L5": 0.85}
 # 展示用的档位降级步数（仅影响 CSV 里的 competition_tier 可读性）
-COMPETITION_RELAX = {"L1": 0, "L2": 2, "L3": 1, "L4": 1}
+COMPETITION_RELAX = {"L1": 0, "L2": 2, "L3": 1, "L4": 1, "L5": 0}
+
+# -----------------------------------------------------------------------------
+# 竞品对标层（L5）：与「通用机翻」的差异性词 —— 2026-10-24 用户令新增
+# -----------------------------------------------------------------------------
+# 只收**用户真的会拿来搜我们**的两家（挂件语料里 vs-competitors 那条的同一份名单）。
+# 加第三家之前先问：我们有没有一句**只在对比这一家时成立**的话可写？
+# 没有就是 doorway page（只换品牌名不换内容），宁可不生成。
+# (code, 品牌名, 页面上的短名, 需求档, 竞争档)
+COMPETITORS = [
+    ("deepl", "DeepL", "DeepL", "high", "high"),
+    ("google-translate", "Google Translate", "Google Translate", "high", "high"),
+]
+# 角度：(code, 关键词模板, fit, 需求档, 中文说明)
+# ★ 每个 (竞品 × 角度) 都要在 build_seo_pages.VS_COPY 里有**独立文案**，
+#   共用一份文案的两个页面＝同义重复页，是本页工厂的头号红线（文件头第 1 条）。
+VS_ANGLES = [
+    ("alternative", "{c} alternative", "format", "high",
+     "找替代：已经知道对方、想换一个（最强的成交意图）"),
+    ("vs", "{c} vs {brand}", "terminology", "mid",
+     "点名对比：在两家之间摇摆，需要一条判断依据"),
+    ("document", "{c} document translation", "format", "mid",
+     "文档场景：要翻的是文件不是句子（我们的主战场）"),
+]
 
 
 # =============================================================================
@@ -195,6 +228,7 @@ class Row:
     dst: str
     fmt: str           # 格式 code，场景型为空
     scenario: str      # 场景 code，格式型为空
+    angle: str         # 竞品型角度 code（L5 专用，其余形态为空；见 VS_ANGLES）
     volume_tier: str
     competition_tier: str
     fit: str
@@ -251,7 +285,7 @@ def _priority(score: float, volume: str, rank: int) -> str:
 
 
 def _emit(slug, keyword, intent, page_type, src, dst, fmt, scenario,
-          volume, fit, base_comp, zh_hint) -> Row:
+          volume, fit, base_comp, zh_hint, angle="") -> Row:
     slug = slug or _slugify(keyword)
     volume = V_OVERRIDE.get(slug, volume)
     relax = abs(min(0, COMPETITION_RELAX.get(intent, 0)))
@@ -259,7 +293,7 @@ def _emit(slug, keyword, intent, page_type, src, dst, fmt, scenario,
     s = _score(intent, volume, comp, fit)
     # priority 依赖全局名次，在 build_rows 排序后统一赋（此处先占位）
     return Row(slug=slug, keyword=keyword, intent=intent, page_type=page_type,
-               src=src, dst=dst, fmt=fmt, scenario=scenario,
+               src=src, dst=dst, fmt=fmt, scenario=scenario, angle=angle,
                volume_tier=volume, competition_tier=comp, fit=fit,
                score=round(s, 3), priority="", zh_hint=zh_hint)
 
@@ -306,6 +340,18 @@ def build_rows(only_formats=None, only_pairs=None, only_scenarios=None) -> list:
                 f"{code}-translation-{src}-to-{dst}", kw3, "L3", "scenario",
                 src, dst, "", code, _tier_min(svol, _pvol), fit, pcomp,
                 f"{pair_zh} · {zh}"))
+
+    # --- L5 竞品对标型：竞品 × 角度（★ 2026-10-24 用户令「和竞品做对标，作出差异性」）---
+    # 与 L1~L4 不同：**不随语言对展开**。搜 "deepl alternative" 的人要的是"换一家"，
+    # 不是"英→西"，按语言对铺开只会得到一批只换标题不换内容的同义页（本页工厂头号红线）。
+    # scenario 位放竞品 code、angle 位放角度 code，两个维度各占一列，渲染侧照此取文案。
+    for ccode, cname, _cshort, cvol, ccomp in COMPETITORS:
+        for acode, tmpl, fit, avol, zh_note in VS_ANGLES:
+            kw = tmpl.format(c=cname.lower(), brand=BRAND_EN)
+            rows.append(_emit(
+                f"{ccode}-{acode}", kw, "L5", "vs", "en", "", "", ccode,
+                _tier_min(cvol, avol), fit, ccomp,
+                f"竞品对标 · {cname} · {zh_note}", angle=acode))
 
     # 去重（同 slug 保留高分）
     best: dict = {}

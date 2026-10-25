@@ -3,41 +3,81 @@
   <url><loc>https://langcross.lexicorn.cn/</loc></url>
   <url><loc>https://langcross.lexicorn.cn/pricing</loc></url>
   <url><loc>https://langcross.lexicorn.cn/compare</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-es-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-en-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-es-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-en-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-en-to-es.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-en-to-zh.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-zh-to-en.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/deepl-alternative.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/deepl-document.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/deepl-vs.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/google-translate-alternative.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/google-translate-document.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/google-translate-vs.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-en-to-es.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-en-to-zh.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-zh-to-en.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-en-to-es.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-en-to-zh.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-zh-to-en.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-de-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-ar-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-de-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-es.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-es-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-pt-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-ru-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-zh.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-zh-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-fr-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-ja-to-en-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-ja-to-zh-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-ko-to-en-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ar-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-de-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-en.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-en-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-es-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ko-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-pt-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ru-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-th-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-de-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-ar-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-de-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-es.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-es-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-pt-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-ru-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-zh.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-zh-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-fr-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-ja-to-en-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-ja-to-zh-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-ko-to-en-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ar-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-de-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-en.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-en-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-es-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ko-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-pt-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ru-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-th-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-de-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-ar-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-de-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-es-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-pt-preserving-formatting.html</loc></url>
+  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-ru-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-ja-to-en-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-ja-to-zh-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-zh-to-de-preserving-formatting.html</loc></url>
@@ -69,38 +109,4 @@
   <url><loc>https://langcross.lexicorn.cn/g/translate-xlsx-zh-to-fr-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-xlsx-zh-to-ja-preserving-formatting.html</loc></url>
   <url><loc>https://langcross.lexicorn.cn/g/translate-xlsx-zh-to-ko-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-en-to-es.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-en-to-zh.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/manual-translation-zh-to-en.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-es.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-zh.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-en.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-es.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-zh.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-en.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-en-to-es.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-en-to-zh.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/contract-translation-zh-to-en.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-en-to-es.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-en-to-zh.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/product-listing-translation-zh-to-en.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-de-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-en-to-ru-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-fr-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-ko-to-en-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ar-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-pt-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-ru-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-docx-zh-to-th-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-de-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-en-to-ru-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-fr-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-ko-to-en-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ar-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-pt-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-ru-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pdf-zh-to-th-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-de-to-zh-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-es-preserving-formatting.html</loc></url>
-  <url><loc>https://langcross.lexicorn.cn/g/translate-pptx-en-to-ru-preserving-formatting.html</loc></url>
 </urlset>

@@ -44,7 +44,10 @@ import (
 // 钉这个数字不是为了惩罚改动，而是**强制改动者显式表态**：新增第 6 个写入点必须
 // 同时改这里并保证它带判定；删掉一个写入点也要改这里。历史上口径就是被「多写一处
 // 但忘了带判定」破坏的，而那种改动不会让任何既有测试变红。
-const fwpExpectedWritePoints = 5
+// ★ 2026-10-24 F-01：新增第 6 个写入点——5% 阈值触发后的「定向补译」循环，
+//
+//	同样先过 fileTranslationUsable 再 addTrans；本基线同步 5→6。
+const fwpExpectedWritePoints = 6
 
 // fwpSensitiveFile 唯一豁免文件：S8 敏感拦截段要**直接预填占位交付**（占位符不是译文，
 // 过判定反而会被「同文/空串」规则拦掉），因此 sensitive.go 的裸写入是设计内的。
@@ -66,7 +69,7 @@ type fwpSite struct {
 //  1. 祖先 if 的条件里调用了 IsTranslationUsable（写入前判定，覆盖模型/兜底写入点）；
 //  2. 同一块内、写入点之前的 `if !IsTranslationUsable(...) { continue }` 早退（★ 2026-10-21 补，
 //     语义与 1 等价；M1 记账腿把四处改写成早退式后，只按祖先 if 判会全部判成「无守护」）；
-//  3. 所在 for-range 的迭代源是 collectKBPass(...) 的返回值（KB 命中写入点，判定收口在纯函数内）；
+//  3. 所在 for-range 的迭代源是 collectKBPass(..., IsTranslationUsable) 的返回值（KB 命中写入点，判定收口在纯函数内）；
 //  4. 第三个实参是字面量 SensitivePlaceholderText（S8 占位预填豁免）。
 func fwpScanWritePoints(t *testing.T, filenames []string) []fwpSite {
 	t.Helper()
@@ -121,13 +124,13 @@ func fwpGuardOf(stack []ast.Node) string {
 	for i := len(stack) - 1; i >= 0; i-- {
 		switch nd := stack[i].(type) {
 		case *ast.IfStmt:
-			if fwpUses(nd.Cond, "IsTranslationUsable") {
-				return "IsTranslationUsable"
+			if g := fwpGuardName(nd.Cond); g != "" {
+				return g
 			}
 		case *ast.RangeStmt:
 			// KB 命中写入点：迭代 collectKBPass 返回的 accepted 切片。
 			// 守护不在这个 if 里（判定收口在纯函数内部），故按数据流回溯：
-			// range 的迭代变量必须由 `accepted, _ := collectKBPass(...)` 的**第一个**返回值赋得。
+			// range 的迭代变量必须由 `accepted, _ := collectKBPass(..., IsTranslationUsable)` 的**第一个**返回值赋得。
 			if id, ok := nd.X.(*ast.Ident); ok && fwpAssignedFromCollect(stack, id.Name) {
 				return "collectKBPass"
 			}
@@ -139,14 +142,14 @@ func fwpGuardOf(stack []ast.Node) string {
 	// 只按祖先 if 找会把它判成「无守护」——2026-10-21 M1 把四处写成早退式后本闸门当场红。
 	// 只认「同一块内、位于写入点之前、条件用到 IsTranslationUsable、且体尾是 continue/return」
 	// 这一种形态：问的是"写入之前有没有被判据拦下"，不是"文件里出现过这个词"。
-	if fwpEarlyContinueGuarded(stack) {
-		return "IsTranslationUsable"
+	if g := fwpEarlyContinueGuarded(stack); g != "" {
+		return g
 	}
 	return ""
 }
 
 // fwpEarlyContinueGuarded 判「写入点之前的同一块里，有一条以 continue/return 收尾的判据早退」。
-func fwpEarlyContinueGuarded(stack []ast.Node) bool {
+func fwpEarlyContinueGuarded(stack []ast.Node) string {
 	// 找到最近的外层块与写入点所在的那条语句。
 	blockIdx := -1
 	for i := len(stack) - 1; i >= 0; i-- {
@@ -156,7 +159,7 @@ func fwpEarlyContinueGuarded(stack []ast.Node) bool {
 		}
 	}
 	if blockIdx < 0 {
-		return false
+		return ""
 	}
 	block := stack[blockIdx].(*ast.BlockStmt)
 	// 写入点的「语句下标」：向上找最近的 *ast.ExprStmt，再在 block.List 里定位它。
@@ -173,26 +176,27 @@ func fwpEarlyContinueGuarded(stack []ast.Node) bool {
 		}
 	}
 	if stmtIdx < 0 {
-		return false
+		return ""
 	}
 	for k := 0; k < stmtIdx; k++ {
 		iff, ok := block.List[k].(*ast.IfStmt)
 		if !ok || iff.Body == nil || len(iff.Body.List) == 0 {
 			continue
 		}
-		if !fwpUses(iff.Cond, "IsTranslationUsable") {
+		g := fwpGuardName(iff.Cond)
+		if g == "" {
 			continue
 		}
 		switch bs := iff.Body.List[len(iff.Body.List)-1].(type) {
 		case *ast.BranchStmt:
 			if bs.Tok == token.CONTINUE {
-				return true
+				return g
 			}
 		case *ast.ReturnStmt:
-			return true
+			return g
 		}
 	}
-	return false
+	return ""
 }
 
 // fwpAssignedFromCollect 回溯栈上最近的函数体，检查 name 是否由 collectKBPass 的
@@ -243,9 +247,26 @@ func fwpUses(node ast.Node, fn string) bool {
 	return found
 }
 
+// fwpGuardName 在表达式里找可用的译文明用性判据（现役 fileTranslationUsable，
+// 兼容旧 IsTranslationUsable），返回命中的函数名；都没命中返回空串。
+func fwpGuardName(n ast.Node) string {
+	for _, fn := range []string{"fileTranslationUsable", "IsTranslationUsable"} {
+		if fwpUses(n, fn) {
+			return fn
+		}
+	}
+	return ""
+}
+
 func fwpCallNamed(ce *ast.CallExpr, fn string) bool {
-	id, ok := ce.Fun.(*ast.Ident)
-	return ok && id.Name == fn
+	switch f := ce.Fun.(type) {
+	case *ast.Ident:
+		return f.Name == fn
+	case *ast.SelectorExpr:
+		// 方法调用 `e.fileTranslationUsable(...)`：只看方法名，不看接收者
+		return f.Sel != nil && f.Sel.Name == fn
+	}
+	return false
 }
 
 // TestFileTranslationWritePointsAllGuarded 钉住「写入门槛只有一处定义」这条装配约束。
@@ -271,7 +292,7 @@ func TestFileTranslationWritePointsAllGuarded(t *testing.T) {
 			continue
 		}
 		inFile++
-		if s.guarded != "IsTranslationUsable" && s.guarded != "collectKBPass" {
+		if s.guarded != "IsTranslationUsable" && s.guarded != "fileTranslationUsable" && s.guarded != "collectKBPass" {
 			t.Errorf("file.go:%d 写入 langTranslations 未经译文可用性判定（guarded=%q）：必须走 IsTranslationUsable 或 collectKBPass，否则脏行会静默交付并永久锁死硬闸", s.line, s.guarded)
 		}
 		byKind[s.guarded]++
@@ -283,8 +304,8 @@ func TestFileTranslationWritePointsAllGuarded(t *testing.T) {
 	}
 	// 反向自证：扫描器必须真的认出两类守护形态（各 4 处 / 1 处），
 	// 否则「全部判为未守护」与「全部判为已守护」两种坏掉都能让上面的断言假绿。
-	if byKind["IsTranslationUsable"] != fwpExpectedWritePoints-1 || byKind["collectKBPass"] != 1 {
-		t.Fatalf("写入点守护形态分布与既有装配不符：%v（期望 IsTranslationUsable %d 处 + collectKBPass 1 处）",
+	if byKind["fileTranslationUsable"] != fwpExpectedWritePoints-1 || byKind["collectKBPass"] != 1 {
+		t.Fatalf("写入点守护形态分布与既有装配不符：%v（期望 fileTranslationUsable %d 处 + collectKBPass 1 处）",
 			byKind, fwpExpectedWritePoints-1)
 	}
 	// 反向自证 2：预填豁免文件里必须**真的有**那一处裸写入——若哪天把它搬回 file.go 或删掉，
@@ -311,11 +332,11 @@ func handle() {
 	if outB != "" && outB != srcB {
 		addTrans("en", srcB, outB) // 违规2：旧的「只判非空/不等源文」口径
 	}
-	_, need := collectKBPass(texts, hit, val, blocked)
+	_, need := collectKBPass(texts, hit, val, blocked, IsTranslationUsable)
 	for _, i := range need {
 		addTrans("en", texts[i], val[i]) // 违规3：迭代 collectKBPass 的第二个返回值（补漏队列）却裸写
 	}
-	accepted, _ := collectKBPass(texts, hit, val, blocked)
+	accepted, _ := collectKBPass(texts, hit, val, blocked, IsTranslationUsable)
 	for _, i := range accepted {
 		addTrans("en", texts[i], val[i]) // 合规：判定收口在 collectKBPass 内
 	}
@@ -373,7 +394,9 @@ func TestFilePipelinePrefillsIdentitySegmentsAndSkipsUpstream(t *testing.T) {
 			case "identitySegments":
 				identityCalls++
 			case "collectKBPass":
-				if len(call.Args) == 4 {
+				// 2026-10-24 DEF-01：collectKBPass 增加第 5 个实参（可用性判定闭包），
+				// 第 4 个仍是 preFilled；只判前 4 个，避免把闭包也算进「实参个数」锁。
+				if len(call.Args) >= 4 {
 					if a, ok := call.Args[3].(*ast.Ident); ok {
 						collectArg = a.Name
 					}
@@ -456,7 +479,7 @@ func TestCollectKBPassRoutesInstructionEchoToRepair(t *testing.T) {
 	kbHitIdx := []bool{true, true}
 	kbVal := []string{echo, "Multi-format file translation is supported"}
 
-	accepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, nil)
+	accepted, needModelIdx := collectKBPass(texts, kbHitIdx, kbVal, nil, IsTranslationUsable)
 	if len(accepted) != 1 || accepted[0] != 1 {
 		t.Fatalf("指令回显候选不得算命中：accepted=%v，want [1]", accepted)
 	}

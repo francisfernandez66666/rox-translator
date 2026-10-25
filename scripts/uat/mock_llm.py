@@ -3,8 +3,15 @@
 # ============================================================================
 # scripts/uat/mock_llm.py — UAT 专用 mock LLM 服务
 # 提供 OpenAI 兼容 /v1/chat/completions 与 /v1/embeddings：
-#   - chat：按行保留行号前缀、内容替换为 "TranslatedEN(...)" 译文字样
-#     （规避引擎「回显检测」把原样返回判为未翻译）
+#   - chat：按行保留行号前缀、内容换成**纯拉丁**假译文载荷（latin_payload：
+#     `TranslatedEN item <md8>`；源文本就全 ASCII 时原样透传）
+#     ★ 载荷里**不许嵌源文汉字**：引擎出栈链的 `PostProcessTranslation`（en 腿）本来就要剥掉
+#     残留汉字，旧写法 `TranslatedEN(源文前 20 字)` 会被剥成 `TranslatedEN(，。)` 空壳，
+#     再被 DEF-01 的指令回显判据判"不可用"⇒ 写入点不落键 ⇒ 文件链 0 产物（A16/T34/T39 红过两次，
+#     第一次是标记契约、第二次是这里的载荷纯度）。前缀字面 `TranslatedEN` 保留：
+#     A7/B2/B3/B8/T34/T47 那几条锁认的就是这个 token；
+#     ★ 批量腿（engine.BatchTranslate）的 `<sN>…</sN>` 标记**逐字保留**、只换标记体内的正文，
+#     否则 parseBatchOutput 解析出 0 条，文件链会"每段都没译出"（见下方 BATCH_MARK 注释）
 #   - chat 的两个纯度触发器（UATPURITYREV / UATPURITYINIT，见下方★段）按「提示词是哪条腿」
 #     定点回包，用来在真 HTTP 出口上复现㊶「审校腿把整句回译覆盖掉正确初翻」的现场
 #   - embeddings：确定性伪向量（1024 维，L2 归一化），用于 KB 检索链路
@@ -14,6 +21,12 @@ import json, re, hashlib, math, sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 NUM = re.compile(r'^(\s*)(\d+)([.、\)])\s*(.*)$')
+# 批量腿的编号契约（engine.BatchTranslate 用 <sN>...</sN> 包裹每一条，见 engine.go 的 runChunk）。
+# 桩必须**按同一条契约**回包：旧实现把整行塞进 TranslatedEN(...) 里，标记被吃掉 ⇒
+# parseBatchOutput 解析出 0 条，文件链每一段都判"未译出"，产物 0 个文件而工单照回完成
+# （A16/T34/T39 三条红的真身）。这是 §三 那条「假上游按我以为的契约实现＝给缺陷发证件」的又一形态：
+# 桩错了不是产品错了，但桩错了会让**产品侧正确的降级链**看起来像缺陷。
+BATCH_MARK = re.compile(r'^(\s*)<s(\d+)>(.*)</s\2>\s*$')
 
 # ---------------------------------------------------------------------------
 # ★ 0AR 第 8 波（㊶）· 译文脚本纯度触发器（UAT T70 段的耗材，别的段一个都不碰）
@@ -77,13 +90,67 @@ def purity_response(kind, prompt):
     return None
 
 
-def fake_translate(text):
+def latin_payload(src):
+    """把源文折成一条**纯拉丁**的假译文载荷（为什么不回抄原文：见函数内注释）。
+
+    ★ 这一条是 A16/T34/T39 三条文件链红的真身，也是 §三「假上游按我以为的契约实现＝给缺陷发证件」
+      的第二个形态（第一个是不保留 <sN> 标记）：旧载荷写的是 `TranslatedEN(源文前 20 字)`，
+      而引擎的出栈链里 `PostProcessTranslation` 的 en 腿**本来就要把残留汉字清洗掉**
+      ——于是真译文变成 `TranslatedEN(，。)` 这样一个空壳，接着被 DEF-01 的指令回显判据
+      (`isProseInstructionEcho`) 判"不可用"⇒ 写入点不落键 ⇒ 该语言一个产物都没有，
+      完成话术却照写「文件翻译完成」（0 个文件）。
+      ⇒ 桩必须回**目标语脚本**的正文，才不会替产品制造一个它自己治不了的形态。
+      前缀字面 "TranslatedEN" 保留：A7/B2/B3/B8/T34/T47 那几条锁认的就是这个 token。
+    · 源文里没有任何非 ASCII 字母时**原样透传**：那是产品的正确交付形态
+      （translation_guard.go 判据 3′——纯代码/编号/符号段原样回吐不记「未译出」），
+      桩在这里硬造一句拉丁话，反而会让那些段被判成"改写掉了"。
+    """
+    t = (src or '').strip()
+    if t and all(ord(c) < 128 for c in t):
+        return t
+    return 'TranslatedEN item ' + hashlib.md5(t.encode('utf-8')).hexdigest()[:8]
+
+
+def han_payload(src):
+    """汉字系目标语（zh/zh_hant/ja/ko）沿用的**改造前逐字形态**：`TranslatedEN(源文前 20 字)`。
+    为什么留一份而不是全站换成拉丁载荷：这些目标语的译文**本来就该带汉字**，
+    桩给纯拉丁等于替产品造一个"审校腿脚本不纯"的现场——T70-c 那条交叉负向
+    （无触发器的正常请求不许动纯度计数）就是这么被顶红的（run7 实测 delta=2）。
+    非汉字符目标语走 latin_payload，两边各按**目标语自己的脚本**回包。"""
+    t = (src or '').strip()
+    return f'TranslatedEN({t[:20]})'
+
+
+# 目标语脚本判据：提示词里的目标语名（中文界面用中文名、英文界面用英文名，两族都认）。
+#   判据来源＝engine.translateInstructionCore 的两条分支（「翻译为简体中文」/「into Simplified Chinese」），
+#   与 §一·12 那条「桩的形态来源必须从产品侧抄、不按字段名直觉拼」同一口径。
+CJK_TARGET_MARKS = ('简体中文', '繁体中文', '日语', '韩语',
+                    'Simplified Chinese', 'Traditional Chinese', 'Japanese', 'Korean')
+
+
+def pick_payload(prompt_all):
+    """按**目标语脚本**选载荷形态（whole-request 判一次，不逐行判）。
+    参数 prompt_all 本轮全部 message 内容拼成的文本（含 system 指令，目标语名只在那里）。"""
+    return han_payload if any(m in prompt_all for m in CJK_TARGET_MARKS) else latin_payload
+
+
+def fake_translate(text, prompt_all=''):
     kind = prompt_kind(text)
     pinned = purity_response(kind, text)
     if pinned is not None:
         return pinned
+    # ★ 载荷形态按目标语脚本分派（判据只看提示词，不看源文——源文脚本与目标语无关）
+    payload = pick_payload(prompt_all)
     out = []
     for line in text.split('\n'):
+        b = BATCH_MARK.match(line)
+        if b:
+            # 批量腿：标记必须原样保留，只换标记体内的正文（契约见上方 BATCH_MARK 注释）
+            body = b.group(3)
+            inner = ('<target>UAT-PSEUDO-CLEANSSED></target>' if 'UATPSEUDO' in body
+                     else payload(body))
+            out.append(f'{b.group(1)}<s{b.group(2)}>{inner}</s{b.group(2)}>')
+            continue
         m = NUM.match(line)
         if m:
             if 'UATPSEUDO' in m.group(4):
@@ -92,12 +159,12 @@ def fake_translate(text):
                 # 且保留标签体正文——若清洗链回退，T48 断言会立即抓到现场残留。
                 out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} <target>UAT-PSEUDO-CLEANSSED></target>")
             else:
-                out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} TranslatedEN({m.group(4)[:20]})")
+                out.append(f"{m.group(1)}{m.group(2)}{m.group(3)} {payload(m.group(4))}")
         elif line.strip():
             if 'UATPSEUDO' in line:
                 out.append("<target>UAT-PSEUDO-CLEANSSED></target>")
             else:
-                out.append(f"TranslatedEN({line.strip()[:30]})")
+                out.append(payload(line))
         else:
             out.append(line)
     return '\n'.join(out)
@@ -124,7 +191,12 @@ class H(BaseHTTPRequestHandler):
         if self.path.endswith('/chat/completions'):
             msgs = req.get('messages', [])
             last = next((m.get('content', '') for m in reversed(msgs) if isinstance(m, dict)), '')
-            content = fake_translate(last)
+            # ★ 目标语名只出现在 **system 指令**里（批量链把指令骨架上移为 system 消息，
+            #   见 engine.BatchTranslate 的 B4 前缀重组），所以载荷分派必须看得见全部消息；
+            #   而 prompt_kind/purity_response 两条判腿逻辑**照旧只看 last**，
+            #   免得把分腿锚点的射程悄悄扩进系统提示词、改变定点触发腿的判定结果。
+            all_text = '\n'.join(str(m.get('content', '')) for m in msgs if isinstance(m, dict))
+            content = fake_translate(last, all_text)
             pt = max(1, len(last) // 4 + 50)
             ct = max(1, len(content) // 4)
             return self._send({

@@ -79,9 +79,8 @@ type Engine struct {
 	rebuilding atomic.Bool // 防并发重建
 
 	// ★ 语言文化规范缓存（Gate L1）：key= tid|lang，TTL 60s
-	cultureMu      sync.Mutex
-	cultureCache   map[string]cultureEntry
-	cultureEntries map[string][]cultureRule // 同 key 的结构化条目（L2 用）
+	cultureMu    sync.Mutex
+	cultureCache map[string]cultureEntry
 
 	// ★ B4（方案 B Phase 1.3）批量固定术语层缓存：key= tid|lang，TTL 60s。
 	//   文件批量主负载是「同前缀 × N 批」形态，此层让同租户同语言的所有批次共享
@@ -101,15 +100,16 @@ type Engine struct {
 
 // cultureRule 单条语言文化规则（来自语言文化包安全句，approved 才生效）。
 type cultureRule struct {
+	ID          int64  // 安全句主键（相关性排序的稳定次序）
 	Kind        string // style/forbidden/replace
+	Source      string // manual/llm（N-02：自动采集的单字只观测）
 	Phrase      string
 	Replacement string
 }
 
-// cultureEntry 缓存条目。
+// cultureEntry 缓存条目（只缓存结构化规则；渲染文本按请求的源文现算，因相关性依赖源文）。
 type cultureEntry struct {
-	Text      string        // 渲染后的提示词块（L1 注入用）
-	Rules     []cultureRule // 结构化条目（L2 硬过滤用）
+	Rules     []cultureRule
 	ExpiresAt time.Time
 }
 
@@ -1046,7 +1046,7 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	}
 	culture := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
-		culture, _ = e.cultureRules(ctx, tid, targetLang)
+		culture = e.cultureBlockFor(ctx, tid, targetLang, zhText)
 	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples) // 知识库术语参考（无命中则为空串）
 	var prompt string
@@ -1124,7 +1124,7 @@ func translateOutputBudget(text string) int {
 func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
 	culture := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
-		culture, _ = e.cultureRules(ctx, tid, targetLang)
+		culture = e.cultureBlockFor(ctx, tid, targetLang, source)
 	}
 	langName := config.LangNames[targetLang]
 	if langName == "" {
@@ -1714,7 +1714,7 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	// ★ Gate L1：语言文化规范注入（approved 安全句按目标语言，60s 缓存，ORDER BY id 行序稳定）
 	cultureBlock := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
-		cultureBlock, _ = e.cultureRules(ctx, tid, targetLang)
+		cultureBlock = e.cultureBlockFor(ctx, tid, targetLang, zhText)
 	}
 	messages := assembleTranslateMessages(instrCore, dynNotes.String(), ref, cultureBlock, zhText)
 
@@ -2816,25 +2816,28 @@ func (e *Engine) rebuildKBIndexIncremental(ctx context.Context, since string, is
 func (e *Engine) Rebuilding() bool { return e.rebuilding.Load() }
 
 // cultureRules 加载租户可应用语言文化包中指定目标语言的已审核规则（60s 缓存）。
-// 返回渲染后的提示词块（L1）与结构化规则（L2 硬过滤）；无规则返回空。
+// 返回结构化规则（L2 硬过滤/渲染共用）；无规则返回 nil。
+// ★ 2026-10-24 N-01：不再在这里拼最终 prompt 文本——渲染上限与相关性依赖源文，
+//
+//	由 renderCultureBlock 按请求现算，避免一次查询出来的大块被所有请求共用。
+//
 // ★ B4（杀手②拆除）：SQL 补 ORDER BY sp.id——旧版无排序，行序随 SQLite/PG 物理顺序
 // 漂移，60s TTL 重载后文化块文本可能整段变化，直接撕裂缓存前缀。
-func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string) (string, []cultureRule) {
+func (e *Engine) cultureRules(ctx context.Context, tid int64, targetLang string) []cultureRule {
 	if e.St == nil || tid <= 0 || targetLang == "" {
-		return "", nil
+		return nil
 	}
 	key := fmt.Sprintf("%d|%s", tid, targetLang)
 	e.cultureMu.Lock()
 	defer e.cultureMu.Unlock()
 	if e.cultureCache == nil {
 		e.cultureCache = map[string]cultureEntry{}
-		e.cultureEntries = map[string][]cultureRule{}
 	}
 	if ce, ok := e.cultureCache[key]; ok && time.Now().Before(ce.ExpiresAt) {
-		return ce.Text, ce.Rules
+		return ce.Rules
 	}
 	rows, err := db.Query(e.St.DB(), db.CurrentDialect(), `
-		SELECT sp.phrase, COALESCE(sp.kind,'style'), COALESCE(sp.replacement,'')
+		SELECT sp.id, sp.phrase, COALESCE(sp.kind,'style'), COALESCE(sp.replacement,''), COALESCE(sp.source,'')
 		FROM kb_safety_phrases sp
 		JOIN kb_packages pkg ON pkg.id = sp.package_id
 		WHERE COALESCE(sp.status,'approved')='approved' AND sp.lang=?
@@ -2844,51 +2847,162 @@ AND COALESCE(pkg.enabled,1)=1 AND pkg.pack_type='locale'
 	if err != nil {
 		// ★ P1-5（2026-09-18）：吞错改显式告警——旧实现静默返回空，PG 下文化闸整链失效不可见
 		observability.Error(ctx, "cultureRules 查询语言文化规则失败（本租户文化闸退化为无规则）", "err", err, "lang", targetLang, "tenant", tid)
-		return "", nil
+		return nil
 	}
 	defer rows.Close()
 	var rules []cultureRule
 	for rows.Next() {
 		var r cultureRule
-		if err := rows.Scan(&r.Phrase, &r.Kind, &r.Replacement); err == nil && r.Phrase != "" {
+		if err := rows.Scan(&r.ID, &r.Phrase, &r.Kind, &r.Replacement, &r.Source); err == nil && r.Phrase != "" {
 			rules = append(rules, r)
 		}
 	}
 	rows.Close()
-	var sb strings.Builder
-	if len(rules) > 0 {
-		sb.WriteString("\n【语言文化规范（必须遵守，违反将被拒绝）】\n")
-		for _, r := range rules {
-			switch r.Kind {
-			case "style":
-				sb.WriteString("· 写作规范：" + r.Phrase + "\n")
-			case "forbidden":
-				// ★ 2026-09-03：中性常见词（control/hot 等）不作为 LLM 禁令指令，避免误导模型避开正常词
-				if culture.IsNeutralForbidden(targetLang, r.Phrase) {
-					continue
-				}
-				sb.WriteString("· 严禁在译文中出现：" + r.Phrase + "\n")
-			case "replace":
-				sb.WriteString("· 用词替换：译文中的「" + r.Phrase + "」必须写作「" + r.Replacement + "」\n")
-			}
-		}
-	}
-	text := sb.String()
 	// ★ 性能优化（不换库 Phase A4）：条目数封顶，超限整代清空后仅保留本次写入，
 	//   防止不同语言/租户组合随时间无限累积（TTL 仅控制命中、不回收内存）。
 	if len(e.cultureCache) >= cultureCacheMax {
 		e.cultureCache = map[string]cultureEntry{}
-		e.cultureEntries = map[string][]cultureRule{}
 	}
-	e.cultureCache[key] = cultureEntry{Text: text, Rules: rules, ExpiresAt: time.Now().Add(cultureCacheTTL)}
-	e.cultureEntries[key] = rules
-	return text, rules
+	e.cultureCache[key] = cultureEntry{Rules: rules, ExpiresAt: time.Now().Add(cultureCacheTTL)}
+	return rules
+}
+
+// cultureLimit 文化规则块进 prompt 的上限（env > system_config > 默认）。
+type cultureLimit struct {
+	MaxChars  int
+	MaxItems  int
+	Relevance bool
+}
+
+// cultureLimit 读取渲染上限。默认 2000 字符 / 30 条 / 按源文相关性排序。
+// 0/负数视为未配置→默认；要临时放开（排障）可设 999999。
+func (e *Engine) cultureLimit() cultureLimit {
+	lim := cultureLimit{MaxChars: 2000, MaxItems: 30, Relevance: true}
+	if e == nil || e.St == nil {
+		return lim
+	}
+	if v, _ := e.St.GetConfig("culture_rules_max_chars"); strings.TrimSpace(v) != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			lim.MaxChars = n
+		}
+	}
+	if v, _ := e.St.GetConfig("culture_rules_max_items"); strings.TrimSpace(v) != "" {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
+			lim.MaxItems = n
+		}
+	}
+	if v, _ := e.St.GetConfig("culture_rules_relevance"); strings.TrimSpace(v) != "" {
+		lim.Relevance = strings.TrimSpace(v) != "0"
+	}
+	return lim
+}
+
+// renderCultureBlock 按「相关性 + 上限」渲染文化规则块（N-01）。
+//   - 只渲染真正需要进 prompt 的规则：style/replace 全收；forbidden 走 N-02 的
+//     IsBlockingForbiddenFields（日常词/自动采集单字不进 prompt，避免教模型避开正常词）；
+//   - 相关性：源文包含 phrase/replacement 的规则优先，其次长短语，再按 id；
+//   - 上限：条数与字符数双限；整条加入/跳过，绝不切半条；
+//   - 输出侧检查仍用全量 rules（applyCultureGate/culture.Run），这里只影响 prompt。
+func (e *Engine) renderCultureBlock(rules []cultureRule, source, targetLang string) string {
+	if len(rules) == 0 {
+		return ""
+	}
+	lim := e.cultureLimit()
+	type scored struct {
+		r     cultureRule
+		score int
+	}
+	list := make([]scored, 0, len(rules))
+	lowSrc := strings.ToLower(source)
+	for _, r := range rules {
+		switch r.Kind {
+		case "style", "replace", "":
+			// 保留
+		case "forbidden":
+			if !culture.IsBlockingForbiddenFields(targetLang, r.Kind, r.Phrase, r.Source) {
+				continue
+			}
+		default:
+			continue
+		}
+		score := 0
+		lowPhrase := strings.ToLower(strings.TrimSpace(r.Phrase))
+		if lowPhrase != "" && strings.Contains(lowSrc, lowPhrase) {
+			score += 3
+		}
+		if r.Replacement != "" && strings.Contains(lowSrc, strings.ToLower(r.Replacement)) {
+			score += 2
+		}
+		if strings.ContainsAny(lowPhrase, " \t") || len([]rune(lowPhrase)) >= 4 {
+			score++
+		}
+		list = append(list, scored{r: r, score: score})
+	}
+	if lim.Relevance {
+		sort.SliceStable(list, func(i, j int) bool {
+			if list[i].score != list[j].score {
+				return list[i].score > list[j].score
+			}
+			return list[i].r.ID < list[j].r.ID
+		})
+	}
+	var sb strings.Builder
+	// usedItems/usedChars 是真正进了 prompt 的量；droppedItems/droppedChars 是被上限挡掉的量。
+	// 两组都要记（N-01 修法第 2 条点名的三件读数＝总条数/实际条数/被截字符数），
+	// 只出保留侧读数的日志看不出「这次到底漏了多少规则」，排障时无法判断上限该不该抬。
+	usedItems, usedChars, droppedItems, droppedChars := 0, 0, 0, 0
+	for _, s := range list {
+		r := s.r
+		var line string
+		switch r.Kind {
+		case "style":
+			line = "· 写作规范：" + r.Phrase + "\n"
+		case "forbidden":
+			line = "· 严禁在译文中出现：" + r.Phrase + "\n"
+		case "replace":
+			line = "· 用词替换：译文中的「" + r.Phrase + "」必须写作「" + r.Replacement + "」\n"
+		default:
+			continue
+		}
+		n := len([]rune(line))
+		if usedItems+1 > lim.MaxItems || usedChars+n > lim.MaxChars {
+			droppedItems++
+			droppedChars += n
+			continue
+		}
+		if sb.Len() == 0 {
+			sb.WriteString("\n【语言文化规范（必须遵守，违反将被拒绝）】\n")
+		}
+		sb.WriteString(line)
+		usedItems++
+		usedChars += n
+	}
+	if droppedItems > 0 {
+		// 只出读数，不出规则原文（规则属租户配置，日志不落全文）。
+		// ★ N-01（2026-10-25 收口）：级别由 Info 抬成 Warn——被截掉的规则＝模型少收到的约束，
+		//   现网表现是「文化避雷没生效」，而 Info 级日志在默认采集里根本没人看，等于静默降级
+		//   （AGENTS §一·12 那一族「有自动降级的链路，产物能打开不算验收」）。
+		observability.Warn(context.Background(), "culture_block_truncated",
+			"lang", targetLang,
+			"total_items", usedItems+droppedItems, // 候选总条数（上限裁剪之前）
+			"kept_items", usedItems, // 实际进 prompt 的条数
+			"dropped_items", droppedItems,
+			"kept_chars", usedChars,
+			"dropped_chars", droppedChars, // 被截掉的字符数（修法点名的第三件读数）
+			"max_chars", lim.MaxChars, "max_items", lim.MaxItems)
+	}
+	return sb.String()
+}
+
+// cultureBlockFor 读取 + 按源文渲染（四个 prompt 拼接点的统一入口）。
+func (e *Engine) cultureBlockFor(ctx context.Context, tid int64, targetLang, source string) string {
+	return e.renderCultureBlock(e.cultureRules(ctx, tid, targetLang), source, targetLang)
 }
 
 // applyCultureGate L2 硬闸门：replace 对自动替换；forbidden 命中记录违规。
 // 返回处理后的文本与违规列表。违规始终记录；是否拦截由调用方按 locale_gate_enforced 决定。
 func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, text string) (string, []string) {
-	_, rules := e.cultureRules(ctx, tid, targetLang)
+	rules := e.cultureRules(ctx, tid, targetLang)
 	var violations []string
 	for _, r := range rules {
 		switch r.Kind {
@@ -2897,8 +3011,9 @@ func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, te
 				text = strings.ReplaceAll(text, r.Phrase, r.Replacement)
 			}
 		case "forbidden":
-			// 中性常见词豁免 + 整词边界匹配，避免 control/hot 等普通词汇误拦正常译文
-			if culture.ForbiddenHit(targetLang, text, r.Phrase) {
+			// N-02：规则级收缩（自动采集单字/日常词只观测）+ 整词边界匹配。
+			if culture.IsBlockingForbiddenFields(targetLang, r.Kind, r.Phrase, r.Source) &&
+				culture.ForbiddenHit(targetLang, text, r.Phrase) {
 				violations = append(violations, r.Phrase)
 			}
 		}
@@ -2920,7 +3035,7 @@ func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translatio
 	}
 	culture := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
-		culture, _ = e.cultureRules(ctx, tid, targetLang)
+		culture = e.cultureBlockFor(ctx, tid, targetLang, strings.Join(sources, "\n"))
 	}
 	langName := config.LangNames[targetLang]
 	if langName == "" {

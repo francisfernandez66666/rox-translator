@@ -149,7 +149,9 @@ curl -s $A_URL/api/auth/register -H 'Content-Type: application/json' \
   -d "{\"username\":\"multi_u_$TS\",\"password\":\"uatpass123\",\"type\":\"personal\",\"name\":\"多实例\",\"email\":\"multi_$TS@test.com\",\"agreed\":true}" >/dev/null
 UID_TOKEN=$(curl -s $A_URL/api/auth/login -H 'Content-Type: application/json' -d "{\"username\":\"multi_u_$TS\",\"password\":\"uatpass123\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))')
 UH="Authorization: Bearer $UID_TOKEN"
-TID=$(dbq "SELECT tenant_id FROM users WHERE username='multi_u_$TS'" | tr -d '[:space:]')
+# ★ 多身份批（2026-10-24）：一个 username 可能有多条 users 行（家行＋补建的个人身份行），
+#   按用户名数租户必须钉「家行 + 恰一行」（is_home=1 LIMIT 1），否则 tr -d 会把两个租户号粘成一个不存在的号。
+TID=$(dbq "SELECT tenant_id FROM users WHERE username='multi_u_$TS' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
 curl -s $A_URL/api/admin/orders/create -H "$AH" -H 'Content-Type: application/json' -d "{\"tenant_id\":$TID,\"points\":27,\"money\":0}" >/dev/null
 OID=$(dbq "SELECT id FROM orders WHERE tenant_id=$TID AND status='pending' ORDER BY id DESC LIMIT 1" | tr -d '[:space:]')
 curl -s $A_URL/api/admin/orders/pay -H "$AH" -H 'Content-Type: application/json' -d "{\"id\":$OID,\"tenant_id\":$TID}" >/dev/null

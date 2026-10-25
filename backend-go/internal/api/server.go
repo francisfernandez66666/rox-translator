@@ -313,6 +313,13 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/auth/register-config", s.handleRegisterConfig)
 	// ★ IAM P0-10（2026-10-21）：登出真撤销（jti 名单，见 auth_logout.go）
 	s.mux.HandleFunc("/api/auth/logout", s.handleLogout)
+	// ★ 多身份方案 B2（2026-10-24）：身份清单与身份切换（一个人多行 users 身份，见 auth_identity.go）。
+	//   刻意**没有**「自助退出企业」端点（R8 拍板：退出只能由租户管理员在管理台移除成员完成）。
+	s.mux.HandleFunc("/api/auth/identities", s.handleIdentities)
+	s.mux.HandleFunc("/api/auth/switch-identity", s.handleSwitchIdentity)
+	// ★ 多身份方案 B3（2026-10-24）门二：专属邀请链接的**公开校验**口（注册页预填用，见 invite_link.go）。
+	//   匿名可达是前提（人还没注册）；防护由码本身的 128 bit 不可枚举性承担，不靠会话。
+	s.mux.HandleFunc("/api/auth/invite-link/", s.handleInviteLinkPublic)
 	s.mux.HandleFunc("/api/admin/users", s.handleAdminUsers)
 	s.mux.HandleFunc("/api/admin/users/create", s.handleAdminUserCreate)
 	s.mux.HandleFunc("/api/admin/users/update", s.handleAdminUserUpdate)
@@ -324,6 +331,13 @@ func (s *Server) routesAuth() {
 	s.mux.HandleFunc("/api/admin/invite-codes", s.handleInviteCodes)
 	s.mux.HandleFunc("/api/admin/invite-codes/create", s.handleInviteCodeCreate)
 	s.mux.HandleFunc("/api/admin/invite-codes/revoke", s.handleInviteCodeRevoke)
+	// ★ 多身份方案 B3（2026-10-24）门二：管理台生成/列出专属邀请链接（R9：建号不录口令、口令由用户点链接自设）。
+	//   同一路径按方法分派（GET=列表／POST=创建，方案 §6.2 点名的形态）；
+	//   撤销复用上面那条 /api/admin/invite-codes/revoke（链接与手输码同一状态机、同一风险面，见 §6.5）。
+	s.mux.HandleFunc("/api/admin/invite-links", s.handleInviteLinksRoute)
+	// ★ B4（2026-10-24）：邀请链接二维码单独一条路径（挂在 /api/admin/invite-links 上会撞精确匹配，
+	// ServeMux 只认整段路径，前缀语义要写成 "/" 结尾——那会把上面那条精确路由也一起吞掉）。
+	s.mux.HandleFunc("/api/admin/invite-links/qrcode", s.handleInviteLinkQrcode)
 	// ★ 邀请裂变（白皮书 §五）：我的邀请码/记录 + 二维码
 	s.registerReferralRoutes()
 	s.routesEditor()

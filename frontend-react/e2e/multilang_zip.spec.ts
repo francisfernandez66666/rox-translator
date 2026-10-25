@@ -3,7 +3,7 @@
 //   覆盖前端唯一的多语言文件翻译交付链：工单页上传 .txt → LangMultiSelect 选
 //   「英语+日语」→ 创建入队（mock LLM 异步跑完）→ 完成行点「⬇ 下载」→
 //   拦截 /api/tickets/download 响应断言：zip 魔数 + ≥2 本地文件头 + 条目名含
-//   e2e_m1_en / e2e_m1_ja（每语言独立产物打包，历史缺口：zip 路径仅 OpenAPI
+//   e2e_m1-en / e2e_m1-ja（每语言独立产物打包，历史缺口：zip 路径仅 OpenAPI
 //   有 API 断言，UI 链路无覆盖）+ ★ #65 条目名无内部落盘时间戳标记。
 // 运行：BASE_URL=http://127.0.0.1:8899 npx playwright test e2e/multilang_zip.spec.ts
 // ============================================================================
@@ -116,8 +116,12 @@ test.describe('多语言文件工单 → zip 打包下载', () => {
     // latin1（逐字节 1:1 映射）而不是 utf8：文件名区段里混着非 UTF-8 字节，
     // utf8 解码会把它们替换成 U+FFFD，导致下面的条目名断言「明明有却说不含」的假红。
     const names = buf.toString('latin1');
-    expect(names, '应含英语产物 e2e_m1_en').toContain('e2e_m1_en');
-    expect(names, '应含日语产物 e2e_m1_ja').toContain('e2e_m1_ja');
+    // ★ 2026-10-25（方案 O-03，对账批）：产物名中的语言标记由 `_en` 改为 `-en`
+    //   （`artifact_lang_suffix` 默认档；`0` 只是应急回退档）。判据跟着交付口径走，
+    //   同时把旧形态写成负向腿——两条一起判，才分得清"改成新名"与"语言标记丢了"。
+    expect(names, '应含英语产物 e2e_m1-en').toContain('e2e_m1-en');
+    expect(names, '应含日语产物 e2e_m1-ja').toContain('e2e_m1-ja');
+    expect(names, '旧下划线语言标记必须已被新口径取代').not.toMatch(/e2e_m1_(en|ja)/);
     // ★ #65（2026-09-22）：条目名必须是「原件展示名 + 语言标记」，不得带内部落盘时间戳标记。
     // 旧口径 zip 条目长这样：`1790026522069352000_e2e_m1_en.txt`——那串 19 位数字是磁盘上
     // 防重名用的内部标识，泄漏进交付物既难看又暴露实现细节。分目录改造后唯一性由产物子目录

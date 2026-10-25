@@ -120,6 +120,14 @@ func checkOne(source, target, lang string) []Issue {
 			Detail: fmt.Sprintf("占位符不一致：源=%v 译=%v", sp, tp)})
 	}
 
+	// structure：多段源文必须保留段落结构（2026-10-24 DEF-02）。
+	// 文本工单的建单页承诺「支持多段，每段一行」；模型把某段当指令吞掉时，
+	// 只靠 length（译文过短）拦不住——本例译文总长度比源文还长。
+	if sl, tl := nonEmptyLineCount(src), nonEmptyLineCount(tgt); sl >= 2 && tl < sl {
+		out = append(out, Issue{Lang: lang, Rule: "structure", Level: "error",
+			Detail: fmt.Sprintf("段落结构缺失：源文 %d 段，译文 %d 段", sl, tl)})
+	}
+
 	// length：疑似漏翻（译文过短）
 	srcRunes, tgtRunes := len([]rune(src)), len([]rune(tgt))
 	if srcRunes > 20 && tgtRunes*10 < srcRunes*3 {
@@ -131,6 +139,33 @@ func checkOne(source, target, lang string) []Issue {
 	if (lang == "zh" || lang == "zh_hant" || lang == "ja") && strings.HasSuffix(tgt, ".") {
 		out = append(out, Issue{Lang: lang, Rule: "punctuation", Level: "warning",
 			Detail: "句末为半角句号，目标语言应使用全角标点"})
+	}
+	return out
+}
+
+// nonEmptyLineCount 统计非空行数（只按 \n 切；全空白行不计）。
+func nonEmptyLineCount(s string) int {
+	n := 0
+	for _, line := range strings.Split(s, "\n") {
+		if strings.TrimSpace(line) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// MissingLineCounts 返回各语言「译文非空行数少于源文」的缺口（无缺口为 0）。
+// 供工单结构失败后的增量重发使用：只重译缺口/错误行，正确行复用。
+func MissingLineCounts(source string, translations map[string]string) map[string]int {
+	sl := nonEmptyLineCount(source)
+	out := map[string]int{}
+	if sl < 2 {
+		return out
+	}
+	for lang, tr := range translations {
+		if tl := nonEmptyLineCount(tr); tl < sl {
+			out[lang] = sl - tl
+		}
 	}
 	return out
 }

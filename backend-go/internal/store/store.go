@@ -49,29 +49,32 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
-	s.feedbackMigrate()            // 老库补 replies 列（幂等，BBS 回复线程）
-	s.backfillAPIOwnership()       // ★ 历史 Key/任务强绑定回填（幂等）
-	s.backfillPaymentsFenC2()      // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
-	s.TmReviewMigrate()            // TM 待审池建表（幂等）
-	s.KBPackGrantsMigrate()        // ★ H3 KB 包级读/写/管理授权表（幂等）
-	s.SCIMMigrate()                // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
-	s.QuotaGrantMigrate()          // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
-	s.TicketStateTimingMigrate()   // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
-	s.TicketQualityMigrate()       // ★ 改造 4/5（2026-09-17）：tickets 增加 quality_flagged/qa_errors/qa_warnings（幂等；质检透出）
-	s.TicketRejectSourceMigrate()  // ★ F-42-b（2026-09-25 UAT 修复批）：tickets 补 reject_source 列，区分人工驳回与系统失败（幂等）
-	s.TicketDeliveryNotesMigrate() // ★ 2026-10-21 UAT 收口 M2：tickets 补 degraded_langs/gate_warnings（幂等；降级提示出栈）
-	s.BalanceAccountMigrate()      // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
-	s.OrgSiblingUniqueMigrate()    // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
-	s.BillingIndexMigrate()        // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
-	s.PackagesTenantMigrate()      // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
-	s.ReferralMigrate()            // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
-	s.InvitesRevokeMigrate()       // ★ G9（2026-10-19）：invite_codes 补 revoked/revoked_at 列（邀请码可撤销不删行）
-	s.KBSearchIndexMigrate()       // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
-	s.OneidMigrate()               // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
-	s.KBRewardMigrate()            // ★ KB 上传奖励流水表（幂等；任务2.3）
-	s.USDTMigrate()                // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
-	s.TasksMigrate()               // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
-	s.EnsureBillingDefaults()      // 商业化参数默认值落库（幂等，面板可改）
+	s.feedbackMigrate()             // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership()        // ★ 历史 Key/任务强绑定回填（幂等）
+	s.backfillPaymentsFenC2()       // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
+	s.TmReviewMigrate()             // TM 待审池建表（幂等）
+	s.KBPackGrantsMigrate()         // ★ H3 KB 包级读/写/管理授权表（幂等）
+	s.SCIMMigrate()                 // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
+	s.QuotaGrantMigrate()           // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）
+	s.TicketStateTimingMigrate()    // ★ ticket_state 增加 started_at/duration_ms（幂等；进度耗时展示）
+	s.TicketQualityMigrate()        // ★ 改造 4/5（2026-09-17）：tickets 增加 quality_flagged/qa_errors/qa_warnings（幂等；质检透出）
+	s.TicketRejectSourceMigrate()   // ★ F-42-b（2026-09-25 UAT 修复批）：tickets 补 reject_source 列，区分人工驳回与系统失败（幂等）
+	s.TicketDeliveryNotesMigrate()  // ★ 2026-10-21 UAT 收口 M2：tickets 补 degraded_langs/gate_warnings（幂等；降级提示出栈）
+	s.TicketRepairAttemptsMigrate() // ★ 2026-10-24 DEF-02 §10.1.2：tickets 补 repair_attempts 列（整单重发计数落列，幂等）
+	s.BalanceAccountMigrate()       // ★ 余额账户去重 + tenant_id 唯一索引（幂等；P0-8 并发止血）
+	s.OrgSiblingUniqueMigrate()     // ★ P0-2（2026-09-15）：orgs 同级同名唯一约束（存量去重+建索引，幂等）
+	s.BillingIndexMigrate()         // ★ 整改 B5：订单号唯一索引 + Key 哈希检索索引（幂等，撞重复降级告警）
+	s.PackagesTenantMigrate()       // ★ 商业包租户化：packages 加 tenant_id 并改 (tenant_id, code) 复合唯一（幂等）
+	s.ReferralMigrate()             // ★ 邀请裂变迁移：users.ref_code/referred_by 列 + referral_rewards 表（幂等）
+	s.InvitesRevokeMigrate()        // ★ G9（2026-10-19）：invite_codes 补 revoked/revoked_at 列（邀请码可撤销不删行）
+	s.InviteLinkMigrate()           // ★ 多身份方案 B3（2026-10-24）：invite_codes 补 kind/bound_*/role/expires_at（专属邀请链接）
+	s.KBSearchIndexMigrate()        // ★ D11：kb_entries 子串检索 trgm GIN（仅 PG，幂等）
+	s.OneidMigrate()                // ★ 账户体系：users.email 同一时刻全局唯一（部分唯一索引+存量去重，幂等）
+	s.MultiIdentityMigrate()        // ★ 2026-10-24 多身份方案 B1：account_id/is_home 回填 + 邮箱唯一索引改按租户（幂等）
+	s.KBRewardMigrate()             // ★ KB 上传奖励流水表（幂等；任务2.3）
+	s.USDTMigrate()                 // ★ USDT 收款（2026-09-15）：usdt_orders/usdt_deposits + 尾数唯一索引（幂等）
+	s.TasksMigrate()                // ★ 任务中心：任务定义 + 领取记录建表（幂等；2026-09-03）
+	s.EnsureBillingDefaults()       // 商业化参数默认值落库（幂等，面板可改）
 	// ★ F-78（2026-09-28 〇-X）：积分汇率 1:300→1:400 的存量等值补发（幂等，一次性，仅旧档库触发）。
 	// 必须排在 EnsureBillingDefaults 之后（要看到库里的真实汇率字面值才能判档）、
 	// 且排在下面三处「按当前汇率折算/回填」的迁移之前（否则会把旧口径再折一遍＝双重放大）。
@@ -171,6 +174,8 @@ func (s *Store) migrate() error {
 			scim_external_id TEXT NOT NULL DEFAULT '',
 			deactivate_at TEXT NOT NULL DEFAULT '',
 			profile_setup_required INTEGER NOT NULL DEFAULT 0,
+			account_id TEXT NOT NULL DEFAULT '',
+			is_home INTEGER NOT NULL DEFAULT 0,
 			created_at TEXT,
 			updated_at TEXT
 		)`,
@@ -751,6 +756,11 @@ var columnAdditions = []colDef{
 	{"users", "must_change_pwd", "ALTER TABLE users ADD COLUMN must_change_pwd INTEGER NOT NULL DEFAULT 0"},
 	// ★ 2026-10-21 IAM 重做：首登资料提醒（可跳过），与 must_change_pwd 强制闸分离
 	{"users", "profile_setup_required", "ALTER TABLE users ADD COLUMN profile_setup_required INTEGER NOT NULL DEFAULT 0"},
+	// ★ 2026-10-24 多身份方案 D1/D2（B1）：「人」的抽象键与家行标记。
+	//   这里只保证「新库建表语句」与「存量库补列清单」是同一份列形状（AGENTS §一·1.4）；
+	//   回填与邮箱唯一索引换轨在 multi_identity_migrate.go 的 MultiIdentityMigrate 里做。
+	{"users", "account_id", "ALTER TABLE users ADD COLUMN account_id TEXT NOT NULL DEFAULT ''"},
+	{"users", "is_home", "ALTER TABLE users ADD COLUMN is_home INTEGER NOT NULL DEFAULT 0"},
 	// ★ C2（2026-09-12）：payments 金额列单位归一——历史 amount_money 实为「分」
 	//   （与 orders.amount_money「元」同名不同单位，勾稽必错）。新增 amount_fen 语义列，
 	//   启动一次性回填旧行，写入点全部改投 amount_fen；amount_money 保留只读兼容。
