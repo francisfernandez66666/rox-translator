@@ -264,6 +264,35 @@ func echoRun(t *testing.T, h *echoHarness) (*FileTranslateResult, string) {
 	return res, artifact
 }
 
+// echoRunExpectFail 与 echoRunRaw 同一条链，但**允许整单失败**：
+// ★ 2026-10-25 修法 C 之后，「一个可用交付物都没有」已由"成功 + 0 文件"翻成"失败 + 带诊断"，
+//
+//	本条正是要判这个形态（旧写法在这里 t.Fatalf 会把新语义直接挡在门外）。
+func echoRunExpectFail(t *testing.T, h *echoHarness) (*FileTranslateResult, string) {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "uat_sample.txt")
+	if err := os.WriteFile(src, []byte(strings.Join(echoSrcLines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatalf("写入样例文件失败: %v", err)
+	}
+	options := map[string]interface{}{
+		"target_langs": []interface{}{"en"},
+		"mode":         "fast",
+	}
+	res := h.eng.HandleFile(context.Background(), src, options, nil, nil)
+	if res == nil {
+		t.Fatal("HandleFile 返回 nil")
+	}
+	if len(res.Files) == 0 {
+		return res, ""
+	}
+	b, err := os.ReadFile(res.Files[0])
+	if err != nil {
+		t.Fatalf("读产物 %s 失败: %v", res.Files[0], err)
+	}
+	return res, string(b)
+}
+
 // TestFileEchoPipelineKeepsEchoOutOfArtifact E1/E2/E3：回显不进产物、极简腿真被走到、漏译归零。
 func TestFileEchoPipelineKeepsEchoOutOfArtifact(t *testing.T) {
 	h := echoEngine(t)
@@ -374,13 +403,21 @@ func echoRunRaw(t *testing.T, h *echoHarness) (*FileTranslateResult, string) {
 func TestFileEchoPipelineMutedMinimalLegDeliversPartial(t *testing.T) {
 	h := echoEngine(t)
 	h.muteMinimal = true
-	res, artifact := echoRunRaw(t, h)
+	res, artifact := echoRunExpectFail(t, h)
 
 	// ① 判据与救援腿互不相干：哑掉救援腿之后，回显仍然不许进产物。
 	if strings.Contains(artifact, "currency symbol") {
 		t.Errorf("极简腿已哑，回显却进了产物 ⇒ 拦住回显的不是判据而是救援腿（判据射程被误读）\n产物=%q", artifact)
 	}
-	// ② 残缺必须如实浮出：四行全部未译出 ⇒ Untranslated=4，且（按既有交付语义）不产出文件。
+	// ② 残缺必须如实浮出：四行全部未译出 ⇒ Untranslated=4。
+	//    ★ 2026-10-25 修法 C：零交付不再"成功 + 0 文件"，而是**整单失败**——
+	//    否则客户看到的是「✅ 文件翻译完成：共 4 段文本，输出 0 个文件」这种成功脸。
+	if res.Error == "" {
+		t.Errorf("一个交付物都没有却报成功（Files=%v）⇒ 修法 C 未生效，客户会以为已交付", res.Files)
+	}
+	if !strings.Contains(res.Error, "未产出任何可用交付物") {
+		t.Errorf("失败文案应点名「未产出任何可用交付物」，实得：%s", res.Error)
+	}
 	if got := res.Data.Untranslated["en"]; got != len(echoSrcLines) {
 		t.Errorf("哑掉极简腿后 Untranslated[en]=%d，期望 %d ⇒ 缺失段没有如实统计（客户会拿到残缺成品而工单显示完成）",
 			got, len(echoSrcLines))
@@ -388,6 +425,10 @@ func TestFileEchoPipelineMutedMinimalLegDeliversPartial(t *testing.T) {
 	if len(res.Files) != 0 {
 		t.Errorf("哑掉极简腿后仍然产出了文件（Files=%v）⇒ 与 E1 的对照失去意义：这条腿明明是唯一交付来源",
 			res.Files)
+	}
+	// ③ 失败不等于丢诊断：未译段清单必须随失败结果一起出去（审批台才能照着补）。
+	if got := res.Data.Untranslated["en"]; got != len(echoSrcLines) {
+		t.Errorf("失败结果的 Untranslated[en]=%d，期望 %d ⇒ 零交付时把「缺哪几段」一起丢了", got, len(echoSrcLines))
 	}
 	// ③ 与 E1 的同一段读数对照：E1 有产物且四行齐全，本条两者皆无 ⇒ 绿灯确实来自兜底腿。
 	if artifact != "" {

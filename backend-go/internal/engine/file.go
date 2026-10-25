@@ -1576,36 +1576,37 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			"count", len(fidelityWarnings), "langs", strings.Join(finalLangs, ","), "file", filepath.Base(filePath))
 	}
 
-	reply := fmt.Sprintf("✅ 文件翻译完成：共 %d 段文本，输出 %d 个文件（%s）",
-		len(texts), len(filesOut), strings.Join(finalLangs, "/"))
-	// ★ 漏翻可见性：存在未译出段时在完成话术与结构化数据中同时告警（审批/QA 可据此补译）。
-	// ★ P1 整改：此前**只给数量**，等于什么都没给（用户只能拿肉眼比对成品找缺哪几段）——
-	//   未译段清单已随 Data.UntranslatedSegments 透出，故话术明示清单所在字段。
-	if len(untranslated) > 0 {
-		parts := make([]string, 0, len(untranslated))
-		for _, lc := range finalLangs {
-			if n := untranslated[lc]; n > 0 {
-				parts = append(parts, fmt.Sprintf("%s×%d", lc, n))
-			}
+	// ★ 2026-10-25 修法 C（方案 §10.6-C）：**一个可用交付物都没有时不许报「✅ 完成」**。
+	//   两条调用路径的零产物处置此前不一致：多文件路径在 service 侧把 `len(res.Files)==0` 判失败，
+	//   而单文件路径只看 `res.Error`——于是「译文全缺/写回与纯文案兜底都失败」那一单会以
+	//   「✅ 文件翻译完成：共 N 段文本，输出 0 个文件」的**成功脸**收尾（客户以为交付了）。
+	//   判据收在引擎这一个出口：0 个主产物且 0 个纯文案旁路 ⇒ 明确失败并给出可执行文案。
+	if fileNoDeliverables(filesOut, textOut) {
+		// 失败也要把「为什么」带出去：未译段清单/闸门告警随 Data 一并返回，
+		// 否则客户与审批台只看到一句失败、拿不到"缺哪几段"（与 E5 那条"残缺必须如实浮出"同一取向）。
+		tp, tc := e.UsageTokens(ctx)
+		return &FileTranslateResult{
+			Skill: "translation",
+			Error: fmt.Sprintf(
+				"文件翻译未产出任何可用交付物（共 %d 段文本，目标语言 %s）：译文缺失或写回/纯文案兜底均失败，请稍后重新发起或联系支持",
+				len(texts), strings.Join(finalLangs, "/")),
+			Data: FileTranslateData{
+				TotalTexts:           len(texts),
+				TargetLangs:          finalLangs,
+				LangNames:            langNames,
+				KBHits:               kbHits,
+				ModelHits:            modelHits,
+				Untranslated:         untranslated,
+				UntranslatedSegments: untranslatedSegments,
+				SourceSegments:       texts,
+				GateWarnings:         gateWarnings,
+				DegradedLangs:        degraded,
+			},
+			TokensUsed: tp + tc,
+			PointsUsed: e.PointsOfTokens(e.UsageDisplayTokens(ctx)),
 		}
-		reply += fmt.Sprintf("；⚠️ 有 %d 段未能译出已保留原文（%s），具体段落见返回的 untranslated_segments，请人工补译",
-			len(parts), strings.Join(parts, ","))
 	}
-	if len(gateWarnings) > 0 {
-		reply += fmt.Sprintf("；⚠️ 质量校验提示 %d 条，详见结构化返回", len(gateWarnings))
-	}
-	// ★ 双模式（2026-09-13）：降级语言在话术中明示（产物已交付 .md 纯文案，非整单失败）
-	if len(degraded) > 0 {
-		names := make([]string, 0, len(degraded))
-		for _, lc := range degraded {
-			if n := config.LangNames[lc]; n != "" {
-				names = append(names, n)
-			} else {
-				names = append(names, lc)
-			}
-		}
-		reply += fmt.Sprintf("；⚠️ %s 版式还原失败，已降级为纯文案交付（.md），如需还原版式可重新发起工单", strings.Join(names, "、"))
-	}
+	reply := fileCompletionReply(len(texts), filesOut, finalLangs, untranslated, gateWarnings, degraded)
 	// ★ 2026-09-03 需求：文件翻译结果附带实际 token 消耗
 	// 用量来自 ctx 的请求级收集器（本次全链路：初翻/校对/embedding 都记在同一处），
 	// 故必须在 ctx 还活着时读取；对外只出 points_used，token 裸值走 json:"-" 不外发。
@@ -1636,6 +1637,59 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		// 旧写法比实际扣费少一个 markup，客户拿 points_used 折算必然对不上账。
 		PointsUsed: e.PointsOfTokens(e.UsageDisplayTokens(ctx)),
 	}
+}
+
+// fileNoDeliverables 判定「这一单没有产出任何可用交付物」（★ 2026-10-25 修法 C 的唯一判据）。
+//
+// 主产物（原位写回/版式重建/纯文案主交付/图片/音频/字幕）与**纯文案旁路**（textOut）两边都空才算零交付；
+// 只要有一边落了盘，客户就仍有可用的东西——那时按失败收尾会白扣一次失败并让客户重跑。
+func fileNoDeliverables(filesOut, textOut []string) bool {
+	return len(filesOut) == 0 && len(textOut) == 0
+}
+
+// fileCompletionReply 生成文件链的完成话术（唯一出口：改口径只改这里，也便于单测）。
+//
+// ★ 2026-10-25 修法 A：漏译提示里的数字是**段数总和**，不是「有漏译的语种个数」。
+// 旧写法把 `len(parts)`（语种数）套进「有 %d 段」的句子：
+//
+//	· en 缺 3 段 + ja 缺 1 段 ⇒ 文案说「有 2 段」（真值 4 段）；
+//	· 只缺一个语种时更离谱：en 缺 5 段 ⇒ 「有 1 段未能译出（en×5）」——同一句自相矛盾。
+//
+// 括号里保留分语种分解（en×3,ja×1），让客户/审批能同时看到"总量"与"缺在哪个语种"。
+func fileCompletionReply(totalTexts int, filesOut, finalLangs []string, untranslated map[string]int, gateWarnings, degraded []string) string {
+	reply := fmt.Sprintf("✅ 文件翻译完成：共 %d 段文本，输出 %d 个文件（%s）",
+		totalTexts, len(filesOut), strings.Join(finalLangs, "/"))
+	if len(untranslated) > 0 {
+		parts := make([]string, 0, len(untranslated))
+		total := 0
+		for _, lc := range finalLangs {
+			if n := untranslated[lc]; n > 0 {
+				parts = append(parts, fmt.Sprintf("%s×%d", lc, n))
+				total += n
+			}
+		}
+		// 只有 0 值（map 里全是 0）时不出这句——否则会印「有 0 段未能译出（）」这种纯噪声。
+		if total > 0 {
+			reply += fmt.Sprintf("；⚠️ 有 %d 段未能译出已保留原文（%s），具体段落见返回的 untranslated_segments，请人工补译",
+				total, strings.Join(parts, ","))
+		}
+	}
+	if len(gateWarnings) > 0 {
+		reply += fmt.Sprintf("；⚠️ 质量校验提示 %d 条，详见结构化返回", len(gateWarnings))
+	}
+	// ★ 双模式（2026-09-13）：降级语言在话术中明示（产物已交付 .md 纯文案，非整单失败）
+	if len(degraded) > 0 {
+		names := make([]string, 0, len(degraded))
+		for _, lc := range degraded {
+			if n := config.LangNames[lc]; n != "" {
+				names = append(names, n)
+			} else {
+				names = append(names, lc)
+			}
+		}
+		reply += fmt.Sprintf("；⚠️ %s 版式还原失败，已降级为纯文案交付（.md），如需还原版式可重新发起工单", strings.Join(names, "、"))
+	}
+	return reply
 }
 
 // ============ 从 prompt 解析"其他语言" ============
