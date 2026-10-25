@@ -107,7 +107,7 @@ describe('FrontMobileTopBar · 汉堡 + 品牌簇（★ 2026-10-15 用户令）'
     expect(onMenu).toHaveBeenCalledTimes(1)
     rerender(<FrontMobileTopBar onMenu={onMenu} drawerOpen />)
     expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('true')
-  })
+  }, 15000)
 
   it('无租户 logo：出品牌名（品牌名缺失时回落 app.title）', () => {
     render(<FrontMobileTopBar onMenu={vi.fn()} drawerOpen={false} />)

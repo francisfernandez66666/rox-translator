@@ -63,8 +63,13 @@ describe('TrialPanel · 首屏装配与分支', () => {
     mocks.langs.mockResolvedValue({ ok: true, langs: [{ code: 'en', name: '英语', name_en: 'English' }, { code: 'de', name: '德语', name_en: 'German' }] })
     open()
     const sel = await screen.findByLabelText(t('land.trial.to'))
-    // 顺序＝插入序：zh 恒在首位（显式补的），其后照名单走；语种名一律经 langLabel（zh 界面取中文名）
-    expect([...sel.querySelectorAll('option')].map((o) => o.textContent)).toEqual(['中文', '英语', '德语'])
+    // ★ 2026-10-25：`findByLabelText` 只等"控件出现"，而选项来自 /api/translation/langs 的回执——
+    //   满载并行时回执晚一拍，直接读会读到内置兜底清单（zh/en/ja/de/fr/ru），把"还没到"误报成"清单错"。
+    //   这里等的是**判据本身**（选项与 mock 回执逐项等值），不是放宽成"至少包含"。
+    await waitFor(() => {
+      // 顺序＝插入序：zh 恒在首位（显式补的），其后照名单走；语种名一律经 langLabel（zh 界面取中文名）
+      expect([...sel.querySelectorAll('option')].map((o) => o.textContent)).toEqual(['中文', '英语', '德语'])
+    })
     expect((sel as HTMLSelectElement).value).toBe('en')
   })
 

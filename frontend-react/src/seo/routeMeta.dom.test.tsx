@@ -31,6 +31,20 @@ describe('syncRouteMeta', () => {
     expect(titles[1]).toContain('定价')
   })
 
+  // ★ 2026-10-25 对账补腿（方案 §六「前端：五条路由 title/canonical/og:url」）：
+  //   此前只锁了 title/canonical/robots/hreflang，og:url 与 og:title 在实现里写了却没人问——
+  //   "社交/IM 分享卡指向哪一页"全靠这两条，漏锁时表现是分享出去永远指向首页（无任何报错）。
+  it('五条公开路由 og:url＝canonical 且 og:title＝title', () => {
+    for (const p of ['/', '/pricing', '/compare', '/login', '/register']) {
+      document.head.innerHTML = '<title>old</title>'
+      expect(syncRouteMeta(p, 'zh', '能言 LangCross')).toBe(true)
+      const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute('href') || ''
+      expect(canonical, `${p} 必须有 canonical`).toBeTruthy()
+      expect(document.querySelector('meta[property="og:url"]')?.getAttribute('content'), `${p} og:url 必须等于 canonical`).toBe(canonical)
+      expect(document.querySelector('meta[property="og:title"]')?.getAttribute('content'), `${p} og:title 必须等于 title`).toBe(document.title)
+    }
+  })
+
   it('app 路由 noindex 且不输出 hreflang', () => {
     syncRouteMeta('/tickets', 'zh', 'LangCross')
     expect(document.querySelector('meta[name="robots"]')?.getAttribute('content')).toBe('noindex,nofollow')

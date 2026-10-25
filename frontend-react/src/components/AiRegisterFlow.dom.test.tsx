@@ -69,12 +69,15 @@ function mount(prefill: string, captcha?: { enabled: boolean; siteKey: string })
 
 /** 走到账号信息表单步：点第一个选项（个人版）→ 角色问答点「暂不选择」→ 等 .ar-form 出现
     （2026-09-19 起个人分支在账号表单前多一问职业角色，选项来自角色字典 + 跳过项） */
+// ★ 2026-10-25：三处等待预算由 3s 抬到 10s。这**不是**放宽判据——`options not ready` 是
+//   `waitFor` 等不到元素（首挂载 + 词典懒加载在满载并行下会顶过 3s），一旦等到，下面每条断言
+//   仍是逐字等值。判据本身一个字没动，只是不让"机器忙"冒充"选项没渲染"。
 async function reachForm(container: HTMLElement) {
   await waitFor(() => {
     const opts = container.querySelectorAll<HTMLButtonElement>('.ar-opt')
     if (opts.length === 0) throw new Error('options not ready')
     fireEvent.click(opts[0])
-  }, { timeout: 3000 })
+  }, { timeout: 10000 })
   await waitFor(() => {
     const groups = container.querySelectorAll('.ar-opts')
     if (groups.length < 2) throw new Error('persona options not ready')
@@ -82,10 +85,10 @@ async function reachForm(container: HTMLElement) {
     const skip = btns.find((b) => (b.textContent || '').includes('暂不选择'))
     if (!skip) throw new Error('skip option missing')
     fireEvent.click(skip)
-  }, { timeout: 3000 })
+  }, { timeout: 10000 })
   await waitFor(() => {
     expect(container.querySelector('.ar-form')).not.toBeNull()
-  }, { timeout: 3000 })
+  }, { timeout: 10000 })
   return container.querySelector('.ar-form input.lc-input') as HTMLInputElement
 }
 
@@ -191,7 +194,7 @@ describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
         .find((b) => (b.textContent || '').includes(text))
       if (!btn) throw new Error(`option "${text}" not ready`)
       fireEvent.click(btn)
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
   }
 
   /** 走到「企业注册·管理员」分支的账号信息表单 */
@@ -202,7 +205,7 @@ describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
     await pickOpt(container, '暂不选择')      // 第四步：职业角色跳过
     await waitFor(() => {
       expect(container.querySelector('.ar-form'), '管理员分支应渲染账号表单').not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
   }
 
   /** 按标签文本找表单字段输入框（label 与 input 同在一个 .ar-fgroup 内） */
@@ -257,7 +260,7 @@ describe('AiRegisterFlow F-06 · 企业·管理员组织编码', () => {
       expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({
         type: 'enterprise', role_choice: 'admin', code: 'uatorg01',
       }))
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
   })
 })
 
@@ -311,7 +314,7 @@ describe('AiRegisterFlow P1-4 · 协议勾选', () => {
     fireEvent.click(submit)
     await waitFor(() => {
       expect(authRegister).toHaveBeenCalledWith(expect.objectContaining({ agreed: true }))
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
   })
 })
 
@@ -550,7 +553,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
         .find((b) => (b.textContent || '').includes(text))
       if (!btn) throw new Error(`option "${text}" not ready`)
       fireEvent.click(btn)
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
   }
 
   it('话术换「完善信息」口径：标题/首问/选项/尾款全部改词，租户注册词不出现', async () => {
@@ -563,13 +566,13 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     //   useState(false) 初值 + effect 才改 true），约 1 秒；故等待窗口给到 5s
     await waitFor(() => {
       expect(document.body.textContent).toContain('要完善哪类资料？')
-    }, { timeout: 5000 })
+    }, { timeout: 10000 })
     // 选项：个人资料 / 企业资料（不是「个人注册 / 企业注册」）
     const optTexts = await waitFor(() => {
       const texts = [...container.querySelectorAll('.ar-opt-t')].map((el) => el.textContent)
       expect(texts.length, '类型选项应已渲染').toBeGreaterThan(0)
       return texts
-    }, { timeout: 5000 })
+    }, { timeout: 10000 })
     expect(optTexts).toContain('个人资料')
     expect(optTexts).toContain('企业资料')
     expect(document.body.textContent).not.toContain('个人注册')
@@ -580,7 +583,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     await pickOpt(container, '暂不选择')
     await waitFor(() => {
       expect(container.querySelector('.ar-form'), '个人分支应渲染账号表单').not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
     expect(document.body.textContent).toContain('设个密码')
     expect(document.body.textContent).toContain('保存并进入') // 提交钮 = auth.profileDone
   })
@@ -591,7 +594,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     await pickOpt(container, '暂不选择')
     await waitFor(() => {
       expect(container.querySelector('.ar-form')).not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
     // 只剩用户名 + 密码两枚输入（邮箱字段隐退）
     const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
     expect(inputs.length).toBe(2)
@@ -609,7 +612,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     const { container } = mountComplete('temporary')
     await pickOpt(container, '个人资料')
     await pickOpt(container, '暂不选择')
-    await waitFor(() => { expect(container.querySelector('.ar-form')).not.toBeNull() }, { timeout: 3000 })
+    await waitFor(() => { expect(container.querySelector('.ar-form')).not.toBeNull() }, { timeout: 10000 })
     const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
     fireEvent.change(inputs[0], { target: { value: 'real-name' } }) // 用户名
     fireEvent.change(container.querySelector<HTMLInputElement>('.ar-form input[type=password]')!, { target: { value: 'P13Pass2026!' } })
@@ -618,13 +621,13 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     fireEvent.click(submit)
     await waitFor(() => {
       expect(profileSetup).toHaveBeenCalledWith({ username: 'real-name', password: 'P13Pass2026!', job_role: undefined })
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
     // 重签的 token 必须消费（旧 token 的 token_version 已递增，不换就 401）
     await waitFor(() => { expect(vi.mocked(setAuthToken)).toHaveBeenCalledWith('ps-tok') })
     // 完成卡：完善完成 + 邮箱行只读展示登录邮箱（表单里根本没有邮箱框）
     await waitFor(() => {
       expect(container.querySelector('.ar-done-t')?.textContent).toBe('完善完成')
-    }, { timeout: 5000 })
+    }, { timeout: 10000 })
     const emailRow = [...container.querySelectorAll('.ar-kv')].find((kv) => (kv.textContent || '').includes('邮箱'))
     expect(emailRow?.textContent).toContain(loginEmail)
     // 企业注册语义的检查点（创建账号/发欢迎邮件）不得出现
@@ -644,7 +647,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
     await pickOpt(container, '暂不选择')      // 职业角色跳过
     await waitFor(() => {
       expect(container.querySelector('.ar-form'), '管理员分支应渲染账号表单').not.toBeNull()
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
     // 字段：用户名/密码/组织编码/组织中文名/组织英文名（没有邮箱框）
     const inputs = container.querySelectorAll<HTMLInputElement>('.ar-form input.lc-input')
     expect(inputs.length).toBe(5)
@@ -666,7 +669,7 @@ describe('AiRegisterFlow complete · 完善信息模式（2026-10-22 统一登�
         type: 'enterprise', role_choice: 'admin', code: 'uatorg01',
         email: loginEmail, agreed: true,
       }))
-    }, { timeout: 3000 })
+    }, { timeout: 10000 })
     // 升级通道：不带 email_code（后端对本人空白账号豁免 register-purpose 验码）
     const body = vi.mocked(authRegister).mock.calls[0]?.[0] as Record<string, unknown>
     expect(body.email_code).toBeUndefined()

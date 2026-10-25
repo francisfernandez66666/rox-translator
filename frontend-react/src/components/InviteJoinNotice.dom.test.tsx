@@ -146,6 +146,8 @@ describe('受邀落地页告知块（§6.5 第 4 条第四面）', () => {
     expect([...seen].sort()).toEqual(['auth-err', 'auth-note'])
   })
 
+  // ★ 2026-10-25：本腿要动态 import 12 份 ALL_KEYS 词典，满载并行时纯加载就会顶过默认 5s
+  //   （失败信息是 "Test timed out"、不是任何断言红）⇒ 显式给 15s 预算。判据本身一字未放宽。
   it('词典齐：本面 11 个键在 zh／en 双侧齐，且 12 语种全量词典逐键有值', async () => {
     const { zh, en } = await import('@/i18n/panels/auth')
     const keys = Object.values(KEY)
@@ -161,5 +163,6 @@ describe('受邀落地页告知块（§6.5 第 4 条第四面）', () => {
         expect(dict[k], `${code} 缺 ${k}`).toBeTruthy()
       }
     }
-  })
+  }, 15000)
+
 })
