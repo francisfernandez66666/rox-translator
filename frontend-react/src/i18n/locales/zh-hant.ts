@@ -526,7 +526,8 @@ export const dict: Record<string, string> = {
   "auth.sendCodeFail": "驗證碼發送失敗",
   "auth.sendFail": "發送失敗",
   "auth.showPwd": "顯示密碼",
-  "auth.signIn": "登 入",
+  "auth.signIn": "登 入",  "auth.signInOrRegister": "註冊 / 登入",
+
   "auth.successReset": "密碼已重設，請使用新密碼登入",
   "auth.tabEnterprise": "企業使用者",
   "auth.tabPersonal": "個人使用者",

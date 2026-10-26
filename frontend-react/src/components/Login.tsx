@@ -582,7 +582,7 @@ export default function Login({ mode, onLogin }: Props) {
         <AuthCard
           title={brandName}
           desc={registerIntent ? t('auth.autoCreateHint') : t('auth.loginDesc')}
-          submitText={t('auth.signIn')}
+          submitText={registerIntent ? t('auth.signInOrRegister') : t('auth.signIn')}
           onSubmit={doLogin}
           busy={loading}
           corner={langPill}

@@ -63,7 +63,10 @@ func chatUsabilityFaceHarness(t *testing.T) (*Server, string, *int64) {
 		reply := "and"
 		// 现网形态：正常档 system 里有「币种保真」尾注 ⇒ 纯翻译模型退化成 and；
 		// 极简档没有这条尾注 ⇒ 正确长译文。
-		if sys != "" && !strings.Contains(sys, "币种保真") {
+		// 目标语＝日语那一腿额外 stuck（连极简档也只回 and），用于验证
+		// 「多语种只丢一个」时 done 帧仍带 gate_warnings（方案 §2.7）。
+		jaLeg := strings.Contains(sys, "日语") || strings.Contains(sys, "Japanese")
+		if sys != "" && !strings.Contains(sys, "币种保真") && !jaLeg {
 			reply = chatUsabilityFaceGood
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -155,5 +158,41 @@ func TestChatStreamNeverDeliversDegenerateAnd(t *testing.T) {
 	// 这条负向锁防止“空壳成功”被误判通过：done 帧必须真的带非空译文。
 	if strings.Contains(resp, `"translations":{"en":""}`) {
 		t.Fatalf("done 帧译文为空（空壳成功形态）：\n%s", resp)
+	}
+}
+
+// TestChatStreamEmitsGateWarningsWhenOneLanguageDropped 多语种只丢一个：
+// done 帧必须带 gate_warnings（前端 MessageBubble 据此显示），可用语种照常交付。
+func TestChatStreamEmitsGateWarningsWhenOneLanguageDropped(t *testing.T) {
+	s, tok, hits := chatUsabilityFaceHarness(t)
+	body, _ := json.Marshal(map[string]interface{}{
+		"message": chatUsabilityFaceSrc,
+		"options": map[string]interface{}{"target_langs": []string{"en", "ja"}, "mode": "fast", "lang": "zh"},
+	})
+	r := httptest.NewRequest(http.MethodPost, "/api/chat/stream", bytes.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+tok)
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	s.handleChatStream(w, r)
+	t.Cleanup(func() { waitChatPersisted(t, s.Store) })
+	resp := w.Body.String()
+
+	if atomic.LoadInt64(hits) == 0 {
+		t.Fatal("假上游一次都没被打：请求没走到模型链路")
+	}
+	if !strings.Contains(resp, `"type":"done"`) {
+		t.Fatalf("应发 done 帧，实际：\n%s", resp)
+	}
+	if strings.Contains(resp, `"en":"and"`) || strings.Contains(resp, `"ja":"and"`) {
+		t.Fatalf("done 帧仍在交付退化译文：\n%s", resp)
+	}
+	if !strings.Contains(resp, "This is a Chinese original text for end-to-end acceptance") {
+		t.Fatalf("英语可用语种未正常交付：\n%s", resp)
+	}
+	if !strings.Contains(resp, `"gate_warnings":[`) {
+		t.Fatalf("丢失语种必须带 gate_warnings（前端要显示原因）：\n%s", resp)
+	}
+	if !strings.Contains(resp, "日语") {
+		t.Fatalf("gate_warnings 应点名日语：\n%s", resp)
 	}
 }

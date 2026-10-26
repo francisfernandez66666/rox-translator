@@ -526,7 +526,8 @@ export const dict: Record<string, string> = {
   "auth.sendCodeFail": "認証コードの送信に失敗しました",
   "auth.sendFail": "送信に失敗しました",
   "auth.showPwd": "パスワードを表示",
-  "auth.signIn": "ログイン",
+  "auth.signIn": "ログイン",  "auth.signInOrRegister": "登録 / ログイン",
+
   "auth.successReset": "パスワードをリセットしました。新しいパスワードでログインしてください",
   "auth.tabEnterprise": "企業ユーザー",
   "auth.tabPersonal": "個人ユーザー",

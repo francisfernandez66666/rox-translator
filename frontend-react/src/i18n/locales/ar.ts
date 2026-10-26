@@ -526,7 +526,8 @@ export const dict: Record<string, string> = {
   "auth.sendCodeFail": "تعذر إرسال الرمز",
   "auth.sendFail": "فشل الإرسال",
   "auth.showPwd": "إظهار كلمة المرور",
-  "auth.signIn": "تسجيل الدخول",
+  "auth.signIn": "تسجيل الدخول",  "auth.signInOrRegister": "إنشاء حساب / تسجيل الدخول",
+
   "auth.successReset": "تمت إعادة تعيين كلمة المرور، يرجى تسجيل الدخول بها",
   "auth.tabEnterprise": "مؤسسة",
   "auth.tabPersonal": "فردي",

@@ -42,6 +42,7 @@ const (
 	chatFakeAlwaysAnd                        // 所有调用都回 and
 	chatFakeFallbackOnly                     // 只有 fallback 模型 + 极简档回正确
 	chatFakeCorrect                          // 所有调用都回正确
+	chatFakeJaStuck                          // 同 derail，但日语腿连极简档也只回 and（多语种只丢一个）
 )
 
 // chatTestSrc 与 UAT V1 同形：含「第N段」结构标签。
@@ -64,6 +65,7 @@ type chatFakeHarness struct {
 	eng  *Engine
 	mu   sync.Mutex
 	mode chatFakeMode
+	good string // 极简档/正确档的返回文本；默认 chatTestGood（品牌归一化用例会换掉）
 	call []chatFakeCall
 }
 
@@ -79,7 +81,7 @@ func (h *chatFakeHarness) calls() []chatFakeCall {
 // HandleText 的 tenantOK / fetchBrandTerms / applyOutputGates 都有 nil 保护。
 func newChatFakeHarness(t *testing.T, mode chatFakeMode) *chatFakeHarness {
 	t.Helper()
-	h := &chatFakeHarness{mode: mode}
+	h := &chatFakeHarness{mode: mode, good: chatTestGood}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Model    string `json:"model"`
@@ -101,21 +103,28 @@ func newChatFakeHarness(t *testing.T, mode chatFakeMode) *chatFakeHarness {
 		h.mu.Lock()
 		h.call = append(h.call, chatFakeCall{model: req.Model, system: sys, user: userMsg})
 		mode := h.mode
+		good := h.good
 		h.mu.Unlock()
 
 		reply := "and"
+		minimalOK := sys != "" && !strings.Contains(sys, miCurrencyMarker) && !strings.Contains(sys, miPurityMarker)
 		switch mode {
 		case chatFakeCorrect:
-			reply = chatTestGood
+			reply = good
 		case chatFakeDerail:
 			// 只有「有 system 且不含中文尾注」的极简档才回正确译文；
 			// 续翻/反馈重译没有 system，同样回 "and"，保持现网退化形态。
-			if sys != "" && !strings.Contains(sys, miCurrencyMarker) && !strings.Contains(sys, miPurityMarker) {
-				reply = chatTestGood
+			if minimalOK {
+				reply = good
 			}
 		case chatFakeFallbackOnly:
 			if req.Model == "fallback/Model" && sys != "" && !strings.Contains(sys, miCurrencyMarker) {
-				reply = chatTestGood
+				reply = good
+			}
+		case chatFakeJaStuck:
+			// 目标语＝日语那一腿 stuck：极简档也回 "and"（判据看提示词里的目标语言名）。
+			if minimalOK && !strings.Contains(sys+userMsg, "日语") && !strings.Contains(sys+userMsg, "Japanese") {
+				reply = good
 			}
 		case chatFakeAlwaysAnd:
 			// 保持 "and"
@@ -293,5 +302,50 @@ func TestFinalizeChatTranslationsClearsDegenerate(t *testing.T) {
 	}
 	if len(warnings) == 0 || !strings.Contains(warnings[0], "译文不可用") {
 		t.Fatalf("清空必须带语种警告，got %v", warnings)
+	}
+}
+
+// TestRepairChatTranslationsWarnsOnlyDroppedLanguage 多语种只丢一个时：
+// 可用语种一字不动，被丢语种清空并只产生一条警告（方案 §2.6.1 的后端半）。
+func TestRepairChatTranslationsWarnsOnlyDroppedLanguage(t *testing.T) {
+	h := newChatFakeHarness(t, chatFakeAlwaysAnd)
+	all := map[string]string{"en": chatTestGood, "ja": "and"}
+	var warnings []string
+	h.eng.repairChatTranslations(context.Background(), chatTestSrc, "zh", all, &warnings)
+	if all["en"] != chatTestGood {
+		t.Fatalf("可用语种被误改：%q", all["en"])
+	}
+	if all["ja"] != "" {
+		t.Fatalf("退化语种未清空：%q", all["ja"])
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "日语") {
+		t.Fatalf("应只对日语出一条可读警告，实际 %v", warnings)
+	}
+}
+
+// TestRepairedChatTranslationStillNormalizedForBrand 救回的译文仍须过品牌归一化
+// （方案 §2.7 第 6 条）：repair 必须在 normalizeBrandTerms 之前，否则极简腿带回的
+// “ROX vehicles”会原样交付。反证＝把 repair 挪到品牌归一化之后，本用例红。
+func TestRepairedChatTranslationStillNormalizedForBrand(t *testing.T) {
+	h := newChatFakeHarness(t, chatFakeDerail)
+	st := newTestStore(t)
+	pkgID := createBrandPackage(t, st.DB())
+	insertBrandTerm(t, st.DB(), pkgID, "极石", "en", "ROX")
+	h.eng.St = st
+	h.mu.Lock()
+	h.good = "ROX vehicles are great, and this text keeps paragraphs, amounts and currencies accurate."
+	h.mu.Unlock()
+
+	src := "极石汽车第三段：请保留段落结构。金额与币种必须准确呈现。"
+	res := h.eng.HandleText(context.Background(), src, chatOptions("en"), nil)
+	if res == nil || res.Error != "" {
+		t.Fatalf("应救回并成功交付，实际 error=%v", res)
+	}
+	got := res.Data.Translations["en"]
+	if strings.Contains(strings.ToLower(got), "vehicles") {
+		t.Fatalf("品牌后缀未被归一化（repair 是否被挪到品牌归一化之后？）：%q", got)
+	}
+	if !strings.Contains(got, "ROX") {
+		t.Fatalf("品牌名丢失：%q", got)
 	}
 }

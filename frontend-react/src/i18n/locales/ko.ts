@@ -526,7 +526,8 @@ export const dict: Record<string, string> = {
   "auth.sendCodeFail": "인증 코드 발송 실패",
   "auth.sendFail": "발송 실패",
   "auth.showPwd": "비밀번호 표시",
-  "auth.signIn": "로그인",
+  "auth.signIn": "로그인",  "auth.signInOrRegister": "가입 / 로그인",
+
   "auth.successReset": "비밀번호가 초기화되었습니다. 새 비밀번호로 로그인하세요",
   "auth.tabEnterprise": "기업 사용자",
   "auth.tabPersonal": "개인 사용자",

@@ -34,6 +34,11 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [errText, setErrText] = useState('')
   const [captchaOn, setCaptchaOn] = useState(false)
+  // ★ 2026-10-26 P2-01 补腿（新 e2e 抓到）：sitekey 必须进 state 并由 effect 驱动挂载。
+  //   旧形态在拉配置的同一个 tick 里 `setCaptchaOn(true)` + `renderTurnstile(...)`，
+  //   而容器 `{captchaOn && <div ref=...>}` 要等这次提交后才进 DOM ⇒ mount() 读到 null ref
+  //   直接 return，且此后再没有人重试 ⇒ **人机验证挂件永远不渲染**（表单看起来正常，提交必被拦）。
+  const [captchaSiteKey, setCaptchaSiteKey] = useState('')
   const captchaBoxRef = useRef<HTMLDivElement>(null)
   const captchaTokenRef = useRef('')
   // ★ 2026-10-26 P2-01：记录当前 widget id / 尺寸档 / sitekey，
@@ -50,13 +55,22 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
         const c = await registerConfig()
         const cap = c as unknown as { captcha_enabled?: boolean; captcha_site_key?: string }
         if (!dead && c.success && cap.captcha_enabled && cap.captcha_site_key) {
+          // 只落状态；真正的 render 在下面的 effect 里（容器 ref 先落 DOM 再挂件）。
+          setCaptchaSiteKey(cap.captcha_site_key)
           setCaptchaOn(true)
-          renderTurnstile(cap.captcha_site_key)
         }
       } catch { /* 配置拉取失败按「无需验证码」处理：后端提交时仍会兜底校验 */ }
     })()
     return () => { dead = true }
   }, [])
+
+  // 容器进 DOM 之后再渲染挂件：captchaOn/sitekey 变化都走这里，幂等（已有 widget 不重建）。
+  useEffect(() => {
+    if (!captchaOn || !captchaSiteKey) return
+    turnstileSiteKeyRef.current = captchaSiteKey
+    renderTurnstile(captchaSiteKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- renderTurnstile 是稳定闭包，按 captchaOn/sitekey 触发即可
+  }, [captchaOn, captchaSiteKey])
 
   // pickTurnstileSize 按容器/视口选 Turnstile 尺寸：
   // normal 固有宽 300px，容器放不下时切 compact（约 150px），避免 320 视口被顶出页面。

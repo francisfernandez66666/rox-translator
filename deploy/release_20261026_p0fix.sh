@@ -96,7 +96,13 @@ CUR_SHA="$(ssh -o BatchMode=yes -p "$SSH_PORT" "$SSH_TARGET" 'sha256sum /opt/tra
 echo "现役二进制 sha=${CUR_SHA}；新件 sha=${BIN_SHA}"
 [ -n "$CUR_SHA" ] || { echo "ABORT=5 现役二进制 sha 读空"; exit 5; }
 if [ "$CUR_SHA" = "$BIN_SHA" ]; then
-  echo "ABORT=5 新件与现役件同 sha ⇒ 编译的不是含本批改动的新树，停手人工核"; exit 5
+  # 纯前端批次：Go 非测试源码没动 ⇒ 二进制字节确实应当相同。放行要显式下令（ALLOW_SAME_BIN=1），
+  # 默认仍判死——「同 sha」最常见的原因仍是编错树，不能让它悄悄通过。
+  if [ "${ALLOW_SAME_BIN:-0}" = "1" ]; then
+    echo "NOTE 新件与现役件同 sha（ALLOW_SAME_BIN=1，纯前端批次）：仍走同一条换源/换件路径"
+  else
+    echo "ABORT=5 新件与现役件同 sha ⇒ 编译的不是含本批改动的新树，停手人工核（纯前端批次加 ALLOW_SAME_BIN=1）"; exit 5
+  fi
 fi
 
 echo "===== P2 服务器侧换源＋换件（两段式，两站全绿才落位） ====="

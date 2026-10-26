@@ -13,6 +13,8 @@ export const zh: Record<string, string> = {
   'auth.username': '用户名',
   'auth.password': '密码',
   'auth.signIn': '登 录',
+  // 2026-10-26 P1-01：/register 路径的提交按钮用「注册 / 登录」意图文案（不重开注册流程）
+  'auth.signInOrRegister': '注册 / 登录',
   // ★ #38（2026-09-21）：第三方身份源（SSO/OIDC）登录入口；loginWith 的 {name} 由后端 display_name 填充
   'auth.orSso': '或使用企业身份源登录',
   'auth.loginWith': '使用 {name} 登录',
@@ -258,6 +260,8 @@ export const en: Record<string, string> = {
   'auth.username': 'Username',
   'auth.password': 'Password',
   'auth.signIn': 'Sign in',
+  // 2026-10-26 P1-01: /register intent copy on the shared sign-in card
+  'auth.signInOrRegister': 'Sign up / Sign in',
   // ★ #38（2026-09-21）：第三方身份源（SSO/OIDC）登录入口；loginWith 的 {name} 由后端 display_name 填充
   'auth.orSso': 'Or sign in with your corporate identity',
   'auth.loginWith': 'Sign in with {name}',

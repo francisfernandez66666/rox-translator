@@ -526,7 +526,8 @@ export const dict: Record<string, string> = {
   "auth.sendCodeFail": "Falha ao enviar o código",
   "auth.sendFail": "Falha no envio",
   "auth.showPwd": "Mostrar senha",
-  "auth.signIn": "Entrar",
+  "auth.signIn": "Entrar",  "auth.signInOrRegister": "Registrar / Entrar",
+
   "auth.successReset": "Senha redefinida; entre com a nova senha",
   "auth.tabEnterprise": "Empresa",
   "auth.tabPersonal": "Pessoa física",

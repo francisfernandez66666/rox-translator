@@ -70,20 +70,24 @@ afterEach(() => {
 
 // 三条：/register 注册意图、/login 不回归、租户站不受影响。
 describe('Login /register 注册意图文案', () => {
-  it('/register 主站：说明切换为“未注册邮箱自动创建账号”', () => {
+  it('/register 主站：说明与提交钮都切到注册意图', () => {
     window.history.pushState({}, '', '/register')
     renderLogin(0)
     const text = cardText()
     expect(text).toContain(t('auth.autoCreateHint'))
     expect(text).not.toContain(t('auth.loginDesc'))
+    // 提交钮文案也必须表达“注册”，否则新用户仍会以为走错页面（方案 v2.0 §3.2）。
+    const submit = document.querySelector('.lc-auth-card__submit')
+    expect(submit?.textContent).toBe(t('auth.signInOrRegister'))
   })
 
-  it('/login 主站：说明保持登录口径（不回归）', () => {
+  it('/login 主站：说明与提交钮保持登录口径（不回归）', () => {
     window.history.pushState({}, '', '/login')
     renderLogin(0)
     const text = cardText()
     expect(text).toContain(t('auth.loginDesc'))
     expect(text).not.toContain(t('auth.autoCreateHint'))
+    expect(document.querySelector('.lc-auth-card__submit')?.textContent).toBe(t('auth.signIn'))
   })
 
   it('租户站 /register：仍走原注册分支，不受主站文案改动影响', () => {
