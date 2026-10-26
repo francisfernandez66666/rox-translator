@@ -46,6 +46,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"translator/internal/billing"
 	"translator/internal/engine"
@@ -163,16 +165,29 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ★ 2026-10-26 修「即时翻译图片上传像失败」的真因：本链路 OCR＋整段翻译＋分腿对齐
+	//   在现网实测 125 s（生产日志 trace 87c3727a…：duration_ms=125157），而跨境边缘
+	//   （Cloudflare 约 100 s 空闲/首字节上限）会先把这一跳掐成 524 HTML，客户端只看到失败。
+	//   下面在过闸之后立即写出响应头，并周期写空白字节保活；空白是合法 JSON 前导字符，
+	//   最终 JSON 仍能被前端 JSON.parse 正常解析（不改成 SSE，前端零改动）。
+	stopBeat := startImageKeepAlive(w, 10*time.Second)
+	// 所有后续出口都必须先停心跳再写 JSON：同一 ResponseWriter 上的并发写会把 JSON 撕开。
+	writeOut := func(v interface{}) {
+		stopBeat()
+		writeJSON(w, http.StatusOK, v)
+	}
+	defer stopBeat()
+
 	// OCR：识别行文本（同时把「行↔坐标」写进 P4 回填缓存，供 RenderTranslatedImage 取用）。
 	lines, oerr := fileproc.ExtractTexts(tmpPath)
 	if oerr != nil {
 		// ★ OCR 出错＝"这一次没识别出来"，不是请求处理出错：HTTP 200 + {error, reason}，
 		//   不碰任何翻译状态（口径同 chat_audio.go「译文第一」）。
-		writeJSON(w, 200, chatVoiceFailure{Error: oerr.Error(), Reason: imageReason(oerr)})
+		writeOut(chatVoiceFailure{Error: oerr.Error(), Reason: imageReason(oerr)})
 		return
 	}
 	if len(lines) == 0 {
-		writeJSON(w, 200, chatVoiceFailure{Error: "图片里没有可翻译的文字", Reason: "no_text"})
+		writeOut(chatVoiceFailure{Error: "图片里没有可翻译的文字", Reason: "no_text"})
 		return
 	}
 
@@ -205,7 +220,7 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		resp.ImageError = "translate_failed"
 		s.metrics.countTranslate("text", false)
 		billing.Flush()
-		writeJSON(w, 200, resp)
+		writeOut(resp)
 		return
 	}
 	s.metrics.countTranslate("text", true)
@@ -238,7 +253,62 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 
 	// ★ 同步冲刷计量缓冲，余额/台账即时可见（与 /api/chat 的 P3 修复同口径）。
 	billing.Flush()
-	writeJSON(w, 200, resp)
+	writeOut(resp)
+}
+
+// startImageKeepAlive 图片翻译的「长请求保活」：写出 200 响应头后周期追加空白字节。
+//
+// 为什么需要：这条链是 OCR ＋ 整段翻译 ＋（坏语种）分腿对齐，现网实测单次 125 s；
+// 跨境边缘（Cloudflare）约 100 s 无字节就回 524 HTML，用户侧表现成"上传图片没反应/失败"。
+// 空白（\n）是合法 JSON 前导字符，最终 JSON 仍是合法响应体，前端 JSON.parse 零改动。
+//
+// 约束：返回的 stop 必须在写最终 JSON **之前**调用（它会等心跳 goroutine 退出），
+// 否则同一 ResponseWriter 上的并发写会把 JSON 撕开。可重复调用（第二次是 no-op）。
+func startImageKeepAlive(w http.ResponseWriter, interval time.Duration) (stop func()) {
+	if interval <= 0 {
+		interval = 10 * time.Second
+	}
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	// 让 Caddy/nginx 这类反代不要在整包完成前缓冲，否则心跳到了代理就被扣住。
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	if flusher != nil {
+		flusher.Flush()
+	}
+	var mu sync.Mutex
+	done := make(chan struct{})
+	var once sync.Once
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-t.C:
+				mu.Lock()
+				fmt.Fprint(w, "\n")
+				if flusher != nil {
+					flusher.Flush()
+				}
+				mu.Unlock()
+			case <-done:
+				return
+			}
+		}
+	}()
+	stop = func() {
+		once.Do(func() {
+			close(done)
+			wg.Wait()
+			mu.Lock() // 与最后可能正在写的心跳字节形成先后关系
+			mu.Unlock()
+		})
+	}
+	return stop
 }
 
 // stageChatImage 把上传的图片字节落盘到临时文件，返回路径与清理函数。

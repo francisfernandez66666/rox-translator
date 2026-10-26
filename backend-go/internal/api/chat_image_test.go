@@ -24,6 +24,7 @@ package api
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -36,6 +37,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // minPNGBase64 1×1 像素的最小合法 PNG（真实图片字节，用于"真件"往返锁）。
@@ -632,4 +634,47 @@ func TestPinChatImageIdentityLinesKeepsMismatchUnchanged(t *testing.T) {
 	if got := pinChatImageIdentityLines([]string{"<", "Hello"}, in); got != in {
 		t.Fatalf("行数不等时必须原样返回（由配对函数判失败），实际改写成 %q", got)
 	}
+}
+
+// TestStartImageKeepAliveKeepsJSONParsable 长请求保活的接线锁（★ 2026-10-26）：
+// 心跳写出的空白必须是**合法 JSON 前导字符**，停表之后不许再往同一个 ResponseWriter 写一个字节
+// ——后者是这条修法唯一的硬风险（并发写会把最终 JSON 撕开，前端从"等很久"变成"永远解析失败"）。
+func TestStartImageKeepAliveKeepsJSONParsable(t *testing.T) {
+	rec := httptest.NewRecorder()
+	stop := startImageKeepAlive(rec, 10*time.Millisecond)
+	time.Sleep(35 * time.Millisecond) // 至少两拍心跳
+	stop()
+	n := rec.Body.Len()
+	if n == 0 {
+		t.Fatal("心跳一拍都没写出（边缘仍会按空闲超时掐断这一跳）")
+	}
+	// stop 之后必须静默：再等两拍，字节数不许再变。
+	time.Sleep(30 * time.Millisecond)
+	if rec.Body.Len() != n {
+		t.Fatalf("stop 之后仍在写心跳：before=%d after=%d", n, rec.Body.Len())
+	}
+	fmt.Fprint(rec, `{"text":"ok"}`)
+	body := strings.TrimSpace(rec.Body.String())
+	if !strings.HasPrefix(body, "{") || !strings.HasSuffix(body, "}") {
+		t.Fatalf("最终响应体不是以 JSON 收口：%q", body)
+	}
+	var out map[string]string
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("前导空白后的 JSON 解析失败（前端会报图片翻译失败）：%v body=%q", err, rec.Body.String())
+	}
+	if out["text"] != "ok" {
+		t.Fatalf("出参被心跳污染：%v", out)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type=%q（前端按 JSON 解析，不能被保活改掉）", ct)
+	}
+}
+
+// TestStartImageKeepAliveStopIsIdempotent stop 重复调用必须安全：
+// handler 里既有显式调用（写终稿前）也有 defer，重复触发不许 panic 或重复关 channel。
+func TestStartImageKeepAliveStopIsIdempotent(t *testing.T) {
+	rec := httptest.NewRecorder()
+	stop := startImageKeepAlive(rec, 5*time.Millisecond)
+	stop()
+	stop()
 }
