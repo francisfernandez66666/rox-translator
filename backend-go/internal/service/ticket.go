@@ -33,6 +33,7 @@ import (
 	"translator/internal/billing"
 	"translator/internal/db"
 	"translator/internal/engine"
+	"translator/internal/fileproc"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
 	"translator/internal/kb"
@@ -107,6 +108,66 @@ func (s *TicketService) Stop() {
 	}
 }
 
+// 单任务执行上限（★ 2026-10-26 用户令）：
+//   - 文本：25 分钟（旧口径，保持）；
+//   - 图片：60 分钟；音频：90 分钟——OCR/ASR/TTS/原位回填是本地子进程或大模型，
+//     耗时不该被 25 分钟的翻译预算一刀切掉（否则回填阶段必然 context deadline exceeded）。
+const (
+	ticketJobTimeout     = 25 * time.Minute
+	mediaImageJobTimeout = 60 * time.Minute
+	mediaAudioJobTimeout = 90 * time.Minute
+)
+
+// mediaTimeoutForFiles 返回图片/音频文件的专属执行上限；无媒体文件返回 0。
+// 判据只看扩展名，缺 FileName 时回落 FilePath；拿不到即按文本档，不猜。
+func mediaTimeoutForFiles(files []*store.TicketFile) time.Duration {
+	hasImage := false
+	for _, f := range files {
+		if f == nil {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(f.FileName))
+		if ext == "" {
+			ext = strings.ToLower(filepath.Ext(f.FilePath))
+		}
+		if fileproc.IsAudioFormat(ext) {
+			return mediaAudioJobTimeout // 音频最长，优先
+		}
+		if fileproc.IsImageFormat(ext) {
+			hasImage = true
+		}
+	}
+	if hasImage {
+		return mediaImageJobTimeout
+	}
+	return 0
+}
+
+// jobExecTimeout 按任务类型/源文件扩展名给出执行上限。
+// ticket_run 先看 ticket_files；旧工单无 ticket_files 行时回落 tickets.file_path。
+// 查询失败一律回落文本档 25 分钟（fail-soft，不让一次库读失败把任务判成短命）。
+func (s *TicketService) jobExecTimeout(job *queue.Job) time.Duration {
+	if job == nil || job.Type != "ticket_run" || s.Store == nil {
+		return ticketJobTimeout
+	}
+	id, err := queue.ParseTicketPayload(job.Payload)
+	if err != nil {
+		return ticketJobTimeout
+	}
+	if files, ferr := s.Store.TicketFiles(id); ferr == nil && len(files) > 0 {
+		if d := mediaTimeoutForFiles(files); d > 0 {
+			return d
+		}
+		return ticketJobTimeout
+	}
+	if t, terr := s.Store.GetTicketGlobal(id); terr == nil && t != nil && strings.TrimSpace(t.FilePath) != "" {
+		if d := mediaTimeoutForFiles([]*store.TicketFile{{FileName: t.FilePath}}); d > 0 {
+			return d
+		}
+	}
+	return ticketJobTimeout
+}
+
 // workerLoop 单个 worker 的主循环：领取→执行→Ack/Fail；空闲时 1s 轮询。
 func (s *TicketService) workerLoop(workerID string) {
 	for {
@@ -135,10 +196,12 @@ func (s *TicketService) workerLoop(workerID string) {
 			}
 			continue
 		}
-		// 执行 ctx 与领取 ctx 完全分离：25 分钟是「单个任务最长执行时间」的硬上限，
+		// 执行 ctx 与领取 ctx 完全分离：默认 25 分钟是「单个文本任务最长执行时间」的硬上限，
 		// 刻意小于默认租约窗口（30min），保证任务正常超时收尾时租约还在，
 		// 不会被 RecoverStale/其他实例判成死任务而双跑。
-		jctx, jcancel := context.WithTimeout(context.Background(), 25*time.Minute)
+		// ★ 2026-10-26 用户令：图片/音频处理时间不按翻译预算卡——媒体工单放宽到
+		//   图片 60 分钟 / 音频 90 分钟；租约心跳每 60s 续期，长任务不会被误回收。
+		jctx, jcancel := context.WithTimeout(context.Background(), s.jobExecTimeout(job))
 		// ★ 2026-09-04 加固：租约续期心跳——长任务处理期间定期刷新 jobs.leased_at，
 		//   防止处理时长逼近/超过租约窗口（默认 30m）时被 RecoverStale 或其他实例
 		//   误回收（running→queued 双跑）。任务结束/取消时停止。

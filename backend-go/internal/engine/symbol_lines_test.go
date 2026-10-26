@@ -87,9 +87,16 @@ func TestSymbolOnlyLineFeedsIdentityDelivery(t *testing.T) {
 			t.Errorf("%q 是符号行，交付形态必须就是原文（NeedsIdentityDelivery＝真）", s)
 		}
 	}
-	for _, s := range []string{"Hello", "产品说明书", "の"} {
+	// ★ 2026-10-26 用户令：代码/编号与单假名也走原文交付（不送模型、不进硬闸重试）。
+	for _, s := range []string{"002584.SZ", "N_shape", "dragon_return", "fac_1", "の"} {
+		if !NeedsIdentityDelivery(s) {
+			t.Errorf("%q 属「无实义词的编号/单假名」，交付形态必须是原文（NeedsIdentityDelivery＝真）", s)
+		}
+	}
+	// 真文字仍必须送翻：别把「编号预填」扩成「整段不翻」。
+	for _, s := range []string{"Hello", "产品说明书"} {
 		if NeedsIdentityDelivery(s) {
-			t.Errorf("%q 是文字，必须送翻（NeedsIdentityDelivery＝假）", s)
+			t.Errorf("%q 是真文字，必须送翻（NeedsIdentityDelivery＝假）", s)
 		}
 	}
 	// ★ `D` 这一档刻意与「符号」分开：它是**字母**（IsSymbolOnlyLine＝假），但按 2026-10-17

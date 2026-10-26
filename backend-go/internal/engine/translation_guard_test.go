@@ -359,7 +359,7 @@ func TestIsTranslationUsableKeepsT4LegitTranslations(t *testing.T) {
 // TestSegmentNeedsTranslationBoundaries 判据 ① 的边界：什么算「需要翻译」按**字符类别**判，
 // 这是「不需要翻译的段不送上游」与「模型噪声必须拒」两个消费者的共用尺子。
 func TestSegmentNeedsTranslationBoundaries(t *testing.T) {
-	need := []string{"全局", "dragon_return", "MANUAL", "ok", "сумма", "合計", "の", "fac_1"}
+	need := []string{"全局", "MANUAL", "ok", "сумма", "合計"}
 	for _, s := range need {
 		if !segmentNeedsTranslation(s) {
 			t.Errorf("应判为需要翻译：%q", s)
@@ -367,7 +367,9 @@ func TestSegmentNeedsTranslationBoundaries(t *testing.T) {
 	}
 	// 不需要翻译：纯数字/货币/日期/符号/单字母/字母数字短标识（"a1"/"D" 这类表格里的标识）
 	noNeed := []string{"0", "0.00", "4716", "¥1003.00", "￥435.00", "09-17 09:40:33",
-		"-11312.00", "<", "---", "•", "D", "A", "a1", "+", "  ", "", "!!", "…"}
+		"-11312.00", "<", "---", "•", "D", "A", "a1", "+", "  ", "", "!!", "…",
+		// ★ 2026-10-26 用户令：单假名（OCR 开关误识别）与代码/编号按原文贴回，不送模型。
+		"の", "dragon_return", "N_shape", "fac_1", "002584.SZ"}
 	for _, s := range noNeed {
 		if segmentNeedsTranslation(s) {
 			t.Errorf("不该判为需要翻译：%q", s)

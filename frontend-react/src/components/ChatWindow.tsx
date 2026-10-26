@@ -679,6 +679,15 @@ export default function ChatWindow() {
         {/* 滚动区：会话消息流（★ 〇-LK：输入框不再放这里——AI 对话的输入永远在底部，
             气泡在其上方往上长；把 textarea 摆在最上面是「表单」不是「对话」） */}
         <div className="cw-dialog-body" ref={scrollRef}>
+          {/* ★ 2026-10-26 用户令：图片识别+翻译是长链路（现网实测 2 分钟量级），
+              选中图片后必须立刻给出可见状态，否则用户会以为"上传失败/卡死"。 */}
+          {imgBusy && (
+            <div className="cw-img-result cw-img-working" data-testid="chat-image-working" role="status" aria-live="polite">
+              <div className="cw-img-result-head">
+                <span><span className="cw-spin" aria-hidden="true" /> {t2('chat.imageWorking')}</span>
+              </div>
+            </div>
+          )}
           {/* ★ 2026-10-17 图片翻译结果卡（临时、不落存储）：译后图（原位回填）＋各目标语译文文本。
               译后图是**择优产出**——后端回填失败时 image 为空串，此时只出译文文本并留一行降级说明。 */}
           {imgResult && (
@@ -798,8 +807,9 @@ export default function ChatWindow() {
                   title={imgBusy ? t2('chat.imageWorking') : t2('chat.image')}
                   aria-label={imgBusy ? t2('chat.imageWorking') : t2('chat.image')}
                   disabled={imgBusy || chat.isLoading}
+                  aria-busy={imgBusy}
                   onClick={() => imgInputRef.current?.click()}>
-                  <UploadIcon size={16} />
+                  {imgBusy ? <span className="cw-spin" aria-hidden="true" /> : <UploadIcon size={16} />}
                 </button>
               )}
               {/* ★ P3 麦克风：录完把识别文本填进输入框（不自动发送，★ 2026-10-19 用户令恢复此口径），
@@ -891,6 +901,9 @@ const CW_CSS = `
 /* ★ 2026-10-17 图片翻译结果卡：与消息气泡同列（同 gap），面色走 L2 panel 档、描边走 1.2px 灰阶
    （〇-P 交付档：全边框 1.2px、面色台阶 --lc-panel）。译后图宽不超容器，点图即下载（外层 <a download> 包住）。 */
 .cw-img-result{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-ctl);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.cw-img-working{color:var(--lc-text-2)}
+.cw-img-working .cw-img-result-head{justify-content:flex-start;gap:8px}
+.cw-img-working .cw-spin{margin-inline-end:8px}
 .cw-img-result-head{display:flex;align-items:center;justify-content:space-between;font-size:15px;color:var(--lc-text-1);font-weight:600}
 .cw-img-wrap{position:relative;display:block;line-height:0;border-radius:8px;overflow:hidden;border:1.2px solid var(--lc-border-faint)}
 .cw-img-out{display:block;max-width:100%;height:auto}

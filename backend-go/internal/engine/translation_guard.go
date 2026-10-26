@@ -251,9 +251,53 @@ func missingSegments(texts []string, tr map[string]string) []string {
 // 与 ① 配对的是文件主链的**预填**（identitySegments）：那些段根本不进上游，也不计未译出。
 // ============================================================================
 
+// isLoneKana 单个假名（含半角片假名）——OCR 把开关/图标误识成假名的典型形态。
+// 与 ocr_translate_image.py 的 _is_lone_nonascii 是同一现网实证（绿色开关被读成 `の`）；
+// 文件链在这里就把它按原文预填，既不再送模型，也不会在图片回填时被重画。
+func isLoneKana(s string) bool {
+	r := []rune(strings.TrimSpace(s))
+	if len(r) != 1 {
+		return false
+	}
+	o := r[0]
+	return (o >= 0x3040 && o <= 0x30FF) || (o >= 0xFF66 && o <= 0xFF9D)
+}
+
+// isCodeLikeSegment 代码/编号类短段：股票代码（002584.SZ）、策略标识（N_shape/dragon_return/fac_1）、
+// 版本号/编号（v1.2、A-1）以及 2~4 位大写字母代码（SZ/SH/USD/ROX）。
+// 判据取向：只收「无空格、仅字母数字与 _/. 、且带数字或分隔符」的形状；
+// 刻意不收连字符/斜杠：`line-00` 这类「单词+编号」仍按正文送翻，避免把正常行误判成代码。
+// manual/dragon/Hello 这类普通单词不带数字或分隔符，仍按正常文本送翻（不误伤）。
+func isCodeLikeSegment(s string) bool {
+	t := strings.TrimSpace(s)
+	r := []rune(t)
+	if len(r) == 0 || len(r) > 32 {
+		return false
+	}
+	hasDigit, hasSep, hasLetter := false, false, false
+	for _, c := range r {
+		switch {
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+			hasLetter = true
+		case c == '_' || c == '.':
+			hasSep = true
+		default:
+			return false
+		}
+	}
+	if !hasLetter && !hasDigit {
+		return false // 纯分隔符不是编号（交给 IsSymbolOnlyLine 那一档）
+	}
+	// 纯字母（含 AI/AWS/USD/ROX 这类短缩写）不在这里判代码：缩写本身可能就是有意义的
+	// 文件名/正文（AWS→亚马逊云科技 是正译），必须继续送翻；只有带数字/分隔符的编号才预填。
+	return hasDigit || hasSep
+}
+
 // segmentNeedsTranslation 判定「这一段是否需要模型翻译」——按**字符类别**判，不按词表判。
 // 含「非 ASCII 字母」（汉/假名/西里尔/阿拉伯/泰文…）或「≥2 连排 ASCII 字母」⇒ 需要翻译；
-// 其余（纯数字、货币、日期时间、标点、单字母、符号）⇒ 不需要。
+// 其余（纯数字、货币、日期时间、标点、单字母、符号、代码/编号、单假名）⇒ 不需要。
 // 为什么按类别切：「0」「¥1003.00」「09-17 09:40:33」在任何语言里都是同一串字符，
 // 模型对它们的输出只可能是幻觉（本工单里整排变成 "and"），回落原文才是正确交付。
 // ★ 本函数有**两个消费者**，必须同源：IsTranslationUsable 的第 6 判据（拒绝模型噪声）
@@ -269,6 +313,12 @@ func segmentNeedsTranslation(src string) bool {
 	//   反证：把这一行改成 `if false` 必须**没有**任何既有断言变红（行为等价），
 	//   而新增的符号表等值锁与回填门静态锁仍各自红在它该红的地方。
 	if IsSymbolOnlyLine(src) {
+		return false
+	}
+	// ★ 2026-10-26 用户令：无实义词的极短段原样贴回。单假名（OCR 开关误识别）与
+	//   代码/编号（股票代码、策略标识、版本号、2~4 位大写短码）都不该烧模型调用，
+	//   更不该因为模型回吐 `<target>…` 而进入硬闸重试链。
+	if isLoneKana(src) || isCodeLikeSegment(src) {
 		return false
 	}
 	asciiRun := 0

@@ -137,4 +137,20 @@ describe('即时翻译图片上传（2026-10-17 用户令）', () => {
     await waitFor(() => expect(mocks.translate).toHaveBeenCalled())
     expect(container.querySelector('[data-testid="chat-image-result"]')).toBeNull()
   })
+  it('⑤ 上传后立即出"正在识别并翻译"状态卡（长链路不许无反馈）', async () => {
+    mocks.cap.ocr = true
+    let resolveFn: (v: any) => void = () => {}
+    mocks.translate.mockReturnValue(new Promise((resolve) => { resolveFn = resolve }))
+    const { container } = renderWindow()
+    const input = container.querySelector('[data-testid="chat-image-input"]') as HTMLInputElement
+    fireEvent.change(input, { target: { files: [new File([new Uint8Array([1])], 'shot.png', { type: 'image/png' })] } })
+    await waitFor(() => expect(container.querySelector('[data-testid="chat-image-working"]')).toBeTruthy())
+    const btn = container.querySelector('[data-testid="chat-image-btn"]') as HTMLButtonElement
+    expect(btn.getAttribute('aria-busy')).toBe('true')
+    expect(btn.querySelector('.cw-spin')).toBeTruthy()
+    // 收尾：让 promise 落地，避免卸载后 act 警告。
+    resolveFn({ text: '你好', translations: { en: 'Hello' }, image_lang: 'en', image: '', image_error: '', line_count: 1, points_used: 1, mode: 'pro', target_langs: ['en'] })
+    await waitFor(() => expect(container.querySelector('[data-testid="chat-image-result"]')).toBeTruthy())
+  })
+
 })
