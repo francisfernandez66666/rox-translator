@@ -118,6 +118,24 @@ export interface TicketQuality {
   review_eval_scores?: Record<string, number>
   /** 评估低于阈值语言（「质检存疑」徽标数据源） */
   quality_flagged_langs?: string[]
+  /**
+   * ★ 2026-10-26 追加裁决九-1：上游那一族问题**给客户看**的那四件（Go 侧
+   * `api/tickets.go` 的 ticketQualityView，全部 omitempty）。
+   * 关键空值口径：**没有回填时这四个键整个不出现**（不是 null、不是 0）——
+   * 渲染判据一律「读不到＝这一单没有未译出行」，禁止凭空造一句"0 行未译出"。
+   * 三档分开各一个 map（上游断／截断／补译后仍无可用输出），混成一句"部分未译出"
+   * 是把归因藏起来（AGENTS §一·19 族一那条）。
+   * 四面（Go 出栈 tag／本类型／TicketsPage 渲染判据／来源档名单）逐字等值，漂移由
+   * `src/api/ticketsUpstreamLock.test.ts` 当场判红。
+   */
+  /** 语言 → 来源档（名单见 src/lib/ticketSource.ts 的 TICKET_SOURCE_VALUES） */
+  sources?: Record<string, string>
+  /** 语言 → 按原文回落的行数（总数） */
+  unresolved_lines?: Record<string, number>
+  /** 语言 → 其中判「上游整条不通」那一部分 */
+  upstream_dead_lines?: Record<string, number>
+  /** 语言 → 其中被 max_tokens 截断那一部分 */
+  truncated_lines?: Record<string, number>
 }
 
 /** 工单接口统一响应结构：tickets 列表/ticket 单对象/states 流程状态/ files 结果文件 */

@@ -348,3 +348,49 @@ export async function adminEstTokensSave(
     method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
   }))
 }
+
+// ============================================================================
+// ★ 2026-10-26（用户追加裁决九-4）逐行翻译两条档位的运营配置口
+// （形态照上面的 est-tokens，后端＝internal/api/text_line_config.go）。
+// 两键对应 system_config 的 text_line_retry_max（一行翻不出时最多再单独打几枪）与
+// text_line_upstream_dead_streak（连着多少行拿不到东西才判上游不可用、停止逐行重试）。
+// 为什么这两条要能配：默认档 3／3 是按现网形态拍的，而上游抖动率只有运营看得见——
+// 写死在代码里等于让调档必须发版。
+// 口径红线：**这两档没有 0 档语义**（0＝一枪都不打／一行失败就打死整语种），
+// 区间 1~5 与 2~10 由后端白名单与读侧钳位共同决定，前端只做同区间预拦、不写第二份判据。
+// tiers＝读侧钳位后的**生效值**；stored＝库内原值。两者不同必须在界面上看得出来，
+// 否则管理台显示一个数、链路用另一个数（表单就成了误导源）。
+// ============================================================================
+
+// 字段名与合法区间的唯一出处在 src/lib/textLineTiers.ts（那里写了为什么要放纯模块）：
+// 管理台夹具按枚举 mock @/api，常量若也从这里走，加一档就得改 N 份 mock。
+import { type TextLineTierField } from '@/lib/textLineTiers'
+
+export {
+  TEXT_LINE_TIER_FIELDS,
+  TEXT_LINE_TIER_CONFIG_KEYS,
+  TEXT_LINE_TIER_RANGES,
+  TEXT_LINE_TIER_DEFAULTS,
+  type TextLineTierField,
+} from '@/lib/textLineTiers'
+/** 档位快照（生效值 / 库内原值 / 代码缺省 / 区间，四态都要有：界面据此区分"配了"与"走缺省"） */
+export interface TextLineTiersCfg {
+  tiers?: Partial<Record<TextLineTierField, number>>
+  stored?: Record<string, string>
+  defaults?: Partial<Record<TextLineTierField, number>>
+  ranges?: Partial<Record<TextLineTierField, [number, number]>>
+}
+
+/** 管理台：回显两条档位的生效值（读侧钳位后的可信值）＋库内原值＋代码缺省＋区间 */
+export async function adminTextLineTiers(): Promise<AdminResp & TextLineTiersCfg> {
+  return bizResp(() => request('/api/admin/config/text-lines', { headers: authHeaders() }))
+}
+
+/** 管理台：保存两条档位（必须一次交齐）；传 { reset: true } 则清空回代码缺省 */
+export async function adminTextLineTiersSave(
+  data: Partial<Record<TextLineTierField, number>> & { reset?: boolean },
+): Promise<AdminResp & TextLineTiersCfg> {
+  return bizResp(() => request('/api/admin/config/text-lines', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+  }))
+}

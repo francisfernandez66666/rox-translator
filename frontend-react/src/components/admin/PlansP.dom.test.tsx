@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({ isSuper: true, payMode: 'mock' }))
 vi.mock('@/api', () => {
   const ok = (extra: Record<string, unknown> = {}) => ({ success: true, ...extra })
   return {
+    // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口（夹具按枚举 mock，新增面必须同步补）
+    adminTextLineTiers: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
+    adminTextLineTiersSave: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
     billingQuota: vi.fn(async () => ok({ qps: 10, concurrent: 3, max_daily_chars: 0 })),
     billingQuotaSave: vi.fn(async () => ok()),
     billingOrders: vi.fn(async () => ok({

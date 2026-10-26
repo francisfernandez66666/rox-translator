@@ -17,6 +17,10 @@ const pkgMock = vi.hoisted(() => ({ value: {} as Record<string, unknown> }))
 
 // '@/api' 全量 mock：只提供租户视角「当前套餐」区会用到的接口（同 PlansP.coupon.dom.test 口径）
 vi.mock('@/api', () => ({
+  // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
+  // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
+  adminTextLineTiers: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
+  adminTextLineTiersSave: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
     // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）预估系数三件套：PlansP 超管分支会读它，
     //   缺导出即 Vitest 抛「No export is defined on the mock」，整文件红。
     EST_TOKEN_FIELDS: ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'],

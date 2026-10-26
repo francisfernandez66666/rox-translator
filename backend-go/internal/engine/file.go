@@ -113,6 +113,85 @@ func writebackDelivery(ext string) string {
 	}
 }
 
+// retryImageSegments 图片链「未译出行先充分重试」（2026-10-26 用户裁决 5），并就地写回补出的译文。
+// 参数：texts=按提取顺序的原文段；tr=原文→译文（本函数会**就地补**能救回来的行）；lc=目标语言。
+// 返回：补译之后仍没有可用译文的段（交付文档「未译出内容」那一节的素材，行号按 texts 顺序 1 起）。
+// 三条取向：
+//  1. 已有可用译文的段**一个字符都不再送**（重复扣费），判据就用同一把 fileTranslationUsable；
+//  2. 逐行都走**单段请求**（`RetryLineUntilUsable`）——长度爆炸那一族的病因在批量上下文里；
+//  3. 与文本逐行链同一个**上游断早停**：连续 N 段补译都拿不回东西 ⇒ 判上游不通，
+//     剩余段不再逐行烧调用（客户白等白扣），但**仍逐段计入未译出**，交付面一行都不藏。
+//
+// untranslatedNotesFromSegments 从「按提取顺序的段」与「原文→译文」映射里导出未译出段清单。
+// 参数：texts=提取顺序的原文段（决定行号口径）；tr=该语言译文映射（缺失/空/失败占位都算未译出）。
+// 返回：交付文档文末那一节的素材；全部译出 ⇒ **空切片**（调用方据此连标题都不写）。
+// 与图片那一口共用同一个 `fileproc.UntranslatedItem` 结构与同一份追加函数——
+// 两个交付口各写一份"什么算没译出"，迟早一边松一边紧（本仓「多把尺子」那一族）。
+func untranslatedNotesFromSegments(texts []string, tr map[string]string) []fileproc.UntranslatedItem {
+	out := make([]fileproc.UntranslatedItem, 0, 4)
+	for i, src := range texts {
+		if strings.TrimSpace(src) == "" {
+			continue // 空段没有可译内容，报出来是把设计当缺陷给客户看
+		}
+		v := strings.TrimSpace(tr[src])
+		if v != "" && !IsFailurePlaceholder(v) {
+			continue
+		}
+		out = append(out, fileproc.UntranslatedItem{
+			Line:   i + 1,
+			Source: src,
+			Reason: "模型多轮补译后仍无可用输出，已按原文交付（成因见工单质量提示：上游未返回／输出被截断）",
+		})
+	}
+	return out
+}
+
+// retryImageSegments 把图片件里「多轮补译仍不合格」的行单独再打一枪，并交出仍未译出的清单。
+// 为什么图片侧要自己再走一遍：图片的交付面是「原位回填的那张图」，一行留白在图上是一片空白，
+// 比正文里少一句更难被发现，所以先把未译项充分重试（用户令⑤），实在不行才回落原文并在 .md 里点名。
+// 第二个返回量＝这一族是否已判上游整条不通（true ⇒ 调用方不再逐行烧调用，只回填并出一行 WARN）。
+func (e *Engine) retryImageSegments(ctx context.Context, texts []string, tr map[string]string, lc string) ([]fileproc.UntranslatedItem, bool) {
+	out := make([]fileproc.UntranslatedItem, 0, 8)
+	rounds := e.LineRetryMax()
+	deadStreak, deadMin := 0, e.LineDeadStreakMin()
+	upstreamDead := false
+	for i, src := range texts {
+		if strings.TrimSpace(src) == "" {
+			continue // 空段没有可译内容，不进未译出清单（把"设计"当"缺陷"报给客户是另一种坏）
+		}
+		have := strings.TrimSpace(tr[src])
+		if have != "" && !IsFailurePlaceholder(have) && e.fileTranslationUsable(ctx, src, have, lc) {
+			deadStreak = 0 // 这一行本来就有力可及的译文 ⇒ 连续失败段被隔断
+			continue
+		}
+		if upstreamDead {
+			out = append(out, fileproc.UntranslatedItem{
+				Line: i + 1, Source: src,
+				Reason: fmt.Sprintf("上游未返回可用译文（连续 %d 段为空/失败占位后本段未再逐行重拨），已按原样保留", deadMin),
+			})
+			continue
+		}
+		v, ok := e.RetryLineUntilUsable(ctx, src, lc)
+		if ok {
+			tr[src] = v
+			deadStreak = 0
+			continue
+		}
+		deadStreak++
+		if deadStreak >= deadMin {
+			upstreamDead = true
+		}
+		reason := fmt.Sprintf("模型补译 %d 轮仍无可用输出，已按原样保留", rounds)
+		if have == "" || IsFailurePlaceholder(have) {
+			reason = fmt.Sprintf("上游未返回可用译文（补译 %d 轮仍为空），已按原样保留", rounds)
+		} else if IsLengthExplosion(src, have) {
+			reason = "上游输出被截断/长度异常（补译轮内未恢复），已按原样保留"
+		}
+		out = append(out, fileproc.UntranslatedItem{Line: i + 1, Source: src, Reason: reason})
+	}
+	return out, upstreamDead
+}
+
 // isComparisonTableFormat 无原格式回写能力、以 xlsx 对照表为唯一交付形态的格式。
 //
 // ★ 这一份清单**就该留在这里**：AGENTS §一·14 规定"交付形态判据只有一处＝本文件的 writebackDelivery"，
@@ -1233,7 +1312,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if deliveryText {
 		// —— 纯文案模式：交付 {base}_{lang}.md，不做任何 office 格式回写 ——
 		for _, lc := range finalLangs {
-			tr := langTranslations[lc]
+			tr := deliveryTranslations(langTranslations[lc])
 			if len(tr) == 0 {
 				continue
 			}
@@ -1251,6 +1330,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if aerr != nil {
 				_ = os.Remove(outPath)
 				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 文案产物生成失败：%s", config.LangNames[lc], aerr.Error())}
+			}
+			// ★ 2026-10-26 裁决 7（「交付文档只记录未翻译的内容」）在**第二个交付口**的同一把尺子：
+			//   纯文案 .md 就是这一语言的主交付物，未译出的段必须在文末点名。
+			//   图片那一口本轮已接上，这里漏了就会出现"同一个产品两种诚实度"——
+			//   客户在图片单上能看见"哪几行没翻"，在 srt/json 这类单上却只有一句"已完成"。
+			if notes := untranslatedNotesFromSegments(texts, tr); len(notes) > 0 {
+				if nerr := fileproc.AppendUntranslatedNotes(outPath, notes); nerr != nil {
+					observability.Warn(ctx, "纯文案交付文档「未译出内容」一节追加失败", "lang", lc, "error", nerr.Error())
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几段没译出", config.LangNames[lc], nerr.Error()))
+				} else {
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 有 %d/%d 段未译出，已按原文交付并在交付文档文末逐段点名", config.LangNames[lc], len(notes), len(texts)))
+				}
 			}
 			filesOut = append(filesOut, outPath)
 			langArtifact[lc] = outPath // 纯文案产物即该语言主交付物（.md 可直读比对指纹）
@@ -1321,7 +1412,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
 		for _, lc := range finalLangs {
-			tr := langTranslations[lc]
+			tr := deliveryTranslations(langTranslations[lc])
 			if len(tr) == 0 {
 				continue
 			}
@@ -1348,8 +1439,33 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if writebackDelivery(ext) == "image" {
 				imgSuffix := e.artifactLangSuffix(lc) + ".md"
 				imgPath := filepath.Join(outputDir, artifactBase(lc, imgSuffix)+imgSuffix)
+				// ★ W4（2026-10-26 用户裁决 5「图片未翻译出行应该先对未翻译项进行充分重试，
+				//   实在失败再在 md 里标注」＋裁决 7「交付文档只记录未翻译内容」）：
+				//   旧形态是"首翻没给这一行 ⇒ 图上与 .md 直接按原文顶上"，日志里只剩一个 residue 计数——
+				//   **重试这个动作物理上从来没发生过**，客户拿到的图上那一行还是中文。
+				//   现在先过一遍单行补译梯（与文本逐行链同一把尺子、同一档位键），
+				//   仍拿不到可用译文的行才进交付文档那一节。
+				//   必须在 WriteTranslationMd **之前**跑：.md 也按原文兜底，先补再写才不会把原文当译文交付。
+				unresolved, imgUpstreamDead := e.retryImageSegments(ctx, texts, tr, lc)
 				if ierr := fileproc.WriteTranslationMd(imgPath, texts, tr); ierr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], ierr.Error())}
+				}
+				// 那一节必须追加在 .md 写完之后（追加到一个还不存在的文件上＝整节静默丢失，
+				// 而"客户看不见哪些行没翻"正是裁决 7 要消灭的形态）。写失败只出声不判死：
+				// 译文与图都已到货，不能因为一节附注没写上就把整单打成失败。
+				if uerr := fileproc.AppendUntranslatedNotes(imgPath, unresolved); uerr != nil {
+					observability.Warn(ctx, "图片交付文档「未译出内容」一节追加失败", "lang", lc, "error", uerr.Error())
+					// ★ 出声必须同块记账（file_delivery_honesty_gate_test.go 那条闸判的红）：
+					//   这一节是客户在交付面上**唯一**能看见"哪几行没翻"的载体，它没写上＝退化，
+					//   只留一行日志就等于把交付面缺东西写成"一切正常"。
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几行没译出", config.LangNames[lc], uerr.Error()))
+				}
+				if imgUpstreamDead {
+					observability.Warn(ctx, "图片原位链逐段补译判上游断，剩余未译段不再逐行烧调用",
+						"lang", lc, "untranslated_segments", len(unresolved))
+					// 同上：早停本身是一次"这些行我们不再尝试"的决定，客户面必须看得见它，
+					// 否则表现就是"图上有几行还是原文"而 nowhere 说明原因（本仓「静默降级」那一族）。
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 上游连续未返回可用译文，已停止逐段重试；%d 段按原文保留", config.LangNames[lc], len(unresolved)))
 				}
 				filesOut = append(filesOut, imgPath)
 				langArtifact[lc] = imgPath // 译文 .md：保真比对应读它
@@ -1843,7 +1959,7 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 	defer f.Close()
 
 	for _, lc := range langs {
-		tr := langTranslations[lc]
+		tr := deliveryTranslations(langTranslations[lc])
 		if len(tr) == 0 {
 			continue
 		}

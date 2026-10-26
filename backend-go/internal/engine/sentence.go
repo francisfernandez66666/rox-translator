@@ -20,28 +20,7 @@ func splitSentencesCJK(text string, budget int) []string {
 	if budget <= 0 {
 		budget = chatSegmentBudgetRunes
 	}
-	runes := []rune(text)
-	var raw []string
-	start := 0
-	for i, r := range runes {
-		if !sentenceEndRunes[r] {
-			continue
-		}
-		if (r == '.' || r == '!') && i > 0 {
-			prev := runes[i-1]
-			if (prev >= 'A' && prev <= 'Z') || prev == ' ' && i > 1 && runes[i-2] >= 'A' && runes[i-2] <= 'Z' {
-				continue // 缩写/序号形如 "U.S." "A ."：不切
-			}
-		}
-		if r == ';' && i > 0 && (runes[i-1] >= '0' && runes[i-1] <= '9') {
-			continue // 数字后分号（如 HTML 实体残留 &amp; 边界）防误切：保守跳过
-		}
-		raw = append(raw, string(runes[start:i+1]))
-		start = i + 1
-	}
-	if start < len(runes) {
-		raw = append(raw, string(runes[start:]))
-	}
+	raw := splitSentenceRaw(text)
 	// 聚合到预算 + 超长单句硬切
 	var out []string
 	acc := ""
@@ -70,6 +49,39 @@ func splitSentencesCJK(text string, budget int) []string {
 		out = append(out, acc)
 	}
 	return out
+}
+
+// splitSentenceRaw 按句界把文本切成**逐句**片段（保留分隔符，不做预算聚合）。
+// 参数：text=待切文本；返回逐句片段（末尾没有句末符的那一段也返回）。
+// ★ 这一份是"句界"的唯一实现（2026-10-26 从 splitSentencesCJK 里拆出来）：
+//
+//	对话链要的是"按预算聚合的段"，交付侧剥回绝话术要的是"逐句各判一次"——
+//	两边都调这一个句界判据，才不会一边把 "U.S." 切开、另一边不切
+//	（同一份文字在两条链上被切成不同粒度，就是本仓反复登记的「多把尺子」形态）。
+func splitSentenceRaw(text string) []string {
+	runes := []rune(text)
+	var raw []string
+	start := 0
+	for i, r := range runes {
+		if !sentenceEndRunes[r] {
+			continue
+		}
+		if (r == '.' || r == '!') && i > 0 {
+			prev := runes[i-1]
+			if (prev >= 'A' && prev <= 'Z') || prev == ' ' && i > 1 && runes[i-2] >= 'A' && runes[i-2] <= 'Z' {
+				continue // 缩写/序号形如 "U.S." "A ."：不切
+			}
+		}
+		if r == ';' && i > 0 && (runes[i-1] >= '0' && runes[i-1] <= '9') {
+			continue // 数字后分号（如 HTML 实体残留 &amp; 边界）防误切：保守跳过
+		}
+		raw = append(raw, string(runes[start:i+1]))
+		start = i + 1
+	}
+	if start < len(runes) {
+		raw = append(raw, string(runes[start:]))
+	}
+	return raw
 }
 
 // splitForChatTranslate 对话翻译入口切分：短文本原样单段；超长按句切分。

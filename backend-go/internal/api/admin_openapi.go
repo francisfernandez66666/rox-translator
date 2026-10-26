@@ -377,6 +377,26 @@ curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization
 # 失败     → {'status':'failed','error_code':'insufficient_balance','message':'余额不足（积分），请充值积分或升级套餐'}
 ~~~
 
+### 译文来源与未译出行（文本任务）
+
+完成响应里除 translations 外还带 sources：语言码 → **该语种译文的来源档**。取值名单固定五种，
+不会长出第六种；请按枚举分支处理，不要按"字符串里有没有 model"判断：
+
+| 取值 | 含义 |
+| --- | --- |
+| kb | 命中您的翻译记忆/术语库，直接直配（零模型调用） |
+| model | 模型译文，全部行都拿到了可用译文 |
+| model_with_source_fallback | 模型译文，但**有若干行没译出来、已按原文交付** |
+| upstream_failed | 该语种判上游服务不可用，未译出的行**全部按原文交付** |
+| approved | 审批终稿覆盖后的那一语种 |
+
+有未译出行时同层另出三个计数（按语言码，键缺席＝这一语种没有未译出行；不会出现 0 或 null）：
+unresolved_lines（总数）、upstream_dead_lines（其中因上游不可用）、truncated_lines（其中因输出被截断）。
+交付的 .md 文档末尾同一份事实会写成「未译出内容」一节，逐行点名原文。
+
+> 这三档是**事实陈述**：系统不会为未译出的行发起人工复核，也不会自动重试到您的余额耗尽。
+> 拿到 upstream_failed 时建议按您的业务重要性重新发起该单。
+
 ## 支持的语言与计费规则
 
 target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种知识库语言（Hunyuan-MT 全量），
@@ -551,6 +571,28 @@ text done  -> {'status':'completed','translations':{'en':'...'},'points_used':18
 files done -> {'status':'completed','files':[...],'download':'/openapi/v1/tasks/download?id=123'}
 failed     -> {'status':'failed','error_code':'insufficient_balance'}
 ~~~
+
+### Translation source & untranslated lines (text tasks)
+
+Besides translations, a completed text response carries sources: language code → **where that
+language's text came from**. The value list is closed at five entries; branch on the exact enum
+value rather than substring checks:
+
+| Value | Meaning |
+| --- | --- |
+| kb | served from your translation memory / term base (no model call) |
+| model | model output, every line produced a usable translation |
+| model_with_source_fallback | model output, but **some lines could not be translated and are delivered as source text** |
+| upstream_failed | the upstream translation service was judged unavailable; the untranslated lines for this language are **all delivered as source text** |
+| approved | the language whose text was replaced by an approved final version |
+
+When lines are untranslated, three per-language counters are present at the same level
+(unresolved_lines total, upstream_dead_lines for upstream unavailability, truncated_lines
+for truncated output). An absent key means that language has no untranslated lines — the API never
+sends 0 or null for these. The delivered .md lists the same facts line by line.
+
+> These counters are statements of fact: the platform does not route such lines to manual review,
+> and it will not keep retrying them against your balance. Re-submit the task for business-critical content.
 
 ## Supported languages & billing rules
 

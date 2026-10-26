@@ -36,6 +36,10 @@ const S = vi.hoisted(() => ({
 
 // @/api 整模块桩（沿用 PlansP.invoice.dom.test.tsx 已验证可行的桩集合）
 vi.mock('@/api', () => ({
+  // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
+  // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
+  adminTextLineTiers: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
+  adminTextLineTiersSave: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
   billingQuota: vi.fn(async () => ({ success: true, qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_points: 0, tenant_selected: true, unlimited: {} })),
   billingQuotaSave: vi.fn(async () => ({ success: true })),
   billingOrders: vi.fn(async () => ({ success: true, orders: [] })),

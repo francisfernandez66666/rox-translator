@@ -27,6 +27,15 @@ import (
 // 集中成常量是为了让「失败占位」与「真译文」的区分只有一处定义，不再各调用点抄字符串。
 const translationFailureMark = "[翻译失败]"
 
+// IsFailurePlaceholder 判定一份候选是不是「上游压根没吐内容」那一档（空串／批量失败占位）。
+// 为什么单独导出：调用方要把「上游断了」与「译出来了但形态不合格」分开记账——
+// 前者重试一万次也不会好（文本工单逐行链据此早停），后者才值得再补译几轮。
+// ★ 只认这两类，不认「回显／拒译」：那些是有内容的坏答案，判据在 IsTranslationUsable 那一侧。
+func IsFailurePlaceholder(out string) bool {
+	o := strings.TrimSpace(out)
+	return o == "" || o == translationFailureMark
+}
+
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。
 // 参数 src: 送翻的源文段；out: 候选译文（KB 命中值或模型返回，未经判定前的原始候选）。
 // 判不可用的九类，任一命中即 false：
@@ -143,6 +152,17 @@ func hasInstructionEcho(src, out string) bool {
 // 为什么限定短格：长段落翻译（尤其中→德/俄等长语系）长度比天然偏高，全文生效会误杀；
 // 而「缩写展开」这类合法短译（AWS→亚马逊云科技）在 80 rune 下限内几乎不可能被拦。
 // 阈值全部 env 可配（保守默认，宁可多走一次补漏重试，不静默交付可疑串）。
+// IsLengthExplosion 导出「短格译文长度爆炸」这一档的判据（与内部写入点判定同一把尺子，不另立第二把）。
+// 为什么需要导出：调用方要分得开**回落原文的成因**——
+// 「上游压根没吐」（族一，重拨无用）／「被 max_tokens 截空」（族三，抬预算可救）／
+// 「吐出一整封邮件那样的污染串」（族三，必须**单独重拨**而不是回同一批里再赌一次）。
+// 三种成因的补救动作不一样，混成一味就会出现"该重拨的没重拨、不该重拨的白烧一万次"。
+func IsLengthExplosion(src, out string) bool { return hasLengthExplosion(src, out) }
+
+// hasLengthExplosion 「短格长度爆炸」判据本体（导出壳 IsLengthExplosion 之外，包内一律调这一个）。
+// 参数：src=原文，out=候选译文；返回是否"短原文换来远超上限的输出"。
+// 只在原文很短（≤shortGuardMaxSrcRunes）时启用：长段落本来就会出现译文比原文长的正常形态，
+// 拿同一比例去判会把整篇合法译文误杀——这一档专治"6 个字的单元格吐出一整封邮件"。
 func hasLengthExplosion(src, out string) bool {
 	sr := []rune(strings.TrimSpace(src))
 	if len(sr) == 0 || len(sr) > shortGuardMaxSrcRunes() {
@@ -536,6 +556,109 @@ func buildRefusalGramSet() map[string]bool {
 
 // refusalGramN 字符 n-gram 的长度。取 4：比 3 少误伤、比 5 更耐措辞微调。
 const refusalGramN = 4
+
+// deliveryTranslations 交付面最后一道同名清洗：把任何一段值里的**模型回绝整句**剥掉。
+// 参数 langTr=原文段 → 该语言译文。返回一份新 map（不改写入侧那份）。
+//
+// ★ 为什么在采纳判据之外还要这一道（2026-10-26 用户裁决八-3b：
+//
+//	「风控拒译——改不拒绝，但**文档第一页和文件名写名请慎重核对**，我们不负责任」）：
+//	交付面有四个口都会吐出这一句——正文/首页首行（.md 第一段）、xlsx 单元格、
+//	docx/PDF 首页、产物文件名。现网 M1 那一次的形态是**五件交付物同名**
+//	`I am unable to provide the translation you requested_en.*`：一处没拦就是整批成品都带着它。
+//	采纳判据（refusalResidue）在第一道拦，这里按同一把尺子**逐句**再核一次——
+//	取向是"宁可多剥一句，不许把回绝话交给客户"，但**剥不掉就按原文交付、绝不留白**。
+//	误杀风险由源文豁免守住：客户自己的文档里就在谈"无法提供翻译服务"时，
+//	那句照译是合法正文（refusalResidue 已按该段原文判过一次，同一豁免条件在这里照用）。
+func deliveryTranslations(langTr map[string]string) map[string]string {
+	if len(langTr) == 0 {
+		return langTr
+	}
+	out := make(map[string]string, len(langTr))
+	for src, v := range langTr {
+		out[src] = stripRefusalSentences(src, v)
+	}
+	return out
+}
+
+// stripRefusalSentences 从一段译文里剥掉**开头的**模型回绝整句，保留其后的真实译文。
+// 参数：src=该段原文（豁免判据要它），out=候选译文。
+// 三步：① 整段判不出回绝 ⇒ 原样返回（绝大多数交付值走这一条，零开销）；
+// ② 反复剥"开头那一句"（句末符 = . 。 ! ！ ? ？ ; ； 换行），每句都用**同一把**
+//
+//	refusalResidue 配该段原文判（源文自己谈这件事时豁免照旧生效）；
+//
+// ③ 剥空 ⇒ 返回该段**原文**（不留白；把回绝话交给客户比把原文交给客户更坏，用户令①同口径）。
+//
+// ★ 为什么这里自己走一遍句末，而不是复用句界切分器 `splitSentenceRaw`：
+//
+//	那个切分器按既有口径**不把英文句号「.」当切分点**（对话链刻意如此——缩写/序号满天飞）。
+//	而现网 M1 那句回绝话是**英文**且以句号收尾："I am unable to provide the translation you requested."，
+//	借它切就永远切不开，混合段会被整段判死、后面那半句正常译文跟着陪葬——
+//	那正是本函数要避免的"砍多了"。句界的**判据**（哪些字符算句末）在这里显式列出来，
+//	与对话链各自服务于自己的动作，不是同一件事的两把尺子。
+func stripRefusalSentences(src, out string) string {
+	if strings.TrimSpace(out) == "" {
+		return out
+	}
+	if !refusalResidue(src, out) {
+		return out // 绝大多数交付值一步走过去，零改动零开销
+	}
+	rest := out
+	for {
+		lead, tail, hasEnd := firstSentenceOf(rest)
+		if !refusalResidue(src, lead) {
+			break // 开头这一句是正常译文 ⇒ 停手，其后一个字都不动（只砍模型多出来的）
+		}
+		if !hasEnd {
+			rest = "" // 整段没有句末且这一句就是回绝 ⇒ 全剥（M1 现网那句正是这一形态）
+			break
+		}
+		rest = strings.TrimLeft(tail, " \t\n")
+		if strings.TrimSpace(rest) == "" {
+			break
+		}
+	}
+	if strings.TrimSpace(rest) == "" {
+		return strings.TrimSpace(src) // 剥空 ⇒ 回落原文交付，绝不留白（用户令①）
+	}
+	return rest
+}
+
+// firstSentenceOf 取开头的整句（含句末符）与其后的剩余部分。
+// 参数：s=待切文本；返回 lead=第一句（含句末符）、tail=其余、hasEnd=是否找到句末符。
+// 句末符集合显式列在 isRefusalTerminator 里（剥回绝话专用，不借对话链那套句界——
+// 那个切分器刻意不把英文「.」当句末，见 stripRefusalSentences 上方那段）。
+// 缩写/编号保护：大写字母后的「.」（"U.S."、"Dr."）与数字后的「.」都不算句末——
+// 宁可少剥一句，也不许把 "The value is 2.0 million." 从中间切开。
+func firstSentenceOf(s string) (lead, tail string, hasEnd bool) {
+	r := []rune(s)
+	for i, ch := range r {
+		if !isRefusalTerminator(ch) {
+			continue
+		}
+		if ch == '.' && i > 0 {
+			prev := r[i-1]
+			if (prev >= 'A' && prev <= 'Z') || (prev == ' ' && i > 1 && r[i-2] >= 'A' && r[i-2] <= 'Z') {
+				continue
+			}
+			if prev >= '0' && prev <= '9' {
+				continue
+			}
+		}
+		return string(r[:i+1]), string(r[i+1:]), true
+	}
+	return s, "", false
+}
+
+// isRefusalTerminator 这一批字符算句末（剥回绝话专用；见 stripRefusalSentences 那条"为什么不复用切分器"）。
+func isRefusalTerminator(ch rune) bool {
+	switch ch {
+	case '.', '。', '!', '！', '?', '？', ';', '；', '\n':
+		return true
+	}
+	return false
+}
 
 // refusalResidue 判据 9：候选译文是模型「拒译/答非所问」的一段话。
 func refusalResidue(src, out string) bool {

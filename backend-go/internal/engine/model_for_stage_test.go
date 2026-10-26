@@ -128,8 +128,13 @@ func TestStageModelResolutionHasSingleThroat(t *testing.T) {
 		t.Fatalf("ai_initial 回退档不在咽喉函数体内 ⇒ 咽喉已不承接「本阶段没配 ⇒ 退回初翻」这一档")
 	}
 
-	// ② 两条翻译腿都必须走咽喉，且不许自己直调阶段配置
-	for _, name := range []string{"singleLangRaw", "BatchTranslate"} {
+	// ② 两条翻译腿都必须走咽喉，且不许自己直调阶段配置。
+	// ★ 2026-10-26「靶子搬家」同步（八-3c／W8）：批量腿的**实体**改名为 `BatchTranslateMarked`
+	//   （要多回吐一份"哪些槽位是被截断的"读数），`BatchTranslate` 降成薄委托。
+	//   判据因此指向实体；薄委托另用下面一条正面钉住"只许转发"——
+	//   否则将来有人把委托写成"自己再实现一遍"（绕过咽喉那一形态），
+	//   这一腿只会因为"实体不在名单里"而看不见。
+	for _, name := range []string{"singleLangRaw", "BatchTranslateMarked"} {
 		body, ok := funcs[name]
 		if !ok {
 			t.Fatalf("找不到翻译腿函数 %s ⇒ 被改名或删除，本锁射程失效", name)
@@ -139,6 +144,21 @@ func TestStageModelResolutionHasSingleThroat(t *testing.T) {
 		}
 		if n := strings.Count(body, "e.resolveStageModel("); n != 0 {
 			t.Fatalf("%s 里出现 %d 次 resolveStageModel 直调 ⇒ 绕过咽喉自己写回退（R-1 半修形态的成因）", name, n)
+		}
+	}
+
+	// ②b 委托腿只许转发：`BatchTranslate` 必须恰好调用一次实体，且自己一个模型调用/取模都不做。
+	//     （它若偷偷长出一条自己的取模腿，就是"两条腿各拿一把尺子"的复发点。）
+	wrap, ok := funcs["BatchTranslate"]
+	if !ok {
+		t.Fatalf("找不到 BatchTranslate ⇒ 批量入口被删除或改名，文件主链与 SSE 逐段上屏都失去口径")
+	}
+	if n := strings.Count(wrap, "e.BatchTranslateMarked("); n != 1 {
+		t.Fatalf("BatchTranslate 应恰好转发实体 1 次，实际 %d 次 ⇒ 委托已长出自己的实现", n)
+	}
+	for _, banned := range []string{"e.resolveModelForStage(", "e.resolveStageModel(", "CallChat("} {
+		if n := strings.Count(wrap, banned); n != 0 {
+			t.Fatalf("BatchTranslate 里出现 %d 次 %s ⇒ 委托不该自己做取模或发请求", n, banned)
 		}
 	}
 

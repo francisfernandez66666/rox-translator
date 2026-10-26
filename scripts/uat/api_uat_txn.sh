@@ -278,7 +278,11 @@ except Exception:
 ck3(){ local name="$1" want="$2,$3,$4" bad=""
   [ "${R3ST:-}" = "$2" ] || { bad="$bad 状态码=${R3ST:-?}"; }
   [ "${R3CODE:-}" = "$3" ] || { bad="$bad code=${R3CODE:-?}"; }
-  printf '%s' "${R3MSG:-}" | grep -qE "$4" || { bad="$bad 文案=${R3MSG:-?}"; }
+  # ★ 2026-10-27 修（本批 T73 三条成功腿的真红因）：文案那一条**期望为空串＝「这一维不判」**。
+  #   旧写法一律走 `grep -qE "$4"`，而**空输入没有任何行**⇒ 空模式也匹配不上⇒ 成功响应
+  #   （信封里压根没有 code/message 两个键）永远被判成「文案不符」。
+  #   这不是放宽：判据问的是「失败时那句诚实文案」，成功态本来没有文案可问。
+  if [ -n "$4" ]; then printf '%s' "${R3MSG:-}" | grep -qE "$4" || { bad="$bad 文案=${R3MSG:-?}"; }; fi
   if [ -z "$bad" ]; then PASS=$((PASS+1)); echo "PASS|$name"
   else FAIL=$((FAIL+1)); echo "FAIL|$name|want(状态码,错误码,文案)=$want|got(${R3ST:-?},${R3CODE:-?},${R3MSG:-?})|$bad|body=${R3BODY:0:160}"; fi
 }
@@ -3805,10 +3809,23 @@ zero_daily_usage
 #      （12 与 34 → 1234），于是六条 DELETE 全部删不到东西而**不报错**——夹具残留长期隐身。
 #   ② 用户维度的表走**子查询**而不是先取 id 再拼：多身份下 user_trial_grants 可能一行有多个 user_id。
 #   另：`usage_ledger` 与 `usage_daily` **刻意不清**（账本是不可变事实，清理口径见 AGENTS §一·18）。
-drop_fixture_user(){ local un="$1" line tid
+drop_fixture_user(){ local un="$1" line tid others
   dbq "DELETE FROM user_trial_grants WHERE user_id IN (SELECT id FROM users WHERE username='$un')" >/dev/null
   for line in $(dbq "SELECT DISTINCT tenant_id FROM users WHERE username='$un'" | tr -cd '0-9 \n'); do
     tid=$(printf '%s' "$line" | tr -dc '0-9'); [ -n "$tid" ] || continue
+    # ★ 2026-10-27 守卫（本批 g7 那五红的真身，写死在这里别再拆掉）：下面这组 DELETE 含
+    #   `DELETE FROM tenants / packages / quota_grants / tickets WHERE tenant_id=$tid`，
+    #   它**只对"这家租户是这个夹具自己的"成立**。若这个 username 是被邀进**已有租户**的
+    #   （本仓 T73 的租户管理员夹具就落在 uatuser_a 的租户里），照旧执行会把那位种子用户的
+    #   整家租户连套餐一起抹掉——随后所有依赖该租户的段与 Playwright 用例全红，
+    #   而红的位置离肇事那一行差着几千行（实测读数：/api/me/context 回落「个人版」、
+    #   五红全是"等译文回流/等工单完成"超时，一点指不到清理段）。
+    #   ⇒ 先问「这一家租户里还有没有别人的账号」，有就只摘这个用户，**绝不拆租户**。
+    others=$(dbq "SELECT COUNT(*) FROM users WHERE tenant_id=$tid AND username<>'$un'" | tr -dc '0-9')
+    if [ "${others:-0}" != "0" ]; then
+      echo "NOTE|drop_fixture_user(tenant=$tid 另有 ${others} 个账号 ⇒ 只摘用户，不拆租户)"
+      continue
+    fi
     dbq "DELETE FROM quota_grants WHERE tenant_id=$tid" >/dev/null
     dbq "DELETE FROM api_keys WHERE tenant_id=$tid" >/dev/null
     dbq "DELETE FROM packages WHERE tenant_id=$tid" >/dev/null
@@ -4425,6 +4442,199 @@ drop_fixture_user "$T72CU"
 ckq T72-cleanup-control-user-zero 0 "$(dbq "SELECT COUNT(*) FROM users WHERE username='$T72CU'" | tr -dc '0-9')"
 ckq T72-cleanup-config-keys-removed 0 "$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ('seo_route_meta','artifact_lang_suffix')" | tr -dc '0-9')"
 rm -rf "$TMPD72"
+
+
+# ----------------------------------------------------------------------------
+# ---------- T73 2026-10-26/27 批：逐行链「上游诚实表达」＋ 运营档位口 ＋ 交付文档那一节 ----------
+#
+# 本批六件事同源（同一句产品口径：翻不出来的时候必须说清楚是哪一族）：
+#   ① 工单详情把「哪一语种、哪一档、几行」给客户看（裁决九-1），不再只活在日志里；
+#   ② 来源列新值 model_with_source_fallback / upstream_failed 是**对外契约**（管理台来源列、
+#      按来源统计、开放 API 的 sources 字段都读它）⇒ 值名单要在规范与内置文档里登记；
+#   ③ 逐行链兜底改成「补译梯 N 轮 → 回落原文」，任何一行都不留白（用户令①）；
+#   ④ 补译轮数与上游断连续数交给运营配（裁决九-4），钳位区间本身就是判据的一部分；
+#   ⑤ 回填过原文的语种绝不写进正式翻译记忆（「不留白」这一决定的直接副产品）；
+#   ⑥ 客户可见文案不再承诺"人工复核"（本仓没有人工作复核环节）。
+#
+# 三条施工纪律（照 T72 的口径）：
+#   ① HTTP 面优先：能被接口回吐的一律打接口，库里只当证据不当判据；
+#   ② 不写死档位数字：区间从接口回显的 ranges 现读，合法/越界两组输入都由它派生
+#      （档位改了断言跟着改不了——那是事实源变了，不是判据坏了）；
+#   ③ 「出栈有 / 没有」必须用**载荷两态**各问一次：真跑一单去赌"mock 有没有翻出来"是不确定判据
+#      （翻得出不等于接线在，翻不出也不等于接线坏），覆写 final_result 才有判别力。
+# ----------------------------------------------------------------------------
+ROOT73="$(cd "$(dirname "$0")/../.." && pwd)"
+zero_daily_usage
+T73AHdr="Authorization: Bearer $(tok "$ADMIN_USER" "$ADMIN_PASS")"
+T73CFG="/api/admin/config/text-lines"
+T73K1="text_line_retry_max"
+T73K2="text_line_upstream_dead_streak"
+T73SU="uat73tenantadmin"
+T73SUE="${T73SU}@t73.uat"
+
+# ⓪ 前提自证：档位口必须已在路由表上（"有代码无调度"那一族）。
+#    不先问这一条，handler 没接线时读到的会是 SPA 兜底整页 HTML，
+#    后面所有腿都红成"没有 tiers 键"——真身却是"接口压根不存在"，红要红在前提上。
+req3 GET "$T73AHdr" "$T73CFG"
+if [ "${R3ST:-0}" != "200" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T73-premise-endpoint-live(状态码=${R3ST:-无} body=${R3BODY:0:120} ⇒ 档位口没接上，本段其余判据失去前提)"
+else
+  PASS=$((PASS+1)); echo "PASS|T73-premise-endpoint-live"
+fi
+
+# ① 鉴权三档：匿名 401 / 租户管理员 403（读面同档，不给半条通道）/ 超管 200
+# ★ 2026-10-27 夹具修法（首跑两条红的真身是夹具取错形态，不是产品放行）：
+#   这一档要的靶子是「等级够但**不是平台账号**」——role='admin' 本身是 4 级（iam.RoleLevel），
+#   而 users/create 有一条**高角色强制 tid=0** 的不变量（iam/auth.go IsSuperAdmin 那段安全整改的落点），
+#   所以直接拿 role=admin 入职只会造出**另一个超管**（403 那两条腿必然错位），且注册那一步也没走通、
+#   token 是空串 ⇒ 读到的是 401 未登录，红得完全指不到病因。
+#   现：先按普通成员入职（拿到该租户下的 users 行与会话），再用 SQL 把**那一行**抬成 role='admin'，
+#   然后按邮箱重拨一次登录——抬权必须走库里那一行，与 1591 行 T43 那批「SQL 提权再还原」同一形态。
+req3 GET "" "$T73CFG"
+ck3 T73-tier-anon-401 401 UNAUTHORIZED '.'
+mf_onboard "$T73AHdr" "$TAID" "$T73SU" "$T73SUE" 'Uat73@Pass!' user 0
+T73INV="${MF_LINK:-}"   # 本段铸的那枚邀请链接码，收尾按它精确摘掉（MF_* 会被后面的 mf_onboard 覆写）
+T73TID73=$(sq "SELECT id FROM users WHERE username='$T73SU' AND is_home=1 LIMIT 1" | tr -d '[:space:]')
+if [ -z "${MF_TOKEN:-}" ] || [ -z "$T73TID73" ]; then
+  # 前提腿：入职链没走通 ⇒ 后面两条 403 全部失去靶子，红必须红在这里并带真回执
+  FAIL=$((FAIL+1)); echo "FAIL|T73-premise-tenant-admin-onboarded(token 长度=${#MF_TOKEN} 行号=${T73TID73:-空} create=${MF_CREATE:0:120} reg=${MF_REG:0:120} ⇒ 租户管理员没造出来，403 两条腿无靶)"
+else
+  PASS=$((PASS+1)); echo "PASS|T73-premise-tenant-admin-onboarded"
+  sq "UPDATE users SET role='admin' WHERE id=$T73TID73" >/dev/null
+  T73TOK73=$(mf_token "$T73SUE" 'Uat73@Pass!')
+  T73TAH="Authorization: Bearer $T73TOK73"
+  if [ ${#MF_TOKEN} -lt 10 ] || [ ${#T73TOK73} -lt 10 ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|T73-premise-tenant-admin-token(提权后重拨登录没拿到会话 ⇒ 下面两条 403 会读成 401；token 长度 入职=${#MF_TOKEN} 重拨=${#T73TOK73})"
+  else
+    PASS=$((PASS+1)); echo "PASS|T73-premise-tenant-admin-token"
+    req3 GET "$T73TAH" "$T73CFG"
+    # 文案收两支（照 T64 同一条口径）：requireAdminUser 里的 iam.RequireRole(4) 已带「≥4 但 tenant_id≠0
+    #   同样拒」这一条，所以租户内 admin 读到的就是「权限不足：需要 超级管理员 角色」。
+    ck3 T73-tier-tenant-admin-read-forbidden 403 FORBIDDEN '权限不足|仅平台超管'
+    req3 POST "$T73TAH" "$T73CFG" '{"retry_max":4,"upstream_dead_streak":4}'
+    ck3 T73-tier-tenant-admin-write-forbidden 403 FORBIDDEN '权限不足|仅平台超管'
+  fi
+fi
+
+# ② 超管回显三态齐在（生效值 / 库内原值 / 代码缺省 / 区间）
+T73G=$(get "$T73AHdr" "$T73CFG")
+ck T73-tier-get-has-tiers '"tiers":\{' "$T73G"
+ck T73-tier-get-has-stored '"stored":\{' "$T73G"
+ck T73-tier-get-has-ranges '"ranges":\{' "$T73G"
+T73R1LO=$(printf '%s' "$T73G" | python3 -c 'import sys,json;print(json.load(sys.stdin)["ranges"]["retry_max"][0])' 2>/dev/null)
+T73R1HI=$(printf '%s' "$T73G" | python3 -c 'import sys,json;print(json.load(sys.stdin)["ranges"]["retry_max"][1])' 2>/dev/null)
+T73R2HI=$(printf '%s' "$T73G" | python3 -c 'import sys,json;print(json.load(sys.stdin)["ranges"]["upstream_dead_streak"][1])' 2>/dev/null)
+if [ -z "${T73R1LO:-}" ] || [ -z "${T73R1HI:-}" ] || [ -z "${T73R2HI:-}" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T73-tier-ranges-readable(ranges 解析不出来 ⇒ 下面几条合法/越界腿会变成空转)"
+else
+  PASS=$((PASS+1)); echo "PASS|T73-tier-ranges-readable(retry_max=${T73R1LO}~${T73R1HI} streak_hi=${T73R2HI})"
+fi
+
+# ③ 合法保存 ⇒ 同一响应体即新档，且**再 GET 一次仍是新值**（"改了跟得上"必须真改第二次验）。
+#    区间两端各存一次：只测中间值会放过"上界被写侧拒收"这类半截实现。
+req3 POST "$T73AHdr" "$T73CFG" "$(printf '{"retry_max":%s,"upstream_dead_streak":%s}' "$T73R1HI" "$T73R2HI")"
+ck3 T73-tier-save-upper-bound 200 '' ''
+ck T73-tier-echo-upper '"retry_max":'"${T73R1HI}" "$R3BODY"
+ck T73-tier-second-get-follows '"retry_max":'"${T73R1HI}" "$(get "$T73AHdr" "$T73CFG")"
+ckq T73-tier-db-value-equals "$T73R1HI" "$(dbq "SELECT value FROM system_config WHERE key='$T73K1'" | tr -d '[:space:]')"
+req3 POST "$T73AHdr" "$T73CFG" "$(printf '{"retry_max":%s,"upstream_dead_streak":4}' "$T73R1LO")"
+ck3 T73-tier-save-lower-bound 200 '' ''
+
+# ④ 越界、0 与半套参数一律拒收，且库里一字不动（写侧"校验先行整批落库"）。
+#    0 必须单独测：这两档没有 0 档语义，落库＝"一枪都不打"，
+#    而读侧会静默回缺省 ⇒ 管理台显示 0、链路按 3 跑，是一个给真实档位撒谎的读数。
+req3 POST "$T73AHdr" "$T73CFG" "$(printf '{"retry_max":%s,"upstream_dead_streak":4}' "$((T73R1HI + 1))")"
+ck3 T73-tier-over-upper-rejected 400 VALIDATION_ERROR '必须落在'
+req3 POST "$T73AHdr" "$T73CFG" '{"retry_max":0,"upstream_dead_streak":4}'
+ck3 T73-tier-zero-rejected 400 VALIDATION_ERROR '必须落在'
+req3 POST "$T73AHdr" "$T73CFG" '{"retry_max":3}'
+ck3 T73-tier-half-params-rejected 400 VALIDATION_ERROR '必须一次提交'
+ckq T73-tier-rejects-leave-db-untouched "$T73R1LO" "$(dbq "SELECT value FROM system_config WHERE key='$T73K1'" | tr -d '[:space:]')"
+
+# ⑤ reset 写空串而不是删行：库里"行不存在"与"行是空串"对读侧同义，
+#    但删行会造出第三种形态，下次排查分不清是运营清过还是从没配过。
+req3 POST "$T73AHdr" "$T73CFG" '{"reset":true}'
+ck3 T73-tier-reset-ok 200 '' ''
+ckq T73-tier-reset-writes-empty-string 1 "$(dbq "SELECT COUNT(*) FROM system_config WHERE key='$T73K1' AND value=''" | tr -dc '0-9')"
+ck T73-tier-reset-falls-back-default '"retry_max":3' "$(get "$T73AHdr" "$T73CFG")"
+
+# ⑥ 工单详情四键与载荷**逐值等值**（裁决九-1 的接线证据）
+# ★ 2026-10-27 夹具修法：建单与读详情都改用**租户用户** $H1，不再用超管头 $T73AHdr。
+#   真身：建单口在 CreateTicket 之前有两道闸（gateUsage 配额墙 + precheckTicketBalance 余额预检），
+#   平台超管的生效租户是 0、没有套餐也没有余额 ⇒ 建单必然被闸拒（402/400），
+#   而旧写法把回执里的 id 用 `or 0` 兜底，于是 T73TK="0" 照样匹配 `^[0-9]+$`（**假绿的建单腿**），
+#   后面 UPDATE ... WHERE id=0 影响 0 行、详情读 id=0 回「缺少工单 id」，
+#   整片红的全在下游、根因在这一条没核回执。现：建单先问 `"success":true`，id 只认**正整数**。
+T73CR=$(post "$H1" '{"title":"T73上游诚实表达","source_text":"第一段：蓝牙钥匙已激活。\n第二段：请勿自行拆卸。\n第三段：质保期为两年。","target_langs":"en","mode":"fast"}' /api/tickets/create)
+ckF T73-ticket-create-envelope '"success":true' "$T73CR"
+T73TK=$(printf '%s' "$T73CR" | pv '.get("ticket",{}).get("id") or 0')
+ck T73-ticket-created '^[1-9][0-9]*$' "$T73TK"
+waittk "$H1" "$T73TK" >/dev/null
+# 甲态：干净载荷（零回填）⇒ 只出 sources，三个计数键**整个缺席**（不许常驻 0 让界面造空话）
+dbq "UPDATE tickets SET final_result='{\"source_text\":\"a\nb\nc\",\"target_langs\":[\"en\"],\"translations\":{\"en\":\"x\ny\nz\"},\"sources\":{\"en\":\"model\"},\"gate\":null}' WHERE id=$T73TK" >/dev/null
+T73D1=$(get "$H1" "/api/tickets/detail?id=$T73TK")
+ck T73-face-clean-sources-present '"sources":\{"en":"model"\}' "$T73D1"
+ckn T73-face-clean-no-unresolved '"unresolved_lines":' "$T73D1"
+ckn T73-face-clean-no-dead '"upstream_dead_lines":' "$T73D1"
+ckn T73-face-clean-no-truncated '"truncated_lines":' "$T73D1"
+# 乙态：载荷里有回填 ⇒ 四键逐值出现（同一条读路径只有载荷变了 ⇒ 证明"库里有没有"直达客户面）
+dbq "UPDATE tickets SET final_result='{\"source_text\":\"a\nb\nc\",\"target_langs\":[\"en\"],\"translations\":{\"en\":\"x\ny\nz\"},\"sources\":{\"en\":\"upstream_failed\"},\"unresolved_lines\":{\"en\":3},\"upstream_dead_lines\":{\"en\":2},\"truncated_lines\":{\"en\":1},\"gate\":null}' WHERE id=$T73TK" >/dev/null
+T73D2=$(get "$H1" "/api/tickets/detail?id=$T73TK")
+ck T73-face-dirty-sources '"sources":\{"en":"upstream_failed"\}' "$T73D2"
+ck T73-face-dirty-unresolved '"unresolved_lines":\{"en":3\}' "$T73D2"
+ck T73-face-dirty-dead '"upstream_dead_lines":\{"en":2\}' "$T73D2"
+ck T73-face-dirty-truncated '"truncated_lines":\{"en":1\}' "$T73D2"
+# 丙态：非 JSON 的历史脏载荷 ⇒ 读成空且不报错（这一档不能变红，否则老工单详情整块白屏）
+dbq "UPDATE tickets SET final_result='not-json' WHERE id=$T73TK" >/dev/null
+req3 GET "$H1" "/api/tickets/detail?id=$T73TK"
+ck3 T73-face-legacy-payload-still-ok 200 '' ''
+
+# ⑦ 源码级接线（接口能过不代表四个交付口都过了咽喉：判据级代替不了守卫级）
+SRC73A="$ROOT73/backend-go/internal/engine/file.go"
+SRC73B="$ROOT73/backend-go/internal/engine/translation_guard.go"
+SRC73C="$ROOT73/backend-go/internal/orchestrator/text_lines.go"
+SRC73D="$ROOT73/backend-go/internal/orchestrator/workflow.go"
+T73FILE=$(cat "$SRC73A" 2>/dev/null || true)
+T73GUARD=$(cat "$SRC73B" 2>/dev/null || true)
+T73LINES=$(cat "$SRC73C" 2>/dev/null || true)
+T73FLOW=$(cat "$SRC73D" 2>/dev/null || true)
+if [ -z "$T73FILE" ] || [ -z "$T73GUARD" ] || [ -z "$T73LINES" ] || [ -z "$T73FLOW" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T73-src-files-readable(有源文件读不到 ⇒ 下面几条 src 锁全部空转，判红而不是放过)"
+else
+  PASS=$((PASS+1)); echo "PASS|T73-src-files-readable"
+fi
+ckF T73-src-delivery-pickups-wrapped 'tr := deliveryTranslations(langTranslations[lc])' "$T73FILE"
+ckF T73-src-image-retry-wired 'unresolved, imgUpstreamDead := e.retryImageSegments(ctx, texts, tr, lc)' "$T73FILE"
+ckF T73-src-notes-appended 'if uerr := fileproc.AppendUntranslatedNotes(imgPath, unresolved); uerr != nil {' "$T73FILE"
+ckF T73-src-strip-reuses-ruler 'if !refusalResidue(src, out) {' "$T73GUARD"
+ckF T73-src-empty-strip-falls-back-source 'return strings.TrimSpace(src)' "$T73GUARD"
+ckF T73-src-ladder-delegates-engine 'return w.Engine.RetryLineUntilUsable(ctx, src, lc)' "$T73LINES"
+ckF T73-src-feedback-skips-backfilled 'if p.UnresolvedLines[lc] > 0 {' "$T73FLOW"
+ckF T73-src-alert-says-quality-flagged '已标记「质检存疑」' "$T73FLOW"
+cknF T73-src-no-manual-promise-in-alert '已标记待人工复核' "$T73FLOW"
+ckn T73-src-orchestrator-stops-reading-tiers 'ConfigInt("text_line_' "$T73LINES"
+ckn T73-src-no-bare-model-source 'p.Sources[lc] = "model"' "$T73LINES"
+ckF T73-roster-has-approved-tier 'SourceApproved' "$T73FLOW"
+ckF T73-spec-registers-sources-roster 'model_with_source_fallback' "$(cat "$ROOT73/backend-go/internal/api/openapi.v1.json" 2>/dev/null || true)"
+ckF T73-doc-registers-sources-roster 'model_with_source_fallback' "$(cat "$ROOT73/backend-go/internal/api/admin_openapi.go" 2>/dev/null || true)"
+T73RENDER=$(cat "$ROOT73/backend-go/internal/fileproc/ocr_translate_image.py" 2>/dev/null || true)
+ckF T73-render-region-mode-wired 'gsizes = _region_sizes(grows)' "$T73RENDER"
+
+# ⑧ 收尾清账：只按本段自己的显式 id / 键清，绝不按前缀或时间批量删
+dbq "DELETE FROM tickets WHERE id=$T73TK" >/dev/null
+dbq "DELETE FROM ticket_state WHERE ticket_id=$T73TK" >/dev/null
+dbq "DELETE FROM system_config WHERE key IN ('$T73K1','$T73K2')" >/dev/null
+# 夹具账号落在 **uatuser_a 的租户**里（不是它自己的租户）⇒ drop_fixture_user 现在只会摘用户那一行，
+#   不会连租户一起拆（守卫见该函数头上那条 2026-10-27 的注释——本批 g7 五红就是这么抓回来的）。
+drop_fixture_user "$T73SU"
+[ -n "${T73INV:-}" ] && dbq "DELETE FROM invite_codes WHERE code='$T73INV'" >/dev/null
+ckq T73-cleanup-ticket-gone 0 "$(dbq "SELECT COUNT(*) FROM tickets WHERE id=$T73TK" | tr -dc '0-9')"
+ckq T73-cleanup-fixture-user-gone 0 "$(dbq "SELECT COUNT(*) FROM users WHERE username='$T73SU'" | tr -dc '0-9')"
+ckq T73-cleanup-tier-keys-gone 0 "$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ('$T73K1','$T73K2')" | tr -dc '0-9')"
+ckq T73-cleanup-no-orphan-ticket 0 "$(dbq "SELECT COUNT(*) FROM tickets WHERE title='T73上游诚实表达'" | tr -dc '0-9')"
+# 跑完把两档钉回"没配"的形态：档位留在上界会跟着进后面的段与多实例矩阵，
+# 那正是"改了配置没反应"最难查的形态（同 T70 段头那条纪律）。
+ck T73-tier-defaults-after-cleanup '"retry_max":3' "$(get "$T73AHdr" "$T73CFG")"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

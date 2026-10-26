@@ -27,6 +27,8 @@ import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
 import { langLabel } from '@/lib/langNames'
+// ★ 2026-10-26 追加裁决九-1/九-2：详情面「上游那一族」诚实块 + 来源档唯一取词点
+import { ticketSourceLabel } from '@/lib/ticketSource'
 import { Icon } from '@/ui/langcross/src'
 // ★ 2026-09-22：进度气泡接入全站共享换词动效（唯一实现见 components/WordSwap.tsx）
 import WordSwap from './WordSwap'
@@ -193,6 +195,67 @@ function QualityBlock({ q, lang, flagged }: { q?: TicketQuality; lang: string; f
       {(flaggedLangs.length > 0 || flagged) && (
         <div style={{ fontSize: 13.5, color: 'var(--lc-warn, #D29922)', marginTop: 8, lineHeight: 1.5 }}><Icon n="alert" /> {t('tk.qaFlaggedTip')}</div>
       )}
+    </div>
+  )
+}
+
+// ============ ★ 2026-10-26 追加裁决九-1：详情面「上游那一族」诚实块 ============
+// 背景：上游整条不通／个别行拿不回东西，过去只活在日志与来源列里，客户在工单详情上
+//   看见的是"完成了"——那是把失败读数写成成功读数。现在这一面直接出栈、直接渲染：
+//   哪一语种、哪一档、几行。
+// 三条渲染纪律（AGENTS §一·19）：
+//   ① **空值口径**：四个键（sources/unresolved_lines/upstream_dead_lines/truncated_lines）
+//      没有回填时**整个不出现**（Go 侧 omitempty）⇒ 读不到＝这一单没有未译出行，
+//      整块不渲染；**禁止**凭空渲染一句"0 行未译出"的空态话。
+//   ② **三档各一句**（上游断／输出被截断／补译后仍无可用输出），混成一句"部分未译出"
+//      是把归因藏起来——三档成因与补救动作不同，方案里明令禁止混写。
+//   ③ **只报事实、零承诺**：本仓无人工复核环节，文案里不许出现"人工/复核/请稍后重试/
+//      我们会跟进"之类（词典值即口径，代码侧不拼接任何承诺句）。
+// 视觉零新增：复用质检区块同款标题/行内样式与 Icon n="alert"（tk-degraded 横幅那一档）。
+function UpstreamNoticeBlock({ q, lang }: { q?: TicketQuality; lang: string }) {
+  const unresolved = q?.unresolved_lines || {}
+  const deadMap = q?.upstream_dead_lines || {}
+  const truncMap = q?.truncated_lines || {}
+  const sourcesMap = q?.sources || {}
+  // 逐语种判据只看 unresolved_lines（总数档）：三档明细缺哪档就少报哪句，不虚报
+  const upstreamLangs = Object.keys(unresolved).filter((lc) => (unresolved[lc] || 0) > 0)
+  if (!(upstreamLangs.length > 0)) return null
+  return (
+    <div data-testid="tk-upstream" style={{ marginTop: 12, borderTop: '1px solid var(--npz-line)', paddingTop: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.upstreamTitle')}</div>
+      {upstreamLangs.map((lc) => {
+        const total = unresolved[lc] || 0
+        const dead = deadMap[lc] || 0
+        const trunc = truncMap[lc] || 0
+        // 补译多轮仍无可用输出＝总数里除去上游断与截断的余量（负数钳 0，读数诚实优先于凑数）
+        const notUsable = Math.max(0, total - dead - trunc)
+        const langName = langLabel(lc, lang)
+        const src = sourcesMap[lc]
+        return (
+          <div key={lc} style={{ marginBottom: 4 }}>
+            {src ? (
+              <div style={{ fontSize: 13.5, color: 'var(--lc-text-2)', lineHeight: 1.5 }}>
+                {langName} · {ticketSourceLabel(src)}
+              </div>
+            ) : null}
+            {dead > 0 && (
+              <div style={{ fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+                <Icon n="alert" /> {tpl('tk.upstreamDead', { lang: langName, n: dead })}
+              </div>
+            )}
+            {trunc > 0 && (
+              <div style={{ fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+                <Icon n="alert" /> {tpl('tk.upstreamTruncated', { lang: langName, n: trunc })}
+              </div>
+            )}
+            {notUsable > 0 && (
+              <div style={{ fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+                <Icon n="alert" /> {tpl('tk.upstreamNotUsable', { lang: langName, n: notUsable })}
+              </div>
+            )}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -904,6 +967,8 @@ export default function TicketsPage() {
             <Icon n="alert" /> {tpl('tk.gateWarningCount', { n: gateWarnings.length })}
           </div>
         )}
+        {/* ★ 2026-10-26 九-1：上游那一族的客户面诚实块（逐语种、三档各一句；读不到键＝整块不渲染） */}
+        <UpstreamNoticeBlock q={detail?.quality} lang={lang} />
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口

@@ -810,6 +810,48 @@
               }
             },
             "description": "产物文件列表。命名口径 {译名}_{语言码}{后缀}：文档=原格式回写（无原格式可回写的字幕/数据类格式以 xlsx 对照表交付）；图片=OCR 识别后翻译，产出同容器译后图（文字按原坐标原位回填）＋译文 .md；音频=ASR 转写后翻译，产出同容器译后配音＋译文 .srt（带原时间轴）＋译文 .md＋原音频副本。"
+          },
+          "translations": {
+            "type": "object",
+            "description": "文本任务完成后的译文：语言码 → 译文。",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "sources": {
+            "type": "object",
+            "description": "文本任务译文来源档：语言码 → 来源。**取值名单固定五种**：kb（翻译记忆直配，零模型调用）／model（模型译文且全部行可用）／model_with_source_fallback（模型译文，但有行未译出、已按原文交付）／upstream_failed（该语种判上游不可用，未译出行全部按原文交付）／approved（审批终稿覆盖）。请按枚举等值分支，不要做子串判断。",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "kb",
+                "model",
+                "model_with_source_fallback",
+                "upstream_failed",
+                "approved"
+              ]
+            }
+          },
+          "unresolved_lines": {
+            "type": "object",
+            "description": "文本任务：语言码 → 按原文交付的行数（总数）。**键缺席＝该语种没有未译出行**；不会下发 0 或 null。与交付 .md 末尾「未译出内容」一节同源。",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "upstream_dead_lines": {
+            "type": "object",
+            "description": "其中因上游服务不可用而未译出的行数（按语言码）。系统不会为这些行发起人工复核。",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "truncated_lines": {
+            "type": "object",
+            "description": "其中因模型输出被截断而未译出的行数（按语言码）。与 upstream_dead_lines 是两族，成因与补救动作不同。",
+            "additionalProperties": {
+              "type": "integer"
+            }
           }
         }
       },

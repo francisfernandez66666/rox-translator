@@ -621,11 +621,14 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 		return fmt.Errorf("编排器未初始化")
 	}
 	err := wf.Executor.Execute(ctx, t, func(step string, ok bool, errMsg string) {})
-	if err != nil {
-		return err
-	}
 	// ★ DEF-02（2026-10-24）：结构失败 → 整单重新入队（上限 ticket_repair_max=3）。
 	//   重发时 runAIInitial 读回旧译文，正确行复用，只重译缺失/错误行（见 orchestrator/text_lines.go）。
+	// ★ 2026-10-26（W3／BUG-01、BUG-06 的顺序修复）：这一问必须**问在 return err 之前**。
+	//   旧形态是 `if err != nil { return err }` 挡在前面，而"漏段"恰恰是**带错误返回**的那一类
+	//   （硬闸按段落数判失败 ⇒ 流水线以 err 收尾）——于是那 3 次重排预算在现网一次都走不到：
+	//   坏单直接落 failed，客户拿到的是缺段成品，而日志里只有一句流水线错误。
+	//   两支现在分开走：结构预算够 ⇒ 重排（吞掉本轮错误是因为它已被"重排"这个更好的出口接住）；
+	//   预算用尽或不是结构失败 ⇒ **照旧把原始错误报出去**，不吞、不假装完成（AGENTS §一·8 同族）。
 	if wf.StructureRetryNeeded(t) {
 		ok, rerr := s.Store.RequeueTicketForRepair(t.ID)
 		if rerr != nil || !ok {
@@ -636,8 +639,11 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 			observability.Warn(ctx, "文本工单结构重排入队失败，按完成态收尾", "ticket", t.ID, "error", eerr.Error())
 			return nil
 		}
-		observability.Info(ctx, "文本工单结构失败，已自动重新入队", "ticket", t.ID, "max_repair", 3)
+		observability.Info(ctx, "文本工单结构失败，已自动重新入队", "ticket", t.ID, "max_repair", 3, "pipeline_error", fmt.Sprint(err))
 		return errTicketRequeued
+	}
+	if err != nil {
+		return err
 	}
 	// 计费统一在 runTicket 完成态按真实 token 聚合扣减（chargeTokens）
 	return nil

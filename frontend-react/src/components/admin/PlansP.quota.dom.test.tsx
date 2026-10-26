@@ -28,6 +28,10 @@ const Q = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api', () => ({
+  // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
+  // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
+  adminTextLineTiers: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
+  adminTextLineTiersSave: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
   billingQuota: vi.fn(async () => Q.get),
   billingQuotaSave: vi.fn(async (data: Record<string, unknown>) => { Q.saves.push(data); return { success: true } }),
   billingOrders: vi.fn(async () => ({ success: true, orders: [] })),

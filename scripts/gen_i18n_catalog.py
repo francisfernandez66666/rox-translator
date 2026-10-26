@@ -294,6 +294,12 @@ T = {
 "租户创建失败：该企业编码已存在": "Tenant creation failed: this company code already exists",
 "租户存储未初始化": "Tenant storage not initialized",
 "租户已创建，但管理员账号创建失败: ": "Tenant created, but admin account creation failed: ",
+# ★ 2026-10-26 裁决九-4：逐行翻译两条档位的超管口（api/text_line_config.go）。
+#   补录口径＝闸门正则扫到的**那一条字面量原文**（含结尾空格），不是整句拼接后的成品；
+#   少一条就是 TestAPICnMessageLiteralsCovered 判红（写死中文不进词典＝非中文界面看到汉字）。
+"两条档位必须一次提交，缺少 ": "Both tiers must be submitted together; missing ",
+'请求格式错误：需为 {"retry_max":3,"upstream_dead_streak":3}': 'Bad request format: expected {"retry_max":3,"upstream_dead_streak":3}',
+
 # ★ 2026-10-23：超管删除租户接口（api/admin_purge.go）——删数据是不可逆动作，错误文案必须逐条可译
 "仅平台超管可删除租户数据": "Only platform super admins can delete tenant data",
 "请求方法不支持": "Request method not supported",

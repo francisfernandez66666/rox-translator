@@ -394,10 +394,12 @@ export const baseZh: Record<string,string> = {
   // ★ 改造 4/5（2026-09-17）：用户侧质检报告透出 + 质检存疑徽标
   'tk.qaTitle': '质检报告', 'tk.qaPass': '质检通过', 'tk.qaFail': '质检未通过',
   'tk.qaErrors': '{n} 项错误', 'tk.qaWarnings': '{n} 项提示', 'tk.qaClean': '暂未发现质量问题',
-  'tk.qaFlagged': '质检存疑', 'tk.qaFlaggedTip': '机器评估分数低于阈值，已标记待人工复核。',
+  // ★ W6（2026-10-26 用户令）：本仓没有人复核环节，出栈文案只陈述机器事实，
+  //   不许写「已标记待人工复核」这类承诺（同那一条「quality_flagged 口径＝质检存疑」）。
+  'tk.qaFlagged': '质检存疑', 'tk.qaFlaggedTip': '机器评估分数低于阈值，已标记「质检存疑」。',
   'tk.qaColLang': '语言', 'tk.qaColRule': '规则', 'tk.qaColLevel': '级别', 'tk.qaColDetail': '说明',
   'tk.qaLevelError': '错误', 'tk.qaLevelWarning': '提示', 'tk.qaNoIssues': '未发现问题。',
-  'tk.qaErrorNote': '错误项为系统已自动重译（最多 8 次）后仍存在的问题，建议人工复核。',
+  'tk.qaErrorNote': '错误项为系统已自动重译（最多 8 次）后仍存在的问题，请结合原文核对。',
   'tk.evalScores': '机器评估分（满分 100）', 'tk.evalInitial': '初翻', 'tk.evalReview': '校对',
   'tk.qaRuleEmpty': '空译文', 'tk.qaRuleSame': '与原文相同', 'tk.qaRuleNumber': '数字不一致',
   'tk.qaRulePlaceholder': '占位符不一致', 'tk.qaRuleLength': '长度异常', 'tk.qaRulePunctuation': '标点异常',
@@ -871,4 +873,14 @@ export const baseZh: Record<string,string> = {
   'tk.downloadInterruptedAt': '下载中断（已收到 {n} KB，网络未走完，请重试）',
   'chat.micNoSpeech': '没有听到语音，请靠近麦克风、确认已授权后再说一次',
   'audit.action.invite_revoke': '撤销邀请码',
+  // ★ 2026-10-26 追加裁决九-1/九-2：详情面「上游那一族」诚实块 + 来源档文案（只报事实、零承诺）
+  'tk.upstreamTitle': '上游未返回可用译文',
+  'tk.upstreamDead': '{lang}：{n} 行上游未返回可用译文，已按原文交付',
+  'tk.upstreamTruncated': '{lang}：{n} 行输出被截断，已按原文交付',
+  'tk.upstreamNotUsable': '{lang}：{n} 行补译后仍无可用输出，已按原文交付',
+  'tk.srcKb': '知识库命中',
+  'tk.srcModel': '模型译文',
+  'tk.srcModelFallback': '模型译文（含按原文回落的行）',
+  'tk.srcUpstreamFailed': '上游失败（整语种按原文交付）',
+  'tk.srcApproved': '审批终稿',
 }

@@ -12,6 +12,7 @@ package fileproc
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -288,6 +289,41 @@ func WriteTranslationMd(outPath string, sourceTexts []string, translations map[s
 		}
 	}
 	return os.WriteFile(outPath, []byte(b.String()), 0o644)
+}
+
+// UntranslatedItem 交付文档「未译出内容」那一节的一条记录。
+// 行号与原文都点名到具体那一行（用户裁决 7：交付文档**只**记录未翻译内容，不写别的），
+// Reason 由调用方给**成因原话**——三族（上游未返回／输出被截断／补译多轮仍非译文）不许混成
+// 一句"部分未译出"，那是把归因藏起来。
+type UntranslatedItem struct {
+	Line   int    // 1 起的行号（按交付文档里的段落顺序数）
+	Source string // 该段原文（图上/文内已按原样保留，这里点名它）
+	Reason string // 成因一句话，由调用方按族给
+}
+
+// AppendUntranslatedNotes 在已写好的 .md 末尾追加「未译出内容」一节。
+// 参数：outPath=目标 .md；items=未译出的段落（**空清单 ⇒ 什么都不写**，连标题都不出）。
+// 为什么空清单不出该节：客户读到的"未译出：0 行"是一句**没有对象的话**，
+// 而这一节的用途是让人定位到具体那一行；没有行就回到"交付物完整"的形态，不制造噪音。
+func AppendUntranslatedNotes(outPath string, items []UntranslatedItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.Write(b)
+	// 原文末尾没有换行时先补一个：否则标题会和最后一句译文粘在同一行（markdown 里就不再是标题）。
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		sb.WriteString("\n")
+	}
+	fmt.Fprintf(&sb, "\n## 未译出内容（共 %d 行）\n", len(items))
+	for _, it := range items {
+		fmt.Fprintf(&sb, "- 第 %d 行：原文「%s」，%s\n", it.Line, it.Source, it.Reason)
+	}
+	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
 }
 
 // WriteComparisonXlsx 生成「源文→译文」xlsx 对照表（无原格式回写能力格式的统一产物）。

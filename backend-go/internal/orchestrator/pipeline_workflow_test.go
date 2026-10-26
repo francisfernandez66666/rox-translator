@@ -49,8 +49,21 @@ import (
 type pwStub struct {
 	mu      sync.Mutex
 	prompts []string
+	// systems 与 prompts **同下标**：记每一次请求的 system 段。
+	// ★ 为什么夹具要记这一维（2026-10-26 逐行链的锁逼出来的）：批量腿的 user 带 `<sN>` 编号契约，
+	//   认得出来；但**单发腿**有三种——引擎批内逐段兜底（正常腿）、审校、以及工单逐行链的
+	//   极简补译梯——它们的 user 段**都是裸源文，字节上完全同形**。只记 user 就会把
+	//   「我的梯没打枪」判成「打了 12 枪」，而真实差异只在 system 有没有那两条尾注
+	//   （见 engine/file_echo_pipeline_test.go 的 echoIsFullLegPrompt 同一口径）。
+	systems []string
 	// reply 由用例注入：输入最后一条 user prompt，返回模型 content 文本。
 	reply func(prompt string) string
+	// finish 为**全部**响应回吐的 finish_reason（空串＝"stop"）。
+	// ★ 为什么夹具要能钉这一维（2026-10-26 八-3c／W8）：截空那一族的唯一外部证据就是
+	//   finish_reason=length——回空串而不带这个标记，测出来的是"上游没返回"，
+	//   于是"截断不喂上游断计数器"那条锁根本没有射程。
+	//   需要按请求分档的用例自行在 reply 里判断形态，这个字段只提供"整台都截断"这一档。
+	finish string
 }
 
 // ServeHTTP 实现 OpenAI 兼容最小协议（本用例只关心 content 字段）。
@@ -64,11 +77,18 @@ func (s *pwStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.Unmarshal(body, &req)
 	prompt := ""
+	sys := ""
 	if len(req.Messages) > 0 {
 		prompt = req.Messages[len(req.Messages)-1].Content
 	}
+	// 只有「多条消息且首条是 system」才算 system 腿；单条请求按正常腿处理（宁少判极简，
+	// 不把没带尾注结构的东西读成极简梯——误判会让"零补译"那条锁凭空红）。
+	if len(req.Messages) >= 2 && req.Messages[0].Role == "system" {
+		sys = req.Messages[0].Content
+	}
 	s.mu.Lock()
 	s.prompts = append(s.prompts, prompt)
+	s.systems = append(s.systems, sys)
 	s.mu.Unlock()
 	content := "UNSET-STUB"
 	if s.reply != nil {
@@ -76,7 +96,11 @@ func (s *pwStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	enc, _ := json.Marshal(content) // 用 JSON 字符串编码，保证换行/引号安全回传
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%s},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":5}}`, enc)
+	finish := s.finish
+	if finish == "" {
+		finish = "stop" // 既有全部用例的默认档，零改动
+	}
+	_, _ = fmt.Fprintf(w, `{"choices":[{"message":{"content":%s},"finish_reason":"%s"}],"usage":{"prompt_tokens":5,"completion_tokens":5}}`, enc, finish)
 }
 
 // asked 返回包含指定片段的历史 prompt 条数（断言「打回原因是否真的送到了模型」）。
@@ -86,6 +110,32 @@ func (s *pwStub) asked(substr string) int {
 	n := 0
 	for _, p := range s.prompts {
 		if strings.Contains(p, substr) {
+			n++
+		}
+	}
+	return n
+}
+
+// pwFullLegNoteAnchors 「正常腿」的锚：两条尾注按界面语言取其一（与 engine 侧同一对锚，
+// 改那两条尾注措辞必须同步这里，否则本文件的极简腿计数会整体翻档）。
+var pwFullLegNoteAnchors = []string{"金额币种保真", "Currency rule:"}
+
+// minimalCalls 返回**极简补译梯**打出的枪数（system 不带那两条尾注的单发请求）。
+// 用途：判"上游断早停后一枪补译都不打"与"不合格行确实走了补译梯"——
+// 按 user 段分不出它和引擎批内逐段兜底，只有 system 这一维分得出。
+func (s *pwStub) minimalCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, sys := range s.systems {
+		full := false
+		for _, a := range pwFullLegNoteAnchors {
+			if strings.Contains(sys, a) {
+				full = true
+				break
+			}
+		}
+		if !full && sys != "" {
 			n++
 		}
 	}

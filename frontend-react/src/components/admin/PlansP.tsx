@@ -18,6 +18,15 @@
 //   {本地日期}」并说明身份/额度保留与逾期移除规则。仅消费后端新出参，计费逻辑未动。
 // ============================================================================
 import { useCallback, useEffect, useRef, useState } from 'react'
+// ★ 2026-10-26（裁决九-4）档位字段名与合法区间的唯一出处：纯模块，不经 @/api 的 mock 面
+//   （管理台夹具按枚举 mock 接口层，常量若也从那儿走，加一档就得改 N 份夹具——漏一处的表现
+//   是整块面板渲染崩，不是少一条用例。区间值与后端白名单等值由 PlansP.textline 那条跨侧锁钉。）
+import {
+  TEXT_LINE_TIER_CONFIG_KEYS,
+  TEXT_LINE_TIER_FIELDS,
+  TEXT_LINE_TIER_RANGES,
+  type TextLineTierField,
+} from '@/lib/textLineTiers'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import type { ChangeEvent } from 'react'
 import { Button, DataTable, Dialog, Switch, StatusPill, Badge, Link, type StatusTone } from '@/ui/langcross/src'
@@ -36,6 +45,8 @@ import {
   adminQuoteCurrency, adminQuoteCurrencySave,
   // ★ 〇-X 第 5 项（F-72 补口 2026-09-27）：计费预估系数（建单余额预检）的超管表单
   adminEstTokens, adminEstTokensSave, EST_TOKEN_FIELDS, type EstTokenField,
+  // ★ 2026-10-26 裁决九-4：逐行翻译两条档位的运营配置口（形态与上面预估系数同一族）。
+  adminTextLineTiers, adminTextLineTiersSave,
   adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
@@ -207,6 +218,15 @@ export function PlansP() {
     formula: string
     pointsRate: number
   }>({ ready: false, rows: {}, formula: '', pointsRate: 0 })
+  // ★ 2026-10-26（裁决九-4）逐行翻译两条档位。与 estMeta 同一口径，两条判据都不许省：
+  //   ① 表单填的是**生效值**（后端按读侧钳位回显），不是库里那个字面量——库里躺着脏值时
+  //      若把脏值塞进输入框，管理员原样点保存就等于把一个系统从没在用过的数钉成正式配置；
+  //   ② ready 为假 ⇒ 禁提交（回显没成功就不许写，防"空值整批覆盖档位"）。
+  const [tlForm, setTlForm] = useState<Record<TextLineTierField, string>>({ retry_max: '', upstream_dead_streak: '' })
+  const [tlMeta, setTlMeta] = useState<{
+    ready: boolean
+    rows: Partial<Record<TextLineTierField, { stored: string; dirty: boolean; def: number }>>
+  }>({ ready: false, rows: {} })
   // ★ #75 C 端报价口径：/api/me/package 透出的 quote_currency + fx_rates_snapshot，
   //   收银台据此把人民币实收金额折算成本币展示值（仅展示，实扣仍是 CNY）。
   const [myQuote, setMyQuote] = useState<{ code: string; rates: Record<string, number> }>({ code: 'CNY', rates: {} })
@@ -388,13 +408,40 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     }
   }, [isSuper, guardRead])
 
+  // loadTlTiers 回显逐行翻译两条档位（裁决九-4）。这一腿**只回显**：输入框填 tiers（读侧钳位后的
+  // 生效值），库里原值另存 rows.stored 做标注——绝不把脏字面量塞进输入框（原样点保存＝把"系统
+  // 从没在用过的数"钉成正式配置）。区间预拦不在这里，在 saveTlTiers 里读 TEXT_LINE_TIER_RANGES
+  // 那一份唯一出处（本组件不写第二份 1~5 / 2~10；跨侧等值由 textLineTiers.crossSide 那条锁钉）。
+  const loadTlTiers = useCallback(async () => {
+    if (!isSuper) return
+    const r: Any = await guardRead(adminTextLineTiers)
+    if (!r.success) {
+      setTlMeta((m) => ({ ...m, ready: false }))
+      return
+    }
+    const eff = (r.tiers as Record<string, number>) || {}
+    const stored = (r.stored as Record<string, string>) || {}
+    const defs = (r.defaults as Record<string, number>) || {}
+    const form = {} as Record<TextLineTierField, string>
+    const rows: Record<string, { stored: string; dirty: boolean; def: number }> = {}
+    for (const k of TEXT_LINE_TIER_FIELDS) {
+      const e = Number(eff[k] ?? 0)
+      form[k] = String(e)
+      const st = String(stored[TEXT_LINE_TIER_CONFIG_KEYS[k]] ?? '').trim()
+      // 库内原值与生效值不等 ⇒ 标脏（越界被钳位、或脏值回落缺省），界面上必须看得出来
+      rows[k] = { stored: st, dirty: st !== '' && !(Number.isFinite(Number(st)) && Number(st) === e), def: Number(defs[k] ?? 0) }
+    }
+    setTlForm(form)
+    setTlMeta({ ready: true, rows })
+  }, [isSuper, guardRead])
+
   // loadAll 计费面板整体刷新：租户先取套餐，再并行拉订单/发票/配额/商业包
   // ★ F-55（批 I-3）时序半：切换器一改就整盘重取。旧实现只在挂载时拉一次，
   //   超管从租户 A 切到 B 后屏上仍是 A 的配额，此时点保存＝把 A 的数写进 B（读写同源的另一半）。
   const loadAll = useCallback(async () => {
     if (!isSuper) await loadPackage()
-    await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs()])
-  }, [isSuper, ad.activeTenantId, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs])
+    await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs(), loadTlTiers()])
+  }, [isSuper, ad.activeTenantId, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs, loadTlTiers])
   useEffect(() => { void loadAll() }, [loadAll])
 
     // subscribe 订阅套餐：建单→弹收款台（券码非空时一并提交，服务端按折后金额出码）
@@ -872,6 +919,39 @@ async function savePayChannels() {
     try {
       const r: Any = await adminEstTokensSave({ reset: true })
       if (toastResp(r, t('common.save'))) await loadPkgs()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
+  // saveTlTiers 保存逐行翻译两条档位。客户端先把与服务端同区间的三道门挡住（两项齐全、
+  // 是整数、落在 ranges 内），脏输入不进请求：这两条改的是**所有租户每一单**的补译枪数与
+  // 早停灵敏度，报一句后端天书不如当场说明该填什么。
+  // ★ 区间一律取 TEXT_LINE_TIER_RANGES 现值（与后端 textLineCfgFields 同源，别在这里写死数字）。
+  async function saveTlTiers() {
+    const nums: Partial<Record<TextLineTierField, number>> = {}
+    for (const k of TEXT_LINE_TIER_FIELDS) {
+      const raw = String(tlForm[k] ?? '').trim()
+      const n = Number(raw)
+      const [lo, hi] = TEXT_LINE_TIER_RANGES[k]
+      if (raw === '' || !Number.isInteger(n) || n < lo || n > hi) {
+        void toastWarn(t('billing.tlNeedAll'))
+        return
+      }
+      nums[k] = n
+    }
+    try {
+      const r: Any = await adminTextLineTiersSave(nums)
+      // 保存成功后**用响应体回显生效值**（不自己拼入参）：钳位/脏值时两者不同，
+      // 界面上留下的必须是"链路此刻真正在用的那一档"。
+      if (toastResp(r, t('common.save'))) await loadTlTiers()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
+  // resetTlTiers 清空两档回代码缺省（批量清空动作 ⇒ 必须二次确认，且只在动作函数内部弹一次）
+  async function resetTlTiers() {
+    if (!(await confirmDialog({ body: t('billing.tlConfirmReset'), danger: true }))) return
+    try {
+      const r: Any = await adminTextLineTiersSave({ reset: true })
+      if (toastResp(r, t('common.save'))) await loadTlTiers()
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
 
@@ -1357,6 +1437,46 @@ async function savePayChannels() {
             {estMeta.pointsRate > 0 ? (
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>{tpl('billing.estPoints', { n: String(estMeta.pointsRate) })}</div>
             ) : null}
+          </div>
+
+          {/* ★ 2026-10-26（裁决九-4）逐行翻译两条档位：与预估系数同一面板同一形态（同为
+              "影响每一单消耗"的运营档位），不新造页面、不开第二套 KV 编辑面。
+              每个字段右侧标注的是**库内原值 vs 生效值**的差异（钳位/脏值），
+              没有这行标注，运营会把库里那个数当成链路在用的数。 */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.tlSection')}</span>
+              <Button onClick={saveTlTiers} disabled={!tlMeta.ready}>{t('common.save')}</Button>
+              <Button onClick={resetTlTiers} disabled={!tlMeta.ready}>{t('billing.estReset')}</Button>
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.tlHint')}</div>
+            {([
+              ['retry_max', t('billing.tlRetryMax')],
+              ['upstream_dead_streak', t('billing.tlStreak')],
+            ] as Array<[TextLineTierField, string]>).map(([f, label]) => {
+              const m = tlMeta.rows[f]
+              const [lo, hi] = TEXT_LINE_TIER_RANGES[f]
+              return (
+                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 15, color: 'var(--adm-hint)', width: 300 }}>{label}</span>
+                  <input className="lc-input" type="number" step="1" min={lo} max={hi} style={{ width: 140 }}
+                         value={tlForm[f]} disabled={!tlMeta.ready}
+                         onChange={(e) => setTlForm((c) => ({ ...c, [f]: e.target.value }))} />
+                  {!m || m.stored === '' ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tpl('billing.estDefault', { v: String(m?.def ?? '') })}</span>
+                  ) : m.dirty ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-amber-tx)' }}>{tpl('billing.estDirty', { v: m.stored, d: String(m.def) })}</span>
+                  ) : null}
+                </div>
+              )
+            })}
+            <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>
+              {tpl('billing.tlRange', {
+                retry: String(tlForm.retry_max ?? ''), streak: String(tlForm.upstream_dead_streak ?? ''),
+                storedRetry: String(tlMeta.rows.retry_max?.stored ?? ''),
+                storedStreak: String(tlMeta.rows.upstream_dead_streak?.stored ?? ''),
+              })}
+            </div>
           </div>
         </Panel>
       )}

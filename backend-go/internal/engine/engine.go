@@ -1093,7 +1093,15 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 //
 //	量的是**真发出去的那份文本**，不是另抄一份字数。改这里＝预估的校对腿开销当场跟着变
 //	（等值锁＝TestChatLegFixedTokensDeriveFromRealPrompts）。
-const reviewPromptFmt = "你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s"
+//
+// ★ 2026-10-26 用户追加裁决八-4「术语/方言/古诗，由复核的 gpt 兜底，提示词加上类似
+//
+//	『请注意这段话的语境和语法』等提示词」：第四族（翻得出但翻不对）**不动可用性判据**
+//	（判据一拦就是把可交付的东西打成没有），改由审校这一腿兜——所以这一句加在审校指令里，
+//	且明确点到「语境／语法／术语／方言与古语用法」四类，不写成"注意质量"这种模型接不住的空话。
+//	⚠️ 改这个模板＝改预估：校对腿的固定指令开销由 `costmodel.go` 从**本模板现量**
+//	（TestChatLegFixedTokensDeriveFromRealPrompts 那族等值锁），不许回头去写死系数。
+const reviewPromptFmt = "你是资深翻译审校。请审校以下%s译文，修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文）；并留意这段话在该语种里的语境与语法是否自然、术语与方言／古语用法是否正确（同一词在不同行业、地区与文体下译法不同，按原文的实际用法判断，不按字面直译）。保持原意与风格，不要改写结构。不得复述原文，也不得以括号或其他任何形式在译文中附注原词。%s\n\n【原文】%s\n【待审校译文】%s\n\n只输出审校后的译文：\n%s"
 
 // translateOutputBudget 按输入文本估算「输出侧」token 预算（★ 2026-10-15 截断修复）。
 // 参数 text: 用于定档的文本（取要被产出的那一版译文长度最贴合）。
@@ -2152,12 +2160,32 @@ func headsample(texts []string, n int) []string {
 type BatchChunkDone func(done, total, start int, sources, results []string)
 
 // BatchTranslate 批量单语翻译，等价 call_online_llm_single_lang_batch
-// 返回与输入等长的译文列表，失败填 "[翻译失败]"
+// 返回与输入等长的译文列表，失败填 "[翻译失败]"。
+// ★ 2026-10-26（裁决八-3c／九-3）：本函数是 `BatchTranslateMarked` 的**薄委托**——实现只有一份。
+//
+//	需要区分「这一槽是上游压根没吐」与「这一槽是被 max_tokens 截空」的调用方走带读数的那一口，
+//	其余调用方（文件主链、SSE 逐段上屏）字节口径一字未变。
 func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone) []string {
+	results, _ := e.BatchTranslateMarked(ctx, texts, targetLang, batchSize, onBatchDone)
+	return results
+}
+
+// BatchTranslateMarked 与 BatchTranslate 同一条实现，额外回吐「哪些槽位是被截断的」。
+// 参数：texts=待译段，targetLang=目标语言，batchSize=段块大小（0=按均长动态），onBatchDone=逐块回调。
+// 返回：results=与输入等长的译文（失败槽位为 `[翻译失败]`）；
+//
+//	truncated=下标→是否被 max_tokens 截断（该块 finish_reason=length 且这一槽没拿到内容才置真）。
+//
+// 为什么必须有这一份读数（用户裁决八-3c「输出被 max_tokens 截空——要解决」＋九-3「W8 与本批一起上」）：
+// 截空槽位与"上游没返回"在字节上**完全同形**（都是空串／`[翻译失败]`）。调用方据此判
+// "上游整条不通"，就会把**可救的行**一起打成原文——截空是预算不够，单独重拨并抬高预算能救回来。
+// ⚠️ 这一档与上游断分不开的那一版如果单独上线，现网投的是客户成品，所以两条同批改（九-3 的原由）。
+func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone) ([]string, map[int]bool) {
 	cfg := e.Cfg
 	result := make([]string, len(texts))
+	truncated := map[int]bool{}
 	if len(texts) == 0 {
-		return result
+		return result, truncated
 	}
 
 	log.Printf("[llm-batch] start lang=%s segs=%d", targetLang, len(texts))
@@ -2197,6 +2225,10 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	}
 
 	var mu sync.Mutex
+	// tm 单独保护 truncated（各段块并发上报自己的截断槽位）。
+	// 不复用上面那把：那把罩的是 result 写回与用量记，临界区里还有解析与循环——
+	// 把新读数塞进去等于顺手扩大了两条不相干链的争用面。
+	var tm sync.Mutex
 	var wg sync.WaitGroup
 	// ★ D18（2026-09-12）：批量段块并发可配（LLM_BATCH_CONCURRENCY，默认 4）；
 	// 供应商侧另有 acquireChat 全局闸与 429 退避兜底，放大默认不再击穿配额。
@@ -2239,14 +2271,14 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			maxTokens = 8192
 		}
 
-		content, _, err := e.LLM.CallChat(ctx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
+		content, finish, err := e.LLM.CallChat(ctx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
 		// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
 		//（base/key 沿用解析结果，不再回退 cfg.Online* 常量）
 		if err != nil && (isRateLimited(err) || isNetworkError(err)) {
 			if isRateLimited(err) && !sleepCtx(ctx, 5*time.Second) {
 				return 0 // ★ D9：批量链取消止损（该块计 0 命中）
 			}
-			content, _, err = e.LLM.CallChat(ctx, base, key, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
+			content, finish, err = e.LLM.CallChat(ctx, base, key, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
 		}
 		if err == nil {
 			// 记录批量路径实际使用的供应商与模型（usageRecord 已加锁，多 chunk 并发安全）
@@ -2254,6 +2286,20 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 		}
 
 		parsed := parseBatchOutput(content, len(chunk))
+		// ★ 2026-10-26 八-3c：这一块**吐到一半被 max_tokens 砍断**（finish_reason=length）时，
+		//   块内没拿到内容的槽位记成「截断档」——那是预算不够，**不是上游不通**。
+		//   只认 length 这一档、只记没内容的槽、且只在请求本身成功时记：
+		//   正常结束却缺段＝模型漏编号（解析层的事，重拨同一批也未必好），err≠nil 时整块一个内容都没有
+		//   （那才该走上游断那一档），两者混进这里都会把判据往错误方向推。
+		if err == nil && finish == "length" {
+			tm.Lock()
+			for i, tr := range parsed {
+				if strings.TrimSpace(tr) == "" && start+i < len(result) {
+					truncated[start+i] = true
+				}
+			}
+			tm.Unlock()
+		}
 		hit := 0
 		mu.Lock()
 		for i, tr := range parsed {
@@ -2349,10 +2395,17 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 			mu.Lock()
 			result[i] = out
 			mu.Unlock()
+			// ⚠️ 这里**不**再补一次截断判定，是有意的：逐段兜底那一枪自己已经在做截断重拨
+			//   （见上面单发腿的 `finishReason == "length" || content == ""` 且 attempt<2 那一支，
+			//   预算按 attempt 翻倍到 16384 封顶）。走到"兜底仍空"这一步时，
+			//   singleLang 的返回里已经没有 finish_reason 了——**没有读数就不造判据**，
+			//   拿"错误文本里有没有 length 字样"去猜＝写一条结构上恒假的腿（AGENTS 那条
+			//   「注释点名的锚点必须存在」的同族反面：锚点在，但它永远不成立）。
+			//   所以这一槽留在「上游没吐内容」的形态里，由调用方按 not_usable 档点名。
 		}(i)
 	}
 	wg.Wait()
-	return result
+	return result, truncated
 }
 
 // parseBatchOutput 解析批量翻译结果。返回与 n 等长的译文切片。

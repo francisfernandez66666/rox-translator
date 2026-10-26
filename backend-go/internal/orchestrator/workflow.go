@@ -91,24 +91,53 @@ type ticketPayload struct {
 	SourceText       string             `json:"source_text"`                  // 源文本
 	TargetLangs      []string           `json:"target_langs"`                 // 目标语言列表
 	Translations     map[string]string  `json:"translations"`                 // 语言 → 译文
-	Sources          map[string]string  `json:"sources"`                      // 语言 → 来源（kb/model）
+	Sources          map[string]string  `json:"sources"`                      // 语言 → 来源（见下方 Source* 三档名单）
 	Mode             string             `json:"mode"`                         // 匹配模式标识
 	Examples         []*kb.Row          `json:"examples,omitempty"`           // 知识库命中例句（供 AI 初翻注入术语参考）
 	EvalScores       map[string]float64 `json:"eval_scores"`                  // 语言 → 评估总分
 	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"` // 语言 → 校对评估总分
 	// ★ 改造 4（2026-09-17）评估不合格处置：低于 evals_fail_threshold（默认 60）的语言
 	//   打标（工单详情透出「质检存疑」徽标）+ 告警中心/群机器人提醒（同单同语言同阶段幂等一次）
-	QualityFlaggedLangs []string               `json:"quality_flagged_langs,omitempty"` // 评估不达标语言列表
-	EvalNotified        map[string]bool        `json:"eval_notified,omitempty"`         // 提醒幂等标记（key=阶段:语言）
-	Gate                *gate.GateResult       `json:"gate"`                            // Gate 校验结果
-	Culture             *culture.CultureResult `json:"culture,omitempty"`               // 语言文化闸门结果
-	QAReport            *qa.Report             `json:"qa_report,omitempty"`             // 确定性 QA 质检报告
-	RetryCount          map[string]int         `json:"retry_count,omitempty"`           // 语言 → 硬闸自动重译次数
-	GateHints           map[string]string      `json:"gate_hints,omitempty"`            // 语言 → 最近一次硬闸打回原因（供审批参考）
+	QualityFlaggedLangs []string `json:"quality_flagged_langs,omitempty"` // 评估不达标语言列表
+	// ★ 2026-10-26 用户令①/⑦：逐行链路补译到最后一轮仍不合格的**行数**（按语言）。
+	// 这些行**按原文回落**（不留白、不丢行），计数落这里给交付面记录"哪几行没译出"，
+	// 只数行数不落原文（工单内容属客户资料，与 §13 那条日志不留原文同口径）。
+	UnresolvedLines map[string]int `json:"unresolved_lines,omitempty"`
+	// ★ 2026-10-26 用户追加裁决八-1「上游问题可以接受，就诚实表达问题就好」：
+	// 回填行**按族分档**计数——`unresolved_lines` 是总数，这一档只数**判上游断**那一部分
+	// （差值即"模型翻得出但形态不合格"那一档）。两档混成一味的代价：客户与值班看到的是
+	// 同一句"部分未译出"，而一族需要等上游、另一族需要改判据，处置完全不同。
+	UpstreamDeadLines map[string]int `json:"upstream_dead_lines,omitempty"`
+	// ★ 2026-10-26 用户追加裁决八-3c＋九-3（W8 与本批一起上）：只数**被 max_tokens 截断**那一档。
+	// 它与 upstream_dead 是两族——截断抬高预算单独重拨能救，上游断重拨一万次也不会好。
+	// 交付面那句"哪一语种、哪一档、几行"要的就是这一维；三档各记各的，不许混成一味。
+	TruncatedLines map[string]int         `json:"truncated_lines,omitempty"`
+	EvalNotified   map[string]bool        `json:"eval_notified,omitempty"` // 提醒幂等标记（key=阶段:语言）
+	Gate           *gate.GateResult       `json:"gate"`                    // Gate 校验结果
+	Culture        *culture.CultureResult `json:"culture,omitempty"`       // 语言文化闸门结果
+	QAReport       *qa.Report             `json:"qa_report,omitempty"`     // 确定性 QA 质检报告
+	RetryCount     map[string]int         `json:"retry_count,omitempty"`   // 语言 → 硬闸自动重译次数
+	GateHints      map[string]string      `json:"gate_hints,omitempty"`    // 语言 → 最近一次硬闸打回原因（供审批参考）
 	// ★ 2026-10-24 DEF-02 的整单重发计数**不在这里**：它落 `tickets.repair_attempts` 列
 	//   （§10.1.2；判据见 Workflow.StructureRetryNeeded）。原先写成载荷字段会被任何一次
 	//   「整段重写载荷」的路径抹回 0，于是上限变软、坏单无限重发并每轮真扣费。
 }
+
+// 工单载荷 Sources[lang] 的**唯一合法值名单**（★ 2026-10-26 用户追加裁决八-1）。
+// ⚠️ 这一档含 `approved`：它由审批面（internal/api/tickets.go）写，不在本包，但仍进同一张名单——
+//
+//	名单锁要扫的是**全部生产写点**，按包切一半等于给下一处裸字面量留盲区。
+//
+// 为什么要把这几档钉成常量＋一条名单锁：这一列是**对外契约**（管理台来源列、按来源统计、
+// 自迭代写库都读它），而"回填过原文却仍写 model"正是本仓反复踩过的「读数为失败背书」形态
+// （AGENTS §一·3 那条 `from` 档位同族）。名单之外不许长出第四种值。
+const (
+	SourceKB                = "kb"                         // 知识库直配命中
+	SourceModel             = "model"                      // 模型译文，零回填
+	SourceModelWithFallback = "model_with_source_fallback" // 模型译文，但含按原文回落的行
+	SourceUpstreamFailed    = "upstream_failed"            // 该语种判上游断，未译行全部按原文回填
+	SourceApproved          = "approved"                   // 审批终稿覆盖（人工改稿后落的那一语种；api 侧写入）
+)
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
 // 参数：s=目标语言串（如 "en,zh_hant"）；返回语言代码切片。
@@ -207,7 +236,7 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 					continue // 空译文跳过
 				}
 				p.Translations[ent.TargetLang] = ent.TargetText
-				p.Sources[ent.TargetLang] = "kb" // 标记来源为知识库
+				p.Sources[ent.TargetLang] = SourceKB // 标记来源为知识库
 			}
 		}
 		// ★ 术语子串匹配（2026-09-09 硬闸 RAG 治本）：整段精确匹配无法命中嵌在长句里的
@@ -264,7 +293,7 @@ func (w *Workflow) runKBMatch(ctx context.Context, t *store.Ticket) error {
 				continue // 空命中跳过 / 已有 KB 或人工译文不覆盖
 			}
 			p.Translations[lc] = v
-			p.Sources[lc] = "kb"
+			p.Sources[lc] = SourceKB
 		}
 		if p.Mode == "" && res != nil {
 			p.Mode = res.Mode
@@ -331,7 +360,7 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 			rev := w.Engine.TranslateWithFeedback(ctx, p.SourceText, lc, t.RejectReason, config.StageAIInitial)
 			if rev != "" {
 				p.Translations[lc] = rev
-				p.Sources[lc] = "model" // 来源标记为模型
+				p.Sources[lc] = SourceModel // 来源标记为模型
 			}
 		}
 		w.savePayload(t, p)
@@ -572,7 +601,10 @@ func (w *Workflow) applyEvalDisposition(t *store.Ticket, p *ticketPayload, lc st
 	if no == "" {
 		no = fmt.Sprintf("#%d", t.ID)
 	}
-	msg := fmt.Sprintf("工单 %s 语言 %s %s评估总分 %.1f 低于阈值 %d，已标记待人工复核", no, lc, stageLabel, total, threshold)
+	// ⚠️ 这句会进**告警中心、群机器人与站内信**（客户与运营都读得到），所以措辞是对外契约：
+	//   本仓没有人工复核环节（2026-10-26 用户明令），旧句尾那半句承诺了一个不存在的动作
+	//   ——客户会以为有人在看这一单。现在只报事实：打了什么标、界面出什么徽标。
+	msg := fmt.Sprintf("工单 %s 语言 %s %s评估总分 %.1f 低于阈值 %d，已标记「质检存疑」", no, lc, stageLabel, total, threshold)
 	if err := w.Store.CreateAlert(t.TenantID, "warning", "eval_quality", msg); err != nil {
 		log.Printf("[evals] 质量告警写入失败（不影响处置）: %v", err)
 	}
@@ -673,7 +705,7 @@ func (w *Workflow) runGate(ctx context.Context, t *store.Ticket) error {
 			}
 			p.RetryCount[lc] = attempt + 1
 			p.Translations[lc] = rev
-			p.Sources[lc] = "model"
+			p.Sources[lc] = SourceModel
 			cursor = rev
 		}
 	}
@@ -728,7 +760,7 @@ func (w *Workflow) runCultureGate(ctx context.Context, t *store.Ticket) error {
 			}
 			p.RetryCount[lc] = attempt + 1
 			p.Translations[lc] = rev
-			p.Sources[lc] = "model"
+			p.Sources[lc] = SourceModel
 			cursor = rev
 		}
 	}
@@ -860,9 +892,23 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 	if thr <= 0 {
 		thr = 80
 	}
-	auto, reviewed := 0, 0
+	auto, reviewed, skipped := 0, 0, 0
 	for lc, tr := range p.Translations {
 		if tr == "" {
+			continue
+		}
+		// ★ 2026-10-26 用户令①「不留白、不整句丢失」的**直接副产品**（本轮实测抓出的新通道，必须同批堵）：
+		// 回填过原文的语种**一条都不写 TM**。这一对里混着原文，写进去就是「中文 → 中文」这种对子，
+		// 此后每次命中都直出＝把一次上游抖动固化成客户记忆里长期复发——比漏一行坏（漏一行只坏这一单）。
+		// ⚠️ 为什么现成的预筛**拦不住**这一档（读数逐条实证，不是推测）：
+		//   · `qa/qa.go:94` 那条同文规则的 `Level` 是 **`warning`**，不是 error；
+		//   · `qa/screener.go:20` 打分＝`100 - 40*Errors - 8*Warnings` ⇒ 同文整篇仍拿 **92 分**；
+		//   · 阈值 `tm_feedback_min_qa_score` 默认 80（上面那段 `thr <= 0 → 80`）⇒ 92 判"达标直写"。
+		//   旧形态这里没有回填行所以走不到；本轮"绝不留空行"落地后回填成为常态，这条路就从没被走到变成常走。
+		// 粒度＝**整语种跳过**：这一对是整篇配对的，个别行混原文也不构成干净对子，
+		// 宁可少沉淀 11 行好译文，不许沉淀 1 行原文冒充译文（沉淀的代价是复发，少沉淀的代价只是一次没学到）。
+		if p.UnresolvedLines[lc] > 0 {
+			skipped++
 			continue
 		}
 		res := qa.ScreenPair(p.SourceText, tr)
@@ -883,9 +929,11 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 			})
 		}
 	}
-	if w.Store != nil && (auto > 0 || reviewed > 0) {
+	if w.Store != nil && (auto > 0 || reviewed > 0 || skipped > 0) {
+		// `跳过N语种` 必须出现在这一行里：回填跳过是一条**故意什么都不写**的分支，
+		// 不留痕就与「这一单没触发反馈写库」在日志上同形（本仓反复踩过的"静默少写"那一族）。
 		w.Store.LogAudit(t.TenantID, 0, "tm_feedback_screen", "tickets",
-			fmt.Sprintf("%s 自动入库%d句/转人审%d句(阈值%d)", t.TicketNo, auto, reviewed, thr))
+			fmt.Sprintf("%s 自动入库%d句/转人审%d句/跳过%d语种(含原文回填，不写TM)(阈值%d)", t.TicketNo, auto, reviewed, skipped, thr))
 	}
 	t.Status = store.TicketCompleted // 写库完成置工单为已完成
 	_ = w.Store.UpdateTicket(t)

@@ -794,6 +794,18 @@ type ticketQualityView struct {
 	EvalScores       map[string]float64 `json:"eval_scores,omitempty"`           // 语言 → 初翻评估总分（0-100）
 	ReviewEvalScores map[string]float64 `json:"review_eval_scores,omitempty"`    // 语言 → 校对评估总分
 	FlaggedLangs     []string           `json:"quality_flagged_langs,omitempty"` // 评估低于阈值语言（「质检存疑」徽标数据源）
+	// ★ 2026-10-26 用户追加裁决九-1「上游发生的问题除了给运营/超管，也要给客户看」：
+	// 上游那一族（整条不通／个别行拿不回东西）**过去只活在日志与来源列里**，
+	// 客户在工单详情上看见的是"完成了"——那是把失败读数写成成功读数（AGENTS §一.3 那条 `from` 档位同族）。
+	// 现在这一面直接出栈：哪一语种、哪一档、几行。三档分开各出一个 map，
+	// 因为三档的**成因与补救动作不同**（上游断＝不可救、截断＝抬预算可救、坏形态＝已单独重拨过），
+	// 混成一句"部分未译出"就是把归因藏起来（方案 §七 那条明令禁止的写法）。
+	// 空值口径：三档都用 omitempty ⇒ 没回填时**键干脆不出**（不是 null、也不是 0），
+	// 前端按"读不到＝这一单没有未译出行"渲染，避免常驻一个 0 让界面自己造一句"0 行未译出"的空话。
+	Sources           map[string]string `json:"sources,omitempty"`             // 语言 → 来源档（名单见 orchestrator.Source*）
+	UnresolvedLines   map[string]int    `json:"unresolved_lines,omitempty"`    // 语言 → 按原文回落的行数（总数）
+	UpstreamDeadLines map[string]int    `json:"upstream_dead_lines,omitempty"` // 语言 → 其中判上游断那一部分
+	TruncatedLines    map[string]int    `json:"truncated_lines,omitempty"`     // 语言 → 其中被 max_tokens 截断那一部分
 }
 
 // parseTicketQuality 从 final_result JSON 解析质量视图（改造 5）。
@@ -807,11 +819,21 @@ func parseTicketQuality(finalResult string) ticketQualityView {
 		EvalScores          map[string]float64 `json:"eval_scores"`
 		ReviewEvalScores    map[string]float64 `json:"review_eval_scores"`
 		QualityFlaggedLangs []string           `json:"quality_flagged_langs"`
+		// 下面四件是九-1 新开的客户面读点（键名与 orchestrator.ticketPayload 逐字相同，
+		// 抄错一个字母就是"接口说没回填而库里明明有"的那种假空态）。
+		Sources           map[string]string `json:"sources"`
+		UnresolvedLines   map[string]int    `json:"unresolved_lines"`
+		UpstreamDeadLines map[string]int    `json:"upstream_dead_lines"`
+		TruncatedLines    map[string]int    `json:"truncated_lines"`
 	}
 	if err := json.Unmarshal([]byte(finalResult), &p); err != nil {
 		return out
 	}
 	out.QAReport = p.QAReport
+	out.Sources = p.Sources
+	out.UnresolvedLines = p.UnresolvedLines
+	out.UpstreamDeadLines = p.UpstreamDeadLines
+	out.TruncatedLines = p.TruncatedLines
 	out.EvalScores = p.EvalScores
 	out.ReviewEvalScores = p.ReviewEvalScores
 	out.FlaggedLangs = p.QualityFlaggedLangs
@@ -1244,7 +1266,7 @@ func applyApprovedTextOverride(finalResult, approvedText string) string {
 	if p.Sources == nil {
 		p.Sources = map[string]string{}
 	}
-	p.Sources[hit] = "approved"
+	p.Sources[hit] = orchestrator.SourceApproved
 	b, err := json.Marshal(p)
 	if err != nil {
 		return ""

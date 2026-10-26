@@ -50,7 +50,10 @@ type Ticket struct {
 	ResultPath   string `json:"result_path,omitempty"` // 结果文件路径（原格式回写产物/xlsx 对照表；空=未生成）
 	// ★ 改造 4（2026-09-17）：评估不达标标记（1=有语言评估总分低于 evals_fail_threshold）。
 	//   独立列而非运行时解析 payload——列表接口可零成本透出并支持后续按标筛选/统计。
-	QualityFlagged int `json:"quality_flagged"` // 0=正常 / 1=质检存疑（待人工复核）
+	// ⚠️ 文案口径（2026-10-26 用户明令：本仓**没有人工复核环节**）：这一列出栈后界面只出
+	//   「质检存疑」徽标，不许写成"待人工复核/已交人工/请等待审核"——那是承诺一个不存在的环节。
+	//   列名与语义都不动（历史数据与统计都读它），只清洗注释与界面文案。
+	QualityFlagged int `json:"quality_flagged"` // 0=正常 / 1=质检存疑（界面出徽标，无人工环节）
 	// ★ 改造 5（2026-09-17）：确定性质检摘要（error/warning 计数），列表行徽标数据源。
 	//   同理由 runQA 落列，避免列表接口为渲染徽标解析整份 final_result payload。
 	QAErrors   int `json:"qa_errors"`   // error 级问题数（已自动重译后仍存在）
@@ -354,7 +357,7 @@ func (s *Store) TicketStateTimingMigrate() {
 }
 
 // TicketQualityMigrate 为 tickets 增加质检透出列（★ 改造 4/5，2026-09-17，幂等）：
-//   - quality_flagged：1=存在语言评估总分低于 evals_fail_threshold，需人工复核；
+//   - quality_flagged：1=存在语言评估总分低于 evals_fail_threshold（界面出「质检存疑」徽标，无人工环节）；
 //   - qa_errors / qa_warnings：确定性质检（qa.Check）error/warning 计数。
 //
 // 三者均落列而非运行时解析 final_result——工单列表接口据此零成本渲染质检徽标，
@@ -460,7 +463,7 @@ func (s *Store) SetTicketDeliveryNotes(id int64, degraded, warnings []string) er
 }
 
 // SetTicketQualityFlagged 标记工单「质检存疑」（★ 改造 4）。
-// 单向置 1，不回置 0——评估不达标是既成事实，不因同单其他语言达标而撤销人工复核提示。
+// 单向置 1，不回置 0——评估不达标是既成事实，不因同单其他语言达标而撤销「质检存疑」标记。
 // 不改 updated_at：本字段为质检元数据，不参与保留期/排序口径。
 // 参数：id=工单 ID。返回错误。
 func (s *Store) SetTicketQualityFlagged(id int64) error {

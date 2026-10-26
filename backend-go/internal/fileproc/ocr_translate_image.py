@@ -39,6 +39,12 @@
     ★ 旧判据写死 `len(box) < 8`（按"四点八坐标"想当然），与现役四值输出不匹配 ⇒ 每一行都被
       `continue` 跳过 ⇒ 译文图＝重编码的原图（尺寸变了、内容还是原文，看着像"翻过了"）——
       正是用户报障「OCR 翻译成功、译后图没变」的真身。
+  · **同一区域的字号归一**（★ 2026-10-26 用户令「按框/块/表格/行高相近来判断同一区域」）：
+    逐行独立定字号会让同一张表格里 11px 与 30px 并存（用户报"大大小小的都有"）。
+    现：`_region_groups`/`_region_sizes` 按「行高相近（±20%）且 垂直邻近/同表格行（y 重叠达标）」
+    分组，组内取**众数**（并列取较小——宁可多排字，不许挤掉邻行）；`-1` 等哨兵档不参与分组、
+    不借邻居字号；众数装不下的那一行仍按自己的下限走（判溢出复用 `_layout` 里那把
+    `_block_ink_h` 尺子，不为归一造第二把）。
 
 依赖：PIL + numpy（都在 ocr_recognize.py 的 MODULES 里，属同一条 OCR 依赖链）。
 """
@@ -102,6 +108,13 @@ SOFT_BREAK_AFTER = "/-_·\\|,;：、，；"
 EXPAND_STEP = 4
 EXPAND_MAX_PX = 24
 EXPAND_UNIFORM_STD = 14.0
+# ★ 2026-10-26 用户令：「同一区域的字号归一要做。按框/块/表格/行高相近来判断同一区域。」
+#   现网形态＝同一张表格的行里 11px 与 30px 并存（字号按每一行自己的框独立算出来的）。
+#   下面三个数是「同一区域」的两腿判据（行高相近 **且** 垂直邻近/同表格行）——
+#   任一不满足就不许并组：把不相干的行并为同字号，比现在「大小不一」更坏（用户口径）。
+REGION_H_TOL = 0.20          # 行高相近：两行行高差 ≤ 较高那一行的 20%
+REGION_Y_OVERLAP_MIN = 0.5   # 同表格行：两框 y 区间重叠 ≥ 较矮框的 50%（同一行各列共用上下边）
+REGION_Y_GAP_TOL = 0.30      # 垂直邻近：两框 y 间隔 ≤ 较矮框的 30%（同一段的相邻行）
 # `.notdef` 哨兵用的探测码位（私用区，任何正常字体都不会有它的字形）。
 _SENTINEL_CH = "\uE000"
 
@@ -358,6 +371,88 @@ def _font_floor(ink_h: int, box_h: int) -> int:
     return max(MIN_FONT_PX, int(ref * FONT_FLOOR_RATIO))
 
 
+def _same_region(ha, ya0, ya1, hb, yb0, yb1) -> bool:
+    """两行算不算「同一区域」？两腿**同时成立**才算（★ 2026-10-26 用户令，判据只在这里一份）。
+
+    ① 行高相近：两行行高差 ≤ 较高行的 REGION_H_TOL（20%）——
+       字号差得远的两行本来就分属不同层级（标题 vs 表格行），并组＝把不相干的行钉成同字号；
+    ② 垂直方向上挨着：要么 y 区间重叠 ≥ 较矮框的 REGION_Y_OVERLAP_MIN（**同一表格行的各列**，
+       共用上下边），要么间隔 ≤ 较矮框的 REGION_Y_GAP_TOL（同一段的相邻行）。
+    ⚠️ 表格行的列天然满足②的重叠腿；**列边界不单独判**（框数据里没有列信息，横向对齐也判不出
+       "同一表格"——只有相邻表格行会被邻近腿并组，而它们行高相近时并成同字号正是用户要的归一）。
+    行高或字号 ≤0 的一律不算区域成员（`-1` 这类哨兵档原样跳过、不参与也不借字，用户令）。
+    """
+    if ha <= 0 or hb <= 0:
+        return False
+    if abs(ha - hb) > REGION_H_TOL * max(ha, hb):
+        return False
+    ov = min(ya1, yb1) - max(ya0, yb0)
+    if ov >= REGION_Y_OVERLAP_MIN * min(ha, hb):
+        return True
+    gap = max(ya0, yb0) - min(ya1, yb1)
+    return gap <= REGION_Y_GAP_TOL * min(ha, hb)
+
+
+def _region_groups(rows):
+    """按「同一区域」给行分组的**唯一判据函数**（纯函数，喂 [(行高, y0, y1, 字号), …]）。
+
+    返回与 rows 等长的组号表：同组同号（从 0 起），**不参与分组的行回 -1**
+    （字号 ≤0 的哨兵档、行高量不到的行——它们既不并组、也不给别人贡献众数）。
+    组＝两两判据的连通块；横竖都挨着的行聚成一片，判据的保守性由 `_same_region` 那两腿保证。
+    """
+    n = len(rows)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    active = [i for i, r in enumerate(rows) if r[3] > 0 and r[0] > 0]
+    for a_pos in range(len(active)):
+        for b_pos in range(a_pos + 1, len(active)):
+            i, j = active[a_pos], active[b_pos]
+            if _same_region(rows[i][0], rows[i][1], rows[i][2],
+                            rows[j][0], rows[j][1], rows[j][2]):
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[rj] = ri
+    root_gid = {}
+    out = [-1] * n
+    for i in active:
+        r = find(i)
+        if r not in root_gid:
+            root_gid[r] = len(root_gid)
+        out[i] = root_gid[r]
+    return out
+
+
+def _region_sizes(rows):
+    """把逐行独立算出的字号按区域归一（★ 2026-10-26 用户令「同一区域的字号归一」）。
+
+    输入同 `_region_groups`（[(行高, y0, y1, 逐行独立字号), …]），返回每行的**生效字号**：
+      · 组内取值＝**众数**（出现最多的那一档）；并列取**较小**那档——宁可多排字，
+        不许把邻行的字挤出去（用户令）；
+      · 不参与分组的行（字号 ≤0 的 `-1` 哨兵档等）**原样返回**，不从邻居借字号（用户令）；
+      · 单行组众数＝自己，等价于没归一，调用方无须特判。
+    ⚠️ 这里只管"该用哪一档"，**装不装得下**由 `_layout` 的既有尺子（`_block_ink_h` vs 框高）
+      逐行复核——众数装不下的那一行仍按它自己的下限走，不许为统一把字裁掉（用户硬约束）。
+    """
+    gids = _region_groups(rows)
+    from collections import Counter
+    by_group = {}
+    for i, g in enumerate(gids):
+        if g >= 0:
+            by_group.setdefault(g, []).append(int(rows[i][3]))
+    mode = {}
+    for g, sizes in by_group.items():
+        cnt = Counter(sizes)
+        top = max(cnt.values())
+        mode[g] = min(s for s, n in cnt.items() if n == top)   # 并列取较小（用户令）
+    return [mode[g] if g >= 0 else int(rows[i][3]) for i, g in enumerate(gids)]
+
+
 def _is_lone_nonascii(src: str) -> bool:
     """源文是不是**单个非 ASCII 字符**（去掉空白后 len==1 且码位 > 0x7F）。
 
@@ -551,7 +646,7 @@ def _wrap_text(chain, text: str, max_w: float):
     return _wrap_text_dbg(chain, text, max_w)[0]
 
 
-def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
+def _layout(text: str, w: int, h: int, floor: int, ink_h: int, region_px: int = 0):
     """定最终字号与折行：优先按原行高起、尽量单行；放不下就**换行**；换行也放不下才降到地板。
 
     返回 (px, lines, overflow)。overflow=True＝已到地板仍超出框，调用方据此出声（不静默画超框）。
@@ -562,10 +657,21 @@ def _layout(text: str, w: int, h: int, floor: int, ink_h: int):
       1px 一档（成档下探会一下掉 10%，把"断词"换成"字号明显小一截"）；降到能不劈词就停。
       降到地板仍劈词 ⇒ 接受（长词在窄框里除劈开没有别的出路），**不谎报越框**。
       注意与"装不下"那一档分工：装不下仍走既有 0.9 成档下探（那一条的行为一字未动）。
+    ★ 2026-10-26 用户令「同一区域的字号归一」：region_px＝所在区域的众数字号（`_region_sizes` 算出）。
+      它**不地板以上**时先整档试一次：装得下（同一把 `_block_ink_h` 尺子）就直接用它——
+      归一优先于本行自己的起算档（含比自然起点更大的众数，装得下就该放大）。
+      装不下 ⇒ **落回本行自己的既有逻辑**（自己的起算与下限），绝不为了统一把字裁掉/画超框——
+      所以"归一"的失败形态是这一行保持原样，不是坏图。region_px<=0＝这一行不参与归一
+      （`-1` 哨兵档与单行组都走这一支，行为与改造前逐字相同）。
     """
     ref = ink_h if ink_h > 0 else int(h * 0.86)
     px = max(floor, int(ref * 0.92))
     px = min(px, max(floor, int(h * 0.98)))
+    if region_px >= floor and region_px > 0:
+        rchain = _chain(region_px)
+        rlines = _wrap_text_dbg(rchain, text, w)[0]
+        if _block_ink_h(rchain, rlines, region_px, int(region_px * LINE_SPACING)) <= h:
+            return region_px, rlines, False
     while True:
         chain = _chain(px)
         lines, hard = _wrap_text_dbg(chain, text, w)
@@ -765,15 +871,24 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
     overflowed = 0
     blank_skipped = 0   # 空框（无墨）+ 单字噪声 + 内容符号原样交付 的跳过计数：排障用（见下面的 INFO 行）
     dropped = 0         # 图形符号整行（箭头/三角/emoji）剔除计数：它们不可译，原图标必须逐像素保住
+    # ★ 2026-10-26 用户令「同一区域的字号归一」：定字号从单遍循环拆成**两遍**——
+    #   第一遍按行独立算出各自的字号（与改造前逐字同尺），第二遍才归一后绘制。
+    #   必须两遍的原因是归一的输入是**全场**的（众数要数整组的行）；单遍边画边定档，
+    #   后画的行永远借不到先画的行的字号。归一只改 `_layout` 的起算档，
+    #   判"装不装得下"仍走 `_layout` 里那把 `_block_ink_h` 旧尺（不为归一造第二把尺子）。
+    plans = []
     for idx, ln in enumerate(lines):
         if not isinstance(ln, dict):
+            plans.append(None)
             continue
         r0 = rects[idx]
         if r0 is None:
+            plans.append(None)
             continue  # 坏行（坐标缺失/不成对/非数值）：跳过这一行，不打断整张图
         text = (ln.get("tran") or "").strip() or (ln.get("text") or "")
         text = " ".join(str(text).replace("\r", " ").replace("\n", " ").split())
         if not text:
+            plans.append(None)
             continue
         # ① 量原行墨迹高度（字号地板的依据；量不到就退用框高），并取框外环带中位色作抹字底色。
         patch = ref_img.crop(r0)
@@ -807,33 +922,60 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
                 dropped += 1
             else:
                 blank_skipped += 1
+            plans.append(None)
             continue
         bg = _pick_bg(ref_img, r0)
-        if bg is not None:
-            # 抹掉原文：填**原有底色**（环带中位色），比一律填白/填灰更耐看
-            # （线图/深色底/彩色卡片的截图不会被抹出一块突兀的灰或白）。
-            # 取不到底色则**不填**（宁愿留轻微残影，也不填一块与周围不一致的灰）。
-            draw.rectangle([r0[0], r0[1], r0[2], r0[3]], fill=bg)
         # ② 长译文先尝试向右扩进均匀空白区（只扩右，不压邻行；扩不动由换行兜底）。
         blockers_wo = [b for b in blockers_all if b != r0]
         left, top, right, bottom = _expand_rect(ref_img, r0, blockers_wo)
         inner_w = max(1, right - left - 2)
         inner_h = max(1, bottom - top - 2)
         floor = _font_floor(ink_h, inner_h)
-        # ③ 定字号与折行：尽量保持原字号、放不下换行、实在放不下才降到地板（绝不缩成蚂蚁字）。
+        # ③ 第一遍定字号：先按**本行自己**的既有逻辑算（区域众数要等全场都算完才有）。
         size, draw_lines, overflow = _layout(text, inner_w, inner_h, floor, ink_h)
-        if overflow:
-            overflowed += 1
-        chain = _chain(size)
         # ④ 文字色优先**沿用原字体色**（从原文墨迹估计），估不准才按底色亮度反差回落。
         #    ★ 2026-10-19 用户令：产物必须用**原背景色 + 原字体色**——旧形态只按底色二选一，
         #    蓝徽章上的白字被画成黑字。patch 是**绘制前的原图**裁片（与量墨迹同一参照系）。
         fill = _pick_fg(patch, bg) or _text_color(bg)
+        # 「同一区域」的行高维度＝原行墨迹（量不到退框高参照，与 _font_floor 的 ref 同一把尺子）。
+        plans.append({
+            "r0": r0, "bg": bg, "text": text,
+            "left": left, "top": top, "right": right, "bottom": bottom,
+            "inner_w": inner_w, "inner_h": inner_h, "floor": floor, "ink_h": ink_h,
+            "ref_h": ink_h if ink_h > 0 else int(inner_h * 0.86),
+            "own_px": size, "own_lines": draw_lines, "own_overflow": overflow,
+            "fill": fill, "region_px": 0,
+        })
+
+    # ⑤ 区域归一：同组（行高相近 且 垂直邻近/同表格行）取众数（并列取较小，用户令）；
+    #    `-1`/量不到行高等不参与分组的档位原样保留，不从邻居借字号（用户令）。
+    grows = [(p["ref_h"], p["top"], p["bottom"], p["own_px"]) for p in plans if p]
+    if grows:
+        gsizes = _region_sizes(grows)
+        for p, gsz in zip((p for p in plans if p), gsizes):
+            p["region_px"] = gsz if gsz != p["own_px"] else 0
+            # 众数与自己一样 ⇒ 不必重排（region_px=0 走既有单行路径，省一次排版）。
+
+    for p in plans:
+        if p is None:
+            continue
+        r0 = p["r0"]
+        if p["bg"] is not None:
+            # 抹掉原文：填**原有底色**（环带中位色），比一律填白/填灰更耐看
+            # （线图/深色底/彩色卡片的截图不会被抹出一块突兀的灰或白）。
+            # 取不到底色则**不填**（宁愿留轻微残影，也不填一块与周围不一致的灰）。
+            draw.rectangle([r0[0], r0[1], r0[2], r0[3]], fill=p["bg"])
+        size, draw_lines, overflow = _layout(
+            p["text"], p["inner_w"], p["inner_h"], p["floor"], p["ink_h"], p["region_px"])
+        if overflow:
+            overflowed += 1
+        chain = _chain(size)
         lh = int(size * LINE_SPACING)
-        # ⑤ 覆盖率掩膜 + **按框裁剪**贴回：墨迹只落在自己的框里（越框部分丢弃），
+        # ⑥ 覆盖率掩膜 + **按框裁剪**贴回：墨迹只落在自己的框里（越框部分丢弃），
         #    垂直位置按**真实墨迹**居中。两件事一起做才治得住「字被邻行底色抹掉半截」——
         #    只居中不裁剪：框高不够时墨迹仍会伸进邻行、被邻行底色吃掉；
         #    只裁剪不按墨迹居中：本来放得下的行也会被压到框边。
+        left, top, right, bottom = p["left"], p["top"], p["right"], p["bottom"]
         mask, bb = _mask_extent(chain, draw_lines, size, lh)
         if bb is not None:
             bw, bh = right - left, bottom - top
@@ -843,7 +985,7 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
                 # 纵向按墨迹居中，并夹进框内（bh-2 与 _box_rect 的 1px 边距对齐）。
                 tile.paste(mask, (1 - bb[0], max(0, (bh - 2 - int(bb[3] - bb[1])) // 2) - bb[1]))
                 try:
-                    img.paste(fill, (left, top), tile)
+                    img.paste(p["fill"], (left, top), tile)
                 except Exception as exc:
                     return _err("Draw", "绘制失败 %s" % exc)
         painted += 1

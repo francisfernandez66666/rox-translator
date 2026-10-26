@@ -526,6 +526,9 @@ func (s *Server) routesBilling() {
 	// ★ F-72（2026-09-27 〇-X 第 5 项）计费预估系数（K/F × pro/fast 四键）的超管配置口：
 	// 没这个口子之前调档只能 psql 插 system_config 行，手滑一次就是全量放行或全量误拦
 	s.mux.HandleFunc("/api/admin/config/est-tokens", s.handleAdminEstTokens)
+	// ★ 2026-10-26 裁决九-4：逐行翻译两条档位（补译轮数／上游断早停连续数）给运营配的口子。
+	//   形态照 est-tokens（白名单枚举 + 校验先行整批落库），不新造页面、不开第二套 KV 编辑面。
+	s.mux.HandleFunc("/api/admin/config/text-lines", s.handleAdminTextLineConfig)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
 	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)

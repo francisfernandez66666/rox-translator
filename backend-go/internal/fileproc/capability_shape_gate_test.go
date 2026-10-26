@@ -62,6 +62,8 @@ var capShapeLegs = []string{
 	"L28", "L29", "L30", "L31", "L32",
 	"L33", "L34", "L35", "L36",
 	"L37", "L38", "L39",
+	// ★ 2026-10-28 用户令「同一区域的字号归一要做。按框/块/表格/行高相近来判断同一区域。」
+	"L40", "L41", "L42",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -155,7 +157,7 @@ var capShapeMutations = []capShapeMutation{
 		"块高退回名义式（漏算下伸部与字体留白 ⇒ 虚报放得下，越框那半行被邻行底色抹掉）"},
 	{"L31", capShapeImgFile, `        patch = ref_img.crop(r0)`, `        patch = img.crop(r0)`,
 		"量墨迹改回就地画布（上一行画下的字落进下一行框内 ⇒ 字号忽大忽小，现网 fac_1：19px→36px）"},
-	{"L32", capShapeImgFile, `                    img.paste(fill, (left, top), tile)`, `                    img.paste(fill, (left, top), mask)`,
+	{"L32", capShapeImgFile, `                    img.paste(p["fill"], (left, top), tile)`, `                    img.paste(p["fill"], (left, top), mask)`, // ★ 2026-10-28 归一批把绘制拆成两遍后此行取 p["fill"]（锚点随实文件重钉，判据职责一字未动）
 		"贴回不再按框裁剪（越框墨迹落进邻行地盘，随后被邻行底色抹成半截字）"},
 	// ===== ★ 2026-10-19（缺陷②尾项：外观）批。四条同样是「运行期形状错」：健康面全绿、
 	// 日志零红，只有把译后图打开（或逐行读 trace）才看得出——蓝徽章被填成白块、
@@ -189,6 +191,28 @@ var capShapeMutations = []capShapeMutation{
 		"字色改回整块墨迹取中位（抗锯齿过渡色把深红估成粉、白字估成浅灰）"},
 	{"L39", capShapeImgFile, `    if int(ink.sum()) < FG_MIN_INK_PX:`, `    if False:`,
 		"墨太少（样本不足）也照样估字色（不可信的读数被当成原字体色用上）"},
+	// ===== ★ 2026-10-28 用户令批：同一区域字号归一（L40~L42）。
+	// 现象＝客户拿到的译后图里"大大小小的都有"（同一张表格 11px 与 30px 并存），
+	// 根因＝字号按每一行自己的框独立算。七枚反证各治一病：分组摘回逐行独立算／
+	// 并列众数取大（把邻行的字挤出去）／_layout 不采纳 region_px／归一不传参（白算）／
+	// 行高判据放宽（不相干的行被钉成同字号——用户明令比大小不一更坏）／
+	// 垂直邻近判据放宽（同病另一维）／-1 哨兵档混进分组（整组被负字号拖垮）。
+	{"L40", capShapeImgFile, `if r[3] > 0 and r[0] > 0`, `if False`,
+		"分组函数被摘（退回逐行独立算）：同表格行字号照旧大小不一——正是用户报的形态"},
+	{"L40", capShapeImgFile, `        mode[g] = min(s for s, n in cnt.items() if n == top)`,
+		`        mode[g] = max(s for s, n in cnt.items() if n == top)`,
+		"众数并列改成取较大（用户令取较小：宁可多排字，不许把邻行的字挤出去）"},
+	{"L40", capShapeImgFile, `    if region_px >= floor and region_px > 0:`, `    if False:`,
+		"_layout 不再采纳区域众数（分组算完没人用＝白修，且装得下时也不放大）"},
+	{"L40", capShapeImgFile, `p["inner_w"], p["inner_h"], p["floor"], p["ink_h"], p["region_px"])`,
+		`p["inner_w"], p["inner_h"], p["floor"], p["ink_h"], 0)`,
+		"绘制腿把 region_px 传成恒 0（归一在渲染里整体断电，同 L18/L30「没人调用＝白修」口径）"},
+	{"L41", capShapeImgFile, `REGION_H_TOL = 0.20`, `REGION_H_TOL = 0.95`,
+		"行高相近判据放宽（标题与表格行被并成同字号——不相干的行并组比大小不一更坏，用户硬约束）"},
+	{"L41", capShapeImgFile, `REGION_Y_GAP_TOL = 0.30`, `REGION_Y_GAP_TOL = 100.0`,
+		"垂直邻近判据放宽（隔半页的两行也并组，字号归一变成了跨块传染）"},
+	{"L42", capShapeImgFile, `if r[3] > 0 and r[0] > 0`, `if r[0] > 0`,
+		"-1 哨兵档混进分组（并列取较时会把整组钉成 -1，进 _chain 被悄悄抬成 8px 蚂蚁字）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
@@ -252,7 +276,7 @@ func capShapeReadings(stdout string) (pass, fail []string, detail map[string]str
 	return
 }
 
-// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 35 条）全绿，且**读数形状本身合规**：
+// TestCapabilityShapeSelftestGreen ① 真件必须**全部腿**（现 41 条）全绿，且**读数形状本身合规**：
 // 每腿恰好一行、没有 FAIL、末行 CAPSHAPE_ALL_OK=1。
 // 「少一行」也算红——那是腿被删掉的形态，不是「剩下的都过了」。
 func TestCapabilityShapeSelftestGreen(t *testing.T) {
