@@ -201,7 +201,13 @@ func (s *TicketService) workerLoop(workerID string) {
 		// 不会被 RecoverStale/其他实例判成死任务而双跑。
 		// ★ 2026-10-26 用户令：图片/音频处理时间不按翻译预算卡——媒体工单放宽到
 		//   图片 60 分钟 / 音频 90 分钟；租约心跳每 60s 续期，长任务不会被误回收。
-		jctx, jcancel := context.WithTimeout(context.Background(), s.jobExecTimeout(job))
+		execTimeout := s.jobExecTimeout(job)
+		if execTimeout != ticketJobTimeout {
+			// 这一行同时是对外排障读数与发版验收证据（换件后这里必须能被打出来）。
+			observability.Info(context.Background(), "媒体工单执行上限已放宽（图片/音频不受文本预算限制）",
+				"ticket", job.ID, "timeout", execTimeout.String())
+		}
+		jctx, jcancel := context.WithTimeout(context.Background(), execTimeout)
 		// ★ 2026-09-04 加固：租约续期心跳——长任务处理期间定期刷新 jobs.leased_at，
 		//   防止处理时长逼近/超过租约窗口（默认 30m）时被 RecoverStale 或其他实例
 		//   误回收（running→queued 双跑）。任务结束/取消时停止。

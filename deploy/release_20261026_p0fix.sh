@@ -9,10 +9,15 @@
 #   前端：chat gate_warnings 可见；/register 注册意图文案；320 视口 Turnstile 尺寸/CSS 兜底；
 #         /billing 余额明细取整说明。
 #
+# 第二批（同日 UAT 用户五点）：
+#   OCR 无实义短段（单假名/编号/股票代码）按原文预填、不送模型；图片 60m / 音频 90m 执行上限；
+#   即时翻译图片上传后立即出「正在识别并翻译」状态卡与按钮转圈。
+#
 # 进包证据（不用函数名 grep：-ldflags="-s -w" 会抹掉函数名）：
 #   ① 二进制含运行期真会产出的字面量「即时翻译译文不可用，已丢弃」；
-#   ② 前端 dist 必须找到承载 gate 警告块的 `gate-warnings` 字符串，换源后与本地逐字节 sha 等值；
-#   ③ 现役二进制/入口分片必须与新件不同。
+#   ② 二进制另含媒体验收批的日志字面量「媒体工单执行上限已放宽」（图片 60m / 音频 90m）；
+#   ③ 前端 dist 必须找到承载 gate 警告块的 `gate-warnings` 字符串，换源后与本地逐字节 sha 等值；
+#   ④ 现役二进制/入口分片必须与新件不同。
 #
 # 发版链：本机构建 → 清脏 → 侧车 → 打包 → 交付包自检 → 交叉编译 → 上传 →
 #         服务器侧常设执行体 swap_web_and_binary.sh（两段式、两站全绿才落位）→ 复验。
@@ -33,6 +38,7 @@ SWAP="$SCRIPT_DIR/swap_web_and_binary.sh"
 SSH_TARGET="${SSH_TARGET:-root@43.108.86.140}"
 SSH_PORT="${SSH_PORT:-28022}"
 MARK_BIN='即时翻译译文不可用，已丢弃'
+MARK_BIN2='媒体工单执行上限已放宽'
 MARK_FE='gate-warnings'
 
 sha_local() { shasum -a 256 "$1" | awk '{print $1}'; }
@@ -65,6 +71,9 @@ echo "===== P0-C 进包证据 ====="
 n=$(LC_ALL=C grep -a -c -F "$MARK_BIN" "$SERVER_BIN" || true)
 echo "bin_marker[chat_drop]=${n:-0}"
 [ "${n:-0}" -ge 1 ] || { echo "ABORT=3 二进制缺本批标记 ⇒ 编错树或新代码没编进去"; exit 3; }
+n2=$(LC_ALL=C grep -a -c -F "$MARK_BIN2" "$SERVER_BIN" || true)
+echo "bin_marker[media_timeout]=${n2:-0}"
+[ "${n2:-0}" -ge 1 ] || { echo "ABORT=3 二进制缺媒体验收批标记 ⇒ 新批次没编进去"; exit 3; }
 CHUNK_LOCAL=$(grep -l -F "$MARK_FE" "$REPO"/frontend-react/dist/assets/*.js 2>/dev/null | head -1 || true)
 [ -n "$CHUNK_LOCAL" ] || { echo "ABORT=3 本地 dist 找不到承载 gate 警告块的 JS 分片"; exit 3; }
 CHUNK_NAME="$(basename "$CHUNK_LOCAL")"
