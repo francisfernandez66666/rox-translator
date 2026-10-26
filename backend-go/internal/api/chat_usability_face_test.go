@@ -102,6 +102,26 @@ func chatUsabilityFaceHarness(t *testing.T) (*Server, string, *int64) {
 	return s, tok, &hits
 }
 
+// waitChatPersisted 等 SSE 收尾后的异步会话落库跑完，再让测试清理去还原 config.C／关库。
+// 为什么必须有它：handleChatStream 在 done 帧后开 goroutine 写 chat_conversations/chat_messages，
+// 而 store 那两条写路径都会读 db.CurrentDialect()（间接读全局 config.C）；测试清理若先还原 config.C，
+// -race 会把它报成 DATA RACE，并且会殃及同包下一条用例（本批真踩：TestContentDispositionSingleExit 被判红）。
+// 这里以"本测试库里的 chat_messages 已落 2 条"为收敛条件（用户消息 + 助手回复），超时只等待不判红。
+func waitChatPersisted(t *testing.T, st *store.Store) {
+	t.Helper()
+	if st == nil {
+		return
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := st.DB().QueryRow("SELECT COUNT(*) FROM chat_messages").Scan(&n); err == nil && n >= 2 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // TestChatStreamNeverDeliversDegenerateAnd 直调 handleChatStream，断言 done 帧里
 // 不出现 `"en":"and"`，而是极简腿救回的正确长译文。
 func TestChatStreamNeverDeliversDegenerateAnd(t *testing.T) {
@@ -115,6 +135,9 @@ func TestChatStreamNeverDeliversDegenerateAnd(t *testing.T) {
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	s.handleChatStream(w, r)
+	// ★ 先等异步会话落库跑完，再让 t.Cleanup 关库/还原 config.C；否则 -race 会把
+	//   store 里的 db.CurrentDialect() 读与测试清理的写报成 DATA RACE（并殃及下一条用例）。
+	t.Cleanup(func() { waitChatPersisted(t, s.Store) })
 	resp := w.Body.String()
 
 	if atomic.LoadInt64(hits) == 0 {
