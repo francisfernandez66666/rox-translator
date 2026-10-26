@@ -21,7 +21,7 @@ TOK_FILE="${TOK_FILE:-/tmp/.uat_probe_tok}"
 H="Authorization: Bearer $(cat "$TOK_FILE")"
 J='Content-Type: application/json'
 PASS=0; FAIL=0
-ck() { if printf '%s' "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "OK   $1"; else FAIL=$((FAIL+1)); echo "BAD  $1（期望 /$2/，实得 $(printf '%s' "$3" | head -c 200)）"; fi; }
+ck() { if printf '%s' "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "OK   $1"; else FAIL=$((FAIL+1)); echo "BAD  ${1}（期望 /$2/，实得 $(printf '%s' "$3" | head -c 200)）"; fi; }
 pv() { python3 -c 'import sys,json;d=json.load(sys.stdin);print(eval(sys.argv[1],{"d":d}))' "$1" 2>/dev/null; }
 
 echo "===== A 即时翻译（41 字） ====="
@@ -84,7 +84,7 @@ ck C-completed 'completed' "$ST"
 HD=$(curl -s -D - -o /tmp/uat_dl.bin "$B/api/tickets/download?id=$TKC" -H "$H" --max-time 60 | tr -d '\r')
 CD=$(printf '%s' "$HD" | grep -iE '^content-disposition:')
 # 负向判据必须吃**真靶子**（头/正文本身），拿占位串判＝恒绿的假锁（AGENTS §三）
-ckn() { if printf '%s' "$2" | grep -qE "$3"; then FAIL=$((FAIL+1)); echo "BAD  $1（不应出现 /$3/，实得 $(printf '%s' "$2" | head -c 160)）"; else PASS=$((PASS+1)); echo "OK   $1"; fi; }
+ckn() { if printf '%s' "$2" | grep -qE "$3"; then FAIL=$((FAIL+1)); echo "BAD  ${1}（不应出现 /$3/，实得 $(printf '%s' "$2" | head -c 160)）"; else PASS=$((PASS+1)); echo "OK   $1"; fi; }
 ck C-download-name-en 'uat_sample-en\.txt' "$CD"
 ckn C-download-name-no-underscore "$CD" 'uat_sample_en'
 ck C-download-complete ' 200 ' "$(printf '%s' "$HD" | head -1)"

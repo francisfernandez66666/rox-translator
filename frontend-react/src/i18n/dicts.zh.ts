@@ -794,6 +794,7 @@ export const baseZh: Record<string,string> = {
   'ss.permanentBalance': '永久余额',
   'ss.grantLedger': '发放台账',
   'ss.totalAvailable': '可用总额',
+  'ss.roundingNote': '明细按四舍五入展示，合计以「可用总额」为准。',
   'ss.myReferral': '我的邀请',
   'ss.funnelTitle': '归因漏斗（2 级邀请树）',
   'ss.funnelL1': '一级受邀',

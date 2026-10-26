@@ -1742,6 +1742,16 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 		model = cfg.HunyuanFallbackModel
 		hunyuan = false
 	}
+	// ★ 2026-10-26 P0-01 质量兜底：正常腿（含极简腿）都判不可用之后，
+	//   repairChatTranslations 会用 withForcedFallbackModel 再翻一次。
+	//   这里强制切到 fallback 模型，避开正在退化的纯翻译模型；端点/Key 走平台主网关，
+	//   因为 cfg.HunyuanFallbackModel 是平台统一模型名，不继承阶段路由的供应商端点。
+	//   未配置 fallback 时保持原模型（调用方那边也会跳过这一档）。
+	if forcedFallbackFromCtx(ctx) && strings.TrimSpace(cfg.HunyuanFallbackModel) != "" {
+		fbBase, fbKey, _ := e.resolveModel(ctx)
+		base, key, model = fbBase, fbKey, cfg.HunyuanFallbackModel
+		hunyuan = false
+	}
 
 	lineCount := strings.Count(zhText, "\n")
 	chars := len([]rune(zhText))

@@ -74,6 +74,9 @@ export function BalancePanel() {
         <div className="ss-row"><span>{t('ss.permanentBalance')}</span><b>{fmtPoints(permanent)}</b></div>
         <div className="ss-row"><span>{t('ss.grantLedger')}</span><b>{fmtPoints(grants)}</b></div>
         <div className="ss-row"><span>{t('ss.totalAvailable')}</span><b>{fmtPoints(totalAvailable)}</b></div>
+        {/* ★ 2026-10-26 P2-02：三个字段各自四舍五入，明细相加可能与“可用总额”差 1；
+            页面不做手动求和，合计一律以 API 的 points_balance 为准。 */}
+        <div className="ss-note">{t('ss.roundingNote')}</div>
       </div>
     </div>
   )
@@ -271,4 +274,6 @@ const CSS_SSC = `
 .ssc-card h3{margin:0 0 6px;font-size:17px}
 .ssc-err{color:var(--lc-danger);font-size:15px}
 .ssc-card + style{display:none}
+/* ★ 2026-10-26 P2-02：余额明细取整说明（不新增几何/颜色档，沿用辅助文字档） */
+.ss-note{margin-top:8px;font-size:14px;line-height:20px;color:var(--lc-text-4)}
 `

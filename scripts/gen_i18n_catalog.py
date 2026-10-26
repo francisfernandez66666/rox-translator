@@ -15,6 +15,7 @@
 import json
 
 T = {
+"target_text 与目标语言书写系统不符，请检查目标语言或译文": "target_text does not match the target language's writing system; check the target language or translation",
 "账号或密码错误": "Incorrect account or password",
 "账号查询失败": "Failed to look up account",
 "账号升级失败，请稍后重试": "Account upgrade failed. Please try again later.",

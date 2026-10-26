@@ -23,6 +23,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/crawler"
 	apierrors "translator/internal/errors"
+	"translator/internal/gate"
 	"translator/internal/store"
 )
 
@@ -252,6 +253,11 @@ func (s *Server) handleKBScrapeApprove(w http.ResponseWriter, r *http.Request) {
 				module := "imported"
 				if e.SourceID > 0 {
 					module = "scrape:" + strconv.FormatInt(e.SourceID, 10)
+				}
+				// ★ 2026-10-26 P2-03：采集/投稿待审池落正式库前同样校验目标书写系统，
+				//   防止「target_lang=en、target_text=英语」这类脏术语绕过入库口。
+				if !gate.TargetTextMatchesLang(e.TgtLang, e.TgtText) {
+					continue
 				}
 				if _, serr := s.Store.SaveEntry(tid, e.TargetPackID, e.Layer, e.SrcLang, e.SrcText, e.TgtLang, e.TgtText, module); serr != nil {
 					continue

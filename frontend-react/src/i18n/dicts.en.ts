@@ -789,6 +789,7 @@ export const baseEn: Record<string,string> = {
   'ss.permanentBalance': 'Permanent Balance',
   'ss.grantLedger': 'Grant Ledger',
   'ss.totalAvailable': 'Total Available',
+  'ss.roundingNote': 'Details are rounded; the total available value is authoritative.',
   'ss.myReferral': 'My Referrals',
   'ss.funnelTitle': 'Attribution Funnel (2-level tree)',
   'ss.funnelL1': 'L1 invited',

@@ -32,6 +32,7 @@ import (
 	"translator/internal/crawler"
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
+	"translator/internal/gate"
 	"translator/internal/kb"
 	"translator/internal/store"
 )
@@ -117,6 +118,12 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 			if e.TargetLang == "" {
 				e.TargetLang = "en"
 			}
+			// ★ 2026-10-26 P2-03：目标文本书写系统与目标语言明显不符的脏术语不得入库/待审。
+			//   典型形态：target_lang=en、target_text=英语（中文），会让任何含源词的正文误报「术语未体现」。
+			if !gate.TargetTextMatchesLang(e.TargetLang, e.TargetText) {
+				skipped++
+				continue
+			}
 			if ok, serr := s.Store.StageEntry(&store.KBStagedEntry{
 				TargetPackID: req.PackageID,
 				PackType:     pkg.PackType,
@@ -156,6 +163,12 @@ func (s *Server) handleKBEntriesImport(w http.ResponseWriter, r *http.Request) {
 		}
 		if e.TargetLang == "" {
 			e.TargetLang = "en"
+		}
+		// ★ 2026-10-26 P2-03：目标文本书写系统与目标语言明显不符的脏术语直接跳过（计入 skipped），
+		//   不阻断整批导入；目标语言本身不受支持时仍由 SaveEntry 的既有校验报错。
+		if !gate.TargetTextMatchesLang(e.TargetLang, e.TargetText) {
+			skipped++
+			continue
 		}
 		// 写入 KB：源语言固定 zh，单条导入失败则跳过计数
 		if _, err := s.Store.SaveEntry(tid, req.PackageID, e.Layer, "zh", src, e.TargetLang, e.TargetText, e.Module); err != nil {
@@ -724,6 +737,12 @@ func (s *Server) handleImportKB(w http.ResponseWriter, r *http.Request) {
 			layer = store.LayerTM
 		}
 		for lang, txt := range translations {
+			// ★ 2026-10-26 P2-03：逐语言校验目标书写系统；脏行跳过并计入 skipped，
+			//   不影响同一文件里其它正常语言列（避免一条脏数据毁掉整批导入）。
+			if !gate.TargetTextMatchesLang(lang, txt) {
+				skipped++
+				continue
+			}
 			if shared {
 				stagedItems = append(stagedItems, &store.KBStagedEntry{
 					TargetPackID: req.PackageID,

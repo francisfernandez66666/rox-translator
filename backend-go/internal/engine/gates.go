@@ -19,6 +19,7 @@ import (
 	"translator/internal/config"
 	"translator/internal/culture"
 	"translator/internal/gate"
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -51,6 +52,16 @@ func (g *gateCtx) termReqs(source, lang string) []gate.TermRequirement {
 				continue
 			}
 			if strings.TrimSpace(ent.SourceText) == "" || strings.TrimSpace(ent.TargetText) == "" {
+				continue
+			}
+			// ★ 2026-10-26 P2-03：目标文本书写系统与目标语言明显不符的脏术语（如 target_lang=en
+			//   却把目标写成中文「英语」）不得进入硬闸——否则任何含源词的正文都会被判「未体现」。
+			//   入库/导入侧也会拦（api/kb.go、api/admin_kb.go），这里是第二道防线，防存量脏行。
+			//   品牌术语（module=brand）豁免：品牌名可能刻意保留汉字（如中文品牌在英文文案里
+			//   仍写中文），不能按“书写系统不符”判脏。
+			if ent.Module != "brand" && !gate.TargetTextMatchesLang(lang, ent.TargetText) {
+				observability.Warn(context.Background(), "跳过目标书写系统不符的术语",
+					"term_id", ent.ID, "target_lang", lang, "source_len", len([]rune(ent.SourceText)))
 				continue
 			}
 			out = append(out, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})

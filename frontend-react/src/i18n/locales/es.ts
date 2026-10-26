@@ -2540,6 +2540,7 @@ export const dict: Record<string, string> = {
   "ss.sentenceUnit": "oraciones",
   "ss.tenant": "Inquilino",
   "ss.totalAvailable": "Total disponible",
+  "ss.roundingNote": "Los detalles se redondean; el total disponible es la referencia.",
   "ss.trialStacked": "Bonificación de prueba",
   "ss.username": "Nombre de usuario",
   "ss2.allBiz": "Todas las operaciones",

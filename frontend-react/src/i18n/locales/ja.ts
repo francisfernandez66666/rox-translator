@@ -2540,6 +2540,7 @@ export const dict: Record<string, string> = {
   "ss.sentenceUnit": "文",
   "ss.tenant": "テナント",
   "ss.totalAvailable": "利用可能合計",
+  "ss.roundingNote": "内訳は四捨五入して表示されます。合計は「利用可能合計」を基準にしてください。",
   "ss.trialStacked": "トライアルボーナス",
   "ss.username": "ユーザー名",
   "ss2.allBiz": "全タイプ",

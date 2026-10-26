@@ -349,6 +349,16 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
   }, [message.data])
   const hasTranslations = transRows.length > 0
 
+  // ★ 2026-10-26 P0-01：质量/丢弃警告必须能被用户看见。
+  //   后端把「某语种译文不可用、已丢弃」写进 Data.GateWarnings；旧形态下 chat 气泡
+  //   只渲染结构化译文表、把 reply 藏起来，导致这条警告永远不出现在屏幕上。
+  //   这里在译文表下方补一个警告块；文件工单的 TicketsPage 早已有自己的渲染，不重复。
+  const gateWarnings = useMemo(() => {
+    const ws = (message.data as { gate_warnings?: unknown } | undefined)?.gate_warnings
+    if (!Array.isArray(ws)) return [] as string[]
+    return ws.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  }, [message.data])
+
   // ★ 14.4 复制净化（2026-10-10）：复制按钮只取译文本体，不再复制 message.content
   //   （后端已不再往 content 拼 📝 原文/📊 模式/⚡ 积分，但复制口径吃结构化字段才是
   //   根治——多目标语按「语言名：译文」逐行拼，单目标语直接给那一句，粘贴即可用）。
@@ -595,6 +605,17 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                 )}
               </div>
             ))}
+          </div>
+        )}
+
+        {/* ★ 2026-10-26 P0-01：质量/丢弃警告块（有结构化译文时才显示，避免与错误态顶栏重复）。
+            标题走 12 语种既有键 tk.gateWarningCount；明细是后端返回的中文排障口径（与 TicketsPage 同源）。 */}
+        {hasTranslations && gateWarnings.length > 0 && (
+          <div className="msg-gate-warn" data-testid="gate-warnings">
+            <div className="msg-gate-warn-title">{tpl('tk.gateWarningCount', { n: gateWarnings.length })}</div>
+            <ul className="msg-gate-warn-list">
+              {gateWarnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
           </div>
         )}
 

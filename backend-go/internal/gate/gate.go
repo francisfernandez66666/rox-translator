@@ -143,11 +143,11 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 		if strings.TrimSpace(tm.Source) == "" || strings.TrimSpace(tm.Target) == "" {
 			continue
 		}
-		if !strings.Contains(source, tm.Source) {
+		if !termContains(source, tm.Source) {
 			continue // 源文不含该术语，不适用
 		}
-		if tr != "" && strings.Contains(tr, tm.Target) {
-			continue // 译文已含规定译法
+		if tr != "" && termContains(tr, tm.Target) {
+			continue // 译文已含规定译法（拉丁术语忽略大小写，见 term_match.go）
 		}
 		res.Checks = append(res.Checks, Check{"术语遵循", false, fmt.Sprintf("知识库术语「%s」应译作 %s，译文未体现", tm.Source, tm.Target)})
 		res.Pass = false
@@ -176,13 +176,13 @@ func ForceTerms(source, translation string, terms []TermRequirement) (string, in
 	for _, tm := range terms {
 		src := strings.TrimSpace(tm.Source)
 		tgt := strings.TrimSpace(tm.Target)
-		if src == "" || tgt == "" || !strings.Contains(source, src) {
+		if src == "" || tgt == "" || !termContains(source, src) {
 			continue
 		}
-		if strings.Contains(tr, tgt) {
-			continue // 已合规
+		if termContains(tr, tgt) {
+			continue // 已合规（拉丁术语忽略大小写）
 		}
-		if strings.Contains(tr, src) {
+		if termContains(tr, src) {
 			n := strings.Count(tr, src)
 			tr = strings.ReplaceAll(tr, src, tgt)
 			fixed += n

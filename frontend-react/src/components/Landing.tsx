@@ -1926,7 +1926,10 @@ const LANDING_CSS = `
 .lc-lead-chip.on{background:#000;border-color:#000;color:#fff}
 /* 蜜罐：不用 display:none（部分 bot 会跳过隐藏域），用 1px 裁剪——人眼不可见、仍在 DOM */
 .lc-lead-hp{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.lc-lead-captcha{align-self:flex-start}
+/* ★ 2026-10-26 P2-01：Turnstile normal 固有宽 300px，320 视口下 40+300=340 会顶出页面。
+   max-width+overflow-x 是兜底（JS 不可用/尺寸选择失效时也不许横向溢出）；
+   正常路径由 LeadForm 按容器宽度选 compact/normal，见该文件 renderTurnstile。 */
+.lc-lead-captcha{align-self:flex-start;max-width:100%;overflow-x:auto}
 /* 报错只用判错红（与演示卡划线同色系），不引入第二套告警色 */
 .lc-lead-err{margin:0;font-size:15px;color:var(--lc-danger)}
 /* 提交按钮 = 白块上的主投反相（与收尾 Pill 同形）：同屏两颗黑胶囊只有一颗是"最终动作" */

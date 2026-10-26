@@ -389,6 +389,12 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 			if strings.TrimSpace(tr) == "" {
 				continue
 			}
+			// ★ 2026-10-26 P0-01：已经明显不可用的译文（如模型退化成 "and"）
+			//   不再送审校——审校模型对这类退化串同样救不回来，只会多烧一次调用；
+			//   留给 review 之后的 repairChatTranslations 走极简/ fallback 兜底。
+			if e.chatUsabilityIssue(ctx, cleanText, srcLang, lc, tr) != "" {
+				continue
+			}
 			jobs = append(jobs, reviewJob{lang: lc, text: tr})
 		}
 		for _, j := range jobs {
@@ -412,6 +418,13 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		wg.Wait()
 	}
 
+	// ★ 2026-10-26 P0-01：即时翻译的可用性修复腿必须在品牌归一化/质量闸门**之前**，
+	//   这样极简/fallback 救回的译文仍会继续过品牌词归一化、术语/文化闸门、纯度清洗。
+	//   正常译文在这里零额外调用；只有被判不可用（如 "and"）的语种才会走兜底。
+	//   gateWarnings 从这里开始累积，稍后 applyOutputGates 的警告直接 append 进来。
+	gateWarnings := []string{}
+	e.repairChatTranslations(ctx, cleanText, srcLang, allTr, &gateWarnings)
+
 	// ★ 品牌术语归一化收尾（2026-09-10 需求，放在 AI 校对与重翻之后）：
 	//   源文命中 KB 品牌术语（极石/极石汽车→ROX）时，对每个目标语言译文剥离
 	//   「ROX vehicles/motor/автомобиль」等自创后缀，统一为纯品牌名。
@@ -422,7 +435,9 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 	}
 
 	// 整改 R1：文本主翻译路径统一走约束闸门 + 语言文化闸门（pro 模式可带反馈重翻）
-	gateWarnings := e.applyOutputGates(ctx, cleanText, allTr, !fast)
+	// ★ 2026-10-26 P0-01：gateWarnings 已由上面的 repairChatTranslations 初始化，
+	//   这里改为 append，保证丢弃/兜底产生的警告不会被闸门返回值覆盖掉。
+	gateWarnings = append(gateWarnings, e.applyOutputGates(ctx, cleanText, allTr, !fast)...)
 
 	// ★ 14.3 输出纯度收尾（2026-10-10）：剥离译文中「全角括号原词复述」——提示词层
 	//   已加约束（translateInstruction / ReviewTranslation），此处是兜底腿。判据见
@@ -441,6 +456,10 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		observability.Warn(ctx, "译文全角括号复述原词，已按纯度判据处理",
 			"lang", lc, "reason", reason, "sample", clipRunes(tr, 80))
 	}
+
+	// ★ 2026-10-26 P0-01：闸门/纯度之后的最终断言（只判不改、不再调模型）。
+	//   闸门里的反馈重译、术语强制替换仍可能把不可用串写回来；这一层负责最后清掉并出声。
+	e.finalizeChatTranslations(ctx, cleanText, srcLang, allTr, &gateWarnings)
 
 	langNames := map[string]string{}
 	for lc := range allTr {

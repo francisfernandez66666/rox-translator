@@ -36,6 +36,11 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
   const [captchaOn, setCaptchaOn] = useState(false)
   const captchaBoxRef = useRef<HTMLDivElement>(null)
   const captchaTokenRef = useRef('')
+  // ★ 2026-10-26 P2-01：记录当前 widget id / 尺寸档 / sitekey，
+  // 供视口跨档时 remove + 重挂（换尺寸后旧 token 失效，必须让用户重新验证）。
+  const turnstileIdRef = useRef<string | number | null>(null)
+  const turnstileSizeRef = useRef<'normal' | 'compact'>('normal')
+  const turnstileSiteKeyRef = useRef('')
 
   // 只在后台开启人机验证时才拉 Turnstile：未开启时表单零第三方请求
   useEffect(() => {
@@ -53,17 +58,35 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     return () => { dead = true }
   }, [])
 
+  // pickTurnstileSize 按容器/视口选 Turnstile 尺寸：
+  // normal 固有宽 300px，容器放不下时切 compact（约 150px），避免 320 视口被顶出页面。
+  // CSS 兜底仍在 Landing.tsx 的 .lc-lead-captcha（max-width+overflow-x），
+  // 所以即使这里选错档，也不会造成页面级横向滚动。
+  function pickTurnstileSize(): 'normal' | 'compact' {
+    const w = captchaBoxRef.current?.clientWidth ?? 0
+    return (w > 0 && w < 300) || window.innerWidth < 400 ? 'compact' : 'normal'
+  }
+
   // Cloudflare Turnstile 显式渲染（与 Login.tsx 同一套守卫：已有 widget 不重建、script 全局只注入一份）
   function renderTurnstile(siteKey: string) {
+    turnstileSiteKeyRef.current = siteKey
     const mount = () => {
       const el = captchaBoxRef.current
-      const ts = (window as unknown as { turnstile?: { render: (el: HTMLElement, o: unknown) => void } }).turnstile
+      const ts = (window as unknown as {
+        turnstile?: {
+          render: (el: HTMLElement, o: unknown) => string | number
+          remove?: (id: string | number) => void
+        }
+      }).turnstile
       if (!el || !ts || el.childElementCount > 0) return
-      ts.render(el, {
+      const size = pickTurnstileSize()
+      turnstileIdRef.current = ts.render(el, {
         sitekey: siteKey,
+        size,
         callback: (tk: string) => { captchaTokenRef.current = tk },
         'expired-callback': () => { captchaTokenRef.current = '' },
       })
+      turnstileSizeRef.current = size
     }
     const w = window as unknown as { turnstile?: unknown; __tsLoading?: boolean }
     if (w.turnstile) { mount(); return }
@@ -75,6 +98,26 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     s.onload = mount
     document.head.appendChild(s)
   }
+
+  // 视口跨档（桌面↔手机）时重挂 widget：尺寸档变了就 remove 旧件、清空 token 后按新档重建。
+  // 只在真正跨档时动作，普通窗口缩放不会反复重建（避免用户验证到一半被清掉）。
+  useEffect(() => {
+    if (!captchaOn) return
+    const onResize = () => {
+      const el = captchaBoxRef.current
+      if (!el) return
+      const next = pickTurnstileSize()
+      if (next === turnstileSizeRef.current) return
+      const ts = (window as unknown as { turnstile?: { remove?: (id: string | number) => void } }).turnstile
+      if (ts?.remove && turnstileIdRef.current != null) ts.remove(turnstileIdRef.current)
+      turnstileIdRef.current = null
+      captchaTokenRef.current = ''
+      el.innerHTML = ''
+      renderTurnstile(turnstileSiteKeyRef.current)
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [captchaOn])
 
   function validEmail(v: string): boolean {
     const at = v.lastIndexOf('@')

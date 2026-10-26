@@ -399,6 +399,13 @@ html, body { background: #000000; color: var(--lc-text); }
 .mode-semantic { background: rgba(231, 233, 234, 0.06); color: var(--npz-text-2); }
 .mode-model { background: rgba(231, 233, 234, 0.12); color: #E7E9EA; }
 .mode-match-text { font-size: 14px; color: var(--lc-text-3); }
+/* ★ 2026-10-26 P0-01：chat 质量/丢弃警告块。
+   有结构化译文时 reply 被隐藏，旧形态下 gate_warnings 用户永远看不到；
+   这里用语义告警色（琥珀）单独成块，不改译文表与操作行的几何。 */
+.msg-gate-warn { margin-top: 8px; padding: 8px 10px; border: 1.2px solid rgba(210, 153, 34, 0.32); border-radius: 8px; background: rgba(210, 153, 34, 0.10); }
+.msg-gate-warn-title { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--lc-warn); }
+.msg-gate-warn-list { margin: 4px 0 0; padding-inline-start: 18px; font-size: 14px; line-height: 20px; color: var(--lc-warn); }
+.msg-gate-warn-list li { margin: 0; }
 
 /* ---- 匹配度报告 ---- */
 .match-report { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--npz-line); }

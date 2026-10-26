@@ -78,6 +78,11 @@ export default function Login({ mode, onLogin }: Props) {
   //   在 applyLogin 里本来也会被 `roleLevel < 2` 弹回去（等于把人送进死路）。
   //   租户子域/演示站（tenantId>0）仍走旧形态，一字不动。
   const unified = branding.tenantId === 0
+  // ★ 2026-10-26 P1-01：主站统一登录下，/register 与 /login 共用同一张登录卡。
+  //   产品口径是“登录即注册”（未注册邮箱验证后自动建号），但旧形态在 /register 上仍写
+  //   “登录后进入翻译工作台”，新用户会以为走错地方。这里只按路径切换说明文案：
+  //   不重开自助注册、不新增注册字段、不改任何 CTA 落点（2026-10-21/10-22/10-23 用户令）。
+  const registerIntent = window.location.pathname === '/register'
   // 邀请裂变个人码（?ref=），登录页与注册提交共用
   // 提到组件顶层而非在提交前现取：注册表单、传统注册提交、AI 接管流三处都要读；
   // 认证页存活期间地址栏 query 不变，故不必 useMemo
@@ -576,7 +581,7 @@ export default function Login({ mode, onLogin }: Props) {
       <BrandLoginShell>
         <AuthCard
           title={brandName}
-          desc={t('auth.loginDesc')}
+          desc={registerIntent ? t('auth.autoCreateHint') : t('auth.loginDesc')}
           submitText={t('auth.signIn')}
           onSubmit={doLogin}
           busy={loading}

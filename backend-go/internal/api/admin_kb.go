@@ -18,6 +18,7 @@ import (
 	"time"
 	"translator/internal/auth"
 	apierrors "translator/internal/errors"
+	"translator/internal/gate"
 	"translator/internal/store"
 )
 
@@ -533,6 +534,14 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 	if req.TargetLang == "" {
 		req.TargetLang = "en"
 	}
+	// ★ 2026-10-26 P2-03：拒绝“目标语与目标文本书写系统明显不符”的脏术语
+	//   （如 target_lang=en 却把目标写成中文「英语」）。这类行会让任何含源词的正文
+	//   都触发「术语未体现」误报，且 pro 模式还会多一次无意义重译。
+	//   品牌术语豁免：品牌名可能刻意保留汉字（module=brand），不能按书写系统判脏。
+	if req.Module != "brand" && !gate.TargetTextMatchesLang(req.TargetLang, req.TargetText) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "target_text 与目标语言书写系统不符，请检查目标语言或译文"))
+		return
+	}
 	id, err := s.Store.SaveEntry(tid, req.PackageID, req.Layer, "zh", req.SourceText, req.TargetLang, req.TargetText, req.Module)
 	if err != nil {
 		// F-64②（批 I-10）：原 200 承载失败 → 按失败性质分流，判据直接用本包 errmsg.go 的
@@ -628,6 +637,12 @@ func (s *Server) handleKBEntryUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.TargetLang == "" {
 		req.TargetLang = "en"
+	}
+	// ★ 2026-10-26 P2-03：与新增同口径，拒绝目标书写系统明显不符的术语修改；
+	//   品牌术语（module=brand）豁免，理由同新增分支。
+	if req.Module != "brand" && !gate.TargetTextMatchesLang(req.TargetLang, req.TargetText) {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "target_text 与目标语言书写系统不符，请检查目标语言或译文"))
+		return
 	}
 	tid := s.kbTenant(r, u)
 	// 取原条目，校验包归属与维护权限（与新增同源）
