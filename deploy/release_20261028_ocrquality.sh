@@ -6,7 +6,7 @@
 #   后端：textscript 新包；识别层 P0-B/C/P4；清洗层；引擎侧 AI 判定（StageOcrFix）；
 #         PendingOcrDoc 交接与三处接线；结构几何列聚类 + AssignBlocks；PP-StructureV3 骨架（默认关）；
 #         LID 内置后端；identity 死锁修复；meta 闸门（scripts/gate_mutants.*）。
-#   前端：**零改动**（重新构建只为与后端同批落位）。
+#   前端：补 `ocr_fix` 阶段卡片（ModelsP 第 8 张）＋ 12 语种 models.s7OcrFix/Hint（发版前审计补缺）。
 #
 # 进包证据（只认运行期真会产出的字面量；-ldflags="-s -w" 会抹掉函数名）：
 #   ① 交付诚实闸新增文案「OCR 清洗结果与提取文本不同源，未重建回填映射」
@@ -82,7 +82,7 @@ CHUNK_LOCAL=$(grep -l -F "$MARK_FE" "$REPO"/frontend-react/dist/assets/*.js 2>/d
 [ -n "$CHUNK_LOCAL" ] || { echo "ABORT=3 本地 dist 找不到承载 gate 警告块的 JS 分片"; exit 3; }
 CHUNK_NAME="$(basename "$CHUNK_LOCAL")"
 CHUNK_SHA=$(sha_local "$CHUNK_LOCAL")
-echo "fe_chunk=${CHUNK_NAME} sha=${CHUNK_SHA}（前端本批零改动，应与现役件同值）"
+echo "fe_chunk=${CHUNK_NAME} sha=${CHUNK_SHA}（前端本批含阶段卡片改动，远端必须等值）"
 
 if [ "$APPLY" != "1" ]; then
   echo "DRY=1 本机动作全过（同步/构建/打包/自检/标记）；未 scp、未碰服务器。加 APPLY=1 才落位。"
