@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "知識庫整句命中後仍需模型兜底／潤飾時使用的模型；留空則回落全域預設端點",
   "models.s6KbScreen": "⑦ 企業包條目篩查模型",
   "models.s6KbScreenHint": "判斷上傳條目是否為可共享的行業通用術語（進入待審池之前）；留空則使用全域預設模型",
+  "models.s7OcrFix": "⑧ OCR 文字判定補償模型",
+  "models.s7OcrFixHint": "對圖片辨識結果做 keep/fix/not_text 裁決（僅低信度與異常行）；留空則用全域預設模型",
   "models.saveEmbed": "儲存 Embedding 金鑰",
   "models.saveModel": "儲存模型",
   "models.savePolicy": "儲存策略",

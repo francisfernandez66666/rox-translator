@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "지식베이스에서 문장 일치 후에도 모델의 보완·다듬기가 필요할 때 사용하는 모델입니다. 비워 두면 전역 기본 엔드포인트로 폴백합니다",
   "models.s6KbScreen": "⑦ 기업 패키지 항목 선별 모델",
   "models.s6KbScreenHint": "업로드한 항목이 업종 공통 용어로 공유 가능한지 판단합니다(검토 풀에 들어가기 전). 비워 두면 전역 기본 모델을 사용합니다",
+  "models.s7OcrFix": "⑧ OCR 텍스트 판정 보정 모델",
+  "models.s7OcrFixHint": "저신뢰·이상 행만 keep/fix/not_text 로 판정합니다. 비워 두면 전역 기본 모델을 사용합니다",
   "models.saveEmbed": "Embedding 키 저장",
   "models.saveModel": "모델 저장",
   "models.savePolicy": "정책 저장",

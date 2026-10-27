@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "Modèle utilisé lorsqu’une correspondance dans la base de connaissances demande encore une reprise par le modèle ; laissé vide, le point d’entrée global s’applique",
   "models.s6KbScreen": "⑦ Modèle de tri des entrées du paquet",
   "models.s6KbScreenHint": "Juge si les entrées téléversées sont des termes sectoriels partageables (avant l’entrée en file de relecture) ; vide = modèle global",
+  "models.s7OcrFix": "⑧ Modèle d’arbitrage du texte OCR",
+  "models.s7OcrFixHint": "Décide keep/fix/not_text uniquement pour les lignes à faible confiance ou anormales ; vide = modèle global",
   "models.saveEmbed": "Enregistrer la clé Embedding",
   "models.saveModel": "Enregistrer le modèle",
   "models.savePolicy": "Enregistrer la stratégie",

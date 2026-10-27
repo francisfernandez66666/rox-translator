@@ -55,8 +55,8 @@ export function ModelsP() {
   // keyState 密钥态：translation/embedding 是否已配置 + embedding 掩码/端点，明文永不回传前端
   const [keyState, setKeyState] = useState<Any>({ translation: false, embedding: false, embeddingMasked: '', embeddingBase: '' })
 
-  // stageCards 七张卡＝后端 config.AllStages() 里「该给运营配」的全部取模点
-  // （初翻→嵌入→初评审校→复核→复评审校→知识库匹配兜底→企业包筛查）。
+  // stageCards 八张卡＝后端 config.AllStages() 里「该给运营配」的全部取模点
+  // （初翻→嵌入→初评审校→复核→复评审校→知识库匹配兜底→企业包筛查→OCR 判定补偿）。
   // ★ R-1 修法 D（2026-10-04）：这里曾经只有五张，而引擎确实在拿 kb_match 取模
   //   （orchestrator/workflow.go、engine/file.go、engine/text.go）⇒ 运营看不见这一档，
   //   配上旧的「整表替换」保存面，每点一次保存就把库里那一档抹掉一次。
@@ -71,6 +71,9 @@ export function ModelsP() {
     { key: 'review_evals', title: t('models.s5ReviewEvals'), hint: t('models.s5ReviewEvalsHint') },
     { key: 'kb_match', title: t('models.s6KbMatch'), hint: t('models.s6KbMatchHint') },
     { key: 'kb_screen', title: t('models.s6KbScreen'), hint: t('models.s6KbScreenHint') },
+    // ★ 2026-10-28 OCR 质量链：图片识别的 AI 判定补偿（低置信/异常行 keep·fix·not_text）。
+    //   与后端 config.StageOcrFix 逐字一致；不加这一张卡＝运营看不见它（kb_match 当年的形态）。
+    { key: 'ocr_fix', title: t('models.s7OcrFix'), hint: t('models.s7OcrFixHint') },
   ]
 
   // loadModels 拉取主模型/embedding/多供应商路由（密钥只回掩码，不回明文）

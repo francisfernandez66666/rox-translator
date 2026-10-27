@@ -213,6 +213,8 @@ export const baseEn: Record<string,string> = {
   'models.s6KbMatchHint': 'Model used when a knowledge-base sentence hit still needs model fallback or polish; leave empty to fall back to the global endpoint',
   'models.s6KbScreen': '⑦ Package Entry Screening Model',
   'models.s6KbScreenHint': 'Judges whether uploaded entries are shareable industry terms (before entering the review pool); leave empty to use the global model',
+  'models.s7OcrFix': '⑧ OCR Text Arbitration Model',
+  'models.s7OcrFixHint': 'Decides keep/fix/not_text only for low-confidence or anomalous OCR lines; leave empty to use the global model',
   'models.stageConfigured': 'Configured',
   'models.stageApiKeyKeep': 'Leave empty to keep current key / inherit global key',
   'admin.platformRoot': 'LangCross (Platform)',

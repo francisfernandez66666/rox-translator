@@ -217,6 +217,8 @@ export const baseZh: Record<string,string> = {
   'models.s6KbMatchHint': '知识库整句命中后仍需模型兜底/润色时使用的模型；留空则回落全局默认端点',
   'models.s6KbScreen': '⑦ 企业包条目筛查模型',
   'models.s6KbScreenHint': '判断上传条目是否为可共享的行业通用术语（进待审池之前）；留空则用全局默认模型',
+  'models.s7OcrFix': '⑧ OCR 文本判定补偿模型',
+  'models.s7OcrFixHint': '对图片识别结果做 keep/fix/not_text 裁决（仅低置信与异常行）；留空则用全局默认模型',
   'models.stageConfigured': '已配置',
   'models.stageApiKeyKeep': '留空沿用原 Key / 继承全局密钥',
   'admin.platformRoot': '能言（平台）',

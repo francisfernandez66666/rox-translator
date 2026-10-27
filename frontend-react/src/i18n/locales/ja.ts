@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "ナレッジベースで文が一致してもモデルによる補完・推敲が必要な場合に使うモデル。空欄の場合はグローバル既定エンドポイントにフォールバックします",
   "models.s6KbScreen": "⑦ 企業パッケージ項目の選別モデル",
   "models.s6KbScreenHint": "アップロードされた項目が業界共通の用語として共有できるかを判定します（審査プールに入る前）。空欄の場合はグローバル既定モデルを使用します",
+  "models.s7OcrFix": "⑧ OCR テキスト判定補正モデル",
+  "models.s7OcrFixHint": "低信頼・異常行のみ keep/fix/not_text を判定します。空欄の場合はグローバル既定モデルを使用します",
   "models.saveEmbed": "Embedding キーを保存",
   "models.saveModel": "モデルを保存",
   "models.savePolicy": "ポリシーを保存",

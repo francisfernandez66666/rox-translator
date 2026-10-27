@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "Modell, das nach einem Treffer im Wissenspeicher noch Ergänzung oder Feinschliff benötigt; leer gelassen wird der globale Standard-Endpoint verwendet",
   "models.s6KbScreen": "⑦ Screening-Modell für Paket-Einträge",
   "models.s6KbScreenHint": "Bewertet, ob hochgeladene Einträge als branchenübergreifend teilbare Fachbegriffe gelten (vor der Freigabeliste); leer = globales Standardmodell",
+  "models.s7OcrFix": "⑧ OCR-Text-Prüfmodell",
+  "models.s7OcrFixHint": "Entscheidet keep/fix/not_text nur für Zeilen mit niedriger Konfidenz oder Anomalien; leer = globales Standardmodell",
   "models.saveEmbed": "Embedding-Schlüssel speichern",
   "models.saveModel": "Modell speichern",
   "models.savePolicy": "Richtlinie speichern",

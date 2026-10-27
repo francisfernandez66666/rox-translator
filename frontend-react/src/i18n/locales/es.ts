@@ -1996,6 +1996,8 @@ export const dict: Record<string, string> = {
   "models.s6KbMatchHint": "Modelo que interviene cuando una coincidencia en la base de conocimiento aún necesita retoque del modelo; si se deja vacío se usa el endpoint global",
   "models.s6KbScreen": "⑦ Modelo de filtro de entradas del paquete",
   "models.s6KbScreenHint": "Juzga si las entradas subidas son términos sectoriales compartibles (antes de entrar en la cola de revisión); vacío = modelo global",
+  "models.s7OcrFix": "⑧ Modelo de arbitraje de texto OCR",
+  "models.s7OcrFixHint": "Decide keep/fix/not_text solo para líneas de baja confianza o anómalas; vacío = modelo global",
   "models.saveEmbed": "Guardar la clave de Embedding",
   "models.saveModel": "Guardar modelo",
   "models.savePolicy": "Guardar política",

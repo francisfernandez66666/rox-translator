@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -36,12 +37,36 @@ import (
 const (
 	ocrFixMaxLinesPerCall = 60
 	ocrFixMaxCalls        = 2
-	ocrFixCallTimeout     = 8 * time.Second
-	ocrFixTotalBudget     = 16 * time.Second
-	ocrFixMaxPayloadBytes = 64 << 10
+	// ocrFixCallTimeoutDefault 单次调用默认超时；`OCR_FIX_TIMEOUT_SEC` 可覆盖（钳 2~30s）。
+	ocrFixCallTimeoutDefault = 8 * time.Second
+	// ocrFixTotalBudgetDefault 整份文档的 ③ 总预算（默认＝两次单调用）。
+	ocrFixTotalBudgetDefault = 16 * time.Second
+	ocrFixMaxPayloadBytes    = 64 << 10
 	// ocrFixMaxTokens 单次回执的 max_tokens：60 行 × 每行约 12 token（含 JSON 骨架）留一倍余量。
 	ocrFixMaxTokens = 1600
 )
+
+// ocrFixCallTimeout 单次 ③ 调用的墙钟预算：env `OCR_FIX_TIMEOUT_SEC`（默认 8s，钳 2~30s）。
+//
+// 为什么钳位：小于 2s 在跨境链路上几乎必然超时（等于把这条腿关掉却仍记调用），
+// 大于 30s 会把一次图片工单的整体等待拖成分钟级——两者都属于"配置写错"，按安全档折回。
+func ocrFixCallTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("OCR_FIX_TIMEOUT_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < 2 {
+				n = 2
+			}
+			if n > 30 {
+				n = 30
+			}
+			return time.Duration(n) * time.Second
+		}
+	}
+	return ocrFixCallTimeoutDefault
+}
+
+// ocrFixTotalBudget 整份文档的总预算＝两次单调用（与"每份文件 ≤2 次"同源）。
+func ocrFixTotalBudget() time.Duration { return 2 * ocrFixCallTimeout() }
 
 // OcrReconcileStats 一次 ③ 的读数（日志与 GateWarnings 的唯一来源，见主方案 §4.5）。
 type OcrReconcileStats struct {
@@ -145,7 +170,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 	groups, skipped := ocrFixGroups(pending)
 	st.Skipped += skipped
 	// 排队优先：quarantine 先于 uncertain（它们更可能是噪声/错字），组内按阅读顺序。
-	deadline := time.Now().Add(ocrFixTotalBudget)
+	deadline := time.Now().Add(ocrFixTotalBudget())
 	for _, g := range groups {
 		if len(g) == 0 {
 			continue
@@ -156,7 +181,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			e.ocrMarkFallback(doc, g, &st)
 			continue
 		}
-		to := ocrFixCallTimeout
+		to := ocrFixCallTimeout()
 		if remain < to {
 			to = remain
 		}

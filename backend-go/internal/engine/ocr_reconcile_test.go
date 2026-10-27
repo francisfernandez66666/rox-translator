@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"translator/internal/fileproc"
 	"translator/internal/textscript"
@@ -219,5 +220,25 @@ func TestOcrFixAllowanceDerivesFromRealPrompt(t *testing.T) {
 	}
 	if OcrFixAllowanceTokens(0) != 0 {
 		t.Fatal("无图片文件时 allowance 必须为 0（老客户端等价）")
+	}
+}
+
+// TestOcrFixTimeoutEnv 单次预算的 env 档位：默认 8s，钳 2~30s，非法值回落默认。
+func TestOcrFixTimeoutEnv(t *testing.T) {
+	cases := map[string]time.Duration{
+		"":    8 * time.Second,
+		"3":   3 * time.Second,
+		"1":   2 * time.Second,
+		"99":  30 * time.Second,
+		"abc": 8 * time.Second,
+	}
+	for v, want := range cases {
+		t.Setenv("OCR_FIX_TIMEOUT_SEC", v)
+		if got := ocrFixCallTimeout(); got != want {
+			t.Errorf("OCR_FIX_TIMEOUT_SEC=%q 得 %v，期望 %v", v, got, want)
+		}
+		if got := ocrFixTotalBudget(); got != 2*want {
+			t.Errorf("总预算应为单次两倍：%v vs %v", got, 2*want)
+		}
 	}
 }

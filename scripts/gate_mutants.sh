@@ -180,9 +180,14 @@ EOF
     [ -f "$TMP/$target" ] || { fail "$id target 不存在：$target"; continue; }
     [ -f "$TMP/$lock" ] || { fail "$id lock 不存在：$lock"; continue; }
     local find_pat rep_pat expect_msg
-    find_pat="$(b64d "$find_b64")"
-    rep_pat="$(b64d "$rep_b64")"
-    expect_msg="$(b64d "$expect")"
+    # ★ 三个字段都必须**非空且能解码**：tab 是 IFS 空白字符，连续 tab 会把空字段折叠掉，
+    #   字段一错位就会出现"expect 解出空串 ⇒ case *""* 恒真 ⇒ 假绿"。
+    find_pat="$(b64d "$find_b64")" || abort "b64-decode-failed:$id:find"
+    rep_pat="$(b64d "$rep_b64")" || abort "b64-decode-failed:$id:replace"
+    expect_msg="$(b64d "$expect")" || abort "b64-decode-failed:$id:expect"
+    [ -n "$find_pat" ] || abort "empty-field:$id:find"
+    [ -n "$rep_pat" ] || abort "empty-field:$id:replace（空替换会被 IFS 折叠；要删行就替换成注释/占位）"
+    [ -n "$expect_msg" ] || abort "empty-field:$id:expect（空期望恒真）"
     local cnt
     cnt="$("$PY" - "$TMP/$target" "$find_pat" <<'PY'
 import sys
@@ -207,7 +212,7 @@ PY
         rc=$?
         ;;
       ts)
-        out="$( cd "$TMP/frontend-react" && npx vitest run "${lock#frontend-react/}" --reporter=basic 2>&1 )"
+        out="$( cd "$TMP/frontend-react" && npx vitest run "${lock#frontend-react/}" 2>&1 )"
         rc=$?
         ;;
       shell)
