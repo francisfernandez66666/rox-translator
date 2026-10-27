@@ -29,7 +29,14 @@ import { toastError } from '@/lib/toastBus'
 // ★ 2026-10-21 IAM 重做 P1-1：口令长度与注册/登录共用同一把尺子
 import { PWD_MIN_LEN } from '@/lib/accountForm'
 import { useCountdown } from '@/lib/useCountdown' // ★ F-03（2026-09-25 批G）：发码失败 60s 冷却，复用 #42 收口的倒计时钩子
-import { loadTurnstile, renderTurnstile, reexecTurnstile, pickTurnstileSize, retryTurnstile, turnstileLoadState, type TurnstileLoadState } from '@/lib/turnstile'
+// ★ 2026-10-27 多提供方批：装载/挂载/重验/重试走 lib/captcha 那一个分发口（provider 由登录页传进来），
+//   尺寸选档仍从 lib/turnstile 现读（normal/compact 是 CF 那一家固有的 300px 问题，极验 popup 档没有这一维）。
+import { pickTurnstileSize } from '@/lib/turnstile'
+import {
+  loadCaptcha, mountCaptcha, revalidateCaptcha, retryCaptcha,
+  captchaLoadState, parseCaptchaProvider,
+  type CaptchaProvider, type CaptchaLoadState, type CaptchaHandle,
+} from '@/lib/captcha'
 import { useT, getLang, tpl } from '@/i18n'
 import { EyeIcon, EyeOffIcon, Checkbox } from '@/ui/langcross/src'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
@@ -131,7 +138,7 @@ const ACP_KEYS: Record<string, string> = {
 interface Props {
   prefillUsername: string
   dedicatedRegister: boolean
-  captcha?: { enabled: boolean; siteKey: string }
+  captcha?: { enabled: boolean; siteKey: string; provider?: CaptchaProvider }
   mode?: 'register' | 'complete'
   loginEmail?: string
   sessionUser?: AuthUser | null
@@ -200,28 +207,30 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   // 旧实现本面板根本不挂 Turnstile：后台开启人机验证后，发码与提交注册的请求都以裸 token 出网，
   // 服务端 siteverify 必判失败回 403，再被 api/core 的 403 统一文案误写成「无管理权限」——即用户看到的「没反应」。
   const captchaOn = !!captcha?.enabled && !!captcha.siteKey
-  const tsIdRef = useRef<string | number | null>(null) // 本面板自己的 widget id
+  const tsIdRef = useRef<CaptchaHandle | null>(null) // 本面板自己的挂载句柄（重验要用）
+  // tsProvider：本面板用哪一家提供方（由登录页那份 register-config 一起传下来，缺省按 turnstile）
+  const tsProvider = parseCaptchaProvider(captcha?.provider)
   const tsTokenRef = useRef('') // 组件回调写入的最新一次性 token
   // token 一次一用：任一请求（发码/提交）把它带出后立刻作废 → 清空并强制重新挑战领新码，
   // 绝不允许「发码用掉的码又被提交注册复用」
   const takeCaptchaToken = useCallback(() => {
     const tk = tsTokenRef.current
     tsTokenRef.current = ''
-    reexecTurnstile(tsIdRef.current)
+    revalidateCaptcha(tsIdRef.current)
     return tk
   }, [])
   // ★ D-02（2026-10-27）：装载状态。旧形态 12 秒到点就静默停表——容器永远空着，
   //   访客只会在提交时撞上一句「请先完成人机验证」，而那一句指着一个不会自己出现的框。
-  const [tsState, setTsState] = useState<TurnstileLoadState>(turnstileLoadState())
+  const [tsState, setTsState] = useState<CaptchaLoadState>(captchaLoadState(tsProvider))
   // 表单块渲染出容器后回调挂载组件（装载脚本收敛在 lib/turnstile：与传统表单共用、只注入一次）
   const attachTs = useCallback((el: HTMLDivElement | null) => {
     if (!el || tsIdRef.current !== null || !captchaOn) return
-    loadTurnstile(() => {
+    loadCaptcha(tsProvider, () => {
       // size 按容器选档（normal 固有宽 300px，窄卡里会顶破右缘）；状态回写驱动下面那张脸
-      const id = renderTurnstile(el, captcha?.siteKey || '', (tk) => { tsTokenRef.current = tk }, { size: pickTurnstileSize(el) })
-      if (id !== null) tsIdRef.current = id
+      const h = mountCaptcha(el, tsProvider, captcha?.siteKey || '', (tk) => { tsTokenRef.current = tk }, { size: pickTurnstileSize(el) })
+      if (h !== null) tsIdRef.current = h
     }, (st) => setTsState(st))
-  }, [captchaOn, captcha?.siteKey])
+  }, [captchaOn, captcha?.siteKey, tsProvider])
 
   // 守卫文案按装载状态分派：还在加载 ≠ 加载不出来 ≠ 用户没点，三种原因的出路不同
   const tsBlockMsg = useCallback(() => (
@@ -234,7 +243,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   const tsNotice: ReactNode = !captchaOn ? null : tsState === 'unavailable' ? (
     <p className="ar-ts-note" role="alert" data-testid="captcha-notice">
       {t('auth.captchaUnavailable')}{' '}
-      <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+      <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryCaptcha(tsProvider)}>
         {t('auth.captchaRetry')}
       </button>
     </p>
@@ -563,7 +572,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       if (!aiForm.agreed) { setBusy(false); fail(t('auth.needAgree')); return }
     }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
-    if (captchaOn && !tsTokenRef.current) { fail(tsBlockMsg()); reexecTurnstile(tsIdRef.current); return }
+    if (captchaOn && !tsTokenRef.current) { fail(tsBlockMsg()); revalidateCaptcha(tsIdRef.current); return }
     const sel = selRef.current
     const kind = sel.type ==='personal'?'personal': sel.role ==='admin'?'admin':'staff'
     // F-06 前置校验（对齐传统表单 Login.tsx 的 orgCodeRequired/inviteRequired）：
@@ -786,7 +795,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                     // F-03：冷却期内双保险拦重发（按钮此时已 disabled，这里防住任何旁路触发）
                     if (codeCd.left > 0) return
                     // 开验但还没领到 token：明确告知要过人机验证（旧写法直接裸发 → 403 无提示）
-                    if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
+                    if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); revalidateCaptcha(tsIdRef.current); return }
                     // F-02：乐观置位（与旧 ref 行为一致，请求在途即显示「在线」），失败分支回滚
                     setCodeSent(true)
                     const tk = takeCaptchaToken()

@@ -20,6 +20,7 @@ import { profileSetup, registerConfig } from '@/api/auth'
 import { setAuthToken } from '@/api/core'
 import { useAuth } from '@/stores/auth'
 import { PWD_MIN_LEN } from '@/lib/accountForm'
+import { parseCaptchaProvider, type CaptchaProvider } from '@/lib/captcha'
 import { t } from '@/i18n'
 import { useBranding } from '@/branding'
 import AiRegisterFlow from './AiRegisterFlow'
@@ -40,7 +41,9 @@ export default function ProfileSetupGate() {
   const mainSite = branding.tenantId === 0
   // AI 面板的人机验证配置：登录屏那份 registerConfig 随登录页卸载，闸门根级常驻，
   // 必须自己拉一份；拉取失败按「关闭」处理（与后端 captcha_provider=none 同义）。
-  const [captcha, setCaptcha] = useState<{ enabled: boolean; siteKey: string } | undefined>(undefined)
+  // ★ 2026-10-27 多提供方批：provider 一起带上——漏了它，本闸门会拿着"缺省＝turnstile"
+  //   去挂一个后台已切成极验的验证：脚本源换错家、token 形状也对不上服务端。
+  const [captcha, setCaptcha] = useState<{ enabled: boolean; siteKey: string; provider?: CaptchaProvider } | undefined>(undefined)
 
   const required = !!user && user.profile_setup_required === 1
   const dismissed = !!user && dismissedRef.current.has(user.id)
@@ -59,7 +62,8 @@ export default function ProfileSetupGate() {
         if (dead) return
         const on = !!(c as unknown as { captcha_enabled?: boolean }).captcha_enabled
         const key = (c as unknown as { captcha_site_key?: string }).captcha_site_key || ''
-        setCaptcha({ enabled: on, siteKey: key })
+        const provider = parseCaptchaProvider((c as unknown as { captcha_provider?: string }).captcha_provider)
+        setCaptcha({ enabled: on, siteKey: key, provider })
       } catch { /* 拉不到就当人机验证关闭，不阻断补全流程 */ }
     })()
     return () => { dead = true }

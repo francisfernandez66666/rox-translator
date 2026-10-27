@@ -49,9 +49,18 @@ const (
 	secCSPEval    = "'unsafe-eval'"                  // ★ 2026-10-17 二批：CF 挑战平台/Turnstile 的字符串求值
 	secCSPWorker  = "worker-src 'self' blob:"        // ★ 同批：挑战平台的 worker
 	secCSPConnDat = "connect-src 'self' blob: data:" // ★ 同批：挑战平台 attestation 的 data: 通道
-	secCSPHeader  = "Content-Security-Policy"        //
-	secPPHeader   = "Permissions-Policy"             //
-	secAssistPath = "/assist-api/*"                  // 豁免：挂件 CSP 不需要这几项能力
+	// ★ 2026-10-27 多提供方批：极验（GeeTest v4）两处域名——前端脚本与弹框 iframe 走 static，
+	//   SDK 自身的上报/取数走 gcaptcha4。切换提供方是**改库里的 captcha_provider**、不是发版，
+	//   所以 CSP 必须提前放行；漏一条的表现是"运营换了提供方，验证框静默被 CSP 拦掉"。
+	secGtStatic = "https://static.geetest.com"
+	secGtAPI    = "https://gcaptcha4.geetest.com"
+	// 三处逐指令原串：反证要"只摘这一处"，所以靶子必须连上下文一起写死
+	secGtGtInScript = "https://challenges.cloudflare.com https://static.geetest.com https://appsforoffice"
+	secGtGtInFrame  = "frame-src 'self' https://challenges.cloudflare.com https://static.geetest.com;"
+	secGtGtInConn   = "https://challenges.cloudflare.com https://static.geetest.com https://gcaptcha4.geetest.com;"
+	secCSPHeader    = "Content-Security-Policy" //
+	secPPHeader     = "Permissions-Policy"      //
+	secAssistPath   = "/assist-api/*"           // 豁免：挂件 CSP 不需要这几项能力
 )
 
 // caddySecurityScopedFiles 按「文件里有没有 Permissions-Policy 或 Content-Security-Policy」
@@ -90,6 +99,21 @@ func caddySecurityScopedFiles(t *testing.T) map[string]string {
 	return seen
 }
 
+// cspDirective 取一条 CSP 里某个指令的原文（从 `name ` 到下一个 `;`）；取不到回空串。
+// 判"某个第三方域名在该指令里有没有"必须落到指令层面：同一条 CSP 里 script/frame/connect
+// 三处都可能带同一个域名，按整行判＝丢了一处也看不出来。
+func cspDirective(line, name string) string {
+	at := strings.Index(line, name+" ")
+	if at < 0 {
+		return ""
+	}
+	rest := line[at+len(name)+1:]
+	if i := strings.Index(rest, ";"); i >= 0 {
+		rest = rest[:i]
+	}
+	return rest
+}
+
 // caddySecurityWiring 判一份配置里的三条能力修法是不是都在。返回空切片＝成立。
 //
 //	L1 任何 Permissions-Policy 行出现 `microphone=()` ⇒ 麦克风被全禁（本次事故形态）；
@@ -98,7 +122,10 @@ func caddySecurityScopedFiles(t *testing.T) map[string]string {
 //	L4 任何**非挂件** CSP 行缺 `media-src 'self' blob:` ⇒ 朗读 blob 音频被拒；
 //	L5 任何**非挂件** CSP 行的 script-src 缺 'unsafe-eval' ⇒ CF 挑战/Turnstile 的字符串求值被拦；
 //	L6 任何**非挂件** CSP 行缺 `worker-src 'self' blob:` ⇒ 挑战平台的 worker 被兜住；
-//	L7 任何**非挂件** CSP 行的 connect-src 缺 `data:` ⇒ 挑战平台 attestation 被拦。
+//	L7 任何**非挂件** CSP 行的 connect-src 缺 `data:` ⇒ 挑战平台 attestation 被拦；
+//	L8 script-src 缺 `https://static.geetest.com` ⇒ 把 captcha_provider 换成 geetest 后脚本被拦；
+//	L9 frame-src 缺 `https://static.geetest.com` ⇒ 极验弹框 iframe 被拦（框永远不出来）；
+//	L10 connect-src 缺 `https://gcaptcha4.geetest.com` ⇒ SDK 取数被拦（验证永远不过）。
 //
 // 挂件豁免＝行内含 /assist-api/*；但整份配置里若一条非挂件 CSP 都没有（L3/L4 靶子为空）
 // 也判问题——射程归零时绿灯没有意义（同 AGENTS「判据射程不足要报『锚点漂了』」）。
@@ -138,6 +165,20 @@ func caddySecurityWiring(rel, content string) []string {
 			}
 			if !strings.Contains(l, secCSPConnDat) {
 				problems = append(problems, rel+": CSP connect-src 缺 data:（L7）⇒ 挑战平台 attestation 被 connect-src 拦")
+			}
+			// ★ L8/L9/L10（2026-10-27 多提供方批）：极验那一路的放行腿。
+			//   切换提供方是改库配置、不发版，所以这三条必须**提前**在位；缺任一条＝运营换个值就静默失效。
+			// ⚠️ 必须**按指令取段**判：三个域名在一条 CSP 里各出现一次，
+			// 按整行 strings.Contains 判会让"只丢了 script-src 那一处"照样过关
+			// （connect-src 与 frame-src 里还各有一份 static）——那样反证也打不掉靶子（本批首跑真踩）。
+			if !strings.Contains(cspDirective(l, "script-src"), secGtStatic) {
+				problems = append(problems, rel+": CSP script-src 缺「"+secGtStatic+"」（L8）⇒ 切成极验后脚本被拦")
+			}
+			if !strings.Contains(cspDirective(l, "frame-src"), secGtStatic) {
+				problems = append(problems, rel+": CSP frame-src 缺「"+secGtStatic+"」（L9）⇒ 极验弹框 iframe 被拦，框永远不出来")
+			}
+			if !strings.Contains(cspDirective(l, "connect-src"), secGtAPI) {
+				problems = append(problems, rel+": CSP connect-src 缺「"+secGtAPI+"」（L10）⇒ 极验 SDK 取数被拦，验证永远不过")
 			}
 		}
 	}
@@ -231,6 +272,30 @@ func TestCaddySecurityHeadersCounterproof(t *testing.T) {
 			target: secCSPWorker,
 			mut:    func(s string) string { return replaceInCodeLine(s, secCSPWorker+"; ", "") },
 			want:   "L6",
+		},
+		{
+			name:   "M7 只从 script-src 摘掉极验静态域（connect/frame 里还各有一份）",
+			target: secGtGtInScript,
+			mut: func(s string) string {
+				return replaceInCodeLine(s, secGtGtInScript, "https://challenges.cloudflare.com https://appsforoffice")
+			},
+			want: "L8",
+		},
+		{
+			name:   "M7b 只从 frame-src 摘掉极验静态域",
+			target: secGtGtInFrame,
+			mut: func(s string) string {
+				return replaceInCodeLine(s, secGtGtInFrame, "frame-src 'self' https://challenges.cloudflare.com;")
+			},
+			want: "L9",
+		},
+		{
+			name:   "M8 摘掉极验取数域（SDK 上报被拦）",
+			target: secGtGtInConn,
+			mut: func(s string) string {
+				return replaceInCodeLine(s, secGtGtInConn, "https://challenges.cloudflare.com https://static.geetest.com;")
+			},
+			want: "L10",
 		},
 		{
 			name:   "M6 把 connect-src 的 data: 摘掉",

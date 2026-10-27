@@ -29,8 +29,15 @@ func (s *Server) captchaProvider() string {
 	return strings.ToLower(strings.TrimSpace(v))
 }
 
-// captchaEnabled 判断是否启用人机验证（仅 turnstile 已实现）。
-func (s *Server) captchaEnabled() bool { return s.captchaProvider() == "turnstile" }
+// captchaEnabled 判断是否启用人机验证＝「provider 命中已实现的某一个」。
+// ★ 判据只在这一处：加提供方改这个表，不改四个业务调用点（同 §一·20「只有一条咽喉」那条纪律）。
+func (s *Server) captchaEnabled() bool {
+	switch s.captchaProvider() {
+	case "turnstile", "geetest":
+		return true
+	}
+	return false
+}
 
 // verifyCaptcha 校验前端提交的人机验证 token；未启用时恒通过。
 // 参数 r: HTTP 请求（取客户端 IP 供 siteverify 参考）；token: 前端组件产出的一次性令牌。
@@ -43,7 +50,11 @@ func (s *Server) verifyCaptcha(r *http.Request, token string) error {
 	if strings.TrimSpace(token) == "" {
 		return &apiErr{"请完成人机验证"}
 	}
-	// 读取 Cloudflare Turnstile 服务端密钥
+	// 按提供方分发：geetest 走极验二次校验（token 是 JSON 四件套），其余仍是 Turnstile
+	if s.captchaProvider() == "geetest" {
+		return s.verifyGeetest(r, token)
+	}
+	// 读取 Cloudflare 服务端密钥（geetest 复用同一列，语义按 provider 解释）
 	secret, _ := s.Store.GetConfig("captcha_secret_key")
 	if secret == "" {
 		return &apiErr{"人机验证未配置密钥，请联系管理员"}
@@ -73,7 +84,7 @@ func (s *Server) verifyCaptcha(r *http.Request, token string) error {
 	return nil
 }
 
-// captchaSiteKey 读取站点 key（公开下发用；provider 非 turnstile 时返回空）。
+// captchaSiteKey 读取站点 key（公开下发用；未启用人机验证时返回空）。
 func (s *Server) captchaSiteKey() string {
 	if !s.captchaEnabled() {
 		return ""

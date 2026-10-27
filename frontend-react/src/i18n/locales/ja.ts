@@ -2830,6 +2830,7 @@ export const dict: Record<string, string> = {
   "tk.qaColLevel": "レベル",
   "tk.qaColRule": "ルール",
   "tk.qaErrorNote": "エラーは、自動再翻訳（最大 8 回）を完了しても残っている項目です。原文と照合してください。",
+  "tk.etaTypical": "この種類の処理は通常約 {n} 分かかります",
   "tk.qaErrors": "エラー {n} 件",
   "tk.qaFail": "品質チェック不合格",
   "tk.qaFlagged": "品質チェック要確認",

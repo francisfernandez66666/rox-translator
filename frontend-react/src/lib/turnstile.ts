@@ -12,7 +12,7 @@
 //   容器永远空壳、界面上只剩一行「请先完成人机验证」的死循环红字——
 //   现网复现读数（本机 /login，无凭证、不拦网络）：CF 脚本 **+13.998s** 才 200 到达、
 //   `window.turnstile` **+14.987s** 才出现，而停表点在 12s ⇒ 到 +63s 容器仍 `iframe:0`。
-//   ⇒ 三条新口径（与本仓 §一·5 批⑤「慢与坏必须分开报、产物要能撤」同一纪律）：
+//   ⇒ 三条口径（与本仓 §一·5 批⑤「慢与坏必须分开报、产物要能撤」同一纪律）：
 //   ① **截止按链路自适应**（默认 12s；慢链路／省流量档 30s），不再拿一个常数当"坏"判决；
 //   ② **到期时链路还在动（Resource Timing 条目数又变了）就再等一拍**，硬上限 60s；
 //   ③ **放弃必须出声**：状态机 `loading → ready | unavailable` 对外可订阅，
@@ -21,10 +21,14 @@
 //   ★ 尺寸（normal 固有宽 300px）也收在这里：`pickTurnstileSize` 是唯一实现，
 //     四处挂件（留资／登录／注册／AI 面板）一律按它选档并在容器上带宽度兜底——
 //     此前只有 LeadForm 自己数了一遍，另外三处拿到的是 300px 硬宽（320 档会顶破页面）。
+//   ★ 2026-10-27 多提供方批：上面那套**等待策略**（三档截止／再等一拍／出声／重试）
+//     已抽到 lib/captchaLoad.ts 成为唯一实现——极验与 CF 共用同一把尺子，
+//     本文件只留「CF 这一家的脚本地址、API 形状、渲染入参」。禁止在别处再抄一份轮询。
 // ============================================================================
+import { createLoadChannel, type CaptchaLoadState, type LoadChannel } from './captchaLoad'
 
 /** Turnstile 全局 API 的最小子集（官方类型不随脚本发布，此处按用到的方法声明） */
-interface TurnstileApi {
+export interface TurnstileApi {
   render: (el: HTMLElement, opts: Record<string, unknown>) => string | number
   execute: (id: string | number) => void
   /** ★ F-03（2026-09-25 批G）：把组件复位回未验证态、作废当前 token；
@@ -35,7 +39,7 @@ interface TurnstileApi {
 }
 
 /** 装载状态机：loading=还在等这一跳；ready=API 到手；unavailable=确定加载不出来（可重试） */
-export type TurnstileLoadState = 'loading' | 'ready' | 'unavailable'
+export type TurnstileLoadState = CaptchaLoadState
 
 /** 挂件尺寸档：normal 固有宽 300px，compact 约 150px（窄容器／窄视口用 compact） */
 export type TurnstileSize = 'normal' | 'compact'
@@ -50,152 +54,28 @@ declare global {
 
 const SCRIPT_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
 
-// 轮询步长：150ms 一拍，够密以让「API 迟到」到「挂件出现」之间不留可感知缝
-const POLL_MS = 150
-// 默认截止：与改造前的 80 拍等值（12s），快链上不改变任何行为
-const BASE_DEADLINE_MS = 12_000
-// 慢链/省流量档截止：这类链路里 CF 那一跳 15~25s 是常态，按默认档判"坏"＝把可救的一跳打死
-const SLOW_DEADLINE_MS = 30_000
-// 「再等一拍」的绝对上限：超过它才允许判 unavailable（无限等待比红字更坏，见 §一·5 批⑤）
-const HARD_LIMIT_MS = 60_000
-// 一次延长的拍长：链路在动就多给这一段时间，不动则放弃
-const EXTEND_MS = 2_000
 // normal 档固有宽度判据：容器比这还窄就必须换 compact
 const NORMAL_MIN_WIDTH = 300
 // 视口窄于该值一律 compact（容器宽度尚未定型时的兜底）
 const COMPACT_VIEWPORT_MAX = 400
 
-// ---- 装载器的共享状态（脚本全局只有一份 ⇒ 状态也只能有一份）----
-let loadState: TurnstileLoadState = 'loading'
-let pollTimer: ReturnType<typeof setInterval> | null = null
-let startedAt = 0
-let deadlineAt = 0
-let seenScriptEntries = -1
-// readyWaiters：等"API 到手"的消费方集合（登录/注册/留资/AI 面板各一个回调，装载成功一起叫醒）
-const readyWaiters = new Set<(ts: TurnstileApi) => void>()
-// stateListeners：装载状态订阅者（loading/ready/unavailable 的变化要让界面换脸，不落库、只活在内存）
-const stateListeners = new Set<(s: TurnstileLoadState) => void>()
-
-/** loadDeadlineMs 按链路给截止：`navigator.connection` 报慢／省流量 → 30s，否则 12s。
-    读不到 connection（Safari／旧内核）按默认档，不许因"读不到"就抬到上限。 */
-function loadDeadlineMs(): number {
-  const c = (navigator as unknown as {
-    connection?: { effectiveType?: string; saveData?: boolean }
-  }).connection
-  if (!c) return BASE_DEADLINE_MS
-  const t = (c.effectiveType || '').toLowerCase()
-  if (c.saveData || t === 'slow-2g' || t === '2g' || t === '3g') return SLOW_DEADLINE_MS
-  return BASE_DEADLINE_MS
-}
-
-/** scriptEntryCount 数「这一跳的 Resource Timing 条目数」。
-    条目只在资源**结束**（成功或失败）时出现，所以它的**变化量**就是"链路还在动"的读数；
-    拿它而不是 `script.complete`——后者在慢链上与"没这条目"同形。 */
-function scriptEntryCount(): number {
-  try {
-    return performance
-      .getEntriesByType('resource')
-      .filter((e) => e.name.startsWith(SCRIPT_SRC.split('?')[0])).length
-  } catch {
-    return -1 // 读不到性能条目＝按"没动"处理（放弃路径，不会无限延长）
-  }
-}
-
-/** publishState 状态唯一写点：值没变就不通知（同 §一·5 那条「订阅必须让快照变值」）。 */
-function publishState(next: TurnstileLoadState): void {
-  if (next === loadState) return
-  loadState = next
-  for (const fn of Array.from(stateListeners)) fn(next)
-}
-
-/** stopPoll 收摊：任何走到终态的路径都必须显式停表，不许留孤儿 interval */
-function stopPoll(): void {
-  if (pollTimer !== null) {
-    clearInterval(pollTimer)
-    pollTimer = null
-  }
-}
-
-/** fireReady 把 API 发给所有在等的消费方（含后来者），并把状态钉成 ready。 */
-function fireReady(ts: TurnstileApi): void {
-  stopPoll()
-  publishState('ready')
-  for (const fn of Array.from(readyWaiters)) fn(ts)
-}
-
-/** tick 每一拍问三件事：API 到了没 → 截止到了没 → 这一跳还在不在动。
-    「到了」与「不动了」是仅有的两个终态；除此之外一律继续等，不做猜测性放弃。 */
-function tick(): void {
-  const ts = typeof window !== 'undefined' ? window.turnstile : undefined
-  if (ts) { fireReady(ts); return }
-  const now = Date.now()
-  if (now < deadlineAt) return
-  const entries = scriptEntryCount()
-  if (entries !== seenScriptEntries && now < HARD_LIMIT_MS + startedAt) {
-    seenScriptEntries = entries
-    deadlineAt = now + EXTEND_MS
-    return
-  }
-  // 确定加载不出来：出声（消费方据此显示「重试」），并停表——退避交给用户点，不自动狂重拨
-  stopPoll()
-  publishState('unavailable')
-}
-
-/** ensureScript 注入脚本，全局只注入一次；已经注入过但失败了由 retryTurnstile 摘掉旧节点再来。
-    ★ D-02 两条腿（缺一条就会把"慢"误判成"坏"且永不复原）：
-    · `load` —— 脚本**晚于放弃时刻**到达时也要把 ready 追回来（否则用户在 12s 看到「加载不出来」，
-      18s 脚本其实到了，界面却永远停在没有出路的旧形态）；
-    · `error` —— 这一跳**确定被拒**（DNS/断连/插件拦截）时当场出声，不必再白等满窗口。
-    两个事件都只动状态机，不各自再挂一遍挂件（挂载始终由 loadTurnstile 的 onReady 消费者负责）。 */
-function ensureScript(replace: boolean): void {
-  if (typeof document === 'undefined') return
-  const existing = Array.from(document.head.querySelectorAll<HTMLScriptElement>('script[data-ts-api]'))
-  if (replace) for (const el of existing) el.remove()
-  if (!replace && (window.__tsInjected || existing.length > 0)) return
-  window.__tsInjected = true
-  const s = document.createElement('script')
-  s.src = SCRIPT_SRC
-  s.async = true
-  s.dataset.tsApi = '1'
-  s.addEventListener('load', () => {
-    const ts = window.turnstile
-    if (ts) fireReady(ts)
-  })
-  s.addEventListener('error', () => {
-    stopPoll()
-    publishState('unavailable')
-  })
-  document.head.appendChild(s)
-}
-
-/** startPoll 起表：一次装载尝试的唯一入口（幂等——已在跑就复用，不并存两个递减源） */
-function startPoll(): void {
-  if (typeof window === 'undefined') return
-  const ts = window.turnstile
-  if (ts) { publishState('ready'); for (const fn of Array.from(readyWaiters)) fn(ts); return }
-  if (pollTimer !== null) return
-  startedAt = Date.now()
-  deadlineAt = startedAt + loadDeadlineMs()
-  seenScriptEntries = scriptEntryCount()
-  ensureScript(false)
-  publishState('loading')
-  pollTimer = setInterval(tick, POLL_MS)
-}
+// channel：CF 这一家的装载通道（脚本全局只有一份 ⇒ 通道也只能有一条）
+const channel: LoadChannel<TurnstileApi> = createLoadChannel<TurnstileApi>({
+  url: SCRIPT_SRC,
+  injectedFlag: '__tsInjected',
+  dataAttr: 'ts-api',
+  probe: () => (typeof window !== 'undefined' ? window.turnstile : undefined),
+})
 
 /** turnstileLoadState 读当前装载状态（消费方首帧取初值用，禁止各组件自己再判一次超时） */
 export function turnstileLoadState(): TurnstileLoadState {
-  return typeof window !== 'undefined' && window.turnstile ? 'ready' : loadState
+  return channel.state()
 }
 
 /** retryTurnstile 用户点「重试」的唯一入口：摘掉失败那份脚本、重新起表（不整页刷新）。
-    这是 D-02 的出路那一半——旧形态没有出路，红字永远指着一个永远不会出现的框。 */
+    这是 D-02 的出路那一半——旧形态没有出路，红字永远指着一个永远不会自己出现的框。 */
 export function retryTurnstile(): void {
-  if (typeof window === 'undefined') return
-  if (window.turnstile) { fireReady(window.turnstile); return }
-  stopPoll()
-  window.__tsInjected = false
-  ensureScript(true)
-  startPoll()
+  channel.retry()
 }
 
 /**
@@ -207,18 +87,7 @@ export function loadTurnstile(
   onReady: (ts: TurnstileApi) => void,
   onState?: (s: TurnstileLoadState) => void,
 ): () => void {
-  if (typeof window === 'undefined') return () => {}
-  const ts = window.turnstile
-  if (ts) { onReady(ts); onState?.('ready'); return () => {} }
-  readyWaiters.add(onReady)
-  const stateCb = onState
-  if (stateCb) stateListeners.add(stateCb)
-  startPoll()
-  stateCb?.(turnstileLoadState())
-  return () => {
-    readyWaiters.delete(onReady)
-    if (stateCb) stateListeners.delete(stateCb)
-  }
+  return channel.load(onReady, onState)
 }
 
 /** pickTurnstileSize 尺寸选档的**唯一实现**：容器放不下 normal 或视口过窄 → compact。

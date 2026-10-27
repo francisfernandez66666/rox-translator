@@ -23,6 +23,8 @@ import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TRANSLATE_FILE_EXTS, TEX
 //   而 accept 里照样列着那八个图片后缀与七个音频后缀 ⇒ 客户选完、建单、等一会儿才吃一句失败：
 //   入口本身在承诺一件服务端做不到的事（同 ChatWindow 麦克风那条口径）。
 import { useVoiceCapability } from '@/api/voiceCapability'
+// ★ 2026-10-27 P2-01：档位与分钟数只认 lib/ticketEta 那一份事实源（禁止在本文件再写扩展名清单）
+import { ticketWaitMinutes, ticketWaitTier } from '@/lib/ticketEta'
 import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
@@ -906,6 +908,14 @@ export default function TicketsPage() {
           <div className="tk-prog-ws-row">
             <WordSwap className="tk-prog-ws" ariaLabel={t('tk.progress')} />
           </div>
+        )}
+        {/* ★ P2-01（2026-10-27）：进行中给一句"这类件通常约需几分钟"。
+            现网实证一张海报 PNG 跑了 5 分 31 秒而界面只有「进度 30%」⇒ 访客分不清在跑还是卡死。
+            只报上限、不报剩余（没有可靠速率读数，猜剩余＝承诺）；配色与同排 stepLabel 同档，零新视觉。 */}
+        {progressAnimating && (
+          <p style={{ margin: '0 0 8px', fontSize: 14, color: 'var(--lc-text-3)' }} data-testid="tk-eta">
+            {tpl('tk.etaTypical', { n: ticketWaitMinutes(ticketWaitTier(String(detail?.ticket?.title || ''))) })}
+          </p>
         )}
         {states.length > 0 ? (
           // 步骤明细：maxHeight 200 + 内部滚动，弹窗整体不超 .tk-dialog 的 86vh；

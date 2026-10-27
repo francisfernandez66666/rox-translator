@@ -13,12 +13,17 @@ import { registerConfig, createLead } from '@/api'
 import { useT } from '@/i18n'
 // ★ 2026-10-27 D-02 批：留资表单此前**自己注入了一份 api.js**（旧 `__tsLoading` 守卫），
 //   正是 2026-09-24 那次「两方各注入、另一方的回调永远等不到」的形态复发；
-//   且只有它有选档、另外三处挂件没有。现在装载/选档/渲染/销毁全部走 lib/turnstile 那一份唯一实现。
+//   且只有它有选档、另外三处挂件没有。现在装载/渲染/销毁全部走那一份唯一实现。
+// ★ 2026-10-27 多提供方批：装载/挂载/重验/重试一律经 lib/captcha 那个分发口——
+//   「哪一家提供方」只在这里问一次（register-config 的 captcha_provider），
+//   组件不再各写 if/else（三家各写一遍＝迟早长出一处静默打旧家）。
+//   尺寸选档仍从 lib/turnstile 现读：normal/compact 是 CF 那一家固有的 300px 问题，极验 popup 档没有这一维。
+import { pickTurnstileSize, type TurnstileSize } from '@/lib/turnstile'
 import {
-  loadTurnstile, renderTurnstile as mountTurnstileWidget, pickTurnstileSize,
-  removeTurnstile, reexecTurnstile, retryTurnstile, turnstileLoadState,
-  type TurnstileLoadState, type TurnstileSize,
-} from '@/lib/turnstile'
+  loadCaptcha, mountCaptcha, revalidateCaptcha, removeCaptcha, retryCaptcha,
+  captchaLoadState, parseCaptchaProvider,
+  type CaptchaProvider, type CaptchaLoadState, type CaptchaHandle,
+} from '@/lib/captcha'
 
 /** 提交状态机：idle=可编辑，busy=请求中，ok=成功（表单整体换成回执），err=失败（保留输入可重试） */
 type Phase = 'idle' | 'busy' | 'ok' | 'err'
@@ -47,26 +52,29 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
   //   而容器 `{captchaOn && <div ref=...>}` 要等这次提交后才进 DOM ⇒ mount() 读到 null ref
   //   直接 return，且此后再没有人重试 ⇒ **人机验证挂件永远不渲染**（表单看起来正常，提交必被拦）。
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
+  // ★ 2026-10-27 多提供方批：提供方也来自 register-config（缺省/未知按 turnstile，见 lib/captcha 口径①）
+  const [captchaProvider, setCaptchaProvider] = useState<CaptchaProvider>('turnstile')
   // ★ 2026-10-27 D-02：装载状态必须进渲染——「还在加载」与「确定加载不出来」是两张脸，
   //   旧形态两者都不出（容器空着 ＋ 提交时才报一句没有出路的红字）。
-  const [captchaState, setCaptchaState] = useState<TurnstileLoadState>(turnstileLoadState())
+  const [captchaState, setCaptchaState] = useState<CaptchaLoadState>(captchaLoadState('turnstile'))
   const captchaBoxRef = useRef<HTMLDivElement>(null)
   const captchaTokenRef = useRef('')
-  // ★ 2026-10-26 P2-01：记录当前 widget id / 尺寸档 / sitekey，
+  // ★ 2026-10-26 P2-01：记录当前挂件句柄 / 尺寸档 / sitekey，
   // 供视口跨档时 remove + 重挂（换尺寸后旧 token 失效，必须让用户重新验证）。
-  const turnstileIdRef = useRef<string | number | null>(null)
+  const captchaHandleRef = useRef<CaptchaHandle | null>(null)
   const turnstileSizeRef = useRef<TurnstileSize>('normal')
   const turnstileSiteKeyRef = useRef('')
 
-  // 只在后台开启人机验证时才拉 Turnstile：未开启时表单零第三方请求
+  // 只在后台开启人机验证时才拉验证组件：未开启时表单零第三方请求
   useEffect(() => {
     let dead = false // 卸载守卫：config 返回时组件可能已随路由卸载
     ;(async () => {
       try {
         const c = await registerConfig()
-        const cap = c as unknown as { captcha_enabled?: boolean; captcha_site_key?: string }
+        const cap = c as unknown as { captcha_enabled?: boolean; captcha_site_key?: string; captcha_provider?: string }
         if (!dead && c.success && cap.captcha_enabled && cap.captcha_site_key) {
           // 只落状态；真正的 render 在下面的 effect 里（容器 ref 先落 DOM 再挂件）。
+          setCaptchaProvider(parseCaptchaProvider(cap.captcha_provider))
           setCaptchaSiteKey(cap.captcha_site_key)
           setCaptchaOn(true)
         }
@@ -81,34 +89,36 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     const key = turnstileSiteKeyRef.current
     if (!el || !key) return
     const size = pickTurnstileSize(el)
-    const id = mountTurnstileWidget(el, key, (tk) => { captchaTokenRef.current = tk }, { size })
-    if (id !== null) {
-      turnstileIdRef.current = id
+    const h = mountCaptcha(el, captchaProvider, key, (tk) => { captchaTokenRef.current = tk }, { size })
+    if (h !== null) {
+      captchaHandleRef.current = h
       turnstileSizeRef.current = size
     }
   }
 
   // 容器进 DOM 之后订阅装载：ready 才真挂；loading/unavailable 只改界面上给访客看的那张脸。
-  // 装载与选档都不在这里各写一遍（唯一实现在 lib/turnstile），本组件只消费。
+  // 装载、脚本注入、选档都不在这里各写一遍（唯一实现在 lib/captchaLoad + lib/captcha），本组件只消费。
   useEffect(() => {
     if (!captchaOn || !captchaSiteKey) return
     turnstileSiteKeyRef.current = captchaSiteKey
-    const cancel = loadTurnstile(() => mountWidget(), (s) => setCaptchaState(s))
+    setCaptchaState(captchaLoadState(captchaProvider))
+    const cancel = loadCaptcha(captchaProvider, () => mountWidget(), (s) => setCaptchaState(s))
     return cancel
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mountWidget 只读 ref 与固定入参，按 captchaOn/sitekey 触发即可
-  }, [captchaOn, captchaSiteKey])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mountWidget 只读 ref 与固定入参，按 captchaOn/sitekey/provider 触发即可
+  }, [captchaOn, captchaSiteKey, captchaProvider])
 
   // 视口跨档（桌面↔手机）时重挂 widget：尺寸档变了才动作，普通缩放不会反复重建
   // （避免用户验证到一半被清掉）；容器空着时（上一档被卸载/首次迟到）直接补挂。
+  // ★ 极验 popup 档由 SDK 自己排版面、没有 normal/compact 这一维，所以这条只在 CF 那一档成立。
   useEffect(() => {
-    if (!captchaOn) return
+    if (!captchaOn || captchaProvider !== 'turnstile') return
     const onResize = () => {
       const el = captchaBoxRef.current
       if (!el || !window.turnstile) return
       if (el.childElementCount === 0) { mountWidget(); return }
       if (pickTurnstileSize(el) === turnstileSizeRef.current) return
-      removeTurnstile(turnstileIdRef.current)
-      turnstileIdRef.current = null
+      removeCaptcha(captchaHandleRef.current)
+      captchaHandleRef.current = null
       captchaTokenRef.current = ''
       el.innerHTML = ''
       mountWidget()
@@ -116,7 +126,7 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 同上：mountWidget 是稳定闭包
-  }, [captchaOn])
+  }, [captchaOn, captchaProvider])
 
   function validEmail(v: string): boolean {
     const at = v.lastIndexOf('@')
@@ -155,7 +165,7 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
       setErrText(err instanceof Error && err.message ? err.message : t('land.leadFail'))
       setPhase('err')
       // token 一次一用：提交失败也可能已被服务端消费，清空并强制重新挑战领新码（同 Login.tsx 口径）
-      if (captchaOn) { captchaTokenRef.current = ''; reexecTurnstile(turnstileIdRef.current) }
+      if (captchaOn) { captchaTokenRef.current = ''; revalidateCaptcha(captchaHandleRef.current) }
     }
   }
 
@@ -218,7 +228,7 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
         <p className="lc-lead-hint" role="alert" data-testid="captcha-notice">
           {t('auth.captchaUnavailable')}
           {' '}
-          <button type="button" className="lc-lead-chip lc-lead-captcha-retry" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+          <button type="button" className="lc-lead-chip lc-lead-captcha-retry" data-testid="captcha-retry" onClick={() => retryCaptcha(captchaProvider)}>
             {t('auth.captchaRetry')}
           </button>
         </p>

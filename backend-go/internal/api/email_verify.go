@@ -344,6 +344,10 @@ func (s *Server) handleRegisterConfig(w http.ResponseWriter, r *http.Request) {
 		"email_verify_enabled": ev,
 		"captcha_enabled":      s.captchaEnabled(),
 		"captcha_site_key":     s.captchaSiteKey(),
+		// ★ 2026-10-27 D-02 批③：把**提供方名字**也下发——前端装载器要按它选脚本源与回调形状
+		//   （turnstile 拿的是不透明串、geetest 拿的是四件套 JSON）。只回 enabled＋sitekey
+		//   的话，加一个提供方就要改前端判断，迟早长出「配置说开了、界面挂错了」那一族。
+		"captcha_provider":     s.captchaProvider(),
 		"industries":           industries,
 		"personas":             personas,
 	})

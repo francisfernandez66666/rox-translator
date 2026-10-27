@@ -2830,6 +2830,7 @@ export const dict: Record<string, string> = {
   "tk.qaColLevel": "수준",
   "tk.qaColRule": "규칙",
   "tk.qaErrorNote": "자동 재번역(최대 8회)을 시도한 후에도 남아 있는 오류입니다. 원문과 대조해 확인하세요.",
+  "tk.etaTypical": "이 유형의 작업은 보통 약 {n}분 걸립니다",
   "tk.qaErrors": "오류 {n}건",
   "tk.qaFail": "품질 검사 미통과",
   "tk.qaFlagged": "품질 검사 요주의",

@@ -276,6 +276,7 @@ export const baseEn: Record<string,string> = {
   // ★ 改造 4/5（2026-09-17）：用户侧质检报告透出 + 质检存疑徽标
   'tk.qaTitle': 'Quality Report', 'tk.qaPass': 'QA passed', 'tk.qaFail': 'QA failed',
   'tk.qaErrors': '{n} errors', 'tk.qaWarnings': '{n} warnings', 'tk.qaClean': 'No quality issues detected',
+  'tk.etaTypical': 'This kind of job usually takes about {n} minutes',
   // ★ W6（2026-10-26 用户令）：本仓没有人复核环节，出栈文案只陈述机器事实。
   //   （此处曾有转义残留：键名连同引号被一起抄进了值里，客户会看到一串键值对文本。）
   'tk.qaFlagged': 'QA flagged', 'tk.qaFlaggedTip': 'Machine evaluation scored below the threshold; marked as QA flagged.',

@@ -39,7 +39,15 @@ import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { useCountdown } from '@/lib/useCountdown' // ★ #42：验证码冷却收口（自带卸载清理 + 幂等重启）
 // ★ 2026-10-21 IAM 重做 P0-6：邮箱形状与口令长度走这一把共用尺子（只判形状，不判"注册过没有"）
 import { PWD_MIN_LEN, isEmailShape } from '@/lib/accountForm'
-import { loadTurnstile, renderTurnstile as mountTurnstileWidget, reexecTurnstile, pickTurnstileSize, retryTurnstile, turnstileLoadState, type TurnstileLoadState } from '@/lib/turnstile'
+// ★ 2026-10-27 多提供方批：装载/挂载/重验/重试走 lib/captcha 那一个分发口——
+//   「哪一家提供方」只在这里问一次（register-config 的 captcha_provider），组件不各写 if/else。
+//   尺寸选档仍从 lib/turnstile 现读：normal/compact 是 CF 那一家固有的 300px 问题，极验 popup 档没有这一维。
+import { pickTurnstileSize } from '@/lib/turnstile'
+import {
+  loadCaptcha, mountCaptcha as mountCaptchaWidget, revalidateCaptcha, retryCaptcha,
+  captchaLoadState, parseCaptchaProvider,
+  type CaptchaProvider, type CaptchaLoadState, type CaptchaHandle,
+} from '@/lib/captcha'
 import AiRegisterFlow from './AiRegisterFlow'
 
 /** Login 入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层挂载工作台 */
@@ -163,9 +171,9 @@ export default function Login({ mode, onLogin }: Props) {
   const codeCd = useCountdown(60)
   const captchaBoxRef = useRef<HTMLDivElement>(null) // Turnstile 挂载容器（脚本会往里塞 iframe）
   const captchaTokenRef = useRef('') // token 用 ref 而非 state：回调写入时不需要触发重渲染
-  const captchaIdRef = useRef<string | number | null>(null) // widget id：token 消费后 reexec 领新码要用
+  const captchaIdRef = useRef<CaptchaHandle | null>(null) // 挂载句柄：token 消费后要拿它重新领一枚
   const loginCaptchaBoxRef = useRef<HTMLDivElement>(null)
-  const loginCaptchaIdRef = useRef<string | number | null>(null)
+  const loginCaptchaIdRef = useRef<CaptchaHandle | null>(null)
   // ★ 2026-09-24：siteKey 存 state——AI 注册面板（接管注册的传统表单替代者）要拿同一份配置
   //   挂自己的验证组件，旧写法只活在注册期局部变量里，面板无从获得
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
@@ -173,7 +181,9 @@ export default function Login({ mode, onLogin }: Props) {
   //   界面按它给两张脸——loading 只提示不拦人，unavailable 必须给「重试」出路。
   //   旧形态这里什么都没有：12 秒窗口一到就静默停表，容器永远空壳，
   //   访客只会在点「发送验证码」时撞上一句指着不存在的框的红字（现网复现：这一跳 14s 才通）。
-  const [captchaState, setCaptchaState] = useState<TurnstileLoadState>(turnstileLoadState())
+  const [captchaState, setCaptchaState] = useState<CaptchaLoadState>(captchaLoadState('turnstile'))
+  // ★ 2026-10-27 多提供方批：提供方同样由 register-config 下发（缺省/未知按 turnstile，见 lib/captcha 口径①）
+  const [captchaProvider, setCaptchaProvider] = useState<CaptchaProvider>('turnstile')
   // 已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
   const [ssoList, setSsoList] = useState<SSOProvider[]>([])
 
@@ -253,8 +263,14 @@ export default function Login({ mode, onLogin }: Props) {
           setEmailVerifyOn(!!c.email_verify_enabled)
           setCaptchaOn(!!(c as unknown as { captcha_enabled?: boolean }).captcha_enabled)
           const key = (c as unknown as { captcha_site_key?: string }).captcha_site_key || ''
-          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled) setCaptchaSiteKey(key)
-          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) mountCaptcha(key)
+          const provider = parseCaptchaProvider((c as unknown as { captcha_provider?: string }).captcha_provider)
+          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled) {
+            setCaptchaProvider(provider)
+            setCaptchaSiteKey(key)
+            setCaptchaState(captchaLoadState(provider))
+          }
+          // 现读的 provider：这一轮 setState 还没落地，挂载必须拿**这一次**的读数（拿 state 会挂到旧家）
+          if ((c as unknown as { captcha_enabled?: boolean }).captcha_enabled && key) mountRegWidget(key, provider)
           const inds = (c as unknown as { industries?: Array<{ code: string; name: string }> }).industries
           if (Array.isArray(inds) && inds.length > 0) setIndustries(inds)
           const ps = (c as unknown as { personas?: Array<{ code: string; name: string }> }).personas
@@ -298,9 +314,9 @@ export default function Login({ mode, onLogin }: Props) {
     if (mode !== 'home' || view !== 'register' || regPhase !== 'form') return
     if (!captchaOn || !captchaSiteKey) return
     const el = captchaBoxRef.current
-    if (!el || el.querySelector('iframe')) return
-    mountCaptcha(captchaSiteKey)
-  }, [regPhase, view, mode, captchaOn, captchaSiteKey])
+    if (!el || el.childElementCount > 0) return
+    mountRegWidget(captchaSiteKey, captchaProvider)
+  }, [regPhase, view, mode, captchaOn, captchaSiteKey, captchaProvider])
 
   // 登录屏（signin）的人机验证挂件：home 与 admin 两档都要挂——理由同上面配置拉取那段，
   // admin 档就是统一登录卡，后端 email-code/email-login 强制校验 token，没有挂件＝没有 token
@@ -311,16 +327,16 @@ export default function Login({ mode, onLogin }: Props) {
     if (!captchaOn || !captchaSiteKey) return
     const el = loginCaptchaBoxRef.current
     if (!el || el.querySelector('iframe')) return
-    mountLoginCaptcha(captchaSiteKey)
-  }, [view, mode, loginMode, captchaOn, captchaSiteKey])
+    mountSigninWidget(captchaSiteKey, captchaProvider)
+  }, [view, mode, loginMode, captchaOn, captchaSiteKey, captchaProvider])
 
   // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
   // ★ D-02：装载状态单独订阅一次（两个容器共用那份脚本、也共用这个状态机），
   //   这样「正在加载／加载不出来」这两张脸与挂件容器无关——容器还没进 DOM 时提示也已经在了。
   useEffect(() => {
     if (!captchaOn) return
-    return loadTurnstile(() => { /* 挂载由各容器自己的 effect 负责，这里只要状态 */ }, (s) => setCaptchaState(s))
-  }, [captchaOn])
+    return loadCaptcha(captchaProvider, () => { /* 挂载由各容器自己的 effect 负责，这里只要状态 */ }, (s) => setCaptchaState(s))
+  }, [captchaOn, captchaProvider])
 
   // 守卫用的阻断文案按装载状态分派：拿不到 token 的**原因**不同，出路也必须不同
   // （ready 却空＝用户还没点验证；loading＝再等一会儿；unavailable＝给重试钮）。
@@ -339,7 +355,7 @@ export default function Login({ mode, onLogin }: Props) {
       return (
         <p className="auth-note" role="alert" data-testid="captcha-notice">
           {t('auth.captchaUnavailable')}{' '}
-          <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+          <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryCaptcha(captchaProvider)}>
             {t('auth.captchaRetry')}
           </button>
         </p>
@@ -349,31 +365,34 @@ export default function Login({ mode, onLogin }: Props) {
     return null
   }
 
-  function mountCaptcha(siteKey: string) {
-    loadTurnstile(() => {
+  // mountRegWidget 挂注册屏那一格的验证组件（provider 由调用方现读传入，理由见配置拉取那段注释）。
+  // ★ 2026-10-27 多提供方批：本函数原名 mountCaptcha，与 lib/captcha 的挂载入口同名，
+  //   分发口落地后一律让位（同名会让"组件自己挂"与"走分发口"两种形态在同一文件里并存）。
+  function mountRegWidget(siteKey: string, provider: CaptchaProvider) {
+    loadCaptcha(provider, () => {
       const el = captchaBoxRef.current
       if (!el) return
-      // 容器里已有挂件 iframe 就不再二挂（配置回调与 F-07 退回重挂两条路可能先后到达同一容器）
-      if (el.querySelector('iframe')) return
+      // 容器里已有挂件就不再二挂（配置回调与 F-07 退回重挂两条路可能先后到达同一容器）
+      if (el.childElementCount > 0) return
       // ★ D-02：normal 档固有宽 300px，必须按容器选档（旧形态从不传 size，窄屏卡片里会顶破右缘）
-      const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk }, { size: pickTurnstileSize(el) })
-      if (id !== null) captchaIdRef.current = id
+      const h = mountCaptchaWidget(el, provider, siteKey, (tk) => { captchaTokenRef.current = tk }, { size: pickTurnstileSize(el) })
+      if (h !== null) captchaIdRef.current = h
     }, (s) => setCaptchaState(s))
   }
 
   // 登录屏的人机验证挂件与注册屏**各挂各的容器**：共用一个容器会在切视图时把 token 串到另一条链路。
-  function mountLoginCaptcha(siteKey: string) {
-    loadTurnstile(() => {
+  function mountSigninWidget(siteKey: string, provider: CaptchaProvider) {
+    loadCaptcha(provider, () => {
       const el = loginCaptchaBoxRef.current
-      if (!el || el.querySelector('iframe')) return
-      const id = mountTurnstileWidget(el, siteKey, (tk) => { setLoginCaptchaToken(tk) }, { size: pickTurnstileSize(el) })
-      if (id !== null) loginCaptchaIdRef.current = id
+      if (!el || el.childElementCount > 0) return
+      const h = mountCaptchaWidget(el, provider, siteKey, (tk) => { setLoginCaptchaToken(tk) }, { size: pickTurnstileSize(el) })
+      if (h !== null) loginCaptchaIdRef.current = h
     }, (s) => setCaptchaState(s))
   }
   // token 一次一用：任一请求（发码/注册提交）把它送出去后即作废，清空并强制重新挑战领新码
   function refreshCaptcha() {
     captchaTokenRef.current = ''
-    reexecTurnstile(captchaIdRef.current)
+    revalidateCaptcha(captchaIdRef.current)
   }
 
   // ---- 会话落地的唯一出口（★ 2026-10-21 IAM 重做 P0-4：登录响应与注册响应共用这一条后处理）----
@@ -456,7 +475,7 @@ export default function Login({ mode, onLogin }: Props) {
     } catch (e) {
       setError((e as Error).message || t('pwd.sendFail'))
     } finally {
-      if (captchaOn) { setLoginCaptchaToken(''); reexecTurnstile(loginCaptchaIdRef.current) }
+      if (captchaOn) { setLoginCaptchaToken(''); revalidateCaptcha(loginCaptchaIdRef.current) }
       setLoading(false)
     }
   }
@@ -754,7 +773,7 @@ export default function Login({ mode, onLogin }: Props) {
         <AiRegisterFlow
           prefillUsername={username}
           dedicatedRegister={branding.dedicatedRegister}
-          captcha={{ enabled: captchaOn, siteKey: captchaSiteKey }}
+          captcha={{ enabled: captchaOn, siteKey: captchaSiteKey, provider: captchaProvider }}
           onDone={onLogin}
           onClose={() => setRegPhase('form')}
         />

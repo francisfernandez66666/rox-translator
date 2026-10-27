@@ -394,6 +394,7 @@ export const baseZh: Record<string,string> = {
   // ★ 改造 4/5（2026-09-17）：用户侧质检报告透出 + 质检存疑徽标
   'tk.qaTitle': '质检报告', 'tk.qaPass': '质检通过', 'tk.qaFail': '质检未通过',
   'tk.qaErrors': '{n} 项错误', 'tk.qaWarnings': '{n} 项提示', 'tk.qaClean': '暂未发现质量问题',
+  'tk.etaTypical': '这类件通常需要约 {n} 分钟',
   // ★ W6（2026-10-26 用户令）：本仓没有人复核环节，出栈文案只陈述机器事实，
   //   不许写「已标记待人工复核」这类承诺（同那一条「quality_flagged 口径＝质检存疑」）。
   'tk.qaFlagged': '质检存疑', 'tk.qaFlaggedTip': '机器评估分数低于阈值，已标记「质检存疑」。',
