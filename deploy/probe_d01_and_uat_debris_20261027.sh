@@ -24,12 +24,23 @@ set -uo pipefail
 
 DB="${DB:-langcross}"
 PORT="${PORT:-8787}"
-SINCE="${SINCE:-2026-10-26 20:00}"
+# ★★ 边界写法必须与**库里那一列的实际形态同形**（2026-10-27 现网实测）：
+#   `tickets.created_at` 存的是 `2026-10-26T00:04:32+08:00` 这种带 **T** 的 ISO 文本，
+#   若把界写成带**空格**的 `'2026-10-26 20:00'`，同一天里 `'T'(0x54) > ' '(0x20)` ⇒
+#   当天**不分时刻**全部落进窗口（本批就是这么把 10-26 的行一起圈进来的；事后逐条核对确认
+#   被摘的 12 张工单全是 UAT 命名件、身份只有 uid=10001/1，没有客户数据，且 281 行用量已整行备份）。
+#   ⇒ 现在默认档改成同形带 T 的 ISO；改这一档必须先看 `SELECT max(created_at)` 的真实形状。
+SINCE="${SINCE:-2026-10-26T00:00:00+08:00}"
 PSQL=(sudo -u postgres psql -d "$DB" -Atc)
 
 echo "== 0) 库与窗口（现读对照，别拿日历当事实）=="
 echo "  DB=$DB  PORT=$PORT  窗口(UTC) >= '$SINCE'"
-echo "  tickets.max(created_at) = $("${PSQL[@]}" 'SELECT coalesce(max(created_at),'<empty>') FROM tickets;')"
+# ⚠️ 这条 SQL 里**不许再出现任何内层单引号**：本行外层已是 `$( … 'SQL' )` 的双引号包单引号形态，
+#    塞 `'<字面>'` 进去会让 bash 把 `空值字面` 当成命令名去执行（首跑真报
+#    `line 32: empty: No such file or directory` ⇒ 这条"边界对照读数"整个缺失，
+#    于是窗口取窄了也看不出来）。回退值改在**壳里**给，不在 SQL 里给。
+max_created=$("${PSQL[@]}" 'SELECT max(created_at) FROM tickets;')
+echo "  tickets.max(created_at) = ${max_created:-<未读>}"
 
 echo "== 1) 窗口内工单（id | 单号 | 状态 | 租户 | 创建人 | 标题 basename）=="
 "${PSQL[@]}" "
