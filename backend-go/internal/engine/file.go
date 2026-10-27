@@ -597,6 +597,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if writebackDelivery(ext) == "image" {
 		defer fileproc.ReleaseImageBoxes(filePath)
 	}
+	// ★ 2026-10-28：OCR 在途队列也要释放。**不能**挂在 image 条件里：
+	//   扫描件 PDF 不画图、但同样有 OCR 队列；漏放只会让那条记录长期占着"不可淘汰"名额。
+	defer fileproc.ReleaseOcrDoc(filePath)
 	// ★ 工单双模式（2026-09-13）：options["delivery"]=="text" → 纯文案模式（anydoc/原生提取，
 	//   交付译文 .md，不还原版式）；restore/空 → 还原文件模式（既有原位回写管线，行为不变）。
 	deliveryText := strings.EqualFold(strings.TrimSpace(optionString(options["delivery"])), "text")
@@ -702,6 +705,31 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 单元格级切分，上面 ExtractTexts 的既有 PDF 文本键（pdftotext，缺则纯 Go 库）
 			// 仍能出译文——降级为版式重建交付，绝不因新链不可用把整单打回。
 			log.Printf("[file] PDF overlay 提取失败（回退既有提取键）: %v", e2)
+		}
+	}
+
+	// ★ 2026-10-28（主方案 §9）：OCR 清洗（②）＋ AI 判定补偿（③）＋ 映射重建（④）。
+	//   顺序三条硬约束：
+	//     · 必须在 identitySegments 之前——预填要用**清洗后**的文本；
+	//     · 必须在语言循环之前——判定的是"这行是不是文字/这个字是什么"，与目标语言无关；
+	//     · Commit 必须在 ③ 之后——改过字就要按 Final 重建行↔框映射，否则回填按旧键找不到译文。
+	// gateWarnings 在这里先起头（原本声明在写回前）：OCR 阶段的告警必须**同块记账**，
+	// 否则「图没回填/识别存疑」对客户与审批台都是静默的（file_delivery_honesty_gate_test.go 的判据）。
+	gateWarnings := make([]string, 0, 4)
+	if doc, ok := fileproc.PendingOcrDoc(filePath); ok {
+		st := e.ReconcileOcrDoc(ctx, doc)
+		if t2, cst := fileproc.CommitOcrDoc(filePath, doc, texts); !cst.Stale {
+			texts = t2
+		} else if cst.Stale {
+			// 文本已被别的链路替换（如 PDF overlay 成功）：不重建映射，回填按旧坐标取不到译文时保留原文。
+			// 出声而不是静默，因为"图上那几行没换掉"是本仓最难发现的一类残留。
+			observability.Warn(ctx, "OCR 清洗结果与提取文本不同源，未重建回填映射",
+				"file", filepath.Base(filePath))
+			gateWarnings = append(gateWarnings, "图片识别结果与提取文本不同源，原位回填已跳过（译文照常交付）")
+		}
+		if st.Unclear > 0 {
+			// 识别存疑是**事实**，不是承诺：只报计数，不进「未译出内容」清单（那清单只收没有译文的行）。
+			gateWarnings = append(gateWarnings, fmt.Sprintf("%d 行图片识别置信度偏低，译文可能基于不确定的识别结果", st.Unclear))
 		}
 	}
 
@@ -1217,7 +1245,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		result := fmt.Sprintf("[sensitive] 文件通道输出侧兑底替换 %d 段", n)
 		log.Println(result)
 	}
-	gateWarnings := e.applySegmentGates(ctx, langTranslations, true)
+	gateWarnings = append(gateWarnings, e.applySegmentGates(ctx, langTranslations, true)...)
 	gateWarnings = append(gateWarnings, leakWarnings...)
 	// ★ G4（2026-10-19 D5）：品牌名是不可译常量，工单/文件链此前没有挂件那道 guardReplyBrand。
 	//   译文里品牌名逐字缺失 ⇒ 出声 + 记账（客户与审批台可见）。名单取不到时 checkFileBrandPresence

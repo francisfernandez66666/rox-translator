@@ -21,7 +21,7 @@
 任一失败打 `LEG <id> FAIL <原因>` 并退 1。Go 侧同时核「腿的**全集**都在位」——
 有人删掉一条腿（或让它恒过）时，那一行 LEG 消失即红，这是本锁的射程自证。
 
-射程（41 条腿，逐条点名；题头数字会随批次滞后，**以 Go 侧 capShapeLegs 全集等值锁为准**）：
+射程（逐条点名；**条数以 @leg 注册与 Go 侧 capShapeLegs 的双向等值锁为准**，本文不写死数字）：
   L01 词典装载：blank 恒占类 0（文件自带空首行时不重复前插）
   L02 词典补齐：类别数比表长时逐位补空格
   L03 CTC 解码：跳类 0＋连续重复去重＋就地补齐到类别数（表长于类别数不许截断）
@@ -354,6 +354,127 @@ def _write_pcm(path, samples_i16, rate=16000, channels=1):
         wf.setsampwidth(2)
         wf.setframerate(rate)
         wf.writeframes(np.asarray(samples_i16, dtype="<i2").tobytes())
+
+
+@leg("L43")
+def leg_l43_box_thresh_drops_low_probability_boxes():
+    """框内概率门：均值 0.45 的候选（开关/图标）被丢，0.85 的真字留下；传 0 即关闭（回滚位）。"""
+    import numpy as np
+
+    sh, sw = 128, 128
+    score = np.zeros((sh, sw), dtype=np.float32)
+    score[20:40, 20:60] = 0.45   # 开关/图标那一档
+    score[60:80, 20:60] = 0.85   # 真字
+    boxes = OCR._det_boxes(score, (sw, sh))
+    assert len(boxes) == 1, "低概率框应被 box_thresh 挡住，实读 %d 个框：%r" % (len(boxes), boxes)
+    # 框会被 unclip 外扩，所以按**中心**判它属于下面那一格，而不是按 y0。
+    assert (boxes[0][1] + boxes[0][3]) / 2 > 50, "剩下的必须是真字那一格，实读 %r" % (boxes[0],)
+    # 0 档＝关（这也是本件的回滚位：DET_BOX_THRESH=0 等价旧行为）。
+    boxes0 = OCR._det_boxes(score, (sw, sh), box_thresh=0.0)
+    assert len(boxes0) == 2, "关掉概率门后两个框都该在，实读 %d" % len(boxes0)
+
+
+@leg("L44")
+def leg_l44_min_area_is_relative_to_map_area():
+    """面积下限按概率图面积相对计算：同一 10px 小块，小图留、大图丢。"""
+    import numpy as np
+
+    def blob(sh, sw):
+        score = np.zeros((sh, sw), dtype=np.float32)
+        score[10:12, 10:15] = 1.0  # 恰好 10 个像素
+        return score
+
+    small = OCR._det_boxes(blob(64, 64), (64, 64))
+    assert len(small) == 1, "小图上 10px 小块应保留（相对阈值≈4），实读 %r" % (small,)
+    big = OCR._det_boxes(blob(960, 960), (960, 960))
+    assert big == [], "大图上同一 10px 小块应被相对阈值（≈37）丢掉，实读 %r" % (big,)
+
+
+@leg("L45")
+def leg_l45_reading_order_adapts_to_line_height():
+    """50px 行高的两行必须被切成两行（旧 20px 固定行带会把它们并成一行）。"""
+    boxes = [[10, 0, 60, 49], [100, 60, 160, 109], [10, 60, 60, 109]]
+    out = OCR._order_boxes(boxes)
+    assert out[0][1] == 0, "第一框必须是上面那一行，实读 %r" % (out[0],)
+    assert out[1][0] < out[2][0], "同一行必须左到右，实读 %r" % (out[1:],)
+
+
+@leg("L46")
+def leg_l46_conf_excludes_blank_frames():
+    """置信度只对被采纳的字符帧取均值：含 blank 帧的旧口径会把长框系统性拉低。"""
+    from PIL import Image
+    import numpy as np
+
+    # (1,T,C)：帧 1,0,1,0,1（0＝blank）；被采纳帧的最高 logit 是 5.0，空帧是 1.0。
+    logits = np.full((1, 5, 4), -1.0, dtype=np.float32)
+    for t, cls in enumerate([1, 0, 1, 0, 1]):
+        logits[0, t, cls] = 5.0 if cls != 0 else 1.0
+    sess = FakeSession([None, 3, 48, 4], [logits])
+    words = ["", "a", "b", "c"]
+    text, conf = OCR._run_rec(sess, Image.new("RGB", (40, 20), "white"), words)
+    assert text == "aaa", "解码结果不对：%r" % (text,)
+    assert abs(conf - 5.0) < 1e-6, "conf 应只数被采纳字符帧（=5.0），实读 %r（含 blank 的旧口径≈3.4）" % (conf,)
+
+
+@leg("L47")
+def leg_l47_crop_padding_is_bounded_by_neighbor_midline():
+    """裁剪白边：按行高 0.15 外扩，且与同行右邻框中线取小（本项唯一误伤面）。"""
+    from PIL import Image
+
+    img = Image.new("RGB", (200, 100), "white")
+    boxes = [[50, 40, 80, 60], [100, 40, 130, 60]]
+    crop = OCR._crop_with_pad(img, boxes, 0)
+    # pad=max(2,round(0.15*21))=3；右边界应被邻框中线 (80+100)//2=90 夹住。
+    assert crop.size == (37, 27), "白边裁剪尺寸不符（期望 37x27），实读 %r" % (crop.size,)
+    assert crop.size[0] <= 90 - 47 + 1, "白边越过了邻框中线"
+
+
+@leg("L48")
+def leg_l48_result_confs_align_with_boxes():
+    """输出契约：confs 与 boxes 等长同序，且 confidence 是逐行 conf 的均值。"""
+    out = OCR._image_result(["a", "b"], [[0, 0, 1, 1], [0, 2, 1, 3]], [0.9, 0.5], 0)
+    assert list(out.keys()) == ["text", "boxes", "confs", "confidence", "skipped_pages"], "输出字段集合变了：%r" % (out,)
+    assert len(out["confs"]) == len(out["boxes"]) == 2, "confs 与 boxes 必须等长"
+    assert abs(out["confidence"] - 0.7) < 1e-6, "confidence 应为逐行均值，实读 %r" % (out["confidence"],)
+
+
+@leg("L49")
+def leg_l49_pipeline_calls_new_stages():
+    """接线腿：cmd_image 的裁剪腿必须走 _crop_all；检测腿必须调用 _merge_fragments。"""
+    from PIL import Image
+    import numpy as np
+
+    img = Image.new("RGB", (100, 60), "white")
+    boxes = [[10, 10, 40, 30], [50, 10, 80, 30]]
+    calls = []
+    orig_crop = OCR._crop_with_pad
+
+    def spy_crop(im, bs, i):
+        calls.append(i)
+        return orig_crop(im, bs, i)
+
+    OCR._crop_with_pad = spy_crop
+    try:
+        crops = OCR._crop_all(img, boxes)
+    finally:
+        OCR._crop_with_pad = orig_crop
+    assert len(crops) == 2 and calls == [0, 1], "裁剪腿没走 _crop_with_pad（函数写对但没被调用＝白修）"
+
+    merged = []
+    orig_merge = OCR._merge_fragments
+
+    def spy_merge(bs):
+        merged.append(len(bs))
+        return orig_merge(bs)
+
+    OCR._merge_fragments = spy_merge
+    try:
+        score = np.zeros((64, 64), dtype=np.float32)
+        score[10:20, 10:40] = 1.0
+        OCR._det_boxes(score, (64, 64))
+    finally:
+        OCR._merge_fragments = orig_merge
+    assert merged, "检测腿没有调用 _merge_fragments（碎片合并只是写在文件里＝没接上）"
 
 
 @leg("L10")

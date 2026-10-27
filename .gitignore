@@ -73,6 +73,9 @@ backend-go/internal/fileproc/assets/asr/*.json
 backend-go/internal/fileproc/assets/tts/*.onnx
 backend-go/internal/fileproc/assets/tts/*.safetensors
 backend-go/internal/fileproc/assets/tts/voices/*.wav
+backend-go/internal/fileproc/assets/structure/*.onnx
+backend-go/internal/fileproc/assets/structure/*.json
+backend-go/internal/fileproc/assets/lid/*
 backend-go/internal/fileproc/assets/tts/voices/*.mp3
 # 探针/冒烟的一次性 Linux 交叉编译产物（源码在 cmd/capability-smoke，产物不落仓库）
 backend-go/bin-probe/

@@ -1,0 +1,4 @@
+id	lock	kind	anchor	where	expect	note
+A0001	backend-go/internal/fileproc/capability_shape_gate_test.go	regex	XkBsZWdcKCJMWzAtOV17Mn0iXCk=	backend-go/internal/fileproc/capability_shape_selftest.py	>=42	腿全集（只数真注册）
+A0002	backend-go/internal/fileproc/assets/ocr/README.md	regex	KDEzfDQxfDQyKVxzKuadoeiFvw==	backend-go/internal/fileproc/assets/ocr/README.md	==0	文档不许写死腿数
+A0003	backend-go/internal/engine/translation_guard.go	literal	YWxsb3dlZEV4dA==	backend-go/internal/engine	==0	注释点名的锚点不许是已删符号

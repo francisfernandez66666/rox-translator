@@ -462,7 +462,10 @@ def _is_lone_nonascii(src: str) -> bool:
     对照：蓝徽章里的 `已同步` 是**真文字**（三个字符），照旧翻译＋回填，不走本判据。
     """
     s = "".join(src.split())
-    return len(s) == 1 and ord(s) > 0x7F
+    # ★ 2026-10-28（三件套 §3.3 S3）：判据从「单个非 ASCII 字符」收成「单个非 ASCII **字母**」。
+    #   旧写法把 ¥、→、• 也算成"单个非 ASCII"，它们本该由符号门（graphic/content symbol）管；
+    #   两条门同时存在、不互相顶替：字母门管「控件被读成字」，符号门管「符号本就不该重画」。
+    return len(s) == 1 and s.isalpha() and ord(s) > 0x7F
 
 
 # ★ 2026-10-21 UAT 收口 M9：图形/内容符号两类清单与 Go 侧

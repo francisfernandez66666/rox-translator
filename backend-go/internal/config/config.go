@@ -54,6 +54,11 @@ const (
 	//   登记进名单后它与其他阶段同源；此前那种「代码里有、名单里没有」的键正是
 	//   「引擎会用、运营看不见」的配置黑洞形态。
 	StageKBScreen = "kb_screen" // 知识库候选筛查（批量判"这条术语值不值得入库"）
+
+	// ★ 2026-10-28 主方案 §8：OCR 文本 AI 判定与补偿（只吃清洗层标出的 uncertain/quarantine 行）。
+	//   走 model_routes/stage_models，运营可在管理台单独配一个便宜的小模型；
+	//   未配置时引擎回退全局主模型（同其它 stage 的既有口径）。
+	StageOcrFix = "ocr_fix"
 )
 
 // ★ R-1 修法 D（2026-10-04）：阶段键的**单一事实源**。
@@ -70,7 +75,7 @@ const (
 func AllStages() []string {
 	return []string{
 		StageKBMatch, StageAIInitial, StageKBEmbed,
-		StageInitialEvals, StageReview, StageReviewEvals, StageKBScreen, StageEvals,
+		StageInitialEvals, StageReview, StageReviewEvals, StageKBScreen, StageEvals, StageOcrFix,
 	}
 }
 

@@ -84,6 +84,7 @@ import (
 
 	"translator/internal/assist/llm"
 	"translator/internal/observability"
+	"translator/internal/textscript"
 )
 
 // simplifiedOnlyRunes 「简体字独有、日文正字法里不长这样」的常用字（判残用，日文档专用）。
@@ -272,7 +273,11 @@ func hanRunsOf(s string) []string {
 		cur.Reset()
 	}
 	for _, r := range s {
-		if r >= 0x4e00 && r <= 0x9fff {
+		// 汉字判据只走 textscript（Unicode 表）：旧手抄区间只有 4E00–9FFF，
+		// 扩展 A/B~G 的汉字一律漏掉，而客户文档里的生僻字正落在那里。
+		// 注：Unicode 把 々（U+3005）也归 Han；这比旧行为更安全——旧实现会把「時々」
+		// 拆成两段「時」，反而更容易与中文源文撞上。
+		if textscript.Of(r) == textscript.Han {
 			cur.WriteRune(r)
 			continue
 		}

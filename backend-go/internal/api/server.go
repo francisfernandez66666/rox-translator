@@ -944,6 +944,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	//	只能靠人 SSH 到体验机翻日志——而这两条本来都是"结果看着对、腿其实没通"的形态。
 	//	口径不变：只出状态词，绝不出远端主机名/IP/绝对路径，也不把 probe 的 JSON 原样透出。
 	disp := fileproc.DispatchReadinessSnapshot()
+	// ★ 2026-10-28：健康面会带 engine 侧状态词（ocr_fix）。这里是启动早期也会被拨的公开面，
+	//   `s.Engine` 是**类型化 nil 指针**——把它塞进 interface 再判 nil 是恒假的，
+	//   所以必须在同一处用具体类型判一次（判错的后果是健康检查自己 panic 把服务打挂）。
+	ocrFixWord := "off"
+	if s.Engine != nil {
+		ocrFixWord = s.Engine.OcrFixHealth(r.Context())
+	}
+	// 结构腿读数一次取齐（内部有 TTL 缓存，但同一份响应里没必要拨两次）。
+	structureWord, structureEngine := fileproc.StructureHealthWord(r.Context())
 	writeJSON(w, 200, map[string]interface{}{
 		"status":  "ok",
 		"version": probeVersion,
@@ -967,8 +976,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   绝不出路径、权重文件名或体积。识别/合并不就绪时产品行为是「友好降级」而非故障：
 		//   图片/扫描件/音频返回「节点未启用识别」，TTS 缺位只少语音不少译文（译文第一）。
 		"ocr_ready": fileproc.OcrAvailable(),
-		"asr_ready": fileproc.AsrAvailable(),
-		"tts_ready": fileproc.TtsAvailable(),
+		// ★ 2026-10-28 主方案 §8.8：OCR AI 判定补偿的**状态词**（off/degraded/ok）。
+		//   off＝env 主动关（正常态）；degraded＝配了但取不到模型（该有人去修）；两者不许合成一个词。
+		//   同 #42 口径：只出状态词，不出 base/model/Key。
+		"ocr_fix": ocrFixWord,
+		// ★ 2026-10-28 主方案 L2：轻量语种识别就绪位与引擎名（只服务报表/归因，翻译链零依赖）。
+		"lid_ready":  fileproc.LidReady(),
+		"lid_engine": fileproc.LidEngineName(),
+		// ★ 2026-10-28 结构腿（S2）：off＝主动没开（正常态，等 spike 全绿）；degraded＝配了但不可用。
+		//   structure_engine 是 S0 决策的直接读数（onnx=构建期转权重路线 / paddle=直装）。
+		"structure":        structureWord,
+		"structure_engine": structureEngine,
+		"asr_ready":        fileproc.AsrAvailable(),
+		"tts_ready":        fileproc.TtsAvailable(),
 		// ★ 2026-10-19 G12：ASR 实际路由档（sense_voice / transducer / whisper；不就绪或认不出型号回空串）。
 		//   asr_ready 只说"这台能识别"，两者对同一段音频的产出形态不同（ITN 标点/多语热切 vs 兜底），
 		//   排障需要知道"跑的是哪一档"。判据与 asr_transcribe.py 的模型选择同序（有效档，非声明档）。

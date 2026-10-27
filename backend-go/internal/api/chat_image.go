@@ -178,6 +178,21 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stopBeat()
 
+	uiLang := strings.TrimSpace(r.FormValue("lang"))
+	mode := engine.ModeFromOptions(map[string]interface{}{"mode": r.FormValue("mode")})
+	options := map[string]interface{}{
+		"target_langs": toIfaceSlice(targets),
+		"mode":         mode,
+	}
+	if uiLang != "" {
+		options["lang"] = uiLang
+	}
+	// ★ 2026-10-28：ctx 提前构造——OCR 的 AI 判定补偿（ocr_fix）要在提取之后、翻译之前跑，
+	//   而它必须带用量收集器（否则这条腿的 token 不计费，预估与实扣又变成两把尺子）。
+	//   WithUsageRecorder 是幂等的：随后 HandleText 内部再注入会复用这一只（F-49②）。
+	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), uiLang))
+	ctx = s.Engine.WithUsageRecorder(ctx)
+
 	// OCR：识别行文本（同时把「行↔坐标」写进 P4 回填缓存，供 RenderTranslatedImage 取用）。
 	lines, oerr := fileproc.ExtractTexts(tmpPath)
 	if oerr != nil {
@@ -191,20 +206,22 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uiLang := strings.TrimSpace(r.FormValue("lang"))
-	mode := engine.ModeFromOptions(map[string]interface{}{"mode": r.FormValue("mode")})
-	options := map[string]interface{}{
-		"target_langs": toIfaceSlice(targets),
-		"mode":         mode,
+	// ★ 2026-10-28（主方案 §9）：② 清洗已在 ExtractTexts 内完成；这里跑 ③ 并重建 ④ 映射。
+	//   fail-open：③ 不可用时全部按原识别交付（绝不因 AI 掉线丢内容）。
+	if doc, ok := fileproc.PendingOcrDoc(tmpPath); ok {
+		s.Engine.ReconcileOcrDoc(ctx, doc)
+		if t2, cst := fileproc.CommitOcrDoc(tmpPath, doc, lines); !cst.Stale {
+			lines = t2
+		}
+		defer fileproc.ReleaseOcrDoc(tmpPath)
+		// 既有小缺口同批收口：这条链路此前从没释放过坐标缓存的在途钉。
+		defer fileproc.ReleaseImageBoxes(tmpPath)
 	}
-	if uiLang != "" {
-		options["lang"] = uiLang
-	}
+
 	// ★ 整段一次翻（与 /api/chat 同构、只发一枪），避免逐行多次调用把即时翻译拖慢。
 	//   注意这里**保留换行**：joined 里的 \n 是"行↔译文"对齐的唯一线索。
 	//   行数对不上的语种随后由 chatImageAlignTranslations 分腿重译（见文件头注）。
 	joined := strings.Join(lines, "\n")
-	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), uiLang))
 	res := s.Engine.HandleText(ctx, joined, options, nil)
 
 	resp := chatImageResp{

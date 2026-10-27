@@ -1,0 +1,3 @@
+id	lock	kind	run	target	find_b64	replace_b64	expect_msg_b64	owner	since	note
+M0001	backend-go/internal/fileproc/capability_shape_gate_test.go	go	^TestCapabilityShapeMutationsBreakTheirLegs$	backend-go/internal/fileproc/ocr_recognize.py	UkVDX0NST1BfUEFEX1JBVElPID0gMC4xNQ==	UkVDX0NST1BfUEFEX1JBVElPID0gMC4w	5q2j5ZCR5a+554Wn5LiN57u/	ocr	2026-10-28	白边归零（末尾竖笔被切）
+M0002	backend-go/internal/fileproc/structure_gate_test.go	go	^TestParseStructureJSONRejectsTextKeys$	backend-go/internal/fileproc/structure_v3.go	aWYgaGFzVGV4dEtleShnZW5lcmljKSB7	aWYgZmFsc2Ugew==	5bimIHRleHQg6ZSu	ocr	2026-10-28	结构腿零文本

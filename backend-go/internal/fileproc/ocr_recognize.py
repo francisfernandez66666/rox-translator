@@ -39,8 +39,26 @@ DET_THRESH = 0.3
 #   **换权重必须回来核这一档**：阈值与膨胀量都是模型自带的训练口径，
 #   拿别的档去配会出现「框在、字却被切半」的静默降质（见 _det_boxes 的实测反例）。
 DET_UNCLIP_RATIO = 1.5
+# ★ 框内概率门（box_thresh）：与权重 yml 的 PostProcess.box_thresh 同值。
+#   DET_THRESH 决定「哪些像素进候选」，本常量决定「哪个候选算文字」——
+#   没有它时开关/图标/箭头只要过 0.3 就被收进正文（现网「绿色开关被读成 の」的源头）。
+#   取 0 即等价于旧行为（永不拦），这是本件的回滚档。
+DET_BOX_THRESH = 0.6
+# ★ 面积下限改成**相对量**（按概率图面积的比例），否则换分辨率就换了有效阈值。
+DET_MIN_AREA_RATIO = 0.00004
+# ★ 裁剪白边：按行高比例从**原图**外扩，治「末尾竖笔被切掉（manual→manua）」。
+#   上限还要与同行邻框的中线取小，避免吃进隔壁格首字（_crop_with_pad）。
+REC_CROP_PAD_RATIO = 0.15
+# ★ 方向分类阈值：官方默认 0.9。旧实现 argmax==1 就旋，横扫图里会偶发误旋 180°。
+CLS_THRESH = 0.9
 # 识别单图高度（PP-OCRv3 约定 48），宽度按宽高比自适应。
 REC_H = 48
+# 分辨率二档（P4）：960 跑不出东西（行高过小或框数过少）时按 1600 重跑。
+DET_MAX_SIDE_HIGH = 1600
+# 「这一页字太小」的判据：中位行高低于它即考虑升档重跑。
+DET_MIN_LINE_H = 12
+# 碎片合并：同行相邻框的水平间隙小于「0.6×行高」即并成一块再识别。
+FRAG_GAP_RATIO = 0.6
 # ★ 方向分类模型的两个输入档（**只作兜底，真值优先从模型自身的输入形状读**）：
 #   · CLS_HW_MODERN＝PP-LCNet_x0_25/x1_0_textline_ori（PP-OCRv5/v6 官方 ONNX 导出）＝高 80、宽 160，
 #     且该导出是**静态** H/W（onnxruntime 会直接拒收别的尺寸）；
@@ -190,21 +208,137 @@ def _label2d(mask):
     return labels, cur
 
 
-def _det_boxes(score_map, orig_size, min_area=16):
+def _unclip_d(box):
+    """按 DB 的 unclip 口径算一个框的膨胀量（概率图坐标系，包围盒近似）。"""
+    bw = box[2] - box[0] + 1
+    bh = box[3] - box[1] + 1
+    return bw * bh * DET_UNCLIP_RATIO / float(2 * (bw + bh))
+
+
+def _unclip_merge(raw):
+    """同一行内相邻框按各自的 unclip 量外扩式合并（等价于"先膨胀再取连通域"）。
+
+    为什么不用"整张二值图全局膨胀 d 像素"：d 是逐框算的，全局膨胀会把上下两行粘成一块
+    （行距小的表格件尤其明显），而 DB 的 unclip 本就是**逐多边形**外扩。
+    这里逐框算 d、只在「垂直重叠 >50% 且水平间隙 ≤ d_i+d_j」时合并，
+    既能把离主块 1~2px 的细竖笔并回同一框，又不会跨行粘连。
+
+    入参/返回：[[x0,y0,x1,y1], …]（概率图坐标），合并是**迭代**的（A 并 B 后再并 C）。
+    """
+    boxes = [list(b) for b in raw]
+    changed = True
+    while changed:
+        changed = False
+        out = []
+        used = [False] * len(boxes)
+        for i in range(len(boxes)):
+            if used[i]:
+                continue
+            a = boxes[i]
+            used[i] = True
+            for j in range(i + 1, len(boxes)):
+                if used[j]:
+                    continue
+                b = boxes[j]
+                ov = min(a[3], b[3]) - max(a[1], b[1]) + 1
+                hmin = min(a[3] - a[1] + 1, b[3] - b[1] + 1)
+                if hmin <= 0 or ov <= 0.5 * hmin:
+                    continue
+                # 水平间隙（重叠时按 0 算）
+                gap = max(a[0] - b[2] - 1, b[0] - a[2] - 1, 0)
+                if gap <= _unclip_d(a) + _unclip_d(b):
+                    a = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                    used[j] = True
+                    changed = True
+            out.append(a)
+        boxes = out
+    return boxes
+
+
+def _order_boxes(boxes):
+    """阅读顺序：按 y 中心滚动聚行（容差 0.5×当前行中位行高）→ 行内按 x0 排。
+
+    ★ 旧实现用 `b[1] // 20` 固定 20px 行带：表格行高 40~60px 时会把两行并成一行，
+      而清洗层的「同列众数」依赖「同一行的框被正确划在一行」。容差必须跟着行高走。
+    """
+    if not boxes:
+        return boxes
+    arr = sorted(boxes, key=lambda b: ((b[1] + b[3]) / 2.0, b[0]))
+    rows = []
+    cur = []
+    for b in arr:
+        if not cur:
+            cur = [b]
+            continue
+        heights = sorted(x[3] - x[1] + 1 for x in cur)
+        h = max(1.0, float(heights[len(heights) // 2]))
+        centers = sorted((x[1] + x[3]) / 2.0 for x in cur)
+        med = centers[len(centers) // 2]
+        if abs((b[1] + b[3]) / 2.0 - med) <= 0.5 * h:
+            cur.append(b)
+        else:
+            rows.append(cur)
+            cur = [b]
+    if cur:
+        rows.append(cur)
+    return [b for r in rows for b in sorted(r, key=lambda x: x[0])]
+
+
+def _merge_fragments(boxes):
+    """同行碎片合并：垂直重叠 >60% 行高、水平间隙 <0.6×行高 ⇒ 并成一个框再识别。
+
+    治「manua + l 被拆成两块」这类形态：它们在同一行、只差一两个像素的间隙。
+    间隙阈值不许降到 0（那会吃掉相邻列）；垂直重叠门槛保证不跨行。
+    """
+    if not boxes:
+        return boxes
+    boxes = [list(b) for b in boxes]
+    changed = True
+    while changed:
+        changed = False
+        out = []
+        used = [False] * len(boxes)
+        for i in range(len(boxes)):
+            if used[i]:
+                continue
+            a = boxes[i]
+            used[i] = True
+            for j in range(i + 1, len(boxes)):
+                if used[j]:
+                    continue
+                b = boxes[j]
+                ha = a[3] - a[1] + 1
+                hb = b[3] - b[1] + 1
+                hmin = min(ha, hb)
+                if hmin <= 0:
+                    continue
+                ov = min(a[3], b[3]) - max(a[1], b[1]) + 1
+                if ov <= 0.6 * hmin:
+                    continue
+                gap = max(a[0] - b[2] - 1, b[0] - a[2] - 1, 0)
+                if gap < FRAG_GAP_RATIO * hmin:
+                    a = [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+                    used[j] = True
+                    changed = True
+            out.append(a)
+        boxes = out
+    return boxes
+
+
+def _det_boxes(score_map, orig_size, min_area_ratio=DET_MIN_AREA_RATIO,
+               box_thresh=DET_BOX_THRESH):
     """DB 概率图 → 文本框列表（axis-aligned 包围盒，已还原到**原图**坐标）。
 
     score_map: (H,W) float，概率；orig_size: (原图宽, 原图高)。
     返回 [[x0,y0,x1,y1], ...] 按阅读顺序（先上后下、同行左到右）。
-    ★ 坐标还原按**概率图自身的尺寸**算，不拿缩放比去乘：检测输入既等比缩过、
-      又对齐过 32 的倍数（见 _resize_for_det），两轴比例已不再严格相等，
-      用单一 scale 反算会把框整体拉偏（图越大偏得越多，末行还会掉到图外）。
-    ★ 每个框必须**按 unclip 口径向外膨胀**（DET_UNCLIP_RATIO，随权重 yml 走）：
-      DB 的二值化区域是字形的**腐蚀核**（概率图在笔画边缘就掉到阈值以下），
-      直接拿包围盒去裁剪会得到一条只穿过字腰的窄带——实测 40px 的行高被切成 20px，
-      「翻译工作台 2026 测试」识别成「秘圣作台测订」：检测腿没报错、置信度 0.94、
-      字数都对，只有文案是错的（本仓最难抓的那一类静默坏，只能靠真件对文案）。
-      膨胀量沿用 PaddleOCR 的公式 d = area * ratio / perimeter，
-      这里用包围盒近似 A=w*h、P=2(w+h)（无 cv2 的多边形 offset 可用）。
+
+    五条口径（顺序即执行顺序，改任一条都要同步形状腿 L43/L44/L45/L47）：
+      ① 连通域面积下限按**概率图面积**相对计算（换分辨率不换有效阈值）；
+      ② 框内概率均值（**膨胀前**的原始 bbox）低于 box_thresh 即丢——
+         这是「开关/图标被读成文字」的源头闸；
+      ③ unclip 按逐框 d 外扩，并合并同行相邻块（细竖笔并回主块）；
+      ④ 坐标按**概率图自身尺寸**逐轴反算（检测输入既等比缩过、又对齐过 32 倍数）；
+      ⑤ 阅读顺序按行高自适应聚类，行内按 x0。
     """
     import numpy as np
     bin_map = score_map >= DET_THRESH
@@ -215,30 +349,63 @@ def _det_boxes(score_map, orig_size, min_area=16):
     ow, oh = orig_size
     sx = ow / float(sw)
     sy = oh / float(sh)
-    boxes = []
+    # ① 相对面积下限：960 长边时约等于旧值 16px，升到 1600 时自动放大。
+    min_area = max(4, int(round(min_area_ratio * sw * sh)))
+    raw = []
     for cid in range(1, n + 1):
         ys, xs = np.where(labels == cid)
-        if ys.size == 0:
-            continue
-        if ys.size < min_area:
+        if ys.size == 0 or ys.size < min_area:
             continue
         x0, x1 = int(xs.min()), int(xs.max())
         y0, y1 = int(ys.min()), int(ys.max())
-        bw = x1 - x0 + 1
-        bh = y1 - y0 + 1
-        # unclip 膨胀（概率图坐标系），再还原到原图坐标并夹回图内。
-        d = (bw * bh) * DET_UNCLIP_RATIO / float(2 * (bw + bh))
-        dx = int(round(d))
-        ex0, ex1 = x0 - dx, x1 + dx
-        ey0, ey1 = y0 - dx, y1 + dx
-        bx0 = max(0, min(ow - 1, int(ex0 * sx)))
-        bx1 = max(0, min(ow - 1, int(ex1 * sx)))
-        by0 = max(0, min(oh - 1, int(ey0 * sy)))
-        by1 = max(0, min(oh - 1, int(ey1 * sy)))
+        # ② 膨胀前取框内均值：膨胀会把背景拉进来稀释均值，那个读数就不能跨框比较。
+        box_score = float(score_map[y0:y1 + 1, x0:x1 + 1].mean())
+        if box_score < box_thresh:
+            continue
+        raw.append([x0, y0, x1, y1])
+    if not raw:
+        return []
+    boxes = []
+    for (x0, y0, x1, y1) in _unclip_merge(raw):
+        d = int(round(_unclip_d([x0, y0, x1, y1])))
+        bx0 = max(0, min(ow - 1, int((x0 - d) * sx)))
+        bx1 = max(0, min(ow - 1, int((x1 + d) * sx)))
+        by0 = max(0, min(oh - 1, int((y0 - d) * sy)))
+        by1 = max(0, min(oh - 1, int((y1 + d) * sy)))
         boxes.append([bx0, by0, bx1, by1])
-    # 阅读顺序：按行聚类（同 y 带容差）后左右排序。
-    boxes.sort(key=lambda b: (b[1] // 20, b[0]))
-    return boxes
+    return _order_boxes(_merge_fragments(boxes))
+
+
+def _crop_with_pad(img, boxes, i):
+    """按行高比例给第 i 个框外扩白边后再裁剪（**从原图外扩**，不许在已裁图上补黑边）。
+
+    两条夹逼：
+      · 夹回图内——PIL 越界会用 0（黑）填充，黑边会被 rec 读成笔画；
+      · 与同一行的左右邻框中线取小——这是本项唯一的误伤面（吃进隔壁格首字），
+        形状腿 L47 有专门反证。
+    """
+    W, H = img.size
+    x0, y0, x1, y1 = boxes[i]
+    h = max(1, y1 - y0 + 1)
+    pad = max(2, int(round(REC_CROP_PAD_RATIO * h)))
+    cx0 = max(0, x0 - pad)
+    cy0 = max(0, y0 - pad)
+    cx1 = min(W - 1, x1 + pad)
+    cy1 = min(H - 1, y1 + pad)
+    for j, b in enumerate(boxes):
+        if j == i:
+            continue
+        bx0, by0, bx1, by1 = b
+        hb = by1 - by0 + 1
+        if min(y1, by1) - max(y0, by0) + 1 <= 0.5 * min(h, hb):
+            continue
+        if bx0 > x1:  # 右邻
+            mid = (x1 + bx0) // 2
+            cx1 = min(cx1, max(x1, mid))
+        elif bx1 < x0:  # 左邻
+            mid = (bx1 + x0) // 2
+            cx0 = max(cx0, min(x0, mid))
+    return img.crop((cx0, cy0, cx1 + 1, cy1 + 1))
 
 
 def _run_rec(session, img_crop, words):
@@ -262,17 +429,22 @@ def _run_rec(session, img_crop, words):
     # 按模型的类别数补齐字符表（use_space_char 追加的那一格），同一份表在多张裁剪图间复用。
     _pad_vocab(words, int(logits.shape[-1]))
     preds = np.argmax(logits, axis=-1)
-    text, conf = "", 0.0
+    probs = np.max(logits, axis=-1)
+    text = ""
+    kept = []
     prev = -1
-    for p in preds:
+    for t, p in enumerate(preds):
         p = int(p)
         # ★ 跳过 blank（**类 0**）与连续重复；下标越界一律不取，
         #   防止投放的词典行数比模型类别数多时整张图抛错（宁可少一个字，不许丢一单）。
         if p != 0 and p != prev and p < len(words):
             text += words[p]
+            kept.append(float(probs[t]))
         prev = p
-    # 平均最大概率当作置信度（粗略）
-    conf = float(np.mean(np.max(logits, axis=-1)))
+    # ★ 置信度只对**真正输出的字符帧**取均值（G4 口径修正）：
+    #   旧实现把 blank 帧也算进分母，长框被系统性拉低、短框偏高，跨行不可比——
+    #   而清洗层的 0.6/0.9 分档正是拿这个数在框与框之间做比较（两把尺子必然误判）。
+    conf = float(sum(kept) / len(kept)) if kept else 0.0
     return text, conf
 
 
@@ -298,13 +470,75 @@ def _iter_images(path):
     yield Image.open(path).convert("RGB")
 
 
+def _image_result(lines, boxes, confs, skipped_pages):
+    """组装 image 子命令的 stdout JSON（唯一出口）。
+
+    为什么单独成函数：`confs` 与 `boxes` 必须等长同序，这是 Go 侧清洗层的输入契约；
+    把它留在 cmd_image 里内联，形状腿就只能 grep 源码（判据级代替不了守卫级）。
+    """
+    return {
+        "text": "\n".join(lines),
+        "boxes": boxes,
+        "confs": confs,
+        "confidence": round(sum(confs) / len(confs), 4) if confs else 0.0,
+        "skipped_pages": skipped_pages,
+    }
+
+
+def _crop_all(img, boxes):
+    """按顺序裁出每一行的图（白边外扩 + 邻框中线夹逼）。"""
+    return [_crop_with_pad(img, boxes, i) for i in range(len(boxes))]
+
+
+def _env_float(name: str, default: float) -> float:
+    """读一个正数环境变量；缺失/非法/非正一律回落默认（运维写错不摘能力）。"""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        v = float(raw)
+        return v if v > 0 else default
+    except ValueError:
+        return default
+
+
+def _det_max_side():
+    """返回 (像素档, 是否自适应)。
+
+    `OCR_DET_MAX_SIDE` 显式给值 ⇒ 固定该档（单机退回 960 就是设它）；
+    未设 ⇒ 自适应两档：先 960，字太小时按 1600 重跑一页（P4）。
+    """
+    raw = (os.environ.get("OCR_DET_MAX_SIDE") or "").strip()
+    if raw.isdigit() and int(raw) > 0:
+        return int(raw), False
+    return DET_MAX_SIDE, True
+
+
+def _detect_page(det_sess, page_img, max_side):
+    """对一页做检测，返回原图坐标的框列表（供 960/1600 两档复用同一套后处理）。"""
+    import numpy as np
+    det_img = _resize_for_det(page_img, max_side)
+    arr = np.array(det_img, dtype=np.float32)
+    blob = _normalize_numpy(arr, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+    det_out = det_sess.run(None, {det_sess.get_inputs()[0].name: blob})[0]
+    score = det_out[0][0] if det_out[0].ndim == 3 else det_out[0]
+    score = np.squeeze(score)
+    return _det_boxes(score, page_img.size)
+
+
 def cmd_image(path: str) -> int:
-    # P1a 实现：PP-OCR ONNX 检测+方向分类+识别，stdout 打 JSON。
+    """图片/扫描件 PDF → 逐行文本（stdout 一份 JSON）。
+
+    输出契约（只增不改，见主方案 §4.1）：
+      text / boxes / confidence 为既有字段；confs 与 boxes 等长同序；
+      skipped_pages 是「因整件预算不足而跳过」的页数（>0 时 Go 侧出声）。
+    """
     if not os.path.exists(path):
         return _err("ImageOpen", "图片不存在: %s" % path)
     for m in MODULES:
         if importlib.util.find_spec(m) is None:
             return _err("Import", "缺少依赖: %s" % m)
+    import time
     import numpy as np
     import onnxruntime as ort
     from PIL import Image
@@ -327,47 +561,56 @@ def cmd_image(path: str) -> int:
 
     lines = []
     boxes_out = []
-    conf_sum = 0.0
-    conf_n = 0
-    # 方向分类的输入档位整轮读一次（同一份权重所有页共用）。
+    confs_out = []
+    skipped_pages = 0
     cls_h, cls_w = _static_hw(cls_sess)
+    # 预算：整件 60s（Go 侧同值）＋ 每页最小可开工时间，两者都由 env 覆盖。
+    # ★ 分辨率升档会撞超时：分页预算必须与两档分辨率同批存在，否则「能识别」被换成「整单超时失败」。
+    budget = _env_float("OCR_TIMEOUT_SEC", 60.0)
+    page_min = _env_float("OCR_PAGE_MIN_SEC", 6.0)
+    started = time.monotonic()
+    max_side, auto_side = _det_max_side()
     try:
         for page_img in _iter_images(path):
-            det_img = _resize_for_det(page_img, DET_MAX_SIDE)
-            arr = np.array(det_img, dtype=np.float32)
-            blob = _normalize_numpy(arr, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-            det_out = det_sess.run(None, {det_sess.get_inputs()[0].name: blob})[0]
-            score = det_out[0][0] if det_out[0].ndim == 3 else det_out[0]
-            score = np.squeeze(score)
-            for (x0, y0, x1, y1) in _det_boxes(score, page_img.size):
-                crop = page_img.crop((x0, y0, x1 + 1, y1 + 1))
+            if budget - (time.monotonic() - started) < page_min:
+                skipped_pages += 1
+                continue
+            boxes = _detect_page(det_sess, page_img, max_side)
+            # 自适应两档：中位行高太小或框数异常少 ⇒ 用 1600 重跑这一页（还够时间才跑）。
+            if auto_side and boxes:
+                heights = sorted(b[3] - b[1] + 1 for b in boxes)
+                med_h = heights[len(heights) // 2]
+                left = budget - (time.monotonic() - started)
+                if (med_h < DET_MIN_LINE_H or len(boxes) < 3) and left >= page_min * 2:
+                    boxes = _detect_page(det_sess, page_img, DET_MAX_SIDE_HIGH)
+            for bi, (crop, box) in enumerate(zip(_crop_all(page_img, boxes), boxes)):
+                x0, y0, x1, y1 = box
                 if crop.width < 4 or crop.height < 4:
                     continue
-                # 方向分类：输入档位按模型自身形状读（v5 是 80x160，旧档 48x192），
-                # 归一与 det 同口径（BGR＋ImageNet mean/std）；argmax==1 表示需旋转 180。
+                # 方向分类：输入档位按模型自身形状读（v5 是 80x160，旧档 48x192）；
+                # 归一与 det 同口径（BGR＋ImageNet mean/std）；概率过阈值且 argmax==1 才旋 180。
                 cc = crop.resize((cls_w, cls_h), Image.BILINEAR)
                 cb = _normalize_numpy(np.array(cc, dtype=np.float32),
                                       [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
                 cl = cls_sess.run(None, {cls_sess.get_inputs()[0].name: cb})[0]
-                if int(np.argmax(cl[0])) == 1:
+                probs = np.asarray(cl[0]).reshape(-1)
+                if probs.size >= 2 and int(np.argmax(probs)) == 1 and float(np.max(probs)) > CLS_THRESH:
                     crop = crop.rotate(180, expand=True)
                 text, conf = _run_rec(rec_sess, crop, words)
                 if text.strip():
                     lines.append(text)
                     boxes_out.append([x0, y0, x1, y1])
-                    conf_sum += conf
-                    conf_n += 1
+                    confs_out.append(round(conf, 4))
     except Exception as e:
         return _err("ImageCorrupt", "图片识别过程出错: %s" % e)
 
     if not lines:
+        # 一页都没处理（预算不足）与"图里真没字"必须分开报：超时是运维问题，空图是内容问题。
+        if skipped_pages > 0:
+            return _err("Timeout", "OCR 预算不足，已跳过 %d 页（可调大 OCR_TIMEOUT_SEC）" % skipped_pages)
         return _err("Empty", "OCR 未识别出文字（图片可能无文字内容、或为手写/艺术字）")
-    result = {
-        "text": "\n".join(lines),
-        "boxes": boxes_out,
-        "confidence": round(conf_sum / conf_n, 4) if conf_n else 0.0,
-    }
-    print(json.dumps(result, ensure_ascii=False))
+    # confs_out 与 boxes_out 等长同序（逐行 conf 出栈，清洗层的 low_conf 分档靠它）。
+    print(json.dumps(_image_result(lines, boxes_out, confs_out, skipped_pages), ensure_ascii=False))
     return 0
 
 

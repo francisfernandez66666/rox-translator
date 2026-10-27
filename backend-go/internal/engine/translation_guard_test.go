@@ -504,7 +504,7 @@ func TestIsTranslationUsableIdentityEchoWithoutSourceLetters(t *testing.T) {
 	t.Run("无中文源回吐⇒原文交付", func(t *testing.T) {
 		for _, s := range []string{
 			"002584.SZ", "600279.SH", "600000.SH", // 股票代码
-			"N_shape", "dragon_return", "fac_1", "manua", "dragon", // 标识符/拉丁词
+			"N_shape", "dragon_return", "fac_1", // 标识符
 			"#", "1", "•", "¥1003.00", "09-17 09:40:33", // 无上下文短串/数字/时间（注释里点名的同族）
 			"  N_shape  ", // 空白折叠后仍同文
 		} {
@@ -516,11 +516,51 @@ func TestIsTranslationUsableIdentityEchoWithoutSourceLetters(t *testing.T) {
 	t.Run("有中文源回吐⇒仍判不可用", func(t *testing.T) {
 		for _, s := range []string{
 			"金额", "当前：全部允许·仓位留空/0 =使用全局单票金额",
-			"已实现=加权成本重放；浮动=市值-成本×数量；30s刷新", "の", "产品方案书",
+			"已实现=加权成本重放；浮动=市值-成本×数量；30s刷新", "产品方案书",
 		} {
 			if IsTranslationUsable(s, s) {
 				t.Errorf("含非 ASCII 字母的源段回吐必须判不可用（中文泄露形态），got true: src=%q", s)
 			}
 		}
 	})
+}
+
+// TestIdentityEchoIsUsable identity 段（交付形态就是原文）同文必须判可用。
+//
+// 这是 2026-10-28 的判据 3 修正腿：不补它，identitySegments 的预填与判据 3 互相否决，
+// 图片链每一轮补译都被否掉，最终把「の」写成"未译出"（T20261027214604CXY）。
+// 反向对照保留在本文件 TestIsTranslationUsableIdentityEchoWithoutSourceLetters 的"有中文源"那一支。
+func TestIdentityEchoIsUsable(t *testing.T) {
+	ok := []string{"の", "¥1003.00", "N_shape", "002584.SZ", "0", "<", "---"}
+	for _, s := range ok {
+		if !IsTranslationUsable(s, s) {
+			t.Errorf("identity 段同文应判可用：%q", s)
+		}
+		if !NeedsIdentityDelivery(s) {
+			t.Errorf("identity 判据必须为真：%q", s)
+		}
+	}
+	// 反向对照：有非 ASCII 字母的真内容段回吐必须仍判不可用（放松这里＝拆掉本函数存在的理由）。
+	for _, s := range []string{"金额", "产品方案书", "の の"} {
+		if NeedsIdentityDelivery(s) {
+			t.Fatalf("真内容段不该判 identity：%q", s)
+		}
+		if IsTranslationUsable(s, s) {
+			t.Errorf("真内容段回吐必须判不可用：%q", s)
+		}
+	}
+}
+
+// TestPureASCIIEchoIsUsableByDesign 纯 ASCII 真词（manua/dragon）回吐判可用是**设计现状**，
+// 不是本批放松：图片链的这类乱码只能由清洗层（同列众数）拦，翻译判据不许在这里加区分
+// （那会误伤股票代码/标识符，属另一族）。
+func TestPureASCIIEchoIsUsableByDesign(t *testing.T) {
+	for _, s := range []string{"manua", "dragon"} {
+		if NeedsIdentityDelivery(s) {
+			t.Fatalf("%q 是需要翻译的拉丁词，不该进 identity", s)
+		}
+		if !IsTranslationUsable(s, s) {
+			t.Fatalf("%q 的纯 ASCII 回吐按现有判据应判可用（由清洗层拦，不由本函数拦）", s)
+		}
+	}
 }

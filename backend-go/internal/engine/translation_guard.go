@@ -21,6 +21,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"translator/internal/textscript"
 )
 
 // translationFailureMark BatchTranslate 在失败槽位写入的占位字面量（见 engine.go 批量链）。
@@ -72,7 +74,11 @@ func IsTranslationUsable(src, out string) bool {
 		//   ⚠️ 反之**有**非 ASCII 字母时仍按原样判不可用：那正是「模型把中文原封不动吐回来」
 		//      的泄露形态（本工单 `金额`、`当前：全部允许·仓位留空/0 =使用全局单票金额` 即此档），
 		//      绝不能在此放行——它是本函数存在的理由。
-		return !sourceHasTranslatableLetters(src)
+		// ★ 2026-10-28（主方案 §10.2）：交付形态就是原文本身的段（数字/符号/单假名/代码短标识），
+		//   同文即正确交付。与 identitySegments 的预填同源（同一个 NeedsIdentityDelivery），不另立判据。
+		//   不补这支会出现**两把尺子互相否决**：预填说"这段交付原文"，判据说"同文不可用"，
+		//   于是图片链每一轮补译都被同一判据否掉，最终把「の」写成"未译出"（本单 T20261027214604CXY）。
+		return !sourceHasTranslatableLetters(src) || NeedsIdentityDelivery(src)
 	}
 	// ★ 判据 3″（2026-10-27 工单 136 复盘）：**中文回显被后处理洗成符号骨架**。
 	// 必须紧跟判据 3：它正是判据 3 被"后处理发生在判定之前"绕过之后留下的那个洞。
@@ -333,8 +339,11 @@ func isLoneKana(s string) bool {
 	if len(r) != 1 {
 		return false
 	}
-	o := r[0]
-	return (o >= 0x3040 && o <= 0x30FF) || (o >= 0xFF66 && o <= 0xFF9D)
+	// 书写体系判据只有一份实现（internal/textscript）：区间不再在本文件手抄，
+	// 扩展区/半角形式/Common 字符（ー・々…）的统一口径都在那个包里。
+	// ★ 这条判据**不带文档画像**（主方案 §10.2 定稿）：画像在 fileproc、判据在 engine，
+	//   穿透四层只为一件事不值得；"开关被误识成の"由 OCR 清洗层的语言无关腿收口。
+	return textscript.Of(r[0]).Kana()
 }
 
 // isCodeLikeSegment 代码/编号类短段：股票代码（002584.SZ）、策略标识（N_shape/dragon_return/fac_1）、

@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"translator/internal/observability"
+	"translator/internal/textscript"
 )
 
 // ============ 退化输出观测计数（★ P0-4，2026-09-18） ============
@@ -69,7 +70,9 @@ var (
 	}
 
 	// 非 CJK 目标语删除中文字符（_strip_chinese_in_non_zh）
-	zhCharRe = regexp.MustCompile("[\u4e00-\u9fff\u3400-\u4dbf]+")
+	// zhCharRe 已退役（2026-10-28）：汉字判据收口到 internal/textscript。
+	// 旧正则只覆盖基本区与扩展 A，扩展 B~G 的汉字会留在非中文译文里（客户可见的中文泄露），
+	// 且没有任何日志会红——见 stripHanLetters 的注释。
 
 	// 拉丁系语言（用语言名独占一行截断）
 	latinScriptLangs = map[string]bool{"en": true, "es": true, "pt": true, "fr": true,
@@ -345,7 +348,24 @@ func StripChineseInNonZh(text, langCode string) string {
 	if langCode == "zh" || langCode == "zh_hant" || langCode == "ja" || langCode == "ko" {
 		return text
 	}
-	return zhCharRe.ReplaceAllString(text, "")
+	return stripHanLetters(text)
+}
+
+// stripHanLetters 删除文本里的全部汉字（只删汉字，标点/数字/假名原样保留）。
+//
+// 为什么不用正则：旧实现只覆盖 U+4E00–9FFF 与 U+3400–4DBF，扩展 B~G 的汉字会原样留在
+// en/de 等非中文译文里——客户直接看到中文，而日志一行都不会红。汉字归属统一走
+// internal/textscript（Unicode 表，随 Go 版本由 TestUnicodeVersionPinned 约束）。
+func stripHanLetters(text string) string {
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		if textscript.Of(r) == textscript.Han {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // StripForeignParagraphs 删除不属于目标语言书写系统的段落

@@ -39,6 +39,9 @@ type estimateReq struct {
 	TargetLangs  []string `json:"target_langs"`  // 目标语言列表
 	Mode         string   `json:"mode"`          // fast | pro（默认 pro）
 	UILang       string   `json:"ui_lang"`       // 界面语言（决定中/英文提示词那一套；缺省按中文）
+	// ImageFiles 本次工单含图片/扫描件的件数：>0 时计入 OCR 理解/纠错的预估 allowance。
+	// 缺省 0 ⇒ 老客户端行为完全不变（不新增任何必填字段）。
+	ImageFiles int `json:"image_files"`
 }
 
 // handleTranslationEstimate 报价预估接口（登录用户，纯只读）。
@@ -113,10 +116,19 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 // estimateTokens 按请求形态选一条预估腿（有正文＝即时翻译形态，只有段数＝文件/工单形态）。
 // 参数 req: 已解析入参；mode: 归一后的模式档。返回: (真实 token 下限, 上限)，两者都 ≥1。
 func (s *Server) estimateTokens(req estimateReq, mode string) (int64, int64) {
+	var minTokens, maxTokens int64
 	if req.Text != "" {
-		return engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, "", req.UILang)
+		minTokens, maxTokens = engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, "", req.UILang)
+	} else {
+		minTokens, maxTokens = engine.EstimateSegmentTokens(req.SegmentCount, req.TargetLangs, mode, "", req.UILang)
 	}
-	return engine.EstimateSegmentTokens(req.SegmentCount, req.TargetLangs, mode, "", req.UILang)
+	// ★ 2026-10-28 主方案 §8.5：图片/扫描件工单会多一条 ③（OCR 判定补偿）的模型调用，
+	//   预估必须与实扣同一把尺子（AGENTS §一·5④）。上限口径见 engine.OcrFixAllowanceTokens。
+	if allow := engine.OcrFixAllowanceTokens(req.ImageFiles); allow > 0 {
+		minTokens += allow
+		maxTokens += allow
+	}
+	return minTokens, maxTokens
 }
 
 // applyMarkup 把真实 token 口径的预估折算成实收口径（与扣费腿同一乘方、同一兜底方向）。

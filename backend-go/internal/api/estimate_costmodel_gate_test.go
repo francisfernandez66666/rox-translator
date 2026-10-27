@@ -211,8 +211,11 @@ func TestEstimateHandlerNoOldFormula(t *testing.T) {
 	}
 	// 反证②：把 engine 委托整段摘掉（换成自己算）也必须判红——
 	// 这一枚抓的是「有人在接口里另写一份公式」，与① 抓的旧公式同族不同形。
-	unhooked := strings.Replace(src, "return engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, \"\", req.UILang)",
-		"return int64(len(req.Text)), int64(len(req.Text)) * 2", 1)
+	// ★ 2026-10-28：estimateTokens 现在先算两腿再叠加 OCR 判定 allowance（图片件），
+	//   委托形态从 `return engine.X(...)` 变成 `minTokens, maxTokens = engine.X(...)`；
+	//   反证锚点必须跟着形态改，否则这条反证会退化成"锚点不存在"（本锁自己会判 A 类红）。
+	unhooked := strings.Replace(src, "minTokens, maxTokens = engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, \"\", req.UILang)",
+		"minTokens, maxTokens = int64(len(req.Text)), int64(len(req.Text)) * 2", 1)
 	if unhooked == src {
 		t.Fatal("反证② 未命中锚点（estimateTokens 的委托形态变了，请同步本锁）")
 	}

@@ -94,9 +94,11 @@ func ocrTimeout() time.Duration {
 
 // ocrResult OCR 识别结果 JSON 形状（与 ocr_recognize.py image 子命令 stdout 一致）。
 type ocrResult struct {
-	Text       string      `json:"text"`       // 按阅读顺序拼好的多行文本（\n 分隔）
-	Boxes      [][]float64 `json:"boxes"`      // 每行文本框（可选，保真比对应读用）
-	Confidence float64     `json:"confidence"` // 整体平均置信度（可选）
+	Text         string      `json:"text"`          // 按阅读顺序拼好的多行文本（\n 分隔）
+	Boxes        [][]float64 `json:"boxes"`         // 每行文本框（可选，保真比对应读用）
+	Confs        []float64   `json:"confs"`         // 逐框识别置信度（与 Boxes 等长同序；老脚本无此字段）
+	Confidence   float64     `json:"confidence"`    // 整体平均置信度（可选）
+	SkippedPages int         `json:"skipped_pages"` // 因整件预算不足被跳过的页数（P4；老脚本为 0）
 }
 
 // ExtractImageOCR 图片 → 文本提取（P1a 识别本体）。
@@ -140,27 +142,20 @@ func parseOcrJSON(out string, e *Extractor, srcPath string) error {
 	if strings.TrimSpace(res.Text) == "" {
 		return fmt.Errorf("OCR 未识别出文字（图片可能无文字内容、或为手写/艺术字）")
 	}
-	lines := strings.Split(res.Text, "\n")
-	for _, line := range lines {
-		e.add(line)
+	// ★ 2026-10-28：识别结果先过清洗层（②），再交给上层（③ 在 engine 侧跑）。
+	//   OcrDoc 是 ①→②→③→④ 之间唯一载体：这里构造并挂进在途队列，
+	//   上层用 PendingOcrDoc 取、回写 Final 后用 CommitOcrDoc 重建映射。
+	doc := BuildOcrDoc(srcPath, res)
+	RememberOcrDoc(srcPath, doc)
+	// 兼容腿：**先用 ② 的 Final 写一次提取器文本与回填映射**。
+	// 从不跑 ③ 的调用方（单测、尚未接线的路径）行为仍正确；CommitOcrDoc 只是幂等覆盖这一次写入。
+	for _, ln := range doc.Lines {
+		e.add(ln.Final)
 	}
-	// ★ P4：把「行文本 ↔ 坐标」这一对关系留下来（原位回填要用同一份坐标，见 ocr_image.go 头注）。
-	//   只有两者数量**严格相等**时才敢配对——数量对不上说明脚本那侧的拼法变了，
-	//   这时宁可不缓存（原位回填整体跳过）也不能把译文盖到错误的框上。
-	if len(res.Boxes) == len(lines) {
-		boxes := make([]OcrBox, 0, len(lines))
-		for i, ln := range lines {
-			key := strings.TrimSpace(ln)
-			if key == "" {
-				continue
-			}
-			// ★ 键必须与**提取器**给出的行文本同形（Extractor.add 会 trim）：
-			//   回填阶段 Go 侧用「译文表 b.Text」取译文，而那张表的键来自提取器（已 trim）。
-			//   这里存未 trim 的原文 ⇒ 首尾带空格的行取不到译文、被当成"未译出"保留原文
-			//   （不报错、只是那几行没换掉，属最难发现的一类静默残留）。
-			boxes = append(boxes, OcrBox{Text: key, Box: res.Boxes[i]})
-		}
-		RememberImageBoxes(srcPath, boxes)
+	if _, st := CommitOcrDoc(srcPath, doc, e.Texts); !st.Mapping && st.Delivered > 0 {
+		// 坐标缺失/不成对：整体跳过映射（原位回填退回"仅译文 .md"），绝不把译文盖到错误的框上。
+		// 这里不再写映射，但文本已经通过 e.add 交付，符合"译文第一"。
+		_ = st
 	}
 	return nil
 }
@@ -188,6 +183,9 @@ func friendlyOcrError(stderr string) string {
 		return "不支持的图片格式，请使用 png/jpg/jpeg/bmp/tif/tiff/webp/heic"
 	case "Empty":
 		return "OCR 未识别出文字（图片可能无文字内容、或为手写/艺术字）"
+	case "Timeout":
+		// 预算不足导致的跳过必须与"图里真没字"分开报：前者是运维档位问题，后者是内容问题。
+		return "文档识别超时（超出单件预算，已按可用页交付）；可调大 OCR_TIMEOUT_SEC 后重试"
 	case "NothingPainted":
 		return "图片原位回填未产出（没有一行拿到可用文本框坐标），已退回仅译文文档"
 	// ★ 2026-10-17：原位回填脚本（ocr_translate_image.py）的五个档位也收进来。

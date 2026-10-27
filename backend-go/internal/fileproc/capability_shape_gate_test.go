@@ -64,6 +64,9 @@ var capShapeLegs = []string{
 	"L37", "L38", "L39",
 	// ★ 2026-10-28 用户令「同一区域的字号归一要做。按框/块/表格/行高相近来判断同一区域。」
 	"L40", "L41", "L42",
+	// ★ 2026-10-28 主方案 P0-B/P0-C/P4：box_thresh / 相对面积 / 行高自适应阅读顺序 /
+	//   conf 口径 / 白边 / confs 契约 / 新腿接线。
+	"L43", "L44", "L45", "L46", "L47", "L48", "L49",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -89,12 +92,12 @@ var capShapeMutations = []capShapeMutation{
 		"解码按「blank 在末位」跳（与 L01 同族，但那一半在解码侧）"},
 	{"L04", capShapeOcrFile, `int(round(w * scale / DET_STRIDE)) * DET_STRIDE`, `int(round(w * scale))`,
 		"对齐 32 的倍数被抹掉（官方导出的 Resize 节点直接拒收）"},
-	{"L05", capShapeOcrFile, `dx = int(round(d))`, `dx = 0`,
+	{"L05", capShapeOcrFile, `d = int(round(_unclip_d([x0, y0, x1, y1])))`, `d = 0`,
 		"unclip 膨胀算出来不落地（40px 行高被裁成穿过字腰的窄带）"},
 	{"L06", capShapeOcrFile, `sy = oh / float(sh)`, `sy = sx`,
 		"纵轴拿横轴比例反算（框整体拉偏、末行掉到图外）"},
-	{"L07", capShapeOcrFile, `boxes.sort(key=lambda b: (b[1] // 20, b[0]))`, `boxes.sort(key=lambda b: b[0])`,
-		"阅读顺序按左右排（多行文本被排成乱序，译文按错序回填）"},
+	{"L07", capShapeOcrFile, `if abs((b[1] + b[3]) / 2.0 - med) <= 0.5 * h:`, `if True:`,
+		"行聚类容差被抹掉（所有框并成一行，多行文本按左右排乱序、译文按错序回填）"},
 	{"L08", capShapeOcrFile, `    if bgr:`, `    if bgr and False:`,
 		"BGR 翻转被绕过（把红通道当蓝通道，掉框不可预测）"},
 	{"L09", capShapeOcrFile, `            return h, w`, `            return CLS_HW_LEGACY`,
@@ -108,6 +111,16 @@ var capShapeMutations = []capShapeMutation{
 		"24-bit 被当 16-bit 硬解（下游静默吃半截样本，比报错更坏）"},
 	{"L13", capShapeAsrFile, `reader = getattr(sherpa_module, "read_wave", None)`, `reader = None`,
 		"read_wave 优先腿被摘（将来版本又导出它时不再走模型侧同款解析）"},
+	// ===== ★ 2026-10-28 批：P0-B/P0-C（L43~L47 的核心四条，各改一个常量/口径即静默降质） =====
+	{"L43", capShapeOcrFile, `if box_score < box_thresh:`, `if False:`,
+		"框内概率门被摘（开关/图标重新进正文，の 的源头闸失守）"},
+	{"L44", capShapeOcrFile, `min_area = max(4, int(round(min_area_ratio * sw * sh)))`, `min_area = 16`,
+		"面积下限写死绝对值（换分辨率就换有效阈值）"},
+	{"L46", capShapeOcrFile, `conf = float(sum(kept) / len(kept)) if kept else 0.0`,
+		`conf = float(np.mean(probs))`,
+		"conf 退回含 blank 帧的旧口径（长框被系统性拉低，清洗层分档失效）"},
+	{"L47", capShapeOcrFile, `pad = max(2, int(round(REC_CROP_PAD_RATIO * h)))`, `pad = 0`,
+		"裁剪白边归零（末尾竖笔被切：manual→manua 的原病）"},
 	// ===== ★ 2026-10-17 批：图片原位回填（L14~L18）。两条真缺陷（框判据按八值、字体缺拉丁字形）
 	// 都是「运行期形状错」——健康面全绿、日志零红，只有把译文图打开才看得出。
 	{"L14", capShapeImgFile, `            if _valid_box(box):`, `            if len(box) >= 8:`,
