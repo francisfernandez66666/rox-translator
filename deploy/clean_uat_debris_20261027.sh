@@ -133,4 +133,4 @@ keep_bak=$("${PSQL[@]}" "SELECT count(*) FROM $BAK.tickets;")
 echo "  窗口外工单现存 $keep_now 行；备份里（窗口内）$keep_bak 行"
 [ "$keep_bak" = "$cnt_tickets" ] || bad "窗口外计数被牵连（备份行数与预览不符）"
 
-if [ "$FAIL" = "0" ]; then echo "CLEAN_ALL_OK=1 隔离目录＝$QUAR 备份 schema＝$BAK"; else echo "CLEAN_FAIL=$FAIL（上面 BAD 行）"; exit 1; fi
+if [ "$FAIL" = "0" ]; then echo "CLEAN_ALL_OK=1 隔离目录＝${QUAR} 备份 schema＝${BAK}"; else echo "CLEAN_FAIL=${FAIL}（上面 BAD 行）"; exit 1; fi
