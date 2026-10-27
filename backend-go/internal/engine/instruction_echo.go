@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"translator/internal/config"
 )
 
 // instructionCorpusCache 指令语料缓存（key=targetLang|uiLang），只生成一次。
@@ -305,30 +307,131 @@ func (e *Engine) LineDeadStreakMin() int {
 // RetryLineUntilUsable 单行补译梯（全仓唯一实现）：极简指令连打 N 轮，任一轮过统一判据即返回。
 // 参数：ctx=上下文（取消即止损），src=这一行的原文，targetLang=目标语言。
 // 返回：可用的译文；ok=false 表示 N 轮都没拿到可用形态 ⇒ **调用方按原文回落**（绝不留空行）。
-// 三条设计取向：
+// 四条设计取向：
 //  1. 采纳判据只用**同一把** fileTranslationUsable（含回显/长文爆炸）——梯自己判"非空"就等于另立尺子；
 //  2. 同一行连着两轮吐出一模一样的坏形态 ⇒ 收手（现网 7B 模型对短指令式源文有这种恒同形态，
 //     再打也不会有新答案，白扣客户的积分）；
 //  3. 每轮都是**单段请求**，不与其他行同批：长度爆炸那一族的病因就在批量上下文里
 //     （裁决八-3d），把这一行单独送才是对症下药。
+//  4. ★ 2026-10-27（工单 136 复盘）：主模型连打 N 轮之后**再换一族模型问一次**。
+//     上面的取向 2 已经点破规律——"同一个模型对同一形态的答案是恒定的"，那 N 轮全空之后
+//     继续用同一个模型重拨，第 N+1 轮的结果必然是第 1 轮的重放（现网实证：图片工单 136
+//     首翻 + 硬闸 5 轮 + 逐行 3 轮全是初翻模型 Hy，八次调用八次空槽）。
+//     而链路上本来就有第二族模型（校对腿，现网配 GPT），它**从未被用来"翻"过任何一段**——
+//     只用来"审"已有译文。这一档把它补上：初翻模型翻不出的形态，换一族模型往往一次就过
+//     （同一句话走单条腿实测，Hy 给出的译文完全正确，说明"翻不出来"从来不是这句话的属性，
+//     而是"批量形态 + 这个模型"的组合属性）。
 func (e *Engine) RetryLineUntilUsable(ctx context.Context, src, targetLang string) (string, bool) {
+	v, ok, _ := e.retryLineUntilUsableDiag(ctx, src, targetLang)
+	return v, ok
+}
+
+// retryDiag 补译梯的**诊断读数**（只为排障存在，不参与任何判定）。
+//
+// ★ 2026-10-27（工单 136 复盘 C 项）为什么需要它：失败之后只知道"这行没翻出来"是不够的——
+// "上游压根没回"（换模型/换问法才可能救）与"上游回了但被我们判死"（判据过杀，要改判据）
+// 在交付面上**同形**（都写"仍为空"），而两种成因的修法完全相反。本单排障时正是因为缺这一层，
+// 只能拿交付 .md 反推。
+//
+// ⚠️ 刻意**不**记候选原文：模型输出是客户内容的衍生物，日志不进客户面但也不该承担泄漏风险
+// （AGENTS 日志口径）。所以这里只留"长度 + 形态分类"，形态用现成的判据函数反推。
+type retryDiag struct {
+	MainRounds   int    // 主模型实际打了几轮（被取消/恒同形态提前收手时小于 LineRetryMax）
+	ReviewTried  bool   // 是否走到了换模型档
+	LastCandLen  int    // 最后一轮候选的字符数（0 ⇒ 上游连空串都没给）
+	LastCandKind string // empty / placeholder / explosion / echo / skeleton / unusable（见 candidateKind）
+}
+
+// retryLineUntilUsableDiag 补译梯本体，额外返回诊断读数。
+// 与 RetryLineUntilUsable 是**同一个实现**——不许各写一份（本仓「多把尺子」那一族）。
+func (e *Engine) retryLineUntilUsableDiag(ctx context.Context, src, targetLang string) (string, bool, retryDiag) {
 	rounds := e.LineRetryMax()
+	diag := retryDiag{}
 	last := ""
 	for r := 0; r < rounds; r++ {
 		if ctx.Err() != nil {
 			break
 		}
+		diag.MainRounds++
 		v, ok := e.translateSegmentMinimal(ctx, src, targetLang)
 		if !ok || strings.TrimSpace(v) == "" {
+			diag.LastCandLen = 0
+			diag.LastCandKind = "empty"
 			continue
 		}
+		diag.LastCandLen = len([]rune(strings.TrimSpace(v)))
 		if e.fileTranslationUsable(ctx, src, v, targetLang) {
-			return v, true
+			return v, true, diag
 		}
+		diag.LastCandKind = e.candidateKind(ctx, src, v, targetLang)
 		if v == last {
 			break
 		}
 		last = v
 	}
-	return "", false
+	// ★ 换模型档（取向 4）：主模型的 N 轮已经全部落空，改用校对模型单独翻这一段。
+	// 只在主模型腿真的没救时才走到这里，所以对正常单的成本影响为零；
+	// 判据仍然只用 fileTranslationUsable——换模型不是换尺子。
+	if ctx.Err() == nil {
+		diag.ReviewTried = true
+		if v, ok := e.translateSegmentByReviewModel(ctx, src, targetLang); ok {
+			diag.LastCandLen = len([]rune(strings.TrimSpace(v)))
+			if e.fileTranslationUsable(ctx, src, v, targetLang) {
+				return v, true, diag
+			}
+			diag.LastCandKind = e.candidateKind(ctx, src, v, targetLang)
+		} else {
+			diag.LastCandLen = 0
+			diag.LastCandKind = "empty"
+		}
+	}
+	return "", false, diag
+}
+
+// candidateKind 把"被判死的那份候选"归到一档成因（**只分类，不回传原文**）。
+//
+// 分类顺序即优先级：空/占位 → 长度爆炸 → 骨架（中文被洗空）→ 指令回显 → 其余不可用。
+// 每一档对应的修法都不同，所以分类必须用**现成的判据函数**反推，
+// 不许在这里另写一套"看起来像什么"的启发式（否则日志与判据会各说各话）。
+func (e *Engine) candidateKind(ctx context.Context, src, cand, lang string) string {
+	t := strings.TrimSpace(cand)
+	switch {
+	case t == "":
+		return "empty"
+	case IsFailurePlaceholder(t):
+		return "placeholder"
+	case IsLengthExplosion(src, t) || hasLongTextExpansion(src, t):
+		return "explosion"
+	}
+	// 骨架档：后处理之后没有任何连续两个字母 ⇒ 汉字被 StripChineseInNonZh 洗掉只剩标点
+	// （工单 136 的邻座缺陷，判据 3″ 抓的就是它）。
+	if !hasLetterRun(PostProcessTranslation(t, lang), 2) {
+		return "skeleton"
+	}
+	if !e.echoGuardOff() && isProseInstructionEcho(src, t, lang, uiLangFromCtx(ctx)) {
+		return "echo"
+	}
+	return "unusable"
+}
+
+// translateSegmentByReviewModel 用**校对模型**单独翻一段（补译梯的换模型档，唯一实现）。
+//
+// 与 translateSegmentMinimal 的分工：那个走主模型（初翻档），这个走校对档
+// （system_config.stage_models.review / 环境变量，现网配的是另一家模型）。
+// 三个要点：
+//  1. 走 SingleLangTranslate 而不是 TranslateOne——后者会先查 KB/TM 精确命中，
+//     一旦库里有一条"原文→原文"的脏行就会短路返回原文、一个模型调用都不打，
+//     换模型档等于被同一条脏行原地挡回（那正是本档要绕开的形态）。
+//  2. 仍然带 WithMinimalInstruction：不带中文尾注的那一档对短段更稳（见 engine.go 的取用点）。
+//  3. 空串一律按失败返回，让调用方继续走"按原文回落 + 点名"的既有出口。
+func (e *Engine) translateSegmentByReviewModel(ctx context.Context, seg, targetLang string) (string, bool) {
+	if e == nil {
+		return "", false
+	}
+	v, err := e.SingleLangTranslate(WithMinimalInstruction(ctx), seg, targetLang, nil,
+		DetectSourceLang(seg), config.StageReview)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	return v, true
 }

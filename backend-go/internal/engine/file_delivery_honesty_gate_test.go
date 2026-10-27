@@ -44,6 +44,14 @@ var fdhAllow = map[string]string{
 	"[brandterm] 文件路径品牌术语归一化 %d 个语言译文":                                 "信息：归一化生效，非退化",
 	"译文配音跳过（不影响字幕与译文交付）":                                               "配音跳过：返回值把 warning 交给调用方 append（见 dubTranslatedAudio 调用点），本函数内无 degraded/gateWarnings",
 	"译文配音回落 mp3（原容器转码不可用）":                                             "配音容器回落：同上，warning 经返回值上抛",
+	// ★ 2026-10-27（工单 T20261027152356CMY 复盘 C 项）新增两条。**记账在本函数内，只是不叫
+	//   degraded/gateWarnings**：retryImageSegments 的账本是返回值 `out []fileproc.UntranslatedItem`，
+	//   调用方把它逐行写进交付 .md 的「未译出内容」一节（图片原位回填的行则按原文保留）。
+	//   也就是说这两条日志不是"只有日志"——它们描述的那次退化**已经进了客户可见的交付面**。
+	//   扫描器只认 degraded/gateWarnings 两个变量名（见 fdhHasLedgerAppend），故在此逐条点名；
+	//   若哪天把 `out` 并进 gateWarnings 口径，这两条豁免应同步删除。
+	"图片工单逐行补译仍不合格，按原文回落":         "记账＝返回值 out（逐行进 .md「未译出内容」）；本 WARN 补的是**成因读数**（empty/explosion/length_info），不是新增静默",
+	"图片工单逐行补译判上游断，剩余未译行一次性按原文回填": "记账＝返回值 out（剩余段逐条计入未译出）；本 WARN 是整语种一行汇总，防逐行刷屏",
 }
 
 // fdhSite 一处「出声」点位及其记账配对情况。

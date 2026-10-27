@@ -171,22 +171,49 @@ func (e *Engine) retryImageSegments(ctx context.Context, texts []string, tr map[
 			})
 			continue
 		}
-		v, ok := e.RetryLineUntilUsable(ctx, src, lc)
+		v, ok, diag := e.retryLineUntilUsableDiag(ctx, src, lc)
 		if ok {
 			tr[src] = v
 			deadStreak = 0
 			continue
 		}
 		deadStreak++
-		if deadStreak >= deadMin {
+		if deadStreak >= deadMin && !upstreamDead {
 			upstreamDead = true
+			// ★ 2026-10-27（工单 T20261027152356CMY 复盘 C 项）：整语种一行，早停必须被值班看见。
+			// 为什么不逐行刷屏：回填行数另有出口（返回的未译出清单逐行进 .md），这里只报"这一单上游是坏的"。
+			// 与文本链 orchestrator/text_lines.go 的同名 WARN 对齐——两条链对同一件事必须同一种出声方式，
+			// 否则排障时又只能靠交付物反推（本单就是这么反推出来的）。
+			observability.Warn(ctx, "图片工单逐行补译判上游断，剩余未译行一次性按原文回填",
+				"lang", lc, "line", i+1, "streak", deadMin, "rounds", rounds,
+				"last_kind", diag.LastCandKind)
 		}
 		reason := fmt.Sprintf("模型补译 %d 轮仍无可用输出，已按原样保留", rounds)
-		if have == "" || IsFailurePlaceholder(have) {
+		emptyHave := have == "" || IsFailurePlaceholder(have)
+		if emptyHave {
 			reason = fmt.Sprintf("上游未返回可用译文（补译 %d 轮仍为空），已按原样保留", rounds)
 		} else if IsLengthExplosion(src, have) {
 			reason = "上游输出被截断/长度异常（补译轮内未恢复），已按原样保留"
 		}
+		// ★ 2026-10-27（C 项）：**回落必须点名成因**，且读数随行报出来。
+		// 本单（136）排障时这一行 WARN 不存在，只能拿交付 .md 与 gate_warnings 反推"到底是没回、
+		// 回了空的、还是回了被我们判死的"——三者在交付面上同形（都写"仍为空"），成因却完全不同。
+		// 现在由 retryLineUntilUsableDiag 给出三样读数：
+		//   last_kind=empty      ⇒ 上游压根没给（换模型/换问法才可能救，不是判据问题）；
+		//   last_kind=explosion  ⇒ 给了但被截断/长度异常；
+		//   last_kind=skeleton   ⇒ 回了中文被洗成符号骨架（判据 3″ 那一族）；
+		//   last_kind=echo       ⇒ 回了提示词回显；
+		//   last_kind=unusable   ⇒ 以上都不是，落到通用不可用（要按 length_info 与原文形态再看）。
+		// 只记读数不记候选原文：日志不进客户面，但模型输出是客户内容的衍生物（AGENTS 日志口径）。
+		observability.Warn(ctx, "图片工单逐行补译仍不合格，按原文回落",
+			"lang", lc, "line", i+1, "rounds", rounds,
+			"main_rounds", diag.MainRounds,
+			"review_tried", diag.ReviewTried,
+			"last_kind", diag.LastCandKind,
+			"last_cand_len", diag.LastCandLen,
+			"pre_had_value", !emptyHave,
+			"pre_explosion", !emptyHave && IsLengthExplosion(src, have),
+			"length_info", LengthExplosionInfo(src, have))
 		out = append(out, fileproc.UntranslatedItem{Line: i + 1, Source: src, Reason: reason})
 	}
 	return out, upstreamDead
@@ -1865,20 +1892,44 @@ func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]
 	return nil, clean
 }
 
-// reviewBatchSafe 批量审校安全包装：过滤空译文与占位失败项，仅审校有效对；
+// reviewBatchSafe 批量审校安全包装：把这一批交给**校对模型**过一遍；
 // 审校结果不改变成功/失败判定（审校输出为空时保留原译文）。
+//
+// ★ 2026-10-27（工单 T20261027152356CMY 复盘）：**空槽必须一起送审校**。
+// 旧形态 `if tr == "" || tr == "[翻译失败]" { continue }` 把空槽从清单里剔掉，
+// 于是"初翻模型没吐出来的那几行"在校对腿上**物理不存在**——而校对腿恰恰是链路上
+// 唯一一个可能由**另一族模型**（初翻 Hy、校对 GPT）经手的环节。
+// 现网实证（图片工单 136，`已实现=加权成本重放；浮动=市值-成本×数量；30s刷新`）：
+// 初翻 Hy 在 `<sN>` 批量形态下对这一槽吐空 → 校对腿跳过它 → 硬闸 5 轮 + 逐行补译 3 轮
+// 仍然全是 Hy 在打同一句话 → 最终按原文回落并在交付文档里点名。
+// 而同一句话走**单条腿**（试用接口实测）Hy 能给出
+// "Realized = Weighted Cost Replay; Floating = Market Value - Cost × Quantity; Refresh every 30s"。
+// ⇒ 结论：不是"这行译不出来"，是"译得出来的那个模型从未被问到"。
+// 代价口径：只多送**空槽**那几条给校对模型（已译出的行仍照旧送，审校语义不变），
+// 换来的是一条"初翻漏槽"的确定性救回通道——比后面 8 轮同模型重拨便宜得多。
 func (e *Engine) reviewBatchSafe(ctx context.Context, sources, translations []string, lang string, onDone func(done, total int)) []string {
 	idxs := make([]int, 0, len(sources))
 	var srcs, tgts []string
+	emptyN := 0
 	for i, tr := range translations {
-		if tr == "" || tr == "[翻译失败]" {
-			continue
+		if i >= len(sources) {
+			break // 两张表不等长时只处理有源文的那部分（下标越界会 panic，而这是非关键路径）
+		}
+		if tr == translationFailureMark {
+			// 失败占位在清单里按"未译出"呈现：**绝不**把 `[翻译失败]` 这串字面量喂给审校模型
+			// （它会当成一条真译文去"润色"，输出一句带着占位符的垃圾）。
+			tr = ""
+		}
+		if strings.TrimSpace(tr) == "" {
+			emptyN++
 		}
 		idxs = append(idxs, i)
 		srcs = append(srcs, sources[i])
 		tgts = append(tgts, tr)
 	}
-	if len(idxs) < 2 { // 单段走常规逐段审校收益低，跳过
+	// 单段且本来就有译文 ⇒ 走常规逐段审校收益低，跳过（旧口径不变）。
+	// ★ 但只要存在空槽，哪怕整批只有 1 段也必须送——那是这一行唯一的换模型机会。
+	if len(idxs) < 2 && emptyN == 0 {
 		if onDone != nil {
 			onDone(len(translations), len(translations))
 		}

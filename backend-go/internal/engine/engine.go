@@ -2170,6 +2170,54 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	return results
 }
 
+// wikiTermNoteEN / wikiTermNoteZH 专有名词的权威译名参照（★ 2026-10-27 用户要求：
+// 「实在不确定用词，可以查维基百科确认专有名词的多语言写法」）。
+//
+// ★ 为什么措辞是「以其通行译名为准」而不是「可以搜索维基百科」：
+//
+//	本仓的 CallChat **没有挂任何检索工具**（没有 tool/function calling，也没有联网代理）。
+//	写成"去搜索"会让模型二选一地坏掉——
+//	  · 假装检索：在译文里插一句"根据维基百科…"，直接污染交付物（下游虽有清洗链，
+//	    但清洗链是兜底，不是许可证）；
+//	  · 编一个看起来像引用的来源：比不查更坏，它让客户以为核对过。
+//	写成"以…为准"达到同一目的（给出权威参照系、抑制臆造译名），而且模型真能执行。
+//	将来若给 LLM 挂上检索工具，这两条可以直接改成真正的 lookup 指令，调用点不用动。
+const wikiTermNoteEN = " If a proper noun, domain term or abbreviation is uncertain, follow the established translation used by Wikipedia" +
+	" (the standard entry title in the target language) instead of inventing one; output only the chosen term, never the lookup process or any citation."
+
+// wikiTermNoteZH 中文版（校对腿 prompt 用中文，同一口径）。
+const wikiTermNoteZH = "若某个专有名词、行业术语或缩写没有把握，请以其在维基百科上的通行译名为准（目标语言的标准词条名），不要臆造译名；只输出确定后的译名，不要输出查找过程或引用说明。"
+
+// batchContextNote 批量腿的「语境判定 + 不许跳条目」指令（★ 2026-10-27 工单 136 复盘）。
+//
+// 现网形态：图片工单 136 的一行 `已实现=加权成本重放；浮动=市值-成本×数量；30s刷新`
+// 在 `<sN>` 批量里被初翻模型（Hunyuan-MT）**整槽吐空**，而同一句话走单条腿能给出
+// "Realized = Weighted Cost Replay; Floating = Market Value - Cost × Quantity; Refresh every 30s"。
+// 也就是说模型并非"不会翻"，而是在批量形态下把这一条判成了**公式/符号串，跳过不译**。
+//
+// 本条指令只做两件事，都针对这个判定：
+//  1. **先判语境再翻**——让它从措辞与符号推断业务域（股票交易/财务核算/界面参数），
+//     用该域的行业话术翻其中的文字，而不是当成乱码；
+//  2. **不许留空条目**——除符号、数字、代码标识外，每一条都必须有输出。
+//     这一句是给"漏槽"上的硬约束：漏一条整批的 <sN> 解析就会缺位，
+//     而缺位那一行在下游表现为"上游没返回"，补救链要多打七八枪。
+//
+// ★ 为什么用**英文**而不是中文（这是本仓踩过的坑，不是偏好）：
+//
+//	纯翻译模型（Hunyuan-MT 这一类）会把 system 里的**中文**指令当成待译内容去翻——
+//	现网实证就是 currencyInstructionNote/purityInstructionNote 那两条中文尾注让 12 段里 11 段
+//	吐出 `and`，极简指令档（去掉尾注）才 12/12 正确（见 minimalInstructionFromCtx 的注释）。
+//	英文指令不落在"待译内容"的判断面上，对这类模型的干扰最小；GPT 侧同样读得懂。
+//
+// ★ 只挂批量腿、不挂单条腿：单条腿实测本来就能翻对，把 system 前缀改长只会波及
+// 每一个正常请求（B4 缓存前缀换桶 + 每请求多 ~70 token），换不来任何收益。
+const batchContextNote = " Before translating each item, infer its business context from the wording and symbols (e.g. stock trading, accounting, UI settings)." +
+	" If an item is a formula, key-value pair, metric definition or parameter note (containing =, ×, ;, / etc.)," +
+	" translate its words with that domain's terminology and keep the symbols, numbers and code identifiers as they are" +
+	" — never treat such an item as garbled text, and never skip it." +
+	" Every item must produce an output: only symbols, numbers and code identifiers may stay untranslated." +
+	wikiTermNoteEN
+
 // BatchTranslateMarked 与 BatchTranslate 同一条实现，额外回吐「哪些槽位是被截断的」。
 // 参数：texts=待译段，targetLang=目标语言，batchSize=段块大小（0=按均长动态），onBatchDone=逐块回调。
 // 返回：results=与输入等长的译文（失败槽位为 `[翻译失败]`）；
@@ -2247,6 +2295,7 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 	batchSrc := DetectSourceLang(strings.Join(headsample(texts, 8), "\n"))
 	sysBatch := translateInstruction(batchSrc, targetLang, uiLangFromCtx(ctx)) +
 		e.batchTermLayer(ctx, e.tenantID(ctx), targetLang) +
+		batchContextNote +
 		"\n请按编号逐条翻译用户消息中的条目，用 <sN>...</sN> 包裹每条翻译结果："
 	runChunk := func(start int, chunk []string) int {
 		// 构造 <sN> 标记
@@ -3110,9 +3159,19 @@ func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translatio
 		fmt.Fprintf(&list, "%d.\n【原文】%s\n【译文】%s\n", i+1,
 			truncateStr(sources[i], 800), truncateStr(translations[i], 800))
 	}
+	// reviseRules 审校的两条硬要求（★ 2026-10-27 工单 136 复盘，与 reviewBatchSafe 的"空槽也送"配对）：
+	//  ① 空槽＝尚未译出，**直接翻译**而不是"没有译文可审"；
+	//  ② 公式/键值对型短行先判语境再翻，不许当乱码跳过，除符号数字外每处文字都要有输出。
+	// 这两条必须在**同一段 prompt 里**成对出现：只放开空槽不说明"要翻"，校对模型会回一句
+	// "该条无译文可审校"或原样回吐空串，等于白送一次调用。
+	reviseRules := "注意：【译文】为空的条目表示**尚未译出**，请直接给出该条完整正确的译文，不要留空、不要照抄原文；" +
+		"若原文是公式、键值对、指标定义或参数说明（含 = 、× 、； 、/ 等符号），先判断它的业务语境" +
+		"（如股票交易、财务核算、界面设置），用该语境下的行业术语翻译其中的文字，符号、数字、代码标识原样保留，" +
+		"不要当成乱码或无意义串跳过；除符号、数字与代码标识外，原文每一处文字都必须有对应的译文输出。" +
+		wikiTermNoteZH
 	prompt := fmt.Sprintf(
-		"你是资深翻译审校。下面是 %d 条%s译文（已编号），请逐条审校：修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文），保持原意与风格，不改写结构。%s\n\n%s\n严格按以下格式输出，共 %d 行，每行一条，不要输出任何其他内容：\n编号. 审校后的完整译文",
-		len(sources), langName, culture, list.String(), len(sources))
+		"你是资深翻译审校。下面是 %d 条%s译文（已编号），请逐条审校：修正术语准确性、语法错误和语义偏差（如译文与原文意思明显不符，需重写为正确译文），保持原意与风格，不改写结构。%s\n\n%s\n%s\n严格按以下格式输出，共 %d 行，每行一条，不要输出任何其他内容：\n编号. 审校后的完整译文",
+		len(sources), langName, culture, list.String(), reviseRules, len(sources))
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {

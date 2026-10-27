@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unicode"
 
 	"translator/internal/observability"
 )
@@ -166,20 +167,129 @@ var leadingCJKNoteStrictRe = regexp.MustCompile(`^[（\[【]?\s*：`)
 //   - 以 CJK 全角标点开头（讲解式残留行，其后仍含英文/数字）。
 //
 // 不影响正常目标语行（含字母/数字、且不以全角标点开头）。
+//
+// ★ 2026-10-27 追加（工单 T20261027152356CMY 复盘，B 项的第二档）：**行尾**骨架。
+// 上面两条只管"整行是骨架"和"行首是骨架"，漏掉了第三种现网形态——
+// **正常英文译文 + 行尾挂一串中文标点骨架**：
+//
+//	源文 `当前：全部允许…；"0" 。` ⇒ 译文 `Current: All allowed ：；""0，。`
+//
+// 它整行含拉丁字母（第一条不命中）、不以全角标点开头（第二条不命中），于是一路写进交付 md
+// （第 39 行末尾那串 `：；""0，。` 就是它）。客户看到的是"翻译完了但尾巴上粘着乱码"。
+// 处理放在逐行扫描里（`trimCJKSkeletonTail`），判据见该函数注释；截断起点那几行同样要修剪。
 func stripTrailingCJKNotes(text string) string {
 	lines := strings.Split(text, "\n")
 	digitRe := regexp.MustCompile(`[0-9]`)
-	for i, line := range lines {
+	kept := make([]string, 0, len(lines))
+	for _, line := range lines {
 		t := strings.TrimSpace(line)
 		if t == "" {
+			kept = append(kept, line) // 空行原样保留（行数口径不变，别在这一层动结构）
 			continue
 		}
 		if (!latnRe.MatchString(t) && !digitRe.MatchString(t) && cjkPunctRe.MatchString(t)) ||
 			leadingCJKNoteRe.MatchString(t) {
-			return strings.TrimRight(strings.Join(lines[:i], "\n"), " \t\n")
+			return strings.TrimRight(strings.Join(kept, "\n"), " \t\n")
 		}
+		kept = append(kept, trimCJKSkeletonTail(line))
 	}
-	return text
+	return strings.Join(kept, "\n")
+}
+
+// cjkSkeletonTailTriggerRe 行尾骨架的**触发特征**：CJK 句读标点（、。，；：！？．）。
+//
+// 刻意不含括号（（）【】）与省略号（…）：
+//   - 括号：`（Appendix）` 这种"全角括号包着英文"是正文的一部分，按括号触发会把右括号
+//     削掉、留下一个不闭合的左括号——比不清更坏；
+//   - 省略号：英文正文自己会用 `…`（"and so on…"），它不构成"中文骨架"的证据。
+//
+// 这两类仍在**可消费集合**里（见 isCJKSkeletonRune）：只要同一串尾巴里另有句读标点，
+// 它们跟着一起被吃掉，不会剩半截。
+var cjkSkeletonTailTriggerRe = regexp.MustCompile("[\u3001\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff0e]")
+
+// trimCJKSkeletonTail 修剪**单行行尾**的中文标点骨架，返回修剪后的行。
+//
+// 判据四道，任一不过即原样返回（"不碰"是默认答案，不是"碰了再说"）：
+//  1. 从行尾回扫，能吃到非空的一串"骨架字符"（全角/中日韩标点、弯引号、省略号、ASCII 数字、
+//     ASCII 引号、空白——集合见 isSkeletonTailRune）；
+//  2. 这一串里**至少含一个句读标点**（`cjkSkeletonTailTriggerRe`）——只有数字/引号/括号不算；
+//  3. 剩下的前缀**含拉丁字母**——纯骨架行（无字母）交给本函数上面的整行判据，这里不重复管；
+//  4. 前缀非空（整行都是骨架时不动，避免把整行清成空串）。
+//
+// 为什么数字在可消费集合里：现网尾巴是 `：；""0，。`——`0` 是源文里那个引号数字 `"0"` 的残骸，
+// 夹在标点中间。它单独出现时（`Chapter 3`）不会被吃，因为第 2 道过不去。
+// 为什么用 `unicode.IsLetter/IsNumber` 排除：全角字母（Ａ）与全角数字（１）是**内容**不是骨架，
+// 一旦按区间无脑吃，会把 `Ａ` 这种正常字符削掉。
+func trimCJKSkeletonTail(line string) string {
+	r := []rune(line)
+	i := len(r)
+	for i > 0 {
+		c := r[i-1]
+		if !isSkeletonTailRune(c) {
+			break
+		}
+		// ★ ASCII 数字要**整段**判定，不能一个一个吃：`1,200` 里的 `200` 是数字字面量的一部分，
+		//   逐字吃会切在千位逗号后面（`Total assets 1,200 ：；` → `Total assets 1,`），
+		//   那是"把正文改错"，比留着尾巴更坏。判据：数字段前面紧邻 `,` 或 `.` 且再前面还是数字
+		//   ⇒ 这段数字属于一个数字字面量，回扫就此停住。
+		if c >= '0' && c <= '9' {
+			j := i
+			for j > 0 && r[j-1] >= '0' && r[j-1] <= '9' {
+				j--
+			}
+			if j >= 2 && (r[j-1] == ',' || r[j-1] == '.') && r[j-2] >= '0' && r[j-2] <= '9' {
+				break
+			}
+			i = j
+			continue
+		}
+		i--
+	}
+	if i == len(r) {
+		return line // 行尾没有骨架字符，一行都不动
+	}
+	if !cjkSkeletonTailTriggerRe.MatchString(string(r[i:])) {
+		return line // 尾巴里没有句读标点 ⇒ 不是"中文骨架"，可能是正文里的数字/引号
+	}
+	head := strings.TrimRight(string(r[:i]), " \t")
+	if head == "" || !latnRe.MatchString(head) {
+		return line // 纯骨架行 / 无拉丁字母 ⇒ 不归这一档管
+	}
+	return head
+}
+
+// isSkeletonTailRune 行尾骨架的**可消费**字符集：空白、ASCII 数字、ASCII 引号，外加 isCJKSkeletonRune。
+//
+// 为什么 ASCII 引号也要吃：现网尾巴是 `：；""0，。`——那对引号是源文 `"0"` 里 ASCII 双引号的残骸。
+// 若把它当"非骨架"停在它前面，只削掉 `0，。`、留下 `：；""`，等于没清干净（客户看到的还是乱码尾巴）。
+// 只吃引号不会误伤：`He said "0"` 这种尾巴里没有句读标点，第 2 道判据会挡住（见 trimCJKSkeletonTail）。
+func isSkeletonTailRune(c rune) bool {
+	if c == ' ' || c == '\t' || (c >= '0' && c <= '9') || c == '"' || c == '\'' {
+		return true
+	}
+	return isCJKSkeletonRune(c)
+}
+
+// isCJKSkeletonRune 该字符是否属于"中文标点骨架"的可消费集合。
+//
+// 三个区间：CJK 标点（U+3000–303F）、全角形式（U+FF00–FFEF）、弯引号与省略号（U+2018/19/1C/1D/2026）。
+// **只排除字母**：全角字母（Ａ）落在 FF00–FFEF 区间里但它是内容，削掉就是改错；
+// 全角数字（１）则是残留骨架的一部分（中文排版里不会在英文译文中出现全角数字），
+// 与 ASCII 数字同档处理——但 ASCII 数字另走 trimCJKSkeletonTail 里的"整段判定"，
+// 以免切在千位逗号后面。
+func isCJKSkeletonRune(c rune) bool {
+	if unicode.IsLetter(c) {
+		return false
+	}
+	switch {
+	case c >= 0x3000 && c <= 0x303F:
+		return true
+	case c >= 0xFF00 && c <= 0xFFEF:
+		return true
+	case c == 0x2018 || c == 0x2019 || c == 0x201C || c == 0x201D || c == 0x2026:
+		return true
+	}
+	return false
 }
 
 // stripTrailingCJKNotesStrict CJK 目标语（zh/zh_hant/ja/ko）专用注释块截断：

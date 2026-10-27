@@ -74,6 +74,11 @@ func IsTranslationUsable(src, out string) bool {
 		//      绝不能在此放行——它是本函数存在的理由。
 		return !sourceHasTranslatableLetters(src)
 	}
+	// ★ 判据 3″（2026-10-27 工单 136 复盘）：**中文回显被后处理洗成符号骨架**。
+	// 必须紧跟判据 3：它正是判据 3 被"后处理发生在判定之前"绕过之后留下的那个洞。
+	if cjkEchoWashedToSkeleton(src, out) {
+		return false
+	}
 	if hasInstructionEcho(src, out) {
 		return false
 	}
@@ -118,6 +123,55 @@ func sourceHasTranslatableLetters(src string) bool {
 		if r > unicode.MaxASCII && unicode.IsLetter(r) {
 			return true
 		}
+	}
+	return false
+}
+
+// cjkEchoWashedToSkeleton 判据 3″：**中文回显被 StripChineseInNonZh 洗成符号骨架**。
+//
+// 现网形态（工单 T20261027152356CMY 的邻座缺陷，本地实测复现）：
+//
+//	模型把源文原样吐回 —— `已实现=加权成本重放；浮动=市值-成本×数量；30s刷新`；
+//	PostProcessTranslation 的 StripChineseInNonZh 把汉字全删掉，剩 `=；=-×；30s`。
+//
+// 此时判据 3（同文）**已经比过了**：它比的是洗之前那份原文，两边逐字相等；而写入点拿到的
+// 是洗完的骨架，字面已不同文，判据 4~9 也一条都不命中 ⇒ **判可用**。
+// 于是一段"压根没翻"的东西被当成译文写进交付物——客户看到 `=；=-×；30s`，
+// 比看到中文更莫名其妙（至少中文他一眼知道没翻）。交付 md 第 39 行末尾那串
+// `：；""0，。`（源文「当前：全部允许…；"0" 。」的标点骨架）就是这条通道的指纹。
+//
+// 判据：源文有可译文字，译文却**没有任何连续两个字母** ⇒ 这段没有承载任何词语，
+// 只能是"中文被删干净后剩下的标点/数字骨架"。
+// 为什么是「连续两个字母」而不是「字母个数」：单字母（`30s` 的 s、`A=1` 的 A）不构成一个词，
+// 而任何语言的最小实义词都在两个字母以上；阈值 2 与 segmentNeedsTranslation 的
+// 「≥2 连排 ASCII 字母」同一把尺子——那边判"要不要翻"，这边判"翻了没有"。
+// 为什么对 CJK 目标语天然安全：out 是汉字/假名/谚文时它们本身就是 Letter，连续两个即放行；
+// 而 `StripChineseInNonZh` 对 zh/zh_hant/ja/ko 根本不删，走不到这条。
+// 反向保护：源文无中文（`0`／`¥1003.00`／`002584.SZ`／`manua`）时整条不适用——
+// 那些段的正确交付就是它自己，由判据 3′ 与判据 6 负责，这里不许多管一段。
+func cjkEchoWashedToSkeleton(src, out string) bool {
+	if !sourceHasTranslatableLetters(src) {
+		return false
+	}
+	return !hasLetterRun(out, 2)
+}
+
+// hasLetterRun 译文里是否存在至少 n 个**连续字母**（任何书写系统：拉丁/西里尔/假名/谚文/阿拉伯…）。
+// 用 unicode.IsLetter 而不是 [A-Za-z]：西里尔/泰文/阿拉伯等目标语的正常译文同样要能放行。
+func hasLetterRun(s string, n int) bool {
+	if n <= 0 {
+		return true
+	}
+	run := 0
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			run++
+			if run >= n {
+				return true
+			}
+			continue
+		}
+		run = 0
 	}
 	return false
 }

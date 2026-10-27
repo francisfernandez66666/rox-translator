@@ -239,11 +239,24 @@ func (s *Server) extractSegments(t *store.Ticket, lang string) ([]baseSeg, bool)
 			path = files[0].ResultPath
 		}
 	}
-	if path == "" {
-		return nil, false
+	if path != "" {
+		if segs, ok := parseAlignedFile(path, lang); ok {
+			return segs, true
+		}
 	}
-	segs, ok := parseAlignedFile(path, lang)
-	return segs, ok
+	// ★ 2026-10-27（工单 T20261027152356CMY）：**图片/音频/纯文案工单的逐段真值也走这张表**。
+	// 旧形态这里直接 `return nil, false`——`parseAlignedFile` 只认 xlsx/csv 对照表，
+	// 拿一张 .png/.mp3 去解析必然失败，于是图片工单的对照编辑器永远是空的。
+	// 而写侧 `persistTicketSegments` 是**全格式落库**的（只要 SourceSegments 非空就写），
+	// 所以数据一直在库里，只是读侧从没问过它（PDF 分支早在 2026-09-18 就接了，图片这一档漏了）。
+	// 现网实证：工单 136（图片 · en）`GET /api/tickets/segments?id=136&lang=en` 返回
+	// `segments: []`，排障时只能靠交付 .md 与 gate_warnings 反推"哪几行没译出"。
+	// 回退位置刻意放在 `parseAlignedFile` **之后**：对照表是客户实际拿到的产物（可能被人改过），
+	// 能解析就以它为准；解析不出来才用翻译当时的真值。
+	if segs, ok := s.segmentsFromStore(t, lang); ok {
+		return segs, true
+	}
+	return nil, false
 }
 
 // extractOfficeSegments 抽取 docx/pdf 工单的源文/译文段落对照。
