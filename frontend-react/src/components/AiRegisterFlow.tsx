@@ -21,7 +21,7 @@
 //   ref→useState（发码成功按钮文案才会真的重渲染）；F-03 发码失败 60s 冷却禁用重发
 //   （复用 lib/useCountdown，与传统表单 Login.tsx 对齐）。
 // ============================================================================
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { authRegister, login, sendEmailCode, profileSetup, setAuthToken, setActiveTenantId, type AuthUser } from '@/api'
 import { registerPersonas } from '@/api/persona'
 import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
@@ -29,7 +29,7 @@ import { toastError } from '@/lib/toastBus'
 // ★ 2026-10-21 IAM 重做 P1-1：口令长度与注册/登录共用同一把尺子
 import { PWD_MIN_LEN } from '@/lib/accountForm'
 import { useCountdown } from '@/lib/useCountdown' // ★ F-03（2026-09-25 批G）：发码失败 60s 冷却，复用 #42 收口的倒计时钩子
-import { loadTurnstile, renderTurnstile, reexecTurnstile } from '@/lib/turnstile'
+import { loadTurnstile, renderTurnstile, reexecTurnstile, pickTurnstileSize, retryTurnstile, turnstileLoadState, type TurnstileLoadState } from '@/lib/turnstile'
 import { useT, getLang, tpl } from '@/i18n'
 import { EyeIcon, EyeOffIcon, Checkbox } from '@/ui/langcross/src'
 import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
@@ -210,14 +210,37 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     reexecTurnstile(tsIdRef.current)
     return tk
   }, [])
+  // ★ D-02（2026-10-27）：装载状态。旧形态 12 秒到点就静默停表——容器永远空着，
+  //   访客只会在提交时撞上一句「请先完成人机验证」，而那一句指着一个不会自己出现的框。
+  const [tsState, setTsState] = useState<TurnstileLoadState>(turnstileLoadState())
   // 表单块渲染出容器后回调挂载组件（装载脚本收敛在 lib/turnstile：与传统表单共用、只注入一次）
   const attachTs = useCallback((el: HTMLDivElement | null) => {
     if (!el || tsIdRef.current !== null || !captchaOn) return
     loadTurnstile(() => {
-      const id = renderTurnstile(el, captcha?.siteKey || '', (tk) => { tsTokenRef.current = tk })
+      // size 按容器选档（normal 固有宽 300px，窄卡里会顶破右缘）；状态回写驱动下面那张脸
+      const id = renderTurnstile(el, captcha?.siteKey || '', (tk) => { tsTokenRef.current = tk }, { size: pickTurnstileSize(el) })
       if (id !== null) tsIdRef.current = id
-    })
+    }, (st) => setTsState(st))
   }, [captchaOn, captcha?.siteKey])
+
+  // 守卫文案按装载状态分派：还在加载 ≠ 加载不出来 ≠ 用户没点，三种原因的出路不同
+  const tsBlockMsg = useCallback(() => (
+    tsState === 'unavailable' ? t('auth.captchaUnavailable')
+      : tsState === 'loading' ? t('auth.captchaLoading')
+        : t('auth.captchaRequired')
+  ), [tsState, t])
+
+  // 装载提示（loading 只报"在路上"；unavailable 必须给「重试」出路）
+  const tsNotice: ReactNode = !captchaOn ? null : tsState === 'unavailable' ? (
+    <p className="ar-ts-note" role="alert" data-testid="captcha-notice">
+      {t('auth.captchaUnavailable')}{' '}
+      <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+        {t('auth.captchaRetry')}
+      </button>
+    </p>
+  ) : tsState === 'loading' ? (
+    <p className="ar-ts-note" role="status" data-testid="captcha-notice">{t('auth.captchaLoading')}</p>
+  ) : null
 
   // 步骤栈：每步记录其起始消息 id，返回时截断并重放（对齐 demo 的 stepRender）
   const stepStack = useRef<{ idx: number; total: number | null; name: string; startId: number; render: (my: number) => void }[]>([])
@@ -540,7 +563,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
       if (!aiForm.agreed) { setBusy(false); fail(t('auth.needAgree')); return }
     }
     // 人机验证前置：没 token 就别出网（出网必 403），提示一句并强制重新挑战领码
-    if (captchaOn && !tsTokenRef.current) { fail(t('auth.captchaRequired')); reexecTurnstile(tsIdRef.current); return }
+    if (captchaOn && !tsTokenRef.current) { fail(tsBlockMsg()); reexecTurnstile(tsIdRef.current); return }
     const sel = selRef.current
     const kind = sel.type ==='personal'?'personal': sel.role ==='admin'?'admin':'staff'
     // F-06 前置校验（对齐传统表单 Login.tsx 的 orgCodeRequired/inviteRequired）：
@@ -782,7 +805,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                   }}
                   busy={busy}
                   onSubmit={() => submitAccount(genRef.current)}
-                  tsOn={captchaOn} tsAttach={attachTs}
+                  tsOn={captchaOn} tsAttach={attachTs} tsNotice={tsNotice}
                   t={t}
                 />
               )}
@@ -834,7 +857,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
 // ---------- 账号信息表单块（真实可控输入，字段按分支裁剪） ----------
 function AccountFormBlock({
-  kind, mode = 'register', form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, t, errMsg,
+  kind, mode = 'register', form, setForm, brought, codeSent, cooldown, onSendCode, busy, onSubmit, tsOn, tsAttach, tsNotice, t, errMsg,
 }: {
   kind:'personal'|'staff'|'admin'
   /** ★ 2026-10-22 统一登录批：complete=登录后完善信息——邮箱/验证码两步隐退
@@ -855,6 +878,8 @@ function AccountFormBlock({
   /** ★ 2026-09-24：人机验证开启时给 Turnstile 预留挂载容器（tsAttach 为回调 ref，widget 由上层持有与消费） */
   tsOn?: boolean
   tsAttach?: (el: HTMLDivElement | null) => void
+  /** ★ D-02（2026-10-27）：装载提示由上层算好传下来（状态机在上层，这里只负责落位） */
+  tsNotice?: ReactNode
   t: (k: string) => string
 }) {
   // 单字段改写：form 由上层持有（提交时还要读），这里只回写不本地复制一份，免得两份状态打架
@@ -914,6 +939,7 @@ function AccountFormBlock({
           ★ 2026-10-22：complete 模式邮箱/验证码隐退后容器前移到密码之后，
           企业分支的升级注册提交仍要吃这枚 token（升级通道只免验码，不免人机验证） */}
       {tsOn && <div className="ar-ts" ref={tsAttach} />}
+      {tsNotice}
       {mode !== 'complete' && (
       <div className="ar-fgroup">
         <span className="ar-flabel">{t('auth.fieldEmailCode')} <i>*</i></span>
@@ -1068,7 +1094,10 @@ const CSS_AR = `
 .ar-pwd-eye:hover{color:var(--lc-text);}
 /* Turnstile 挂载容器：widget 固定 300px 宽，居中摆放；预留 65px 高度，
    避免脚本晚到时表单内容突然下移（AI 面板是逐条追加的，跳动很显眼） */
-.ar-ts{display:flex;justify-content:center;min-height:65px;}
+/* ★ D-02：widget 固有宽 300px，容器必须能收缩（选档失效时也不许把面板顶出横向滚动）；
+   装载提示占一行小字，用现成的次级文字档，不新造色。 */
+.ar-ts{display:flex;justify-content:center;min-height:65px;max-width:100%;overflow-x:auto;}
+.ar-ts-note{margin:0;color:var(--lc-text-3);font-size:14px;line-height:1.5;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;}
 .ar-flabel{font-size:14px;color:var(--lc-text-3);}
 .ar-flabel i{font-style:normal;color:var(--lc-text-4);font-size:13px;}
 /* ★ 2026-10-21 IAM 重做 P1-4：协议勾选链接与登录/传统注册卡的 .auth-link 同档（次级文字色、悬停下划线） */

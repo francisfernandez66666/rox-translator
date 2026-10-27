@@ -42,6 +42,12 @@ vi.mock('@/lib/turnstile', () => ({
     return 'wid'
   },
   reexecTurnstile: () => {},
+  // ★ 2026-10-27 D-02 批：lib 多了三个导出（状态初值／选档／重试出口）。
+  //   夹具必须全装——只装一半会让 Login 渲染期撞 undefined 调用，
+  //   栈顶落在产品代码里、看起来像产品崩（本仓老坑：夹具半装＝假崩溃）。
+  turnstileLoadState: () => 'ready',
+  pickTurnstileSize: () => 'normal',
+  retryTurnstile: () => {},
 }))
 
 // AI 接管流程在登录屏不渲染，剔掉以免连带加载重依赖

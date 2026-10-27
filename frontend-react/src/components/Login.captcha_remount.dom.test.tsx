@@ -36,6 +36,12 @@ vi.mock('@/lib/turnstile', () => ({
     return 'wid'
   },
   reexecTurnstile: () => {},
+  // ★ 2026-10-27 D-02 批新增的三件：状态初值／选档／重试出口。
+  //   本文件测的是「重挂」这一段，所以状态恒 ready（不引入 loading 分支），
+  //   但**必须**把这四个导出补齐——少一个就是 Login 渲染期 undefined 调用（夹具半装＝假崩溃）。
+  turnstileLoadState: () => 'ready',
+  pickTurnstileSize: () => 'normal',
+  retryTurnstile: () => {},
 }))
 
 // AI 面板桩：只保留「点 × 关闭」这一个行为（onClose 由 Login 传入，触发 setRegPhase('form')）

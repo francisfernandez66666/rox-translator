@@ -11,6 +11,14 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { registerConfig, createLead } from '@/api'
 import { useT } from '@/i18n'
+// ★ 2026-10-27 D-02 批：留资表单此前**自己注入了一份 api.js**（旧 `__tsLoading` 守卫），
+//   正是 2026-09-24 那次「两方各注入、另一方的回调永远等不到」的形态复发；
+//   且只有它有选档、另外三处挂件没有。现在装载/选档/渲染/销毁全部走 lib/turnstile 那一份唯一实现。
+import {
+  loadTurnstile, renderTurnstile as mountTurnstileWidget, pickTurnstileSize,
+  removeTurnstile, reexecTurnstile, retryTurnstile, turnstileLoadState,
+  type TurnstileLoadState, type TurnstileSize,
+} from '@/lib/turnstile'
 
 /** 提交状态机：idle=可编辑，busy=请求中，ok=成功（表单整体换成回执），err=失败（保留输入可重试） */
 type Phase = 'idle' | 'busy' | 'ok' | 'err'
@@ -39,12 +47,15 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
   //   而容器 `{captchaOn && <div ref=...>}` 要等这次提交后才进 DOM ⇒ mount() 读到 null ref
   //   直接 return，且此后再没有人重试 ⇒ **人机验证挂件永远不渲染**（表单看起来正常，提交必被拦）。
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
+  // ★ 2026-10-27 D-02：装载状态必须进渲染——「还在加载」与「确定加载不出来」是两张脸，
+  //   旧形态两者都不出（容器空着 ＋ 提交时才报一句没有出路的红字）。
+  const [captchaState, setCaptchaState] = useState<TurnstileLoadState>(turnstileLoadState())
   const captchaBoxRef = useRef<HTMLDivElement>(null)
   const captchaTokenRef = useRef('')
   // ★ 2026-10-26 P2-01：记录当前 widget id / 尺寸档 / sitekey，
   // 供视口跨档时 remove + 重挂（换尺寸后旧 token 失效，必须让用户重新验证）。
   const turnstileIdRef = useRef<string | number | null>(null)
-  const turnstileSizeRef = useRef<'normal' | 'compact'>('normal')
+  const turnstileSizeRef = useRef<TurnstileSize>('normal')
   const turnstileSiteKeyRef = useRef('')
 
   // 只在后台开启人机验证时才拉 Turnstile：未开启时表单零第三方请求
@@ -64,73 +75,47 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     return () => { dead = true }
   }, [])
 
-  // 容器进 DOM 之后再渲染挂件：captchaOn/sitekey 变化都走这里，幂等（已有 widget 不重建）。
+  // mountWidget 按**容器现宽**选档渲染挂件；容器里已有挂件就不重建（重建会清掉用户刚完成的验证）。
+  function mountWidget() {
+    const el = captchaBoxRef.current
+    const key = turnstileSiteKeyRef.current
+    if (!el || !key) return
+    const size = pickTurnstileSize(el)
+    const id = mountTurnstileWidget(el, key, (tk) => { captchaTokenRef.current = tk }, { size })
+    if (id !== null) {
+      turnstileIdRef.current = id
+      turnstileSizeRef.current = size
+    }
+  }
+
+  // 容器进 DOM 之后订阅装载：ready 才真挂；loading/unavailable 只改界面上给访客看的那张脸。
+  // 装载与选档都不在这里各写一遍（唯一实现在 lib/turnstile），本组件只消费。
   useEffect(() => {
     if (!captchaOn || !captchaSiteKey) return
     turnstileSiteKeyRef.current = captchaSiteKey
-    renderTurnstile(captchaSiteKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- renderTurnstile 是稳定闭包，按 captchaOn/sitekey 触发即可
+    const cancel = loadTurnstile(() => mountWidget(), (s) => setCaptchaState(s))
+    return cancel
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mountWidget 只读 ref 与固定入参，按 captchaOn/sitekey 触发即可
   }, [captchaOn, captchaSiteKey])
 
-  // pickTurnstileSize 按容器/视口选 Turnstile 尺寸：
-  // normal 固有宽 300px，容器放不下时切 compact（约 150px），避免 320 视口被顶出页面。
-  // CSS 兜底仍在 Landing.tsx 的 .lc-lead-captcha（max-width+overflow-x），
-  // 所以即使这里选错档，也不会造成页面级横向滚动。
-  function pickTurnstileSize(): 'normal' | 'compact' {
-    const w = captchaBoxRef.current?.clientWidth ?? 0
-    return (w > 0 && w < 300) || window.innerWidth < 400 ? 'compact' : 'normal'
-  }
-
-  // Cloudflare Turnstile 显式渲染（与 Login.tsx 同一套守卫：已有 widget 不重建、script 全局只注入一份）
-  function renderTurnstile(siteKey: string) {
-    turnstileSiteKeyRef.current = siteKey
-    const mount = () => {
-      const el = captchaBoxRef.current
-      const ts = (window as unknown as {
-        turnstile?: {
-          render: (el: HTMLElement, o: unknown) => string | number
-          remove?: (id: string | number) => void
-        }
-      }).turnstile
-      if (!el || !ts || el.childElementCount > 0) return
-      const size = pickTurnstileSize()
-      turnstileIdRef.current = ts.render(el, {
-        sitekey: siteKey,
-        size,
-        callback: (tk: string) => { captchaTokenRef.current = tk },
-        'expired-callback': () => { captchaTokenRef.current = '' },
-      })
-      turnstileSizeRef.current = size
-    }
-    const w = window as unknown as { turnstile?: unknown; __tsLoading?: boolean }
-    if (w.turnstile) { mount(); return }
-    if (w.__tsLoading) return
-    w.__tsLoading = true
-    const s = document.createElement('script')
-    s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'
-    s.async = true
-    s.onload = mount
-    document.head.appendChild(s)
-  }
-
-  // 视口跨档（桌面↔手机）时重挂 widget：尺寸档变了就 remove 旧件、清空 token 后按新档重建。
-  // 只在真正跨档时动作，普通窗口缩放不会反复重建（避免用户验证到一半被清掉）。
+  // 视口跨档（桌面↔手机）时重挂 widget：尺寸档变了才动作，普通缩放不会反复重建
+  // （避免用户验证到一半被清掉）；容器空着时（上一档被卸载/首次迟到）直接补挂。
   useEffect(() => {
     if (!captchaOn) return
     const onResize = () => {
       const el = captchaBoxRef.current
-      if (!el) return
-      const next = pickTurnstileSize()
-      if (next === turnstileSizeRef.current) return
-      const ts = (window as unknown as { turnstile?: { remove?: (id: string | number) => void } }).turnstile
-      if (ts?.remove && turnstileIdRef.current != null) ts.remove(turnstileIdRef.current)
+      if (!el || !window.turnstile) return
+      if (el.childElementCount === 0) { mountWidget(); return }
+      if (pickTurnstileSize(el) === turnstileSizeRef.current) return
+      removeTurnstile(turnstileIdRef.current)
       turnstileIdRef.current = null
       captchaTokenRef.current = ''
       el.innerHTML = ''
-      renderTurnstile(turnstileSiteKeyRef.current)
+      mountWidget()
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 同上：mountWidget 是稳定闭包
   }, [captchaOn])
 
   function validEmail(v: string): boolean {
@@ -146,6 +131,14 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     if (phase === 'busy') return // 双击护栏：请求在途时按钮已禁用，但回车仍可能二次触发
     if (!company.trim()) { setErrText(t('land.leadNeedCompany')); setPhase('err'); return }
     if (!validEmail(email.trim())) { setErrText(t('land.leadNeedEmail')); setPhase('err'); return }
+    // ★ D-02（2026-10-27）：开验证却没拿到 token 时，**红字必须按装载状态分派**——
+    //   「还在加载」与「确定加载不出来」不是一件事：前者再等一会儿就好（不发注定被后端拒的请求），
+    //   后者要给「重试」出路（旧形态只留一句「请先完成人机验证」，指着一个永远不会出现的框）。
+    if (captchaOn && !captchaTokenRef.current) {
+      setErrText(t(captchaState === 'unavailable' ? 'auth.captchaUnavailable' : 'auth.captchaLoading'))
+      setPhase('err')
+      return
+    }
     setPhase('busy')
     try {
       await createLead({
@@ -161,6 +154,8 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
     } catch (err) {
       setErrText(err instanceof Error && err.message ? err.message : t('land.leadFail'))
       setPhase('err')
+      // token 一次一用：提交失败也可能已被服务端消费，清空并强制重新挑战领新码（同 Login.tsx 口径）
+      if (captchaOn) { captchaTokenRef.current = ''; reexecTurnstile(turnstileIdRef.current) }
     }
   }
 
@@ -213,6 +208,21 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
         <input tabIndex={-1} autoComplete="off" value={honeypot} onChange={(e) => setHoneypot(e.target.value)} />
       </div>
       {captchaOn && <div ref={captchaBoxRef} className="lc-lead-captcha" />}
+      {/* ★ D-02（2026-10-27）：装载中的读数要给访客看，放弃时更要给一条出路。
+          旧形态这一整块什么都没有——容器空着、界面正常，直到点提交才撞一句「请先完成人机验证」，
+          而那一句指着一个永远不会自己出现的框。 */}
+      {captchaOn && captchaState === 'loading' && (
+        <p className="lc-lead-hint" role="status" data-testid="captcha-notice">{t('auth.captchaLoading')}</p>
+      )}
+      {captchaOn && captchaState === 'unavailable' && (
+        <p className="lc-lead-hint" role="alert" data-testid="captcha-notice">
+          {t('auth.captchaUnavailable')}
+          {' '}
+          <button type="button" className="lc-lead-chip lc-lead-captcha-retry" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+            {t('auth.captchaRetry')}
+          </button>
+        </p>
+      )}
       {phase === 'err' && <p className="lc-lead-err" role="alert">{errText}</p>}
       <button type="submit" className="lc-lead-btn" disabled={phase === 'busy'}>
         {phase === 'busy' ? t('land.leadSubmitting') : t('land.leadSubmit')}

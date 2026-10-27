@@ -39,7 +39,7 @@ import { PERSONA_FALLBACK, personaName } from '@/lib/personas'
 import { useCountdown } from '@/lib/useCountdown' // ★ #42：验证码冷却收口（自带卸载清理 + 幂等重启）
 // ★ 2026-10-21 IAM 重做 P0-6：邮箱形状与口令长度走这一把共用尺子（只判形状，不判"注册过没有"）
 import { PWD_MIN_LEN, isEmailShape } from '@/lib/accountForm'
-import { loadTurnstile, renderTurnstile as mountTurnstileWidget, reexecTurnstile } from '@/lib/turnstile'
+import { loadTurnstile, renderTurnstile as mountTurnstileWidget, reexecTurnstile, pickTurnstileSize, retryTurnstile, turnstileLoadState, type TurnstileLoadState } from '@/lib/turnstile'
 import AiRegisterFlow from './AiRegisterFlow'
 
 /** Login 入参：mode 区分前台(home)/后台(admin)登录；onLogin 登录成功后回调上层挂载工作台 */
@@ -169,6 +169,11 @@ export default function Login({ mode, onLogin }: Props) {
   // ★ 2026-09-24：siteKey 存 state——AI 注册面板（接管注册的传统表单替代者）要拿同一份配置
   //   挂自己的验证组件，旧写法只活在注册期局部变量里，面板无从获得
   const [captchaSiteKey, setCaptchaSiteKey] = useState('')
+  // ★ D-02（2026-10-27）：装载状态。两个容器共用同一份脚本与同一个状态机，所以只订阅一次；
+  //   界面按它给两张脸——loading 只提示不拦人，unavailable 必须给「重试」出路。
+  //   旧形态这里什么都没有：12 秒窗口一到就静默停表，容器永远空壳，
+  //   访客只会在点「发送验证码」时撞上一句指着不存在的框的红字（现网复现：这一跳 14s 才通）。
+  const [captchaState, setCaptchaState] = useState<TurnstileLoadState>(turnstileLoadState())
   // 已启用的 IdP 列表；空数组=后端未接 SSO，登录卡不渲染第三方登录区块
   const [ssoList, setSsoList] = useState<SSOProvider[]>([])
 
@@ -310,15 +315,50 @@ export default function Login({ mode, onLogin }: Props) {
   }, [view, mode, loginMode, captchaOn, captchaSiteKey])
 
   // ---- Cloudflare Turnstile 人机验证（装载收敛到 lib/turnstile：多消费方只注入一次脚本）----
+  // ★ D-02：装载状态单独订阅一次（两个容器共用那份脚本、也共用这个状态机），
+  //   这样「正在加载／加载不出来」这两张脸与挂件容器无关——容器还没进 DOM 时提示也已经在了。
+  useEffect(() => {
+    if (!captchaOn) return
+    return loadTurnstile(() => { /* 挂载由各容器自己的 effect 负责，这里只要状态 */ }, (s) => setCaptchaState(s))
+  }, [captchaOn])
+
+  // 守卫用的阻断文案按装载状态分派：拿不到 token 的**原因**不同，出路也必须不同
+  // （ready 却空＝用户还没点验证；loading＝再等一会儿；unavailable＝给重试钮）。
+  function captchaBlockMsg(): string {
+    if (captchaState === 'unavailable') return t('auth.captchaUnavailable')
+    if (captchaState === 'loading') return t('auth.captchaLoading')
+    return t('auth.captchaRequired')
+  }
+
+  // ★ D-02（2026-10-27）：装载提示。两个容器共用这一小段（一处改两处生效，别各抄一份）：
+  //   loading 只报"还在路上"（不拦人、不盖界面）；unavailable 必须带出路（重试钮）——
+  //   旧形态这两个状态都**不出脸**，容器空着，访客只会在点提交时撞上一句没有下文的红字。
+  function captchaNotice() {
+    if (!captchaOn) return null
+    if (captchaState === 'unavailable') {
+      return (
+        <p className="auth-note" role="alert" data-testid="captcha-notice">
+          {t('auth.captchaUnavailable')}{' '}
+          <button type="button" className="lc-btn lc-btn--secondary lc-btn--sm" data-testid="captcha-retry" onClick={() => retryTurnstile()}>
+            {t('auth.captchaRetry')}
+          </button>
+        </p>
+      )
+    }
+    if (captchaState === 'loading') return <p className="auth-note" role="status" data-testid="captcha-notice">{t('auth.captchaLoading')}</p>
+    return null
+  }
+
   function mountCaptcha(siteKey: string) {
     loadTurnstile(() => {
       const el = captchaBoxRef.current
       if (!el) return
       // 容器里已有挂件 iframe 就不再二挂（配置回调与 F-07 退回重挂两条路可能先后到达同一容器）
       if (el.querySelector('iframe')) return
-      const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk })
+      // ★ D-02：normal 档固有宽 300px，必须按容器选档（旧形态从不传 size，窄屏卡片里会顶破右缘）
+      const id = mountTurnstileWidget(el, siteKey, (tk) => { captchaTokenRef.current = tk }, { size: pickTurnstileSize(el) })
       if (id !== null) captchaIdRef.current = id
-    })
+    }, (s) => setCaptchaState(s))
   }
 
   // 登录屏的人机验证挂件与注册屏**各挂各的容器**：共用一个容器会在切视图时把 token 串到另一条链路。
@@ -326,9 +366,9 @@ export default function Login({ mode, onLogin }: Props) {
     loadTurnstile(() => {
       const el = loginCaptchaBoxRef.current
       if (!el || el.querySelector('iframe')) return
-      const id = mountTurnstileWidget(el, siteKey, (tk) => { setLoginCaptchaToken(tk) })
+      const id = mountTurnstileWidget(el, siteKey, (tk) => { setLoginCaptchaToken(tk) }, { size: pickTurnstileSize(el) })
       if (id !== null) loginCaptchaIdRef.current = id
-    })
+    }, (s) => setCaptchaState(s))
   }
   // token 一次一用：任一请求（发码/注册提交）把它送出去后即作废，清空并强制重新挑战领新码
   function refreshCaptcha() {
@@ -380,7 +420,7 @@ export default function Login({ mode, onLogin }: Props) {
       if (!isEmailShape(loginEmail)) { setError(t('auth.emailBad')); return }
       if (!loginCode.trim()) { setError(t('auth.codeRequired')); return }
       if (!loginAgreed) { setError(t('auth.needAgree')); return }
-      if (captchaOn && !loginCaptchaToken) { setError(t('auth.captchaRequired')); return }
+      if (captchaOn && !loginCaptchaToken) { setError(captchaBlockMsg()); return }
       setLoading(true)
       try {
         const resp = await loginWithEmail(loginEmail.trim(), loginCode.trim(), { agreed: loginAgreed, captchaToken: loginCaptchaToken })
@@ -405,7 +445,7 @@ export default function Login({ mode, onLogin }: Props) {
   async function doSendLoginCode() {
     if (!loginEmail.trim()) { setError(t('auth.emailRequired')); return }
     if (!isEmailShape(loginEmail)) { setError(t('auth.emailBad')); return }
-    if (captchaOn && !loginCaptchaToken) { setError(t('auth.captchaRequired')); return }
+    if (captchaOn && !loginCaptchaToken) { setError(captchaBlockMsg()); return }
     setLoading(true); setError('')
     try {
       const r = await sendEmailCode(loginEmail.trim(), loginCaptchaToken || undefined, 'login')
@@ -477,7 +517,7 @@ export default function Login({ mode, onLogin }: Props) {
     if (!form.email.trim()) { toast({ title: t('auth.emailRequired'), tone: 'warn' }); return }
     // ★ P0-6：发码前先判形状——把码发到一串根本不是地址的东西上，等于替用户制造一次空等
     if (!isEmailShape(form.email)) { toast({ title: t('auth.emailBad'), tone: 'warn' }); return }
-    if (captchaOn && !captchaTokenRef.current) { toast({ title: t('auth.captchaRequired'), tone: 'warn' }); return }
+    if (captchaOn && !captchaTokenRef.current) { toast({ title: captchaBlockMsg(), tone: 'warn' }); return }
     let r!: Awaited<ReturnType<typeof sendEmailCode>>
     try {
       r = await sendEmailCode(form.email.trim(), captchaTokenRef.current || undefined)
@@ -509,7 +549,7 @@ export default function Login({ mode, onLogin }: Props) {
     //   指的还是一张表单上看不见的字段。判据跟着**渲染面**走：只有 admin 档才要 code/name。
     if (!branding.dedicatedRegister && typeChoice === 'enterprise' && roleChoice === 'admin' && !form.code.trim()) { setRegMsg(t('auth.orgCodeRequired')); return }
     if (!branding.dedicatedRegister && typeChoice === 'enterprise' && roleChoice === 'admin' && !form.name.trim()) { setRegMsg(t('auth.orgNameRequired')); return }
-    if (captchaOn && !captchaTokenRef.current) { setRegMsg(t('auth.captchaRequired')); return }
+    if (captchaOn && !captchaTokenRef.current) { setRegMsg(captchaBlockMsg()); return }
     const regType = (!branding.dedicatedRegister ? typeChoice : 'enterprise')
     // 个人用户：好友邀请码经 ref 走邀请裂变；企业用户：普通成员须凭企业邀请码加入
     // 专属域名（dedicatedRegister）下只允许企业注册，且邀请码无条件必填
@@ -630,6 +670,7 @@ export default function Login({ mode, onLogin }: Props) {
                 </div>
               </Field>
               {captchaOn && <div ref={loginCaptchaBoxRef} id="__ts_login_widget__" />}
+              {captchaNotice()}
               <Checkbox checked={loginAgreed} onChange={(e) => setLoginAgreed(!!e.target.checked)}
                 label={(
                   <>
@@ -862,6 +903,7 @@ export default function Login({ mode, onLogin }: Props) {
 
         {/* Turnstile 挂载点：容器自己不留任何文案，开启人机验证时由 renderTurnstile 往里塞 widget */}
             <div ref={captchaBoxRef} id="__ts_widget__" />
+        {captchaNotice()}
         {/* ★ IAM P1-5：把「人机验证只覆盖注册＋发码」这条刻意取舍写在界面上，免得用户以为
             登录/找回漏了防护；文案走 12 语种词典，不硬编码中文。 */}
         {captchaOn && <p className="auth-note">{t('auth.captchaNote')}</p>}
@@ -980,4 +1022,8 @@ const CSS_AUTH = `
   .lc-auth-bg{padding:16px;}
   .lc-auth-bg .lc-auth-card{width:100%;max-width:100%;padding:20px;}
 }
+/* ★ D-02 批（2026-10-27）：Turnstile normal 档固有宽 300px，卡片收到满宽后容器内宽只有 ~267px，
+   挂件 iframe 会溢出卡片右缘把页面顶出横向滚动（此前只有留资表单那一个容器有兜底）。
+   两个容器各挂各的（登录屏/注册屏），这里一起收：宽度兜底 + 挂件选档（lib 的 pickTurnstileSize）。 */
+#__ts_widget__,#__ts_login_widget__{max-width:100%;overflow-x:auto;}
 `

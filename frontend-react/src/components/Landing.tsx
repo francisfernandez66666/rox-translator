@@ -1928,8 +1928,13 @@ const LANDING_CSS = `
 .lc-lead-hp{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 /* ★ 2026-10-26 P2-01：Turnstile normal 固有宽 300px，320 视口下 40+300=340 会顶出页面。
    max-width+overflow-x 是兜底（JS 不可用/尺寸选择失效时也不许横向溢出）；
-   正常路径由 LeadForm 按容器宽度选 compact/normal，见该文件 renderTurnstile。 */
+   正常路径按容器宽度选 compact/normal，选档的唯一实现在 src/lib/turnstile.ts 的 pickTurnstileSize
+   （★ 2026-10-27 D-02 批：原先写在 LeadForm 自己一份，登录/注册/AI 面板三处拿的是 300px 硬宽）。 */
 .lc-lead-captcha{align-self:flex-start;max-width:100%;overflow-x:auto}
+/* ★ D-02（2026-10-27）：装载中/加载不出来的读数要有地方落字——同一张白卡上的标签墨色，
+   不引第三套告警色；「重试」复用本表单已有的胶囊档（.lc-lead-chip），只加一个左间隔。 */
+.lc-lead-hint{margin:0;font-size:15px;color:rgba(0,0,0,.68)}
+.lc-lead-captcha-retry{margin-inline-start:6px}
 /* 报错只用判错红（与演示卡划线同色系），不引入第二套告警色 */
 .lc-lead-err{margin:0;font-size:15px;color:var(--lc-danger)}
 /* 提交按钮 = 白块上的主投反相（与收尾 Pill 同形）：同屏两颗黑胶囊只有一颗是"最终动作" */
