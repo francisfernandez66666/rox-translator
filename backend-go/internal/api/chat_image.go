@@ -375,7 +375,7 @@ func renderChatImage(r *http.Request, srcPath, lang string, lines []string, tran
 	}
 	outPath := srcPath + ".translated.png"
 	defer os.Remove(outPath)
-	if _, err := fileproc.RenderTranslatedImage(r.Context(), srcPath, outPath, tr); err != nil {
+	if _, err := fileproc.RenderTranslatedImage(r.Context(), srcPath, outPath, engine.RenderSafeTranslations(tr)); err != nil {
 		// 原位回填失败（缺中文字体/坐标没缓存住/绘制超时）只跳过该产物，译文照常在。
 		resp.ImageError = "render_failed"
 		return

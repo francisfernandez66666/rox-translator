@@ -71,6 +71,40 @@ cat > "$H/bin/curl" <<'EOF'
 #   以及最重要的**归因方向**：000 必须写成"这一跳没走完"，不许写成"socket activation 没生效"。
 #   所以桩与执行体各管一半：桩负责"上游什么都不回"，执行体负责"把空白读成 000 并且读对病因"。
 [ -n "${STUB_CURL_EMPTY:-}" ] && exit 0
+# ★★ 2026-10-28 CF purge 腿的桩分支（T8 用）：命中 api.cloudflare.com 时**按端点分两档**回吐，
+#   响应体写进 `-o` 指定的文件（执行体是从文件里 grep zone id 与 "success":true 的，不看 stdout），
+#   stdout 只出 http_code。三档 env：
+#     STUB_CF_ZONE_RESP／STUB_CF_PURGE_RESP＝两档响应体（默认 zone 回一个 32 位 hex id、purge 回 success）；
+#     STUB_CF_CODE＝两档共用的状态码（设 000 即"这一跳没走完"）；
+#     STUB_CF_FAIL_ONCE＝**按端点各失败一次**（第一枪 000、第二枪放行），验执行体的重拨腿真的会救。
+case " $* " in
+  *api.cloudflare.com*)
+    cfout=/dev/null
+    pv=""
+    for a in "$@"; do [ "$pv" = "-o" ] && cfout="$a"; pv="$a"; done
+    ep=zone
+    case " $* " in *purge_cache*) ep=purge ;; esac
+    if [ -n "${STUB_CF_FAIL_ONCE:-}" ]; then
+      marker="${STUB_CF_FAIL_MARKER_DIR:-/tmp}/stub_cf_failed_${ep}"
+      if [ ! -f "$marker" ]; then : > "$marker"; echo 000; exit 0; fi
+    fi
+    # STUB_CF_CODE=000 ＝ **整条不通**：真 curl 在连接被拒／等满 max-time 时不落任何响应体，
+    # 桩必须照做（写了体再回 000 会让执行体从旧体里 grep 到 zone id，把"链路断了"读成"通了"）。
+    if [ "${STUB_CF_CODE:-200}" = "000" ]; then echo 000; exit 0; fi
+    # ⚠️ 默认体**不许**写成 `${VAR:-{"json":...}}`：bash 的参数展开在第一个 `}` 处收尾，
+    # 会把 JSON 的引号与大括号一起吞掉（首跑真踩：桩落盘 `{result:[{id:...}}`，执行体 grep 不到 id，
+    # 于是"链路通了"被读成"取不到 zone id"——红得像是执行体的错）。只有显式赋值这一种形态。
+    zone_resp="${STUB_CF_ZONE_RESP-}"
+    [ -n "$zone_resp" ] || zone_resp='{"result":[{"id":"0123456789abcdef0123456789abcdef"}]}'
+    purge_resp="${STUB_CF_PURGE_RESP-}"
+    [ -n "$purge_resp" ] || purge_resp='{"success":true,"errors":[]}'
+    case "$ep" in
+      purge) printf '%s' "$purge_resp" > "$cfout" ;;
+      *)     printf '%s' "$zone_resp" > "$cfout" ;;
+    esac
+    echo "${STUB_CF_CODE:-200}"
+    exit 0 ;;
+esac
 fmt=""
 prev=""
 for a in "$@"; do
@@ -342,12 +376,91 @@ expect "T7g_不跑采样" "$(grep -c '^WINDOW_PROBE samples=' "$W7G")" "0"
 expect "T7g_关掉不影响发版判定" "$(grep -c 'SWAP_ALL_OK=1' "$W7G")" "1"
 
 echo
+echo "############ T8 CF purge 腿的六枚射程（正测＋三枚反证＋两种不阻塞形态） ############"
+# 为什么这一段必须进夹具：**purge 的位置就是这条腿的全部意义**——落位前失败＝停在完整上一代（慢而不坏），
+# 落位后失败＝「边缘旧 HTML＋源站新代」的白屏窗口。位置写错在真实发版里不报任何错，
+# 只会由下一位访客的白屏发现（本仓最典型的「有症状的地方不在闸门射程内」那一族）。
+# ⇒ T8b 那枚「API 拒绝后树必须一个字节未动」是这一段的主判据，其余都是它的陪跑。
+export STUB_CF_FAIL_MARKER_DIR="$H/cfmarkers"
+
+# T8a 正测：带 token＋桩回 success ⇒ 出受理行、且确实走到了落位
+build_trees
+W8A=$H/t8a.log
+CLOUDFLARE_API_TOKEN=stubtok WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8A" 2>&1
+T8A=$?
+expect_zero "$T8A" "T8a purge 正测"
+expect "T8a_受理行在位" "$(grep -c 'CF purge 已受理' "$W8A")" "1"
+expect "T8a_仍判发版成功" "$(grep -c 'SWAP_ALL_OK=1' "$W8A")" "1"
+expect "T8a_确实落位了" "$([ "$(cat "$H/opt/translator/web/index.html")" != "old-entry" ] && echo yes || echo NO)" "yes"
+
+# T8b 反证（主判据）：API 回 success:false ⇒ 必须 ABORT 且**树一个字节未动**＝purge 真的排在落位之前
+build_trees
+W8B=$H/t8b.log
+STUB_CF_PURGE_RESP='{"success":false,"errors":[{"message":"stub reject"}]}' \
+  CLOUDFLARE_API_TOKEN=stubtok WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8B" 2>&1
+T8B=$?
+expect_nonzero "$T8B" "T8b purge 被拒"
+expect "T8b_web仍为老一代" "$([ "$(cat "$H/opt/translator/web/index.html")" = "old-entry" ] && echo yes || echo NO)" "yes"
+expect "T8b_二进制未被换" "$([ "$(sha256sum < "$H/opt/translator/bin/translator-server" | cut -d' ' -f1)" = "$BIN_SHA" ] && echo NO || echo yes)" "yes"
+expect "T8b_无web.new残留" "$(find "$H/opt" -maxdepth 2 -name 'web.new' | wc -l | tr -d ' ')" "0"
+expect "T8b_不许出现SWAP_ALL_OK" "$(grep -c 'SWAP_ALL_OK=1' "$W8B")" "0"
+
+# T8c 反证：整条链路不通（两枪都 000、且**不落响应体**）⇒ 判死且不落位
+# 这一腿同时是桩那行「000 不写体」的存在理由：写了体执行体会从旧体里 grep 到 zone id，把断链读成通了。
+build_trees
+W8C=$H/t8c.log
+STUB_CF_CODE=000 CLOUDFLARE_API_TOKEN=stubtok WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8C" 2>&1
+T8C=$?
+expect_nonzero "$T8C" "T8c 链路全断"
+expect "T8c_点名取不到zone" "$(grep -c '取不到 zone id' "$W8C")" "1"
+expect "T8c_web仍为老一代" "$([ "$(cat "$H/opt/translator/web/index.html")" = "old-entry" ] && echo yes || echo NO)" "yes"
+
+# T8d 反证（重拨真的会救）：第一枪 000、第二枪通 ⇒ 仍必须全绿
+build_trees
+rm -rf "$STUB_CF_FAIL_MARKER_DIR"; mkdir -p "$STUB_CF_FAIL_MARKER_DIR"
+W8D=$H/t8d.log
+STUB_CF_FAIL_ONCE=1 CLOUDFLARE_API_TOKEN=stubtok WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8D" 2>&1
+T8D=$?
+expect_zero "$T8D" "T8d 第一枪断第二枪通"
+expect "T8d_受理行在位" "$(grep -c 'CF purge 已受理' "$W8D")" "1"
+expect "T8d_仍判发版成功" "$(grep -c 'SWAP_ALL_OK=1' "$W8D")" "1"
+
+# T8e 显式关：CF_PURGE_OFF=1（带 token 也关）⇒ 出一行"被关掉了"，不阻塞发版
+build_trees
+W8E=$H/t8e.log
+CF_PURGE_OFF=1 CLOUDFLARE_API_TOKEN=stubtok WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8E" 2>&1
+T8E=$?
+expect_zero "$T8E" "T8e 显式关"
+expect "T8e_出显式关行" "$(grep -c 'CF_PURGE=off' "$W8E")" "1"
+expect "T8e_不拨API" "$(grep -c 'CF purge 已受理' "$W8E")" "0"
+expect "T8e_关掉不影响发版判定" "$(grep -c 'SWAP_ALL_OK=1' "$W8E")" "1"
+
+# T8f 未配 token：⇒ 出一行"没配"，与"显式关"**不同形**（"什么都没出"与两种"没清缓存"必须分得开），
+# 且不阻塞——换源链不该因可选的第三方动作整体不能走。
+build_trees
+W8F=$H/t8f.log
+env -u CLOUDFLARE_API_TOKEN WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8F" 2>&1
+T8F=$?
+expect_zero "$T8F" "T8f 未配 token"
+expect "T8f_出未配行" "$(grep -c 'CF_PURGE=skipped' "$W8F")" "1"
+expect "T8f_不出显式关行" "$(grep -c 'CF_PURGE=off' "$W8F")" "0"
+expect "T8f_没配不影响发版判定" "$(grep -c 'SWAP_ALL_OK=1' "$W8F")" "1"
+
+echo
 # 末行枚数**现读现算**（不写死"六腿/七腿"）：写死的数字在加腿那晚就过时，而"过时却全绿"比红更坏。
 # 同时留一条**下界**断言：窗口段的腿被误删时，派生读数会掉到 7 以下并当场点名，不会让末行跟着缩水。
 T7_LEGS=$(grep -c '^# T7[a-g] ' "$0" 2>/dev/null || echo 0)
 expect "T7_窗口腿枚数下界(≥7)" "$([ "${T7_LEGS:-0}" -ge 7 ] && echo yes || echo NO)" "yes"
+T8_LEGS=$(grep -c '^# T8[a-f] ' "$0" 2>/dev/null || echo 0)
+expect "T8_purge腿枚数下界(≥6)" "$([ "${T8_LEGS:-0}" -ge 6 ] && echo yes || echo NO)" "yes"
 if [ "$BAD_EXPECT" -eq 0 ]; then
-  echo "SWAPTEST_ALL_OK=1 七段（T1 正测＋T2–T6 五枚反证＋T7 窗口探针 ${T7_LEGS} 腿）全部命中期望；夹具树在 $H"
+  echo "SWAPTEST_ALL_OK=1 八段（T1 正测＋T2–T6 五枚反证＋T7 窗口探针 ${T7_LEGS} 腿＋T8 purge ${T8_LEGS} 腿）全部命中期望；夹具树在 $H"
   exit 0
 fi
 echo "SWAPTEST_ABORT=期望不符 $BAD_EXPECT 条（上面 EXPECT_BAD 行逐条点名；先判是夹具漂了还是守卫真废了）"

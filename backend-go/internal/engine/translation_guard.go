@@ -38,6 +38,29 @@ func IsFailurePlaceholder(out string) bool {
 	return o == "" || o == translationFailureMark
 }
 
+// RenderSafeTranslations 把「占位符值」从图片原位回填的映射里摘掉，让 fileproc 的空串分支把**原文**画上图。
+//
+// ★ 2026-10-28 图片版式回退批立：交付图上绝不允许出现占位符字面量。三态一律摘除——
+//
+//	空串／`[翻译失败]`（上游失败槽）／`[已拦截·REDACTED]`（敏感词拦截段）。
+//	图上画原文＝"这一行保持原样"，客户看得见、也认得出；画占位符＝把内部记号交给客户
+//	（AGENTS §19 族一：兜底形态一律「回落原文＋点名」，点名发生在 .md 与工单读数，不在图上）。
+//	为什么收在 engine 而不是 fileproc 自判：两份名单（translationFailureMark／SensitivePlaceholderText）
+//	都住在 engine，而 import 方向是 fileproc ← engine——在 fileproc 里再抄一遍字面量
+//	就是 §一·14 那一族「清单长出第二份」，迟早打架。
+//	摘除后该键**缺席**（不是写空串）：fileproc 侧 `tr[b.Text]` 取零值即走「保留原文」那一支，行为与空串同形。
+func RenderSafeTranslations(tr map[string]string) map[string]string {
+	out := make(map[string]string, len(tr))
+	for src, v := range tr {
+		s := strings.TrimSpace(v)
+		if s == "" || IsFailurePlaceholder(s) || s == SensitivePlaceholderText {
+			continue
+		}
+		out[src] = v
+	}
+	return out
+}
+
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。
 // 参数 src: 送翻的源文段；out: 候选译文（KB 命中值或模型返回，未经判定前的原始候选）。
 // 判不可用的九类，任一命中即 false：

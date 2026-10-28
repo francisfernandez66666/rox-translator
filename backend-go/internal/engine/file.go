@@ -638,6 +638,15 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		return &FileTranslateResult{Skill: "translation", Error: err.Error()}
 	}
 	ext := strings.ToLower(filepath.Ext(filePath))
+	// ★ 2026-10-28 图片版式回退批：**图片件的单批段数上限收紧到 15**（其余格式仍是 40）。
+	// 为什么只对图片：图片的交付面是「按 OCR 框原位回填的那张图」，段↔框一一对应，
+	// 批量里漏一行／串行一行就会把译文画到**错误的框**上（客户看到的不是"少一句"而是"字跑到别处"），
+	// 而文档件错一行只是正文少一句。图片件段数本就少（几十段量级），收紧上限多出的固定指令开销
+	// 远小于文档件——自适应 40 那一档是为长文档/表格省指令开销设计的（计价批口径），不该覆盖到图片。
+	imgSegCap := 40
+	if fileproc.IsImageFormat(ext) {
+		imgSegCap = 15
+	}
 	// ★ P4：图片件的 OCR 坐标缓存在提取期入列并**钉住**（在途），这里用 defer 保证
 	//   **任何返回路径都解除钉住**——包括第 3 步写回中途 return 的错误路径。
 	//   为什么必须 defer 而不是循环后调：语言循环里有多个 return（字幕/文档生成失败即整单失败），
@@ -1020,7 +1029,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					// ★ 品牌保护（2026-09-10）：把该语言源文中的品牌名替换为规定译法，
 					//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
 					protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
-					batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, 40, 6000),
+					batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, imgSegCap, 6000),
 						// ★B3：段回调升级为「进度+逐段 segment_done」；gidx=needModelIdx 将批下标映射回
 						// texts 全局段号（事件带原始源文而非品牌保护后的 protSrc，保证前端行对得上号）
 						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx),
@@ -1070,7 +1079,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				sendTexts[i] = texts[idx]
 			}
 			protSrc, _ := protectSourceByLang(sendTexts, brandTermsAll[lc])
-			batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, 40, 6000),
+			batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, imgSegCap, 6000),
 				// ★B3：同 KB 路径——进度 + 逐段 segment_done（sendIdx 映射回全局段号/原始源文）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx),
 				// ★ P5：表头语境（同上）
@@ -1184,7 +1193,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
 			// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
 			protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
-			batch := e.BatchTranslateOpts(ctx, protStill, lc, adaptiveBatchSize(protStill, 40, 6000),
+			batch := e.BatchTranslateOpts(ctx, protStill, lc, adaptiveBatchSize(protStill, imgSegCap, 6000),
 				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
 				// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
@@ -1609,7 +1618,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				inPlacePath := filepath.Join(outputDir, artifactBase(lc, inPlaceSuffix)+inPlaceSuffix)
 				// ★ G2/G18（2026-10-19）：原位回填失败不再只写一行日志——档位名进 GateWarnings，
 				//   该语言同时进 degraded（交付形态实为「仅译文 .md」，与话术口径一致）。
-				if stats, rerr := fileproc.RenderTranslatedImage(ctx, filePath, inPlacePath, tr); rerr != nil {
+				if stats, rerr := fileproc.RenderTranslatedImage(ctx, filePath, inPlacePath, RenderSafeTranslations(tr)); rerr != nil {
 					reason := fileproc.ImageRenderReason(rerr)
 					observability.Warn(ctx, "图片原位回填跳过（退回仅译文 .md）", "error", rerr.Error(), "reason", reason, "artifact", filepath.Base(inPlacePath))
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填未生成（%s）：%s；译文 .md 已完整交付", config.LangNames[lc], reason, rerr.Error()))

@@ -2623,7 +2623,9 @@ func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, t
 			fbSem <- struct{}{}
 			defer func() { <-fbSem }()
 			s2, err := e.singleLang(ctx, texts[i], targetLang, nil, "zh", config.StageAIInitial, 0)
-			out := "[翻译失败]"
+			// ★ 2026-10-28 图片版式回退批：失败槽占位符收进唯一常量（原先这里抄了一份字面量，
+			// 与 translation_guard.go 的定义构成第二把尺子——名单只许有一份，AGENTS §一·14）。
+			out := translationFailureMark
 			if err == nil && strings.TrimSpace(s2) != "" {
 				out = s2
 				// ★ 2026-10-28：逐段兜底拿到的译文同样值得记忆（它已经花了一次上游调用）。

@@ -212,7 +212,7 @@ for BASE in "${BASES[@]}"; do
     UNMEASURED=$((UNMEASURED + 1))
     continue
   fi
-  echo "  读数：bytes=$FETCH_SIZE（尝试 ${FETCH_ATTEMPTS} 次，收完整了）"
+  echo "  读数：bytes=${FETCH_SIZE}（尝试 ${FETCH_ATTEMPTS} 次，收完整了）"
 
   # D4 反向对照：先证明"命中/未命中"这套读法在本页是有分辨力的
   CONTRA=$(grep -c "该标记本仓任何版本都不存在_1004探针对照" "$TMPBODY" || true)

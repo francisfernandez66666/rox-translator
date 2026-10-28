@@ -20,6 +20,12 @@
 #      旧形态是「本站拒了但别的站照换、二进制照换、单元照重启」，会留下 **web 旧代＋后端新代**的混合半态；
 #   ④ 二进制走 `cp 到临时名 + mv rename`（`cp` 直接覆盖运行中文件退 ETXTBSY 会**静默不生效**）；
 #   ⑤ 任一条 BAD ⇒ 退出码抬高，`SWAP_ALL_OK` 不出现在屏上（AGENTS §三「验证链自己不算账」：exit 必须一路 exit 到最外层）。
+#   ⑥ ★ 2026-10-28 慢链缓解批新增 **CF 边缘 purge 腿**：SPA 六个入口页现在带 Edge TTL 2h 的边缘缓存
+#      （国内访客被 Cloudflare 调度到 LAX、源站在首尔，每次 DYNAMIC 回源都要跨太平洋——缓存是免费版能做的缓解）。
+#      缓解带来一个新窗口：换源后边缘残留的**旧 HTML** 会引用已被换掉的旧入口 JS ⇒ 访客白屏到 TTL 过期。
+#      purge 位置**钉死在「备料全绿之后、落位之前」**：purge 失败 ⇒ 整段 ABORT，此刻边缘已清、源站仍是完整上一代
+#      （访客拿到回源旧代，慢而不坏）；反过来「先落位后 purge」会留下「边缘旧 HTML＋源站新代」的白屏窗口，
+#      那正是这一腿要消灭的形态。三态 ok／skipped／off 见 `cf_purge` 函数头。
 #
 # ⚠️ 三条不改的东西：不 reload/restart caddy（它和 `caddy stop` 共用 127.0.0.1:2019 管理面，会停全站）；
 #    不删归档以外的任何目录（只把 web.old.* 按**文件名时间戳**裁到 4 份——`ls -t` 会被 cp -a 继承的 mtime 骗）；
@@ -111,6 +117,56 @@ commit_site() {
   ok "$name 换源完成，web 归档现有 $(ls -d "$root".old.* 2>/dev/null | wc -l) 份（保留上限 ${KEEP_ARCHIVES}）"
 }
 
+# ---- 1a5. CF 边缘缓存 purge（★ 2026-10-28 慢链缓解批；位置理由见文件头第 ⑥ 条）----
+# 三态：ok（真清成功）／skipped（未配 token，出一行可见 NOTICE 后照常发版）／off（CF_PURGE_OFF=1 显式关）。
+# ⚠️ token 只经 env `CLOUDFLARE_API_TOKEN` 传入，**绝不写进脚本/文档/git**；zone id 现查不写死。
+CF_ZONE_NAME=${CF_ZONE_NAME:-lexicorn.cn}
+
+# cf_api <URL> <METHOD> <payload 可空> <响应落盘文件> [额外 curl 参数]：统一构造并回吐 http_code；
+# curl 自身失败（连接被拒／等满 max-time）回 000，由调用方按「这一跳没走完」重拨一次。
+cf_api() {
+  local url="$1" method="$2" payload="$3" out="$4" extra="${5:-}"
+  local args=(-sS -o "$out" -w '%{http_code}' --max-time 60 -X "$method"
+              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
+  [ -n "$payload" ] && args+=(-H "Content-Type: application/json" -d "$payload")
+  [ -n "$extra" ] && args+=("$extra")
+  curl "${args[@]}" "$url" 2>/dev/null || echo 000
+}
+
+cf_purge() {
+  if [ "${CF_PURGE_OFF:-0}" = "1" ]; then
+    echo "CF_PURGE=off（CF_PURGE_OFF=1 显式下令 ⇒ 边缘可能残留旧 HTML ≤2h，白屏窗口自负）"
+    return 0
+  fi
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "CF_PURGE=skipped（未配 CLOUDFLARE_API_TOKEN ⇒ 边缘可能残留旧 HTML ≤2h；要消窗口就带 token 重跑）"
+    return 0
+  fi
+  local tmp code zone
+  tmp=$(mktemp)
+  # ① zone id 现查：写死 zone id＝换 zone 后静默打错地方（屏幕上什么都看不出）。
+  code=$(cf_api "https://api.cloudflare.com/client/v4/zones?name=${CF_ZONE_NAME}" GET "" "$tmp")
+  [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones?name=${CF_ZONE_NAME}" GET "" "$tmp" --http1.1)
+  zone=$(grep -oE '"id":"[a-f0-9]{32}"' "$tmp" 2>/dev/null | head -1 | cut -d'"' -f4)
+  if [ -z "$zone" ]; then
+    rm -f "$tmp"
+    bad "CF purge 取不到 zone id（HTTP=${code}，zone=${CF_ZONE_NAME}）⇒ 边缘缓存没清，落位不会开始"
+    return 1
+  fi
+  # ② purge_everything：全 zone 一次清完（主站／演示站／租户品牌域共用这一个 zone）。
+  code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp")
+  [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp" --http1.1)
+  if grep -q '"success":true' "$tmp" 2>/dev/null; then
+    ok "CF purge 已受理（zone=${zone}，HTTP=${code}）⇒ 边缘 HTML 缓存已清"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  # 重拨只对「这一跳没走完」；4xx/5xx 与 success:false 一律不重拨——摇绿灯就是把白屏窗口藏起来。
+  bad "CF purge 未成功（HTTP=${code}）⇒ 边缘缓存没清，落位不会开始（此刻源站仍是完整上一代）"
+  return 1
+}
+
 for d in $DEPLOY_DIRS; do stage_site "$d/web" "$(basename "$d")"; done
 # ★ 两段式（2026-10-13 自证时补的修法）：备料段任一 BAD ⇒ 把 .new 收干净、**整段停在这里**，
 #   不去碰二进制也不重启单元。旧形态是「本站拒了但后面的站照换、二进制照换、闹钟照响」＝
@@ -118,6 +174,14 @@ for d in $DEPLOY_DIRS; do stage_site "$d/web" "$(basename "$d")"; done
 if [ "$FAIL" -gt 0 ]; then
   for d in $DEPLOY_DIRS; do rm -rf "$d/web.new"; done
   echo "SWAP_ABORT=备料段有 $FAIL 条 BAD，web／二进制／单元一律未动（现网仍是上一代）"
+  exit "$FAIL"
+fi
+# ★ purge 在**落位之前**（文件头第 ⑥ 条）：失败即停手＝源站仍是完整上一代、边缘已清，
+#   访客回源拿旧代（慢而不坏）；先落位后 purge 才会留下「边缘旧 HTML＋源站新代」的白屏窗口。
+cf_purge
+if [ "$FAIL" -gt 0 ]; then
+  for d in $DEPLOY_DIRS; do rm -rf "$d/web.new"; done
+  echo "SWAP_ABORT=CF purge 未成功，web／二进制／单元一律未动（现网仍是上一代；边缘缓存已清或未被清都不影响正确性）"
   exit "$FAIL"
 fi
 for d in $DEPLOY_DIRS; do commit_site "$d/web" "$(basename "$d")"; done

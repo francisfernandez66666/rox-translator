@@ -128,7 +128,7 @@ func (se *segEmitter) batchCB(lc string, prog func(done, total int), gidx []int)
 		}
 		for j := range sources {
 			tr := results[j]
-			if tr == "" || tr == "[翻译失败]" {
+			if IsFailurePlaceholder(tr) { // ★ 2026-10-28 收进唯一判据（原先抄了一份占位符字面量）
 				continue // 失败段不发初翻，留给硬闸补漏/收尾 sweep
 			}
 			src := sources[j]

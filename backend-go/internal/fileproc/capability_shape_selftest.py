@@ -440,7 +440,15 @@ def leg_l48_result_confs_align_with_boxes():
 
 @leg("L49")
 def leg_l49_pipeline_calls_new_stages():
-    """接线腿：cmd_image 的裁剪腿必须走 _crop_all；检测腿必须调用 _merge_fragments。"""
+    """接线腿（★ 2026-10-28 图片版式回退批**按新口径翻转**）：裁剪腿必须走 `_crop_all`；
+    检测腿必须**不并框**——同一行两个分离色块必须出**两个**框。
+
+    旧期望是「检测腿必须调用 `_merge_fragments`」（今天凌晨质量链批写的）。本批把它**翻转而不是删掉**：
+    并框正是用户报「字体大大小小、版式完全不还原」的回归源——版式还原完全以「框」为输入
+    （每框独立按原墨迹高定字号），多元素并进单框 ⇒ 字号被压扁。
+    留着旧期望会让下一个人按旧口径把合并写回来，所以翻转理由写在这里（AGENTS §一·5 那条纪律）。
+    合并件本身也已从脚本里摘除（`hasattr` 那条），形状锁＝`ocr_recognize_shape_gate_test.go`。
+    """
     from PIL import Image
     import numpy as np
 
@@ -460,21 +468,15 @@ def leg_l49_pipeline_calls_new_stages():
         OCR._crop_with_pad = orig_crop
     assert len(crops) == 2 and calls == [0, 1], "裁剪腿没走 _crop_with_pad（函数写对但没被调用＝白修）"
 
-    merged = []
-    orig_merge = OCR._merge_fragments
+    assert not hasattr(OCR, "_merge_fragments"), "碎片合并函数还挂在模块上（并框形态没摘干净）"
+    assert not hasattr(OCR, "_unclip_merge"), "同行膨胀合并函数还挂在模块上（并框形态没摘干净）"
 
-    def spy_merge(bs):
-        merged.append(len(bs))
-        return orig_merge(bs)
-
-    OCR._merge_fragments = spy_merge
-    try:
-        score = np.zeros((64, 64), dtype=np.float32)
-        score[10:20, 10:40] = 1.0
-        OCR._det_boxes(score, (64, 64))
-    finally:
-        OCR._merge_fragments = orig_merge
-    assert merged, "检测腿没有调用 _merge_fragments（碎片合并只是写在文件里＝没接上）"
+    # 同一行、左右分离的两个色块：并框会把它们收成一块（字号压扁的起点），逐元素必须出两框。
+    score = np.zeros((64, 64), dtype=np.float32)
+    score[10:20, 10:25] = 1.0
+    score[10:20, 30:40] = 1.0
+    got = OCR._det_boxes(score, (64, 64))
+    assert len(got) == 2, "同一行两个分离色块被并成一框（实得 %d 框）⇒ 框粒度回归源又长回来了" % len(got)
 
 
 @leg("L10")
