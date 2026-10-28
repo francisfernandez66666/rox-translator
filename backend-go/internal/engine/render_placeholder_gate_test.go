@@ -113,3 +113,31 @@ func TestPlaceholderLiteralsHaveSingleDefinition(t *testing.T) {
 		}
 	}
 }
+
+// TestRenderSafeTranslationsSkipsSingleSymbolSources 单字符、非汉字的源文一律不回填（图上保留原样）。
+// 现网实证（2026-10-29）：开/关按钮被识别成 `0`，回填把绿色开关整个盖成一个 "0"。
+// 这类行本来就没有可译内容（AGENTS §19 族二），画上去只会抹掉底下的图形；
+// 而**单字中文**是可译正文，必须照常回填——这条腿把两边都钉住。
+func TestRenderSafeTranslationsSkipsSingleSymbolSources(t *testing.T) {
+	tr := map[string]string{
+		"0":      "0",
+		"√":      "√",
+		"の":      "の",
+		"。":      "。",
+		"D":      "D",
+		"是":      "Yes",
+		"manual": "Manual",
+	}
+	out := RenderSafeTranslations(tr)
+	for _, k := range []string{"0", "√", "の", "。", "D"} {
+		if _, ok := out[k]; ok {
+			t.Fatalf("单字符非汉字源文不应回填（会盖掉底下的控件/符号）：%q", k)
+		}
+	}
+	if out["是"] != "Yes" {
+		t.Fatalf("单字中文是可译正文，必须照常回填（got=%q）", out["是"])
+	}
+	if out["manual"] != "Manual" {
+		t.Fatalf("多字符正常译文被误伤：%q", out["manual"])
+	}
+}

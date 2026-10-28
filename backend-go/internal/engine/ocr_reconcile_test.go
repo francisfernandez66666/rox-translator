@@ -28,16 +28,59 @@ func TestOcrFixEnabledSwitch(t *testing.T) {
 	}
 }
 
-// TestReconcileSkipsCleanLines clean 行一条都不送（③ 的射程边界）。
-func TestReconcileSkipsCleanLines(t *testing.T) {
-	e := &Engine{}
+// TestReconcileIncludesCleanLines clean 行也进 ③（★ 2026-10-29 按新口径**翻转**）。
+//
+// 旧期望是「clean 行一条都不送」——那正是 `manua` 这类**高置信**错字永远修不掉的根因：
+// 模型认得很自信，只是少了个字符，而旧射程只收隔离行。现口径＝所有含字母/汉字的行都送，
+// 采纳仍由 `ocrFixDocSupported`（改一字 + 新词在本文件别处出现过）把着，不会把正文改坏。
+// 保留测试名会让下一个人按旧口径改回去，故连名带注释一起翻。
+func TestReconcileIncludesCleanLines(t *testing.T) {
+	e := &Engine{} // 无 LLM：走 no_model 分支，但候选数必须如实反映"该送的都送了"
 	doc := ocrTestDoc(
 		fileproc.OcrLine{Index: 0, Text: "manual", Final: "manual", Verdict: fileproc.OcrVerdictClean, Conf: 0.99},
 		fileproc.OcrLine{Index: 1, Text: "entry", Final: "entry", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+		// 纯数字/符号行不送（没有可修内容，送进去只会诱模型改写）。
+		fileproc.OcrLine{Index: 2, Text: "0", Final: "0", Verdict: fileproc.OcrVerdictClean, Conf: 0.99},
 	)
 	st := e.ReconcileOcrDoc(context.Background(), doc)
-	if st.Candidates != 0 || st.Calls != 0 || st.Fixed != 0 {
-		t.Fatalf("clean 行不该进 ③：%+v", st)
+	if st.Candidates != 2 {
+		t.Fatalf("含字母的行都要送审（数字/符号行除外），期望 2 实得 %d：%+v", st.Candidates, st)
+	}
+	if st.Skipped != 1 {
+		t.Fatalf("纯数字行应计入 skipped，实得 %d", st.Skipped)
+	}
+}
+
+// TestOcrFixDocSupported 高置信行的文档内佐证闸：只认「改一字 + 新词在本文件别处出现过」。
+func TestOcrFixDocSupported(t *testing.T) {
+	doc := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Verdict: fileproc.OcrVerdictClean, Conf: 0.97},
+		fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+		fileproc.OcrLine{Index: 2, Text: "cat", Final: "cat", Verdict: fileproc.OcrVerdictClean, Conf: 0.97},
+	)
+	// 现网形态：manua → manual（本文件另有一处 manual 佐证）。
+	if !ocrFixDocSupported(doc, "manual", doc.Lines[0]) {
+		t.Fatal("manua→manual 有本文件佐证，应当采纳")
+	}
+	// 无佐证的单字符替换（cat→car）必须拒绝——否则"改一字"就成了改写正文的口子。
+	if ocrFixDocSupported(doc, "car", doc.Lines[2]) {
+		t.Fatal("cat→car 没有任何本文件佐证，必须拒绝")
+	}
+	// 改两个词（超出"恰好一个词变了"）必须拒绝。
+	doc2 := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "global time", Final: "global time", Verdict: fileproc.OcrVerdictClean, Conf: 0.97},
+		fileproc.OcrLine{Index: 1, Text: "global time", Final: "global time", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+	)
+	if ocrFixDocSupported(doc2, "globel tome", doc2.Lines[0]) {
+		t.Fatal("一次改两个词必须拒绝")
+	}
+	// 数字序列变了必须拒绝（0↔O、1↔l 这类）。
+	doc3 := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "v1.0", Final: "v1.0", Verdict: fileproc.OcrVerdictClean, Conf: 0.97},
+		fileproc.OcrLine{Index: 1, Text: "v1.5", Final: "v1.5", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+	)
+	if ocrFixDocSupported(doc3, "v1.5", doc3.Lines[0]) {
+		t.Fatal("数字序列变化必须拒绝")
 	}
 }
 
@@ -223,14 +266,14 @@ func TestOcrFixAllowanceDerivesFromRealPrompt(t *testing.T) {
 	}
 }
 
-// TestOcrFixTimeoutEnv 单次预算的 env 档位：默认 8s，钳 2~30s，非法值回落默认。
+// TestOcrFixTimeoutEnv 单次预算的 env 档位：默认 15s，钳 2~60s，非法值回落默认。
 func TestOcrFixTimeoutEnv(t *testing.T) {
 	cases := map[string]time.Duration{
-		"":    8 * time.Second,
+		"":    15 * time.Second,
 		"3":   3 * time.Second,
 		"1":   2 * time.Second,
-		"99":  30 * time.Second,
-		"abc": 8 * time.Second,
+		"99":  60 * time.Second,
+		"abc": 15 * time.Second,
 	}
 	for v, want := range cases {
 		t.Setenv("OCR_FIX_TIMEOUT_SEC", v)

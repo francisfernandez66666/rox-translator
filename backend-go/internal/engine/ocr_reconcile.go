@@ -37,27 +37,31 @@ import (
 const (
 	ocrFixMaxLinesPerCall = 60
 	ocrFixMaxCalls        = 2
-	// ocrFixCallTimeoutDefault 单次调用默认超时；`OCR_FIX_TIMEOUT_SEC` 可覆盖（钳 2~30s）。
-	ocrFixCallTimeoutDefault = 8 * time.Second
+	// ocrFixCallTimeoutDefault 单次调用默认超时；`OCR_FIX_TIMEOUT_SEC` 可覆盖（钳 2~60s）。
+	// ★ 2026-10-29 由 8s 抬到 15s：现网一单 17 个候选**全部** timeout（模型一次要判 17 行，
+	//   跨境 + 推理模型的首包延迟就吃掉 8s），等于这条腿对客户完全没生效。
+	//   抬到 15s 保住"一次工单不超过半分钟"的总等待（总预算=两次单调用=30s），
+	//   同时把上限放到 60s 供运维按链路状况显式放宽。
+	ocrFixCallTimeoutDefault = 15 * time.Second
 	// ocrFixTotalBudgetDefault 整份文档的 ③ 总预算（默认＝两次单调用）。
-	ocrFixTotalBudgetDefault = 16 * time.Second
+	ocrFixTotalBudgetDefault = 30 * time.Second
 	ocrFixMaxPayloadBytes    = 64 << 10
 	// ocrFixMaxTokens 单次回执的 max_tokens：60 行 × 每行约 12 token（含 JSON 骨架）留一倍余量。
 	ocrFixMaxTokens = 1600
 )
 
-// ocrFixCallTimeout 单次 ③ 调用的墙钟预算：env `OCR_FIX_TIMEOUT_SEC`（默认 8s，钳 2~30s）。
+// ocrFixCallTimeout 单次 ③ 调用的墙钟预算：env `OCR_FIX_TIMEOUT_SEC`（默认 15s，钳 2~60s）。
 //
 // 为什么钳位：小于 2s 在跨境链路上几乎必然超时（等于把这条腿关掉却仍记调用），
-// 大于 30s 会把一次图片工单的整体等待拖成分钟级——两者都属于"配置写错"，按安全档折回。
+// 大于 60s 会把一次图片工单的整体等待拖成分钟级——两者都属于"配置写错"，按安全档折回。
 func ocrFixCallTimeout() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("OCR_FIX_TIMEOUT_SEC")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			if n < 2 {
 				n = 2
 			}
-			if n > 30 {
-				n = 30
+			if n > 60 {
+				n = 60
 			}
 			return time.Duration(n) * time.Second
 		}
@@ -124,20 +128,37 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		if strings.TrimSpace(ln.Final) == "" {
 			continue // dup 已在清洗层闭环（Final 为空 = 不交付）
 		}
-		if ln.Verdict == fileproc.OcrVerdictUncertain || ln.Verdict == fileproc.OcrVerdictQuarantine {
-			pending = append(pending, i)
+		// ★ 2026-10-29 用户令「该翻就全部翻」：③ 的射程从「隔离行」扩到**全部有可译内容的行**。
+		// 旧口径只送 low_conf/column_mode/glyph_set/geom_anomaly 判过的行，高置信错字（现网 `manua`、
+		// 把 `l` 吃掉的整类）永远进不来——那条腿看着是绿的，实际对客户最常见的错字完全无感。
+		// 不含字母的行（纯数字/符号/单非汉字）不送：它们没有"错字"可修，
+		// 把开关误读出的 `0` 送进去只会被模型改写成别的字（现网真踩，见 RenderSafeTranslations 那条）。
+		if !ocrFixableLine(ln.Text) {
+			st.Skipped++
+			continue
 		}
+		pending = append(pending, i)
 	}
 	st.Candidates = len(pending)
 	if len(pending) == 0 {
 		return st
 	}
-	// 排队优先：quarantine 先于 uncertain（它们更可能是噪声/错字），组内按阅读顺序。
+	// 排队优先：quarantine 先于 uncertain 先于 clean（越可疑越先送，预算不够时先保要紧的），
+	// 组内按阅读顺序。三档都用 rank 表达，别再用"是不是 quarantine"的布尔（加第三档时布尔就分不出来了）。
+	rank := func(i int) int {
+		switch doc.Lines[i].Verdict {
+		case fileproc.OcrVerdictQuarantine:
+			return 0
+		case fileproc.OcrVerdictUncertain:
+			return 1
+		default:
+			return 2
+		}
+	}
 	sort.SliceStable(pending, func(a, b int) bool {
-		qa := doc.Lines[pending[a]].Verdict == fileproc.OcrVerdictQuarantine
-		qb := doc.Lines[pending[b]].Verdict == fileproc.OcrVerdictQuarantine
-		if qa != qb {
-			return qa
+		ra, rb := rank(pending[a]), rank(pending[b])
+		if ra != rb {
+			return ra < rb
 		}
 		return doc.Lines[pending[a]].Index < doc.Lines[pending[b]].Index
 	})
@@ -273,7 +294,7 @@ func (e *Engine) applyOcrFix(doc *fileproc.OcrDoc, idx int, r ocrFixResult, st *
 			st.Kept++
 			return true
 		}
-		if ocrFixFromAlts(val, ln.Alts) || ocrFixNewCandidate(val, *ln) {
+		if ocrFixFromAlts(val, ln.Alts) || ocrFixNewCandidate(val, *ln) || ocrFixDocSupported(doc, val, *ln) {
 			ln.Final = val
 			st.Fixed++
 			return true
@@ -295,6 +316,85 @@ func ocrFixFromAlts(val string, alts []string) bool {
 	for _, a := range alts {
 		if strings.TrimSpace(a) == val {
 			return true
+		}
+	}
+	return false
+}
+
+// ocrFixableLine 这一行值不值得送 ③：至少含一个字母或汉字。
+//
+// 纯数字/符号/单非汉字没有"错字"可修；送进模型只会诱它改写（现网把开关误读出的 `0` 送进去，
+// 模型完全可能"修正"成别的字形）。清洗层已把这类行按 §19 族二原样交付。
+func ocrFixableLine(text string) bool {
+	for _, r := range text {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// ocrFixDocSupported 高置信行的「文档内佐证」开口（★ 2026-10-29 用户令「高置信错字也要修」）。
+//
+// 为什么必须再开一条：`ocrFixNewCandidate` 的开口带 `Conf < 0.6`，而现网最常见的错字
+// （`manua`、`double_bum`）恰恰是**高置信**的——模型认得很自信，只是少了个字符。
+// 不开这条，扩了射程也修不动（模型给了 fix 也会被闸丢掉）。
+//
+// 判据（全部成立才采纳，缺一不可）：
+//
+//	· 只改一个字符（插入/删除/替换各一以内），字符集与数字序列不变；
+//	· 词数不变，且**恰好一个词变了**；
+//	· 新词（≥3 字符）在本文档**别的行里出现过**（大小写不敏感）。
+//
+// 最后一条是结构上的证据：模型不能凭空造一个本文件里不存在的词，只能把某个词改成本文件里
+// 真实出现过的写法（`manua` + 同文件里另两处 `manual` ⇒ 采纳；`cat`→`car` 这种没有任何佐证的
+// 单字符替换一律拒绝）。这样扩射程不会把"改一个字"变成"改写正文"。
+func ocrFixDocSupported(doc *fileproc.OcrDoc, val string, ln fileproc.OcrLine) bool {
+	if doc == nil {
+		return false
+	}
+	if ln.ConfMissing || ln.Conf < 0.6 {
+		return false // 低置信走既有 NewCandidate 口径，不重复开口
+	}
+	if absIntLocal(len([]rune(val))-len([]rune(ln.Text))) > 1 {
+		return false
+	}
+	if !ocrWithinOneEdit(val, ln.Text) {
+		return false
+	}
+	if !sameScriptSet(val, ln.Text) {
+		return false
+	}
+	if digitsOf(val) != digitsOf(ln.Text) {
+		return false
+	}
+	oldW, newW := strings.Fields(ln.Text), strings.Fields(val)
+	if len(oldW) == 0 || len(oldW) != len(newW) {
+		return false
+	}
+	changed, diff := "", 0
+	for i := range oldW {
+		if oldW[i] == newW[i] {
+			continue
+		}
+		diff++
+		changed = newW[i]
+		if diff > 1 {
+			return false
+		}
+	}
+	if diff != 1 || len([]rune(changed)) < 3 {
+		return false
+	}
+	target := strings.ToLower(changed)
+	for i := range doc.Lines {
+		if doc.Lines[i].Index == ln.Index {
+			continue
+		}
+		for _, w := range strings.Fields(doc.Lines[i].Text) {
+			if strings.ToLower(w) == target {
+				return true
+			}
 		}
 	}
 	return false

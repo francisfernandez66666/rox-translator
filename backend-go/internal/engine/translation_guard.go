@@ -52,6 +52,13 @@ func IsFailurePlaceholder(out string) bool {
 func RenderSafeTranslations(tr map[string]string) map[string]string {
 	out := make(map[string]string, len(tr))
 	for src, v := range tr {
+		// ★ 2026-10-29：单字符、且**不是汉字**的源文不覆盖（图上保留原样）。
+		// 现网实证：开/关按钮被识别成 `0`，回填把绿色开关整个盖成一个 "0"——控件没了。
+		// 这类行本来就无可译内容（数字/符号/单字母/单假名，AGENTS §19 族二「原样保留」），
+		// 画上去的"译文"与原字形一致时不但没有任何收益，还会抹掉底下的图形。⇒ 一律缺席。
+		if renderIdentityOnly(src) {
+			continue
+		}
 		s := strings.TrimSpace(v)
 		if s == "" || IsFailurePlaceholder(s) || s == SensitivePlaceholderText {
 			continue
@@ -59,6 +66,20 @@ func RenderSafeTranslations(tr map[string]string) map[string]string {
 		out[src] = v
 	}
 	return out
+}
+
+// renderIdentityOnly 源文去空白后恰好一个字符、且该字符不是汉字。
+//
+// 为什么只排除汉字：单字中文（如「是」「买」）是可译正文，必须照常回填；
+// 而数字、标点、货币符号、单个拉丁字母、单假名（含「の」——它正是开关被误读的那种）都属于
+// "本来就没有可译内容"的一档，原样保留才是正确交付。
+func renderIdentityOnly(src string) bool {
+	t := strings.TrimSpace(src)
+	rs := []rune(t)
+	if len(rs) != 1 {
+		return false
+	}
+	return !unicode.Is(unicode.Han, rs[0])
 }
 
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。
