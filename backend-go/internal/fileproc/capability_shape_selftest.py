@@ -418,15 +418,30 @@ def leg_l46_conf_excludes_blank_frames():
 
 @leg("L47")
 def leg_l47_crop_padding_is_bounded_by_neighbor_midline():
-    """裁剪白边：按行高 0.15 外扩，且与同行右邻框中线取小（本项唯一误伤面）。"""
+    """裁剪白边：**默认值必须是 0.0（回滚档）**；机制腿在显式 0.15 下验「与邻框中线取小」的夹逼。
+
+    ★ 2026-10-28 图片版式回退批的**二次翻转**：白边默认 0.15 在密表件上是净负收益——
+    同一张 2408px 参照图实测 `double_bump`→`double_bum`、`600000.SH`→`60000.SH`、
+    时间两格被吃成一行 `09-1509:57:20`（水平白边吃进邻格；竖直白边把字在 rec 输入里压矮）。
+    归零后这三处全恢复、`の` 仍被 `DET_BOX_THRESH` 治住、框数不变（白边只影响 crop、不影响出栈框坐标，
+    版式不受牵连）。`manua` 那一族（rec 丢尾字母）改由 AI 修正腿治（待定项①），不由白边兜。
+    机制本身仍要有人看着：所以把 0.15 显式塞进去验夹逼还在——翻转理由写在这里，不删断言。
+    """
     from PIL import Image
+
+    assert OCR.REC_CROP_PAD_RATIO == 0.0, "白边默认值不是回滚档 0.0（密表件实测净负收益，见腿注释）"
 
     img = Image.new("RGB", (200, 100), "white")
     boxes = [[50, 40, 80, 60], [100, 40, 130, 60]]
-    crop = OCR._crop_with_pad(img, boxes, 0)
-    # pad=max(2,round(0.15*21))=3；右边界应被邻框中线 (80+100)//2=90 夹住。
-    assert crop.size == (37, 27), "白边裁剪尺寸不符（期望 37x27），实读 %r" % (crop.size,)
-    assert crop.size[0] <= 90 - 47 + 1, "白边越过了邻框中线"
+    orig = OCR.REC_CROP_PAD_RATIO
+    OCR.REC_CROP_PAD_RATIO = 0.15
+    try:
+        crop = OCR._crop_with_pad(img, boxes, 0)
+        # pad=max(2,round(0.15*21))=3；右边界应被邻框中线 (80+100)//2=90 夹住。
+        assert crop.size == (37, 27), "白边裁剪尺寸不符（期望 37x27），实读 %r" % (crop.size,)
+        assert crop.size[0] <= 90 - 47 + 1, "白边越过了邻框中线"
+    finally:
+        OCR.REC_CROP_PAD_RATIO = orig
 
 
 @leg("L48")
