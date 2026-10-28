@@ -339,9 +339,18 @@ def build_pdf(md_path, out_path, font_path):
         buf_h += h + GAP
     render_current()
 
+    # ★ 2026-10-28：insert_htmlbox 是**逐页**渲染的，每页都会各嵌一份字体子集 ⇒
+    #   产出体积 ≈ 页数 × 字体大小（实测 en 5.7 MB／zh 18.4 MB／ja 19.4 MB，而注册欢迎邮件
+    #   就是把这 12 份当附件发出去的，ja/zh-hant 已顶到常见 20 MB 附件上限）。
+    #   保存前做一次**文档级**字体合并与子集化，再带压缩存盘：实测 en 5.7 MB → 170 KB、
+    #   zh 18.4 MB → 1.4 MB，页数与正文一字不动（抽文本核验见构建后的自检）。
+    try:
+        doc.subset_fonts()
+    except Exception as e:  # 合并失败不该让手册生不出来：退回原样保存（体积大但内容对）
+        print(f"WARN subset_fonts({lang}) 失败，按原样保存: {e}")
     if os.path.exists(out_path):
         os.remove(out_path)
-    doc.save(out_path)
+    doc.save(out_path, garbage=4, deflate=True, deflate_fonts=True)
     return doc.page_count
 
 
