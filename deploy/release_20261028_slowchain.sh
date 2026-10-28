@@ -26,7 +26,10 @@
 #   bash deploy/release_20261028_slowchain.sh                 # 干跑（本机动作全做，不碰服务器）
 #   APPLY=1 bash deploy/release_20261028_slowchain.sh         # 真发版（不带 token＝purge 走 skipped）
 #   APPLY=1 CLOUDFLARE_API_TOKEN=cfut_xxx bash deploy/release_20261028_slowchain.sh   # 带 purge
+#   APPLY=1 CF_PURGE_OFF=1 bash deploy/release_20261028_slowchain.sh                  # 显式关（本次 HTML 同代时用）
 # ⚠️ token 经 **stdin** 送进远端（不进远端 argv、不回显、不落盘）；一次性 token 用完即在 CF 面板删除。
+# ⚠️ purge 需要的权限是 **Zone → Cache Purge: Edit**（只给 Cache Rules／Zone Settings 会退 401，
+#    本批首跑实测；401 时执行体在任何动作之前 ABORT＝现网停在完整上一代，不会留半态）。
 # ============================================================================
 set -uo pipefail
 
@@ -109,6 +112,15 @@ if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
   echo "P3=带 token（CF purge 会真清边缘缓存；屏上应有「CF purge 已受理」）"
   printf '%s\n' "$CLOUDFLARE_API_TOKEN" | ssh -o BatchMode=yes -p "$SSH_PORT" "$SSH_TARGET" \
     "IFS= read -r CF_TOKEN; CLOUDFLARE_API_TOKEN=\"\$CF_TOKEN\" $SWAP_CMD; rc=\$?; unset CF_TOKEN CLOUDFLARE_API_TOKEN; exit \$rc"
+  rc=$?
+elif [ "${CF_PURGE_OFF:-0}" = "1" ]; then
+  # 三种"没清缓存"在屏幕上必须不同形：**显式关**＝有人核过"这次 HTML 同代、不必清"并为此下令；
+  # **未配 token**＝这次没带凭据（可能是忘了）。两者混成一行的那天，就是白屏窗口悄悄回来那天。
+  # 本批首跑实测：token 权限档位只给了 Cache Rules／Zone Settings，purge 退 **401**——
+  # 执行体按设计在任何动作之前 ABORT（现网停在完整上一代），要清缓存得另建一枚带
+  # `Zone → Cache Purge: Edit` 的 token。
+  echo "P3=显式关 purge（CF_PURGE_OFF=1 ⇒ 执行体出一行 CF_PURGE=off；本次已核过 HTML 同代）"
+  sshr "CF_PURGE_OFF=1 $SWAP_CMD"
   rc=$?
 else
   echo "P3=未配 CLOUDFLARE_API_TOKEN（执行体会出一行 CF_PURGE=skipped；边缘旧 HTML 最多残留 2h，"
