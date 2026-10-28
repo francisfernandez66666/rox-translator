@@ -14,6 +14,7 @@ package sensitive
 
 import (
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -59,13 +60,50 @@ func normalizeLoose(s string) string {
 	return b.String()
 }
 
+// latinWord 词条是否「纯拉丁/数字/空白」。
+// ★ 这类词**不许**走松散口径的子串匹配（2026-10-29 现网实证）：
+// `normalizeLoose` 把空格全剥掉，正常英文译文里「…calls down…」会拼成「…callsdown…」，
+// 里面恰好有 `lsd` ⇒ 词表里的 `LSD` 把一行**正常业务译文**整段判成敏感词，
+// 交付物上那一行变成占位符（按交付口径回落原文＝图上留中文），客户看到「该翻的没翻」。
+// 所以拉丁词一律走**词边界**匹配（见 latinPattern），CJK 词才用子串+松散口径。
+func latinWord(w string) bool {
+	if w == "" {
+		return false
+	}
+	for _, r := range w {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == ' ' || r == '-' || r == '.' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// latinPattern 为一个拉丁词条构造「字符间可夹空白 + 两端词边界」的匹配式：
+// `lsd` ⇒ `\bl\s*s\s*d\b`——既能击穿「L S D」，又不会跨词边界误命中。
+// 两端 `\b` 在 Go 里按 ASCII 词字符判定，CJK 紧邻时（如「是lsd」）仍成立。
+func latinPattern(w string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString(`\b`)
+	for i, r := range w {
+		if i > 0 {
+			b.WriteString(`\s*`)
+		}
+		b.WriteString(regexp.QuoteMeta(string(r)))
+	}
+	b.WriteString(`\b`)
+	return regexp.MustCompile(b.String())
+}
+
 // Checker 敏感词包扫描器（并发安全；文件变更 mtime 触发热加载）。
 type Checker struct {
 	path string
 
 	mu     sync.RWMutex
-	words  []string // 小写化的词表（保持原词供命中回显）
-	origin []string // 原词（审计/告警展示）
+	words  []string         // 小写化的词表（保持原词供命中回显）
+	origin []string         // 原词（审计/告警展示）
+	latin  []bool           // 与 words 同序：该词条是否纯拉丁/数字（走词边界匹配，见 latinWord）
+	res    []*regexp.Regexp // 与 words 同序：拉丁词条的边界匹配式（CJK 词为 nil）
 	mtime  time.Time
 	loaded time.Time
 }
@@ -87,7 +125,7 @@ func (c *Checker) reload(force bool) {
 	if err != nil {
 		c.mu.Lock()
 		if force {
-			c.words, c.origin = nil, nil
+			c.words, c.origin, c.latin, c.res = nil, nil, nil, nil
 		}
 		c.mu.Unlock()
 		return
@@ -103,16 +141,26 @@ func (c *Checker) reload(force bool) {
 		return
 	}
 	var words, origin []string
+	var latin []bool
+	var res []*regexp.Regexp
 	for _, line := range strings.Split(string(b), "\n") {
 		w := strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(line), "\r"))
 		if w == "" || strings.HasPrefix(w, "#") {
 			continue
 		}
+		nw := normalize(w) // ★ P0-5：词表与文本同口径归一化
 		origin = append(origin, w)
-		words = append(words, normalize(w)) // ★ P0-5：词表与文本同口径归一化
+		words = append(words, nw)
+		isLatin := latinWord(nw)
+		latin = append(latin, isLatin)
+		if isLatin {
+			res = append(res, latinPattern(nw))
+		} else {
+			res = append(res, nil)
+		}
 	}
 	c.mu.Lock()
-	c.words, c.origin = words, origin
+	c.words, c.origin, c.latin, c.res = words, origin, latin, res
 	c.mtime = st.ModTime()
 	c.loaded = time.Now()
 	c.mu.Unlock()
@@ -133,7 +181,7 @@ func (c *Checker) Hits(text string) []string {
 	}
 	c.reload(false)
 	c.mu.RLock()
-	words, origin := c.words, c.origin
+	words, origin, latin, res := c.words, c.origin, c.latin, c.res
 	c.mu.RUnlock()
 	if len(words) == 0 {
 		return nil
@@ -149,7 +197,17 @@ func (c *Checker) Hits(text string) []string {
 		if w == "" || seen[w] {
 			continue
 		}
-		if strings.Contains(lower, w) || strings.Contains(loose, w) {
+		// ★ 拉丁词只走词边界（见 latinWord 的现网实证）；CJK 词才用子串+松散口径。
+		//   把拉丁词也丢进 loose 子串，就是「calls down ⇒ callsdown 命中 lsd」那一族误杀。
+		hit := false
+		if i < len(latin) && latin[i] {
+			if i < len(res) && res[i] != nil && res[i].MatchString(lower) {
+				hit = true
+			}
+		} else if strings.Contains(lower, w) || strings.Contains(loose, w) {
+			hit = true
+		}
+		if hit {
 			seen[w] = true
 			out = append(out, origin[i])
 			if len(out) >= 5 {

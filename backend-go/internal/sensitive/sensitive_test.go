@@ -121,3 +121,33 @@ func TestNormalize(t *testing.T) {
 		t.Errorf("宽松口径空白剥离失效: %q", normalizeLoose("F i r e"))
 	}
 }
+
+// TestLatinWordsUseWordBoundary 拉丁词条按**词边界**匹配（★ 2026-10-29 现网实证）。
+// 旧形态把拉丁词也丢进 `normalizeLoose` 子串：正常英文译文「…calls down…」剥空格后拼成
+// 「…callsdown…」，里面恰好有 `lsd` ⇒ 词表里的 `LSD` 把整段正常译文判成敏感词，
+// 交付物上那一行变占位符（回落原文＝图上留中文）。这条锁两边都判：
+// 不跨词边界误杀；原样/大写/全角/零宽/字符间空格仍要拦住。
+func TestLatinWordsUseWordBoundary(t *testing.T) {
+	c := newTestChecker(t, "LSD", "枪支")
+
+	for _, benign := range []string{
+		"The signals are calls down the list.",
+		"Tools designed for trading.",
+		"results during the day",
+	} {
+		if hits := c.Hits(benign); len(hits) > 0 {
+			t.Fatalf("正常译文被误判（跨词边界拼出 lsd）：%q 命中 %v", benign, hits)
+		}
+	}
+
+	for _, bad := range []string{"lsd", "LSD", "ＬＳＤ", "l\u200bsd", "L S D", "是lsd。"} {
+		if hits := c.Hits(bad); len(hits) == 0 {
+			t.Fatalf("应命中却漏（拉丁词边界口径不能放走混淆写法）：%q", bad)
+		}
+	}
+
+	// CJK 词条仍走「子串 + 剥空格」口径：字符间插空格是中文侧最常见的绕过写法。
+	if hits := c.Hits("枪 支"); len(hits) == 0 {
+		t.Fatalf("CJK 词条松散口径失效：「枪 支」没命中")
+	}
+}

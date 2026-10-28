@@ -656,6 +656,61 @@ const refusalGramN = 4
 //	取向是"宁可多剥一句，不许把回绝话交给客户"，但**剥不掉就按原文交付、绝不留白**。
 //	误杀风险由源文豁免守住：客户自己的文档里就在谈"无法提供翻译服务"时，
 //	那句照译是合法正文（refusalResidue 已按该段原文判过一次，同一豁免条件在这里照用）。
+//
+// normalizeImageTranslations 图片件「单行源文 → 单行译文」收敛（★ 2026-10-29 用户实证）。
+//
+// 现网形态：某段源文是单行 `manual`，模型回了 `"manual  \nManual"`，原位回填把两行画进
+// **同一个框** ⇒ 客户看到同一个词翻了两遍（"manual / Manual"），.md 里也成了两行。
+// 图片件每个框按构造就是**一行**，所以对单行源文做收敛：
+//
+//	· 各行去空白后忽略大小写相同（回声/重复）⇒ 只留最后一行（模型通常把译文放在后面）；
+//	· 其余多行 ⇒ 用单个空格连接成一行（换行在这里没有语义，只有"画进一个框"的后果）；
+//	· 去空白后为空 ⇒ 原样返回（交给下游的占位符/原文回落判据，不在这里造空串）。
+//
+// 多行源文（扫描件 PDF 的段落）**不动**——那里的换行是源文自己的结构。
+// 只在图片链调用（`HandleFile` 的 image 分支），别搬到通用交付路径：
+// docx/xlsx 的段级换行有各自的回写语义。
+func normalizeImageTranslations(tr map[string]string) map[string]string {
+	if len(tr) == 0 {
+		return tr
+	}
+	out := make(map[string]string, len(tr))
+	for src, v := range tr {
+		if strings.Contains(src, "\n") {
+			out[src] = v
+			continue
+		}
+		lines := strings.Split(v, "\n")
+		kept := make([]string, 0, len(lines))
+		for _, ln := range lines {
+			if s := strings.TrimSpace(ln); s != "" {
+				kept = append(kept, s)
+			}
+		}
+		switch {
+		case len(kept) == 0:
+			out[src] = v
+		case len(kept) == 1:
+			out[src] = kept[0]
+		case sameFoldAll(kept):
+			out[src] = kept[len(kept)-1]
+		default:
+			out[src] = strings.Join(kept, " ")
+		}
+	}
+	return out
+}
+
+// sameFoldAll 各行忽略大小写是否完全相同（`manual`／`Manual` 这种回声-译文双行）。
+func sameFoldAll(lines []string) bool {
+	for i := 1; i < len(lines); i++ {
+		if !strings.EqualFold(lines[0], lines[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func deliveryTranslations(langTr map[string]string) map[string]string {
 	if len(langTr) == 0 {
 		return langTr

@@ -1588,6 +1588,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				//   现在先过一遍单行补译梯（与文本逐行链同一把尺子、同一档位键），
 				//   仍拿不到可用译文的行才进交付文档那一节。
 				//   必须在 WriteTranslationMd **之前**跑：.md 也按原文兜底，先补再写才不会把原文当译文交付。
+				// ★ 2026-10-29：单行源文 → 单行译文收敛（模型回「manual\nManual」会把两行画进一个框）。
+				tr = normalizeImageTranslations(tr)
 				unresolved, imgUpstreamDead := e.retryImageSegments(ctx, texts, tr, lc)
 				if ierr := fileproc.WriteTranslationMd(imgPath, texts, tr); ierr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], ierr.Error())}
