@@ -27,6 +27,7 @@ import (
 	"testing"
 )
 
+// TestRenderSafeTranslationsDropsPlaceholders 行为腿：正常译文保留，三态占位符一律摘成缺席。
 func TestRenderSafeTranslationsDropsPlaceholders(t *testing.T) {
 	tr := map[string]string{
 		"正常行":   "hello",

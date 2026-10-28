@@ -19,6 +19,8 @@ import (
 	"testing"
 )
 
+// TestNormalizeImageTranslations 四档行为逐字点名（回声双行取末行／多行合一行／
+// 单行原样／多行源文不动／全空白回落），现网 manual/Manual 是第一条的真实形态。
 func TestNormalizeImageTranslations(t *testing.T) {
 	cases := []struct {
 		name string
@@ -41,6 +43,7 @@ func TestNormalizeImageTranslations(t *testing.T) {
 	}
 }
 
+// TestNormalizeImageTranslationsWired 接线腿：图片链必须真调用收敛函数（写对没人调＝白修）。
 func TestNormalizeImageTranslationsWired(t *testing.T) {
 	b, err := os.ReadFile("file.go")
 	if err != nil {

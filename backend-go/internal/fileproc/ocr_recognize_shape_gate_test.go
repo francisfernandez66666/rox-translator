@@ -105,6 +105,8 @@ func readOcrShapeFile(t *testing.T) string {
 	return string(b)
 }
 
+// TestOcrRecognizeBoxesStayPerElement 负锁：合并/双档那五个名字在代码行上零命中；
+// 正锁：治旧错字的保留件与输出契约五键必须在位。
 func TestOcrRecognizeBoxesStayPerElement(t *testing.T) {
 	src := readOcrShapeFile(t)
 	neg, posMissing, contract := ocrShapeJudge(ocrShapeStripComments(src))

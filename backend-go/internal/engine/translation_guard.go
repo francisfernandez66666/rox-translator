@@ -711,6 +711,7 @@ func sameFoldAll(lines []string) bool {
 	return true
 }
 
+// deliveryTranslations 交付前统一过一遍回绝话术剥离（采纳判据之外的第二道，口径见 stripRefusalSentences）。
 func deliveryTranslations(langTr map[string]string) map[string]string {
 	if len(langTr) == 0 {
 		return langTr

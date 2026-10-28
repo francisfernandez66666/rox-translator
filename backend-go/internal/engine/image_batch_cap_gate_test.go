@@ -65,6 +65,7 @@ func goCodeLines(src string) string {
 	return strings.Join(out, "\n")
 }
 
+// TestImageBatchCapIsFifteen 形态腿：图片件上限 15、调用点不许写死 40（文本链仍 40 作正向对照）。
 func TestImageBatchCapIsFifteen(t *testing.T) {
 	src, err := os.ReadFile("file.go")
 	if err != nil {
