@@ -440,8 +440,18 @@ target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种知识�
 | te | 泰卢固语 | 知识库+AI |
 | mr | 马拉地语 | 知识库+AI |
 
-**计费口径**：消耗句数 = 源句数 × 目标语言数（多语言按倍数累增）；扣费按积分余额结算，积分余量与 ≈句数同屏展示。
-mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast。
+**计费口径（★ 2026-10-28 起为 v3：实扣与预估要分开看）**
+
+- **实扣**＝按**真实用量**结算：翻译完成后按模型实际消耗折成积分，从账户余额扣减。接口只出积分
+  （balance_points / points_used），不下发任何内部计量常数；同一条任务多译一个目标语种就是多一份真实用量。
+- **预估**＝控制台提交前做余额预检的那把尺子（**API 侧不按公式冻结预付款**：只在这笔调用之前校验余额与
+  每日配额，耗尽即以 insufficient_balance / 429 拒绝）：
+  **预估积分 = points_fixed + (目标语种数 − 1) × points_fixed_per_lang + (源字符数 ÷ 1000) × points_per_1k_chars × 目标语种数**
+  三段系数按模式（pro / fast）各一组，请从 GET /api/pricing/meta **现取**（运营调档后同刻变化，
+  **不要在客户端写死**）。单语种时它等价于「固定项 ＋ 线性项」；多语种时**每个语种各摊一次固定项**，
+  所以多语种短单的预检值会明显高于"只算一次固定项"的老算法——这是刻意的。
+  这把尺子**刻意偏高**，是"余额够不够"的门槛而**不是报价**：实扣以真实用量为准，多估的部分不会多扣一分钱。
+- mode=pro 含知识库匹配与双评估审校全流水线，消耗高于 fast；额度一律以积分计，系数由平台管理员配置。
 
 ## 文件批量任务要点
 
@@ -526,6 +536,12 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
 翻译按实际用量从账户余额扣减；每次响应携带 balance_points（当前积分余额）与
 balance_sentences_approx（≈句数）。额度均以积分计，具体计费规则由平台管理员配置。
 额度不足将返回错误码 insufficient_balance，请充值或升级套餐。
+
+自己估算一笔调用要花多少（可选）：GET /api/pricing/meta 给出每档的
+points_fixed（单语种固定合计）／points_fixed_per_lang（每多一个目标语种的固定增量）／
+points_per_1k_chars（每 1000 源字符 × 每语种），按「支持的语言与计费规则」里那条 v3 式子现算即可。
+这三个数**每次调用现取**，不要在客户端缓存写死——运营调档后它们会立刻变。
+另注意：预估只是余额门槛，**实扣永远以真实用量为准**，多估不会多扣。
 `
 
 // defaultDocsMDEn 英文默认文档。
@@ -636,7 +652,23 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 | te | Telugu | AI direct |
 | mr | Marathi | AI direct |
 
-**Billing**: sentences consumed = source sentences × target language count (multi-target multiplies). Charges settle against your points balance; responses show points left and the ≈ sentence estimate. mode=pro includes KB matching and full review pipeline, consuming more than fast.
+**Billing (v3 since 2026-10-28: keep the deduction and the estimate apart)**
+
+- **Deduction** follows **actual usage**: when a task finishes, the model's real consumption is converted to credits
+  and taken from your balance. Responses only ever carry credits (balance_points / points_used); no internal
+  metering constant is exposed. Translating one more target language costs one more real slice of usage.
+- **Estimate** is the ruler the console uses to pre-check your balance before submitting (**the API does not
+  pre-authorise by formula** — it only verifies balance and daily quota before the call and rejects with
+  insufficient_balance / 429 once exhausted):
+  **estimated credits = points_fixed + (target language count − 1) × points_fixed_per_lang + (source characters ÷ 1000) × points_per_1k_chars × target language count**
+  The three coefficients come per mode (pro / fast) and must be **read live** from GET /api/pricing/meta
+  (they change the moment an operator retunes them — **never hard-code them in a client**). With a single target
+  language this equals "fixed + linear"; with several, **each language carries its own fixed share** (charging the
+  fixed part only once is what under-estimated multi-language short jobs).
+  The ruler is deliberately **conservative**: it is a threshold, **not a quote**. The real deduction follows actual
+  usage, so an over-estimate never costs you a single extra credit.
+- mode=pro includes KB matching and the full review pipeline and consumes more than fast; everything is metered in
+  credits, and the coefficients are configured by platform administrators.
 
 ## Batch file task notes
 
@@ -728,6 +760,14 @@ outcome (the translation itself failed) while the request succeeded; its reason 
 ## Balance & Billing
 
 Usage is deducted from your account balance based on actual consumption; every response carries balance_points (in credits) and balance_sentences_approx. Billing rules are configured by platform administrators.
+
+To size a call yourself (optional): GET /api/pricing/meta returns per-mode
+points_fixed (fixed total for a single target language) / points_fixed_per_lang (extra fixed share per additional
+target language) / points_per_1k_chars (per 1000 source characters × per language); plug them into the v3 formula in
+"Supported languages & billing rules". Fetch these three **on every run** instead of caching them — operator retunes
+take effect immediately.
+Note that the estimate is only a balance threshold: **the deduction always follows actual usage**, so an over-estimate
+never charges you more.
 `
 
 // ============ 开放 API 辅助接口（KB 统计 / 用量 / Key 轮换） ============
