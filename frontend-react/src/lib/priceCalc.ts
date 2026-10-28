@@ -28,8 +28,10 @@
 export interface PriceCoeff {
   /** 每「1000 源字符 × 1 个目标语种」的线性积分档 */
   per1k: number
-  /** 每次建单的一次性固定积分档（可能是小数，如 pro=7.5） */
+  /** 单语种时的固定积分合计（(F0+F1)÷汇率；可能是小数，如 pro=7.5） */
   fixed: number
+  /** 每多一个目标语种的固定增量（F1÷汇率，如 pro=6） */
+  fixedPerLang: number
 }
 
 // HUMAN_MIN_PER_CHAR / HUMAN_MAX_PER_CHAR 人工笔译单价区间（元/源字，中译英主线）。
@@ -61,7 +63,10 @@ const EXAMPLE_LANGS = 1
  */
 export function calcEstimatePoints(m: PriceCoeff, chars: number, langs: number): number {
   if (!Number.isFinite(chars) || !Number.isFinite(langs) || chars <= 0 || langs <= 0) return 0
-  return Math.round(m.fixed + (chars / 1000) * m.per1k * langs)
+  // 两段式 v3（2026-10-28 计价批）：单语种固定 + 每多一语种的固定增量 + 线性项×语种数。
+  // 与后端 estimateTicketTokens 同式：F0 + 语种数×(F1 + 字符数×K)，
+  // 这里展开成「(F0+F1) + (语种数-1)×F1 + 线性」，只为让页面上的系数行能逐项解释。
+  return Math.round(m.fixed + (langs - 1) * m.fixedPerLang + (chars / 1000) * m.per1k * langs)
 }
 
 /** clampNum 输入框取值归一：非法/空一律 0，上限钉死（负数与 NaN 都不许进算式） */

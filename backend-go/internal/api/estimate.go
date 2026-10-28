@@ -30,6 +30,7 @@ import (
 
 	"translator/internal/engine"
 	apierrors "translator/internal/errors"
+	"translator/internal/fileproc"
 )
 
 // estimateReq 预估接口入参（提成具名类型：单测要直接构造它，匿名结构体在包外/跨函数不可复用）。
@@ -42,6 +43,12 @@ type estimateReq struct {
 	// ImageFiles 本次工单含图片/扫描件的件数：>0 时计入 OCR 理解/纠错的预估 allowance。
 	// 缺省 0 ⇒ 老客户端行为完全不变（不新增任何必填字段）。
 	ImageFiles int `json:"image_files"`
+	// HeaderContextChars 本次文件工单的表头上下文字符数（★ 2026-10-28 P5）：
+	// 它会被塞进**每一次**批量调用的 system 前缀，所以每条腿都要多付一次固定指令开销 + 表头本体。
+	// 缺省 0 ⇒ 与老客户端完全等价；钳 0..4000（超上限按上限计，避免异常入参算出天价）。
+	// ⚠️ **只在 `FILE_HEADER_CONTEXT` 打开时才计入**：关着的时候产品根本不注入表头，
+	// 照它计价＝让客户为一件没发生的事备钱（同 §一·5「取不到就渲染空态且零金额」那条口径的镜像）。
+	HeaderContextChars int `json:"header_context_chars"`
 }
 
 // handleTranslationEstimate 报价预估接口（登录用户，纯只读）。
@@ -127,6 +134,15 @@ func (s *Server) estimateTokens(req estimateReq, mode string) (int64, int64) {
 	if allow := engine.OcrFixAllowanceTokens(req.ImageFiles); allow > 0 {
 		minTokens += allow
 		maxTokens += allow
+	}
+	// ★ 2026-10-28 P5：表头上下文（默认关）。**只在开关打开时才计价**——
+	//   关着的时候产品压根不注入表头，照它收费＝让客户为一件没发生的事备钱。
+	//   与 image_files 一样是可选字段，缺省 0 ⇒ 老客户端读数字节等价。
+	if req.HeaderContextChars > 0 && fileproc.FileHeaderContextEnabled() {
+		if allow := engine.HeaderContextAllowanceTokens(req.HeaderContextChars); allow > 0 {
+			minTokens += allow
+			maxTokens += allow
+		}
 	}
 	return minTokens, maxTokens
 }

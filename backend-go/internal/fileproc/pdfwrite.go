@@ -175,6 +175,15 @@ func docxScriptPath() string {
 
 // pyBin 解析 Python 解释器：优先生产 venv（fpdf2/pdf2docx 所在），回退 PATH python3。
 func pyBin() string {
+	// ★ 2026-10-28（S2 结构腿）：`FILEPROC_PYTHON_BIN` 优先——它是**声明式覆盖**，
+	// 而不是"这台机器上恰好有这个路径"。
+	// 为什么必须在这一层认：`findPython()`（健康探测）早就认这个 env，而真正被 exec 的
+	// 子进程解释器却只认生产 venv ⇒ 开发机/CI 上会出现"探测说 paddleocr 在、page 却说模块找不到"
+	// 的两把尺子形态（探测用一个解释器、执行用另一个），而症状是 probe 绿、page 恒 Unavailable。
+	// 生产不配这个 env 时行为与改造前逐字一致（仍优先 /opt/translator/.venv/bin/python3）。
+	if v := strings.TrimSpace(os.Getenv("FILEPROC_PYTHON_BIN")); v != "" {
+		return v
+	}
 	if _, err := os.Stat("/opt/translator/.venv/bin/python3"); err == nil {
 		return "/opt/translator/.venv/bin/python3"
 	}

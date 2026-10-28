@@ -32,8 +32,8 @@ const META = {
   unit: 'points',
   points_price_money: 0.099668,
   modes: [
-    { code: 'fast', points_per_1k_chars: 150, points_fixed: 3 },
-    { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5 },
+    { code: 'fast', points_per_1k_chars: 150, points_fixed: 3, points_fixed_per_lang: 2.25 },
+    { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5, points_fixed_per_lang: 6 },
   ],
 }
 
@@ -94,11 +94,12 @@ describe('比价/算价页 · 数字一律来自接口（★ 〇-X #55）', () =
   })
 
   it('② calcEstimatePoints 与公示公式逐字同式（含小数固定项的四舍五入方向）', () => {
-    const pro = { per1k: 400, fixed: 7.5 }
+    const pro = { per1k: 400, fixed: 7.5, fixedPerLang: 6 }
     expect(calcEstimatePoints(pro, 80000, 1)).toBe(32008) // 32007.5 → 32008（半值向上）
-    expect(calcEstimatePoints(pro, 1000, 2)).toBe(808)    // 7.5 + 800 = 807.5 → 808
+    expect(calcEstimatePoints(pro, 1000, 2)).toBe(814)    // 7.5 + 6 + 800 = 813.5 → 814（每多一语种 +6）
+    expect(calcEstimatePoints(pro, 1000, 3)).toBe(1220)   // 7.5 + 2×6 + 1200 = 1219.5 → 1220
     expect(calcEstimatePoints(pro, 19, 1)).toBe(15)       // 短单由固定项兜底：7.5 + 7.6 = 15.1 → 15
-    expect(calcEstimatePoints({ per1k: 150, fixed: 3 }, 80000, 1)).toBe(12003)
+    expect(calcEstimatePoints({ per1k: 150, fixed: 3, fixedPerLang: 2.25 }, 80000, 1)).toBe(12003)
     // 非法输入一律 0，不进算式（负数/NaN/0 都会把「预估」变成无意义的钱数）
     expect(calcEstimatePoints(pro, 0, 1)).toBe(0)
     expect(calcEstimatePoints(pro, -5, 1)).toBe(0)
@@ -116,14 +117,14 @@ describe('比价/算价页 · 数字一律来自接口（★ 〇-X #55）', () =
     expect(text()).not.toContain(fmtInt(32008))
   })
 
-  it('④ 改输入即改结果：1000 字符 × 2 语种（专业档）＝808 积分', async () => {
+  it('④ 改输入即改结果：1000 字符 × 2 语种（专业档）＝814 积分', async () => {
     const { text } = renderPage()
     await waitFor(() => expect(text()).toContain(fmtInt(32008)))
     const inputs = [...document.querySelectorAll('.lc-cmp-field input')] as HTMLInputElement[]
     expect(inputs.length).toBe(2) // 字数 + 语种数
     fireEvent.change(inputs[0], { target: { value: '1000' } })
     fireEvent.change(inputs[1], { target: { value: '2' } })
-    await waitFor(() => expect(text()).toContain(fmtInt(808)))
+    await waitFor(() => expect(text()).toContain(fmtInt(814)))
   })
 
   it('⑤ 接口失败 / 系数残缺 → 明说取不到，且一张金额卡都不出（不许拿兜底值报价）', async () => {
@@ -134,7 +135,7 @@ describe('比价/算价页 · 数字一律来自接口（★ 〇-X #55）', () =
     expect(text()).not.toContain('¥') // 不可用态连货币符号都不该出现
     // 残缺包（只有 pro 没有 fast / 系数非数）同样判不可用：半个系数也能算出一个「看起来很确定」的价
     apiMocks.request.mockImplementation(async () => ({
-      ...META, modes: [{ code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5 }],
+      ...META, modes: [{ code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5, points_fixed_per_lang: 6 }],
     }))
     cleanup()
     const r2 = renderPage()

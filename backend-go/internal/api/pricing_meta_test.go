@@ -11,11 +11,13 @@
 //
 //	A 契约面锁：出参**键集合精确等值**（多一个键就红灯——这是防漏最有效的一招，
 //	  比"禁某些词"强，因为新增字段的人根本不会想到去写被禁的词）；
-//	  缺省系数按积分口径等值（pro 400/7.5、fast 150/3）、每积分单价 = 汇率×尺子÷1e8，
+//	  缺省系数按积分口径等值（pro 400/7.5/6、fast 150/3/2.25）、每积分单价 = 汇率×尺子÷1e8，
 //	  并反向锁「3,000 积分 = ¥299」这条套餐面值（F-78 联动对的公开侧投影）；
 //	  外加一条 body 不含 "token" 字样与四枚内部键名的粗筛（漏口径的第一道网）。
 //	B 公式同源锁：页面用公示系数跑出来的积分，必须与后端建单预检
 //	  PointsFromTokens(estimateTicketTokens(...)) 逐档等值（短/中/长 × 两模式）。
+//	  ★ 2026-10-28 计价批：式子从「F + 字符×语种×K」变成「F0 + 语种×（F1 + 字符×K）」，
+//	  页面侧对应「fixed + (语种-1)×fixedPerLang + 字符/1000×per1k×语种」。两式必须逐档等值。
 //	  系数被配成非整数时放宽到 ≤1 积分——那是 token 层 int64 截断与积分层取整的量化噪声，
 //	  不是口径分叉，写死等值反而会在超管调档后假红。
 //	C 改档跟随锁：汇率与尺子成对改档后所有读数一起动、面值仍锁 ¥299；
@@ -79,13 +81,13 @@ func pricingMetaModes(t *testing.T, resp map[string]interface{}) map[string]map[
 	for _, it := range raw {
 		m, _ := it.(map[string]interface{})
 		for k := range m {
-			if k != "code" && k != "points_per_1k_chars" && k != "points_fixed" {
+			if k != "code" && k != "points_per_1k_chars" && k != "points_fixed" && k != "points_fixed_per_lang" {
 				t.Fatalf("modes 出现契约外键 %q：%+v", k, m)
 			}
 		}
 		code, _ := m["code"].(string)
-		if code == "" || m["points_per_1k_chars"] == nil || m["points_fixed"] == nil {
-			t.Fatalf("modes 每档必须带 code/points_per_1k_chars/points_fixed，got %+v", m)
+		if code == "" || m["points_per_1k_chars"] == nil || m["points_fixed"] == nil || m["points_fixed_per_lang"] == nil {
+			t.Fatalf("modes 每档必须带 code/points_per_1k_chars/points_fixed/points_fixed_per_lang，got %+v", m)
 		}
 		out[code] = m
 	}
@@ -122,20 +124,27 @@ func TestPricingMetaContractAndNoTokenLeak(t *testing.T) {
 		t.Fatalf("unit 应恒为 points（对外唯一计量口径），got %q", s)
 	}
 
-	// 缺省系数＝代码缺省按积分汇率折算：pro K=160→每千字 400 积分、F=3000→7.5 积分；
-	// fast K=60→150、F=1200→3。**这里必须留 7.5 这种小数**，取整成 8 就是页面向客户报错数。
+	// 缺省系数＝代码缺省按积分汇率折算：pro K=160→每千字 400 积分、F0+F1=3000→7.5 积分、
+	// 每多一语 +2400→6 积分；fast K=60→150、F0+F1=1200→3、每多一语 +900→2.25。
+	// **这里必须留 7.5 / 2.25 这种小数**，取整成 8 / 3 就是页面向客户报错数。
 	modes := pricingMetaModes(t, resp)
 	if got := pricingFloat(t, modes, "pro", "points_per_1k_chars"); got != 400.0 {
 		t.Fatalf("pro 每千字积分档应为 160×1000÷400=400，got %v", got)
 	}
 	if got := pricingFloat(t, modes, "pro", "points_fixed"); got != 7.5 {
-		t.Fatalf("pro 固定积分档应为 3000÷400=7.5（不许取整成 8），got %v", got)
+		t.Fatalf("pro 单语种固定积分档应为 3000÷400=7.5（不许取整成 8），got %v", got)
+	}
+	if got := pricingFloat(t, modes, "pro", "points_fixed_per_lang"); got != 6.0 {
+		t.Fatalf("pro 每多一语固定增量应为 2400÷400=6，got %v", got)
 	}
 	if got := pricingFloat(t, modes, "fast", "points_per_1k_chars"); got != 150.0 {
 		t.Fatalf("fast 每千字积分档应为 60×1000÷400=150，got %v", got)
 	}
 	if got := pricingFloat(t, modes, "fast", "points_fixed"); got != 3.0 {
-		t.Fatalf("fast 固定积分档应为 1200÷400=3，got %v", got)
+		t.Fatalf("fast 单语种固定积分档应为 1200÷400=3，got %v", got)
+	}
+	if got := pricingFloat(t, modes, "fast", "points_fixed_per_lang"); got != 2.25 {
+		t.Fatalf("fast 每多一语固定增量应为 900÷400=2.25，got %v", got)
 	}
 
 	// 每积分人民币单价＝汇率×尺子÷1e8（分→元、每百万 token），出厂档 400×24917 → 0.099668 元
@@ -169,20 +178,24 @@ func TestPricingMetaFormulaMatchesPrecheck(t *testing.T) {
 	h := f.srv.pricingMetaMux()
 
 	// pagePoints 前端算法（与 PriceComparePage 的算式逐字同式）：
-	// 积分 = 固定积分 + 字符数 ÷ 1000 × 每千字积分 × 语种数，末尾四舍五入取整。
+	// 积分 = 单语种固定积分 + (语种数-1)×每语种固定增量 + 字符数 ÷ 1000 × 每千字积分 × 语种数，
+	// 末尾四舍五入取整。★ 2026-10-28 计价批：固定项按语种数线性增长（旧式只算一次）。
 	pagePoints := func(resp map[string]interface{}, mode string, chars, langs float64) float64 {
 		m := pricingMetaModes(t, resp)
 		per1k := pricingFloat(t, m, mode, "points_per_1k_chars")
 		fixed := pricingFloat(t, m, mode, "points_fixed")
-		return float64(int64(fixed + chars/1000*per1k*langs + 0.5))
+		perLang := pricingFloat(t, m, mode, "points_fixed_per_lang")
+		return float64(int64(fixed + (langs-1)*perLang + chars/1000*per1k*langs + 0.5))
 	}
 	// backPoints 后端算法：预检折 token（含 token 层 int64 截断），再按 store 口径折积分。
 	backPoints := func(mode string, chars, langs int) int64 {
 		est := estimateTicketTokens(int64(chars), langs, mode, estParams{
-			kPro:      f.srv.estTokensPerChar("pro"),
-			kFast:     f.srv.estTokensPerChar("fast"),
-			fixedPro:  f.srv.estTokensFixed("pro"),
-			fixedFast: f.srv.estTokensFixed("fast"),
+			kPro:          f.srv.estTokensPerChar("pro"),
+			kFast:         f.srv.estTokensPerChar("fast"),
+			fixedPro:      f.srv.estTokensFixed("pro"),
+			fixedFast:     f.srv.estTokensFixed("fast"),
+			fixedLangPro:  f.srv.estTokensFixedLang("pro"),
+			fixedLangFast: f.srv.estTokensFixedLang("fast"),
 		})
 		return f.st.PointsFromTokens(est)
 	}
@@ -242,7 +255,10 @@ func TestPricingMetaFollowsRepricingPair(t *testing.T) {
 		t.Fatalf("改档后 pro 每千字积分应 =160×1000÷300=533.333333，got %v", got)
 	}
 	if got := pricingFloat(t, modes, "pro", "points_fixed"); got != 10.0 {
-		t.Fatalf("改档后 pro 固定积分应 =3000÷300=10，got %v", got)
+		t.Fatalf("改档后 pro 单语种固定积分应 =3000÷300=10，got %v", got)
+	}
+	if got := pricingFloat(t, modes, "pro", "points_fixed_per_lang"); got != 8.0 {
+		t.Fatalf("改档后 pro 每多一语增量应 =2400÷300=8，got %v", got)
 	}
 	price, _ := resp["points_price_money"].(float64)
 	if price != 0.099666 {
@@ -298,12 +314,20 @@ func TestPricingMetaFallsBackToEffectiveValues(t *testing.T) {
 
 	// 固定项显式配 0 是合法运维选择（明知短单低估仍退回纯线性），必须如实露 0，
 	// 不许被当成脏值抹回 7.5——那会让页面显示的公式和实际扣费差出一个截距。
+	// ★ 2026-10-28 起固定项拆成 F0（每单）+F1（每语种）：只清 F0 时单语种固定仍是 F1，
+	// 所以「退回纯线性」必须两档一起显式 0（这也是运维真要那么做时的正确操作）。
 	if err := f.st.SetConfig(cfgEstFixedPro, "0"); err != nil {
 		t.Fatalf("配 fixed_pro=0 失败: %v", err)
 	}
+	if err := f.st.SetConfig(cfgEstFixedLangPro, "0"); err != nil {
+		t.Fatalf("配 fixed_lang_pro=0 失败: %v", err)
+	}
 	resp3, _ := pricingMetaGet(t, h)
 	if got := pricingFloat(t, pricingMetaModes(t, resp3), "pro", "points_fixed"); got != 0.0 {
-		t.Fatalf("fixed_pro 显式配 0 必须露 0（那是合法档位），got %v", got)
+		t.Fatalf("fixed_pro/fixed_lang_pro 显式配 0 必须露 0（那是合法档位），got %v", got)
+	}
+	if got := pricingFloat(t, pricingMetaModes(t, resp3), "pro", "points_fixed_per_lang"); got != 0.0 {
+		t.Fatalf("fixed_lang_pro 显式配 0 必须露 0，got %v", got)
 	}
 }
 

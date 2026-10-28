@@ -175,6 +175,7 @@ export default function PriceComparePage() {
         {meta.ready && m && (
           <ul className="lc-cmp-coef">
             <li>{tpl('cmp.coefFixed', { mode: t(mode === 'fast' ? 'cmp.modeFast' : 'cmp.modePro'), v: fmtNum(m.fixed, { min: 2, max: 2 }) })}</li>
+            <li>{tpl('cmp.coefFixedPerLang', { mode: t(mode === 'fast' ? 'cmp.modeFast' : 'cmp.modePro'), v: fmtNum(m.fixedPerLang, { min: 2, max: 2 }) })}</li>
             <li>{tpl('cmp.coefLinear', { mode: t(mode === 'fast' ? 'cmp.modeFast' : 'cmp.modePro'), v: fmtInt(m.per1k) })}</li>
             <li>{tpl('cmp.coefPrice', { p: fmtNum(meta.pointsPrice, { min: 4, max: 4 }) })}</li>
           </ul>

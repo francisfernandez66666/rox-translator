@@ -2,17 +2,25 @@
 // 轻量语种识别（LID）的唯一出口：DetectLangs。只服务「报表 / sources 归因 / 客户语言画像」，
 // **翻译链零依赖**（主方案把这条写死：一次 LID 抖动不许把交付打红）。
 //
-// 为什么没有引第三方库（2026-10-28 施工记录）：方案原定 lingua-go（Apache-2.0，纯 Go），
-// 但发版机构建环境无法访问模块代理（proxy.golang.org 不可达），新增依赖会让整仓无法编译。
-// 因此本批用**内置轻量后端**先落地同一个出口与同一份降级语义：
-//   - 判定 = 书写体系（textscript）＋拉丁语种的功能词打分；
-//   - 它只回答"这一段/这一篇大致是什么语言"，不承诺逐段高精度；
-//   - 换回 lingua-go / fastText 时**只改本文件内部**，调用方零改动（这是"唯一出口"的意义）。
+// ★ 2026-10-28 计价与成本批：后端由内置轻量实现换成 **lingua-go v1.4.0**（Apache-2.0，纯 Go）。
+// 上一版的施工记录是"发版机构建环境无法访问模块代理，故先用内置轻量后端"——本批实测
+// `go get github.com/pemistahl/lingua-go@v1.4.0` 可下（含 shopspring/decimal、x/exp、protobuf 三个间接依赖），
+// 于是按方案 §6.4 真换。**换的只是本文件内部**：DetectLangs 的签名、缓存口径、批量上限、
+// "判不出就 und"的语义全部一字未变，调用方零改动（这正是"唯一出口"的意义）。
 //
-// 三条硬口径：
-//  1. 不支持/判断不出 ⇒ 返回 "und"，绝不硬猜（猜错的后果是报表口径被污染）；
-//  2. 空输入/纯符号/纯数字 ⇒ "und"；
-//  3. 批量一次调用（≤2000 段），同一段文本命中进程内缓存。
+// 四条硬口径（改这块前必读）：
+//  1. **受限语种集**：只 `FromLanguages(...)` 那 17 种（站点 11 种书写体系 ＋ it/nl/pl/tr/vi/id 这几种常见源语）。
+//     **禁止** `FromAllLanguages()`——它会把 75 种语言的模型都纳入候选，构建与常驻内存都是一个数量级的抬升，
+//     而本仓的业务只在这十几种里做归因（判不出的那部分本来就该是 und）。
+//  2. **判不出就 und**：`DetectLanguageOf` 的 ok=false（lingua 内部判为 Unknown）⇒ "und"；
+//     文本不足 3 个字符或**一个字母都没有**（纯数字/纯符号）⇒ "und"，不交给模型硬猜。
+//  3. **繁简不在 LID 职责内**：lingua 只有 `Chinese`（zh），繁体文本也回 `zh`。
+//     本仓没有简繁判定器，而按字符集猜 `zh_hant` 比给 `zh` 更坏（前端展示语种按界面语言走）。
+//  4. **缓存与批量口径不变**：`lidCacheMax=1024` FIFO、一次最多 2000 段、每段先查缓存。
+//     同一单里重复段很多，去重前的模型调用开销在这里被摊薄。
+//
+// 降级方向：本包对 LID **没有 fail-soft 之外的退路**——lingua 是纯 Go 依赖、没有外部进程，
+// 编译进来就可用（`LidReady()` 恒 true）。若将来要换 fastText，只改本文件内部。
 package fileproc
 
 import (
@@ -20,25 +28,81 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"unicode"
+	"unicode/utf8"
 
-	"translator/internal/textscript"
+	"github.com/pemistahl/lingua-go"
 )
 
 // lidCacheMax 进程内缓存条数（同一单里重复段很多，去重前的开销在这里被摊薄）。
 const lidCacheMax = 1024
 
-// lidMu 保护缓存；lidOrder 记插入顺序，用于超上限时淘汰最旧一条（同坐标缓存的 FIFO 口径）。
+// lidMinRunes 交给 lingua 的最短文本长度（字符）。低于它一律 und：
+// lingua 对 1~2 个字符的输入置信度不可靠，而"猜错"会直接污染报表口径（同硬口径 2）。
+const lidMinRunes = 3
+
+// lidEngineName 引擎名单一出处（健康面 `lid_engine` 读它；单测逐字钉住，防止"换了依赖没换出口"）。
+const lidEngineName = "lingua"
+
+// lidState 语种识别器的进程级状态（缓存 + 检测器单例 + 观测计数）。
+// 收在一个 var 块里只为让「这份状态只有一处」一眼可见：缓存与检测器必须同生共死，
+// 拆成两处迟早出现「检测器换了、缓存还留着旧判定」。
 var (
+	// lidMu 保护缓存；lidOrder 记插入顺序，用于超上限时淘汰最旧一条（同坐标缓存的 FIFO 口径）。
 	lidMu    sync.Mutex
 	lidCache = map[string]string{}
 	lidOrder []string
+
+	// lidDetectorOnce lingua 检测器只建一次（构建 + 模型加载都是重活）。
+	// ⚠️ 必须用 `FromLanguages` 的受限集合，禁止 `FromAllLanguages()`（见文件头硬口径 1）。
+	lidDetectorOnce sync.Once
+	lidDetector     lingua.LanguageDetector
+
+	// lidDetectCalls 真正落到模型的次数（缓存命中不计）。它是**只读观测腿**：
+	// 单测据它证明"第二次同段命中缓存"，排障时也能看出"这一次到底跑了多少次识别"。
+	lidDetectCalls atomic.Int64
 )
 
 // LidEngineName 当前 LID 引擎名（健康面读数用；换后端时这里跟着变）。
-func LidEngineName() string { return "builtin" }
+func LidEngineName() string { return lidEngineName }
 
-// LidReady LID 是否可用。内置后端恒可用（它没有任何外部依赖）。
+// LidReady LID 是否可用。lingua 是纯 Go 依赖（无外部进程、无权重文件），恒可用。
 func LidReady() bool { return true }
+
+// lidLanguages LID 的受限语种集：站点 11 种书写体系 + 6 种常见源语。
+// 写成函数而不是包级切片：单测可以拿它做"极大集合不许出现"的对照（避免有人加回 FromAllLanguages）。
+func lidLanguages() []lingua.Language {
+	return []lingua.Language{
+		lingua.Chinese,    // zh（含繁体；见文件头硬口径 3）
+		lingua.English,    // en
+		lingua.Japanese,   // ja
+		lingua.Korean,     // ko
+		lingua.French,     // fr
+		lingua.German,     // de
+		lingua.Spanish,    // es
+		lingua.Portuguese, // pt
+		lingua.Russian,    // ru
+		lingua.Arabic,     // ar
+		lingua.Thai,       // th
+		lingua.Italian,    // it（西/葡/意的混淆必须靠"都在候选集里"才分得开）
+		lingua.Dutch,      // nl
+		lingua.Polish,     // pl
+		lingua.Turkish,    // tr
+		lingua.Vietnamese, // vi
+		lingua.Indonesian, // id
+	}
+}
+
+// lidDetectorInstance 建（或取）检测器。sync.Once ⇒ 全进程一份，构建与模型加载只付一次。
+func lidDetectorInstance() lingua.LanguageDetector {
+	lidDetectorOnce.Do(func() {
+		lidDetector = lingua.NewLanguageDetectorBuilder().
+			FromLanguages(lidLanguages()...).
+			Build()
+	})
+	return lidDetector
+}
 
 // DetectLangs 批量识别语种。
 //
@@ -107,81 +171,59 @@ func lidOfCached(t string) string {
 	return v
 }
 
-// lidLatinStops 拉丁语种的功能词表（只用于"这一段更像哪种拉丁语"）。
-// 刻意做小：它不参与翻译，只服务报表；误判的代价是报表口径偏一格，不是交付错误。
-var lidLatinStops = map[string][]string{
-	"en": {"the", "and", "of", "to", "is", "are", "you", "for", "with", "this", "that", "it"},
-	"fr": {"le", "la", "les", "des", "est", "et", "un", "une", "pour", "avec", "dans", "vous"},
-	"de": {"der", "die", "das", "und", "ist", "nicht", "mit", "für", "ein", "eine", "auf", "sie"},
-	"es": {"el", "la", "los", "las", "es", "y", "para", "con", "una", "un", "en", "que"},
-	"pt": {"o", "a", "os", "as", "é", "e", "para", "com", "uma", "um", "não", "que"},
+// lidOf 单段识别（无缓存）。
+//
+// 判据顺序是刻意的：**先做"这段根本不是语言"的排除**，再交给模型。
+// 反过来（先问模型）在短数字串上会拿到"某个语言 + 高置信度"这种读数——
+// 那时我们拿到的是一个**看起来有效的错误答案**，比 und 坏得多（报表里 und 是"没判出来"，
+// 而错码是"判成了别的语言"，后者会被当成数据错误去查上游）。
+func lidOf(t string) string {
+	s := strings.TrimSpace(t)
+	if utf8.RuneCountInString(s) < lidMinRunes {
+		return "und"
+	}
+	if !lidHasLetter(s) {
+		return "und"
+	}
+	lidDetectCalls.Add(1)
+	lang, ok := lidDetectorInstance().DetectLanguageOf(s)
+	if !ok {
+		return "und" // lingua 内部判为 Unknown（置信度不足）⇒ 我们也回 und，不硬猜
+	}
+	return lidCodeOf(lang)
 }
 
-// lidOf 单段识别（无缓存）。判据顺序：书写体系优先（强信号），拉丁再看功能词。
-func lidOf(t string) string {
-	counts := textscript.Share(t)
-	if len(counts) == 0 {
-		return "und"
-	}
-	total := 0
-	for _, n := range counts {
-		total += n
-	}
-	if total == 0 {
-		return "und"
-	}
-	share := func(s textscript.Script) float64 { return float64(counts[s]) / float64(total) }
-	// 非拉丁体系：一个体系占绝对多数即可定（短段也有判别力）。
-	switch {
-	case share(textscript.Hiragana)+share(textscript.Katakana) >= 0.10:
-		// 假名占比 ≥10% 即判日文：日文正文必然混排假名，而中文里几乎不会出现假名。
-		return "ja"
-	case share(textscript.Hangul) >= 0.30:
-		return "ko"
-	case share(textscript.Arabic) >= 0.30:
-		return "ar"
-	case share(textscript.Thai) >= 0.30:
-		return "th"
-	case share(textscript.Cyrillic) >= 0.30:
-		return "ru"
-	case share(textscript.Han) >= 0.50:
-		// 简繁细分不做（报表按中文一族统计即可；细分需要额外词典，收益不抵成本）。
-		return "zh"
-	}
-	// 拉丁系：功能词打分（只数小写词，标点先剥）。
-	words := strings.FieldsFunc(strings.ToLower(t), func(r rune) bool {
-		return !(r >= 'a' && r <= 'z') && r != '\'' && r != '-' && r != 'é' && r != 'è' && r != 'à' &&
-			r != 'ü' && r != 'ö' && r != 'ä' && r != 'ñ' && r != 'ã' && r != 'ç'
-	})
-	if len(words) == 0 {
-		return "und"
-	}
-	best, bestHit := "", 0
-	keys := make([]string, 0, len(lidLatinStops))
-	for k := range lidLatinStops {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, lc := range keys {
-		hit := 0
-		for _, stop := range lidLatinStops[lc] {
-			for _, w := range words {
-				if w == stop {
-					hit++
-				}
-			}
-		}
-		if hit > bestHit {
-			best, bestHit = lc, hit
+// lidHasLetter 这段文本里有没有至少一个"字母"（任何书写体系的 Letter）。
+// 用途：纯数字/纯符号/纯表情一律 und（它们不是任何语言）。
+func lidHasLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
 		}
 	}
-	if bestHit >= 2 || (bestHit == 1 && len(words) <= 4) {
-		return best
+	return false
+}
+
+// lidCodeOf lingua 的 Language → 本仓语种码。
+//
+// 为什么走 ISO 639-1 而不是 `Language.String()`：后者是英文名（"Chinese"），
+// 与本仓的 `zh/en/...` 码表对不上，且改名比换码更可能（上游按 ISO 常量映射最稳）。
+// 语种集外的语言（理论上不会出现，因为候选集就 17 种）统一回 und。
+func lidCodeOf(l lingua.Language) string {
+	if l == lingua.Unknown {
+		return "und"
 	}
-	// 拉丁字母但功能词不足：短标签/型号等，按英文兜底（站点默认语言），而不是 und——
-	// 报表里 und 太多会让人以为"识别坏了"，而这里的事实是"这段话太短"。
-	if share(textscript.Latin) >= 0.90 && len(words) >= 1 {
-		return "en"
+	switch l {
+	case lingua.Chinese:
+		return "zh" // 繁简不细分（硬口径 3）
 	}
-	return "und"
+	iso := l.IsoCode639_1()
+	if iso == lingua.UnknownIsoCode639_1 {
+		return "und"
+	}
+	code := strings.ToLower(iso.String())
+	if len(code) != 2 {
+		return "und"
+	}
+	return code
 }

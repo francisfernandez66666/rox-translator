@@ -7,10 +7,16 @@ package api
 
 import "testing"
 
-// estDefaultParams 生产缺省档的两段式参数（K：pro 160 / fast 60；F：pro 3,000 / fast 1,200）。
+// estDefaultParams 生产缺省档的两段式参数。
+// ★ 2026-10-28 计价批：K 不变（pro 160 / fast 60），固定项拆成「每单 F0 + 每语种 F1」——
+// pro 600+2400×语种、fast 300+900×语种，单语种合计仍是 3,000 / 1,200（与拆分前逐字相同）。
 // 锁里一律用它，公式改动只会让下面这批等值一起红，不会把「调档」和「改公式」两件事混在一条红里。
 func estDefaultParams() estParams {
-	return estParams{kPro: 160, kFast: 60, fixedPro: 3000, fixedFast: 1200}
+	return estParams{
+		kPro: defEstKPro, kFast: defEstKFast,
+		fixedPro: defEstFixedPro, fixedFast: defEstFixedFast,
+		fixedLangPro: defEstFixedLangPro, fixedLangFast: defEstFixedLangFast,
+	}
 }
 
 // TestEstimateTicketTokens F-72 后的口径：est = F(mode) + chars × langs × K(mode)。
@@ -24,7 +30,7 @@ func TestEstimateTicketTokens(t *testing.T) {
 		p         estParams
 		want      int64 // 等值锁（公式无方言/浮点歧义，直接钉死）
 	}{
-		{"pro3语5k字", 5000, 3, "pro", estDefaultParams(), 2403000},
+		{"pro3语5k字", 5000, 3, "pro", estDefaultParams(), 2407800},
 		{"fast单语1k字", 1000, 1, "fast", estDefaultParams(), 61200},
 		{"mode空按pro默认", 100, 1, "", estDefaultParams(), 19000},
 		{"无语言不估算", 5000, 0, "pro", estDefaultParams(), 0},
@@ -36,8 +42,9 @@ func TestEstimateTicketTokens(t *testing.T) {
 		{"短单19字pro含固定项", 19, 1, "pro", estDefaultParams(), 6040},
 		// 固定项配 0 = 运维显式退回纯线性（不是脏配置），必须原样生效，否则「关掉固定项」这条运维手段无效。
 		{"固定项0退回纯线性", 19, 1, "pro", estParams{kPro: 160, kFast: 60}, 3040},
-		// 固定项为负属脏配置：回退 pro 档 3,000（负数会把预估往回扣，比清零更危险）。
-		{"固定项负数回退pro档", 19, 1, "pro", estParams{kPro: 160, kFast: 60, fixedPro: -1, fixedFast: -1}, 6040},
+		// 固定项为负属脏配置：两档（F0/F1）都回退 pro 缺省 600+2400=3,000（负数会把预估往回扣，比清零更危险）。
+		{"固定项负数回退pro档", 19, 1, "pro", estParams{kPro: 160, kFast: 60, fixedPro: -1, fixedFast: -1,
+			fixedLangPro: -1, fixedLangFast: -1}, 6040},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -71,13 +78,16 @@ func TestEstimateTicketTokensMonotonic(t *testing.T) {
 // 等于短单低估复发——这条与字数无关，纯线性年代它恒假（1 字单估 160 < 真实一次性开销）。
 func TestEstimateTicketTokensNeverBelowFixed(t *testing.T) {
 	p := estDefaultParams()
+	// 固定项拆成 F0（每单）+F1（每语种）后，任何有效单（langs≥1）的下限就是 F0+F1。
+	proFixed := int64(p.fixedPro + p.fixedLangPro)
+	fastFixed := int64(p.fixedFast + p.fixedLangFast)
 	for _, chars := range []int64{1, 19, 67, 1000, 20000} {
 		for _, langs := range []int{1, 5} {
-			if got := estimateTicketTokens(chars, langs, "pro", p); got < int64(p.fixedPro) {
-				t.Fatalf("pro 预估低于固定项 %v（固定项丢失）：chars=%d langs=%d est=%d", p.fixedPro, chars, langs, got)
+			if got := estimateTicketTokens(chars, langs, "pro", p); got < proFixed {
+				t.Fatalf("pro 预估低于固定项 %d（固定项丢失）：chars=%d langs=%d est=%d", proFixed, chars, langs, got)
 			}
-			if got := estimateTicketTokens(chars, langs, "fast", p); got < int64(p.fixedFast) {
-				t.Fatalf("fast 预估低于固定项 %v：chars=%d langs=%d est=%d", p.fixedFast, chars, langs, got)
+			if got := estimateTicketTokens(chars, langs, "fast", p); got < fastFixed {
+				t.Fatalf("fast 预估低于固定项 %d：chars=%d langs=%d est=%d", fastFixed, chars, langs, got)
 			}
 		}
 	}
@@ -103,15 +113,16 @@ func TestEstimateTicketTokensFixedNotInflatingLong(t *testing.T) {
 	if longPro >= longPure*10 {
 		t.Fatalf("长单预估因固定项膨胀超一个数量级（F-72 红线）：pure=%d withFixed=%d", longPure, longPro)
 	}
-	// 短单方向相反：固定项必须**真的加进去**（增量恰为 F），且在 6 字这种极短单里它是报价主项
+	// 短单方向相反：固定项必须**真的加进去**（单语种增量恰为 F0+F1），且在 6 字这种极短单里它是报价主项
 	// （3,000 vs 线性项 960）——否则等于只加了个零头，F-72 没修。
+	shortFixed := int64(p.fixedPro + p.fixedLangPro)
 	shortWith := estimateTicketTokens(19, 1, "pro", p)
 	shortPure := estimateTicketTokens(19, 1, "pro", linearOnly)
-	if shortWith-shortPure != int64(p.fixedPro) {
-		t.Fatalf("短单固定项增量应为 %v：pure=%d withFixed=%d", p.fixedPro, shortPure, shortWith)
+	if shortWith-shortPure != shortFixed {
+		t.Fatalf("短单固定项增量应为 %d：pure=%d withFixed=%d", shortFixed, shortPure, shortWith)
 	}
-	if tiny := estimateTicketTokens(6, 1, "pro", p); int64(p.fixedPro)*2 <= tiny {
-		t.Fatalf("6 字极短单里固定项应占主导（>50%%），est=%d fixed=%v", tiny, p.fixedPro)
+	if tiny := estimateTicketTokens(6, 1, "pro", p); shortFixed*2 <= tiny {
+		t.Fatalf("6 字极短单里固定项应占主导（>50%%），est=%d fixed=%d", tiny, shortFixed)
 	}
 }
 

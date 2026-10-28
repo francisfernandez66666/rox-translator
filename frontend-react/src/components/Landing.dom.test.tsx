@@ -237,8 +237,8 @@ describe('落地页 · 快速算价卡挂载与 #39 口径共存（★ 〇-Y #64
     json: async () => ({
       success: true, unit: 'points', points_price_money: 0.099668,
       modes: [
-        { code: 'fast', points_per_1k_chars: 150, points_fixed: 3 },
-        { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5 },
+        { code: 'fast', points_per_1k_chars: 150, points_fixed: 3, points_fixed_per_lang: 2.25 },
+        { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5, points_fixed_per_lang: 6 },
       ],
     }),
   }

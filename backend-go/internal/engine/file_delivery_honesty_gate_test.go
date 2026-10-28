@@ -306,21 +306,29 @@ func deliver(ctx context.Context) {
 	}
 }
 
-// TestFileHardgateHasFiveAttempts 文件链硬闸必须给足 5 轮（★ 2026-10-21 用户令），
-// 且不许再用「连续零进展」提前熔断——否则用户看到的仍是最多 2 次。
-func TestFileHardgateHasFiveAttempts(t *testing.T) {
+// TestFileHardgateHasThreeAttempts 文件链硬闸必须是 3 轮。
+//
+// 轮次口径的两次变化，理由都写在这里（改这个数之前先读完整段，不要只看末次）：
+//   - 2026-10-21 用户令：由「连续零进展提前熔断（实际最多 2 次）」改成**给足 5 轮**；
+//   - 2026-10-28 用户令（计价与成本批）：**5 → 3**。射程不变——仍是"每轮只补缺失段"，
+//     三轮之后仍缺失的段按原文交付并由 UntranslatedSegments / GateWarnings 出声。
+//     降轮的唯一理由是成本：第 4/5 轮的救回率 <2%，而每一轮都是对整篇缺失段的重新调用，
+//     在 1G 机器上是实打实的 token 与墙钟放大（同批的缓存 A/B 才是真正的省法）。
+//     所以"给足 3 次"这条仍然成立：`attempt <= fileHardgateMaxAttempts` 的循环约束与
+//     「不许按连续零进展提前熔断」两条一起判——它们才是 10-21 那条用户令不受损的部分。
+func TestFileHardgateHasThreeAttempts(t *testing.T) {
 	src, err := os.ReadFile("file.go")
 	if err != nil {
 		t.Fatalf("读 file.go 失败: %v", err)
 	}
 	s := string(src)
-	if !strings.Contains(s, "const fileHardgateMaxAttempts = 5") {
-		t.Fatal("硬闸轮次上限必须为 5")
+	if !strings.Contains(s, "const fileHardgateMaxAttempts = 3") {
+		t.Fatal("硬闸轮次上限必须为 3")
 	}
 	if !strings.Contains(s, "attempt <= fileHardgateMaxAttempts") {
 		t.Fatal("硬闸循环必须受 fileHardgateMaxAttempts 约束")
 	}
 	if strings.Contains(s, "zeroProgressRounds") {
-		t.Fatal("硬闸不许再按连续零进展提前熔断（用户令要求给足 5 次）")
+		t.Fatal("硬闸不许再按连续零进展提前熔断（用户令要求给足 3 次）")
 	}
 }

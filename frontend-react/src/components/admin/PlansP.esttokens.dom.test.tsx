@@ -1,12 +1,13 @@
 // ============================================================================
 // components/admin/PlansP.esttokens.dom.test.tsx — 计费预估系数表单（★ 〇-X 第 5 项 / F-72 补口）
 //
-// 为什么有这张锁：这四个数（est_tokens_per_char_pro|fast 与 est_tokens_fixed_pro|fast）
+// 为什么有这张锁：这六个数（est_tokens_per_char_pro|fast、est_tokens_fixed_pro|fast
+// 与 est_tokens_fixed_lang_pro|fast——★ 2026-10-28 计价批把固定项拆成「每单 F0」+「每语种 F1」）
 // 直接决定「客户点建单时余额够不够」——调小＝放行更多单（真烧穿），调大＝更多单被误拦。
 // 在它进管理台之前只能 psql 改 system_config，手滑一次没有第二个人知道。
 // 表单必须做到三件事，本文件逐件钉死：
 //  ① 回显的是**生效值**而不是库里的原样字符串（脏值直塞输入框＝把系统从没在用过的数正式写成配置）；
-//  ② 客户端先把与服务端同口径的门挡住（K 必须 >0、四项必须齐、不许负数），
+//  ② 客户端先把与服务端同口径的门挡住（K 必须 >0、六项必须齐、不许负数），
 //     脏输入**不得发出请求**——「弹窗照弹/提示照出、请求照发」的假拦截判为红；
 //  ③ 恢复缺省是批量清空动作，必须二次确认，取消即零调用。
 //
@@ -32,10 +33,10 @@ const S = vi.hoisted(() => ({
 function defaultCfg() {
   return {
     success: true,
-    coefficients: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
-    stored: { k_pro: '', k_fast: '', fixed_pro: '', fixed_fast: '' },
-    defaults: { k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 },
-    formula: 'est_tokens = F(mode) + chars × langs × K(mode)',
+    coefficients: { k_pro: 160, k_fast: 60, fixed_pro: 600, fixed_fast: 300, fixed_lang_pro: 2400, fixed_lang_fast: 900 },
+    stored: { k_pro: '', k_fast: '', fixed_pro: '', fixed_fast: '', fixed_lang_pro: '', fixed_lang_fast: '' },
+    defaults: { k_pro: 160, k_fast: 60, fixed_pro: 600, fixed_fast: 300, fixed_lang_pro: 2400, fixed_lang_fast: 900 },
+    formula: 'est_tokens = F0(mode) + langs × (F1(mode) + chars × K(mode))',
     points_tokens_rate: 400,
   }
 }
@@ -77,7 +78,7 @@ vi.mock('@/api', () => ({
   adminQuoteCurrency: vi.fn(async () => ({ success: true, currency: 'CNY', rates: { CNY: 1 }, supported_currencies: ['CNY'], env_overridden: {} })),
   adminQuoteCurrencySave: vi.fn(async () => ({ success: true })),
   // ---- 预估系数三件套（本文件主测对象）----
-  EST_TOKEN_FIELDS: ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'],
+  EST_TOKEN_FIELDS: ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast', 'fixed_lang_pro', 'fixed_lang_fast'],
   adminEstTokens: vi.fn(async () => (S.getOk ? S.cfg : { success: false, message: '读取失败' })),
   adminEstTokensSave: vi.fn(async (data: Record<string, unknown>) => { S.saves.push(data); return { success: true, ...S.cfg } }),
   adminGrowthFunnel: vi.fn(async () => ({ success: true, rows: [] })),
@@ -100,10 +101,11 @@ function estBox(): HTMLElement {
   if (!title) throw new Error('未渲染预估系数区块（PlansP 结构变了？锁需随迁）')
   return title.parentElement!.parentElement!
 }
-// 四个输入框按 EST_TOKEN_FIELDS 声明序渲染，故下标即键序
+// 六个输入框按 EST_TOKEN_FIELDS 声明序渲染，故下标即键序
+// （0=k_pro 1=k_fast 2=fixed_pro 3=fixed_fast 4=fixed_lang_pro 5=fixed_lang_fast）
 function estInput(i: number): HTMLInputElement {
   const ins = Array.from(estBox().querySelectorAll('input')) as HTMLInputElement[]
-  if (ins.length !== 4) throw new Error(`预估区块应有 4 个输入框，实得 ${ins.length}`)
+  if (ins.length !== 6) throw new Error(`预估区块应有 6 个输入框，实得 ${ins.length}`)
   return ins[i]
 }
 function estButton(label: string): HTMLButtonElement {
@@ -132,10 +134,13 @@ beforeEach(() => {
 describe('PlansP · 计费预估系数表单（〇-X #51 / F-72 补口）', () => {
   it('① 回显生效值 + 库里未配置时标注「走代码缺省」', async () => {
     await mount()
-    expect([estInput(0).value, estInput(1).value, estInput(2).value, estInput(3).value]).toEqual(['160', '60', '3000', '1200'])
+    expect([estInput(0).value, estInput(1).value, estInput(2).value, estInput(3).value,
+      estInput(4).value, estInput(5).value]).toEqual(['160', '60', '600', '300', '2400', '900'])
     const txt = estBox().textContent ?? ''
     expect(txt).toContain(billingZh['billing.estDefault'].replace('{v}', '160'))
-    expect(txt).toContain('est_tokens = F(mode)') // 公式随接口回显放出，界面上不另写一份
+    expect(txt).toContain('est_tokens = F0(mode)') // 公式随接口回显放出，界面上不另写一份
+    // 单语种固定合计仍与拆分前一致（600+2400=3000 / 300+900=1200），页面上两行各有标注：
+    expect(txt).toContain(billingZh['billing.estFixedLangPro'])
   })
 
   it('② K 填 0：客户端拦住且保存接口零调用（假拦截判红）', async () => {
@@ -146,19 +151,23 @@ describe('PlansP · 计费预估系数表单（〇-X #51 / F-72 补口）', () =
     expect(S.saves.length, 'K=0 不得发出保存请求').toBe(0)
   })
 
-  it('③ 四项合法改动：恰好 1 次保存且四项一次交齐', async () => {
+  it('③ 六项合法改动：恰好 1 次保存且六项一次交齐', async () => {
     await mount()
     fireEvent.change(estInput(0), { target: { value: '150' } })
     fireEvent.change(estInput(2), { target: { value: '0' } }) // 固定项 0 合法（退回纯线性）
     fireEvent.click(estButton(baseZh['common.save']))
     await vi.waitFor(() => expect(S.saves.length).toBe(1))
-    expect(S.saves[0]).toEqual({ k_pro: 150, k_fast: 60, fixed_pro: 0, fixed_fast: 1200 })
+    // 后端六项硬校验：少发 fixed_lang_* 会被整批拒，故提交体必须六键齐全
+    expect(S.saves[0]).toEqual({
+      k_pro: 150, k_fast: 60, fixed_pro: 0, fixed_fast: 300,
+      fixed_lang_pro: 2400, fixed_lang_fast: 900,
+    })
   })
 
   it('④ 库里是脏值：输入框填生效值、给脏值提示，保存发出的是生效值而非脏串', async () => {
     S.cfg = {
       ...defaultCfg(),
-      stored: { k_pro: 'abc', k_fast: '', fixed_pro: '3000', fixed_fast: '1200' },
+      stored: { k_pro: 'abc', k_fast: '', fixed_pro: '600', fixed_fast: '300', fixed_lang_pro: '2400', fixed_lang_fast: '900' },
     }
     await mount()
     expect(estInput(0).value, '脏值不得直塞输入框').toBe('160')
@@ -166,7 +175,10 @@ describe('PlansP · 计费预估系数表单（〇-X #51 / F-72 补口）', () =
       billingZh['billing.estDirty'].replace('{v}', 'abc').replace('{d}', '160'))
     fireEvent.click(estButton(baseZh['common.save']))
     await vi.waitFor(() => expect(S.saves.length).toBe(1))
-    expect(S.saves[0]).toEqual({ k_pro: 160, k_fast: 60, fixed_pro: 3000, fixed_fast: 1200 })
+    expect(S.saves[0]).toEqual({
+      k_pro: 160, k_fast: 60, fixed_pro: 600, fixed_fast: 300,
+      fixed_lang_pro: 2400, fixed_lang_fast: 900,
+    })
   })
 
   it('⑤ 恢复缺省：先二次确认，取消零调用、确认只发 {reset:true}', async () => {
@@ -183,7 +195,7 @@ describe('PlansP · 计费预估系数表单（〇-X #51 / F-72 补口）', () =
     expect(S.saves[0]).toEqual({ reset: true })
   })
 
-  it('⑥ GET 失败：输入框禁用且点保存零调用（防拿空表单覆盖线上四键）', async () => {
+  it('⑥ GET 失败：输入框禁用且点保存零调用（防拿空表单覆盖线上六键）', async () => {
     S.getOk = false
     render(<><PlansP /><DialogHost /></>)
     await vi.waitFor(() => {
@@ -192,7 +204,8 @@ describe('PlansP · 计费预估系数表单（〇-X #51 / F-72 补口）', () =
       expect(t).toBeTruthy()
     })
     const ins = Array.from(estBox().querySelectorAll('input')) as HTMLInputElement[]
-    expect(ins.every((i) => i.disabled), '回显失败时四个输入框必须禁用').toBe(true)
+    expect(ins.length).toBe(6)
+    expect(ins.every((i) => i.disabled), '回显失败时六个输入框必须禁用').toBe(true)
     fireEvent.click(estButton(baseZh['common.save']))
     await new Promise((r) => setTimeout(r, 50))
     expect(S.saves.length).toBe(0)

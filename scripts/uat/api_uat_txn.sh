@@ -195,6 +195,15 @@
 #       ⑦ 源码级防回退（同 T44 取向，行为侧已在各 Go 单测锁住）：英语避雷只拦 kind=forbidden＋中性词豁免表在位、
 #          文化规则块上限 2000 字/30 条及其两个配置键读点、工单整单重发上限 3、文件漏译比例只有一处定义；
 #       ⑧ 收尾按**显式 id** 摘干净（users/tenants/invite_codes/trial 台账/额度行/Key/包/审计/工单/限流/两枚配置键）。
+#   T74 2026-10-28 计价与成本优化批（方案 §3/§5/§6/§8）：
+#       ① 公开报价 `/api/pricing/meta` 与超管六系数 + 积分汇率**三处同源**（现读现算，不写死 600/2400）；
+#          公开面零 token 裸值（负向锁配正向对照，避免"整段被删也绿"）；
+#       ② LID 引擎现读 `lingua` 且 `lid_ready=true`；
+#       ③ 译文记忆库表与七维列真在库里（按方言各问一次 information_schema/pragma_table_info）；
+#       ④ TM 端到端：第一次同文建单**零命中且真写行**，第二次必须命中（库内 hits 自增或命中日志 hits_a/hits_b>0）；
+#       ⑤ `tm_enabled=0` 时**两层一起关**：同一份老文本不再命中、新行一行都不写；
+#       ⑥ 源码级防回退：3 轮硬闸、三处自适应分批、TM 提示词口径进键、写回过可用性判据、LID 不许 FromAllLanguages。
+#       ⑦ 收尾按显式 id 摘掉本段工单与记忆行（测试数据不留进下一轮）。
 # 注意：所有带复杂引号 body 的 curl 必须「先存变量再断言」，禁止在 ck 内嵌嵌套引号
 #   —— 2026-09-21 实测：`ck X 'want' "$(post "$H" "{\"a\":1,\"b\":2}" /p)"` 里的 body 会被 bash
 #   在双引号内的命令替换中做**大括号展开**，按逗号切成两个参数，curl 发出残缺 body 换来「参数格式
@@ -1293,11 +1302,14 @@ ck T40-pdf-code-quota '"code":"QUOTA_EXCEEDED"' "$R40S"
 if echo "$R40S" | grep -qi "token"; then FAIL=$((FAIL+1)); echo "FAIL|T40-pdf-msg-no-raw-token($(echo "$R40S" | head -c 120))"; else PASS=$((PASS+1)); echo "PASS|T40-pdf-msg-no-raw-token"; fi
 # a-2 等值锁（★ F-72 2026-09-27 〇-W 改两段式；★ F-78 折算尺改现读）：
 #   N == round( (F(fast) + (716800/12 整除) × K(fast)) / RATE )
-#   三档都从库里**现读**（K/F 键缺失/非法 → 与后端同口径的保守默认 F=1200 / K=60；RATE 见文件头 T0），
+#   三档都从库里**现读**（K/F 键缺失/非法 → 与后端同口径的保守默认 F0=300 / F1=900 / K=60；RATE 见文件头 T0），
 #   所以管理台回调 F 或 K、或积分改档，本条都自动跟随；只有「代码偷偷改默认值 / 两段式接错档 / 分档折算被改回 /3」才翻红。
+#   ★ 2026-10-28 计价批：公式改成 F0 + 语种数×(F1 + 字符×K)，本单单语种 ⇒ F0+F1+字符×K，
+#     单语种合计与拆分前的 1200 逐字相同；F0/F1 两键都现读，运营只改其中一档也自动跟随。
 KFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_per_char_fast'" | tr -d '[:space:]')
 FFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_fixed_fast'" | tr -d '[:space:]')
-EXP40=$(K40="$KFAST40" F40="$FFAST40" RATE40="$RATE" python3 -c 'import os
+FLFAST40=$(dbq "SELECT value FROM system_config WHERE key='est_tokens_fixed_lang_fast'" | tr -d '[:space:]')
+EXP40=$(K40="$KFAST40" F40="$FFAST40" FL40="$FLFAST40" RATE40="$RATE" python3 -c 'import os
 def num(raw, defv, allow_zero):
     try:
         v = float(os.environ.get(raw, "").strip())
@@ -1307,9 +1319,11 @@ def num(raw, defv, allow_zero):
         return v
     return defv                # K 的 ≤0 与 F 的负数都是脏配置
 k = num("K40", 60.0, False)
-fixed = num("F40", 1200.0, True)   # F 允许显式 0＝运维退回纯线性
+fixed = num("F40", 300.0, True)        # F0 每单固定项（允许显式 0）
+fixed_lang = num("FL40", 900.0, True)  # F1 每语种固定项（允许显式 0）
 rate = int(num("RATE40", 400.0, False))
-est = int(fixed) + int(716800 // 12 * k)   # 与 Go 侧同序：固定项先取整，再加线性项
+langs = 1                              # 本单 target_langs=en
+est = int(fixed) + int(langs * (fixed_lang + 716800 // 12 * k))   # 与 Go 侧同式
 print((est + rate // 2) // rate)')
 ck T40-pdf-estimate-eq-K "预估需约 ${EXP40} 积分" "$R40S"
 N40=$(printf '%s' "$R40S" | grep -oE '预估需约 [0-9]+ 积分' | grep -oE '[0-9]+' | head -1)
@@ -2990,7 +3004,7 @@ req3 GET "" /api/admin/orgs; ck3 T63-orgs-anon-401 401 UNAUTHORIZED '未登录'
 #   而 run_uat 复用同一个库跑下一轮——留着 161/61 会让 T40 跟着漂移，且「未配置走缺省」这条
 #   线上真实形态就再也没被测到了。
 ESTCFG=/api/admin/config/est-tokens
-ESTKEYS="'est_tokens_per_char_pro','est_tokens_per_char_fast','est_tokens_fixed_pro','est_tokens_fixed_fast'"
+ESTKEYS="'est_tokens_per_char_pro','est_tokens_per_char_fast','est_tokens_fixed_pro','est_tokens_fixed_fast','est_tokens_fixed_lang_pro','est_tokens_fixed_lang_fast'"
 # estv <键> → 从 R3BODY 的 coefficients 里取一个生效值（取不到回空，交给等值判据报红）
 estv(){ printf '%s' "${R3BODY:-}" | python3 -c 'import sys,json
 try:
@@ -3026,10 +3040,11 @@ ck T64-super-token '^.{20,}$' "${AH64#Bearer }"
 EST0=$(ESTCNT); EST0=${EST0:-0}
 PRE64KPRO=$(ESTGET est_tokens_per_char_pro); PRE64KFAST=$(ESTGET est_tokens_per_char_fast)
 PRE64FPRO=$(ESTGET est_tokens_fixed_pro);     PRE64FFAST=$(ESTGET est_tokens_fixed_fast)
+PRE64FLPRO=$(ESTGET est_tokens_fixed_lang_pro); PRE64FLFAST=$(ESTGET est_tokens_fixed_lang_fast)
 # ① 鉴权三态（匿名 401 / 租管 403 / 超管 200）
 req3 GET "" $ESTCFG; ck3 T64-get-anon-401 401 UNAUTHORIZED '未登录'
 req3 GET "$H1" $ESTCFG; ck3 T64-get-tenantadmin-403 403 FORBIDDEN '权限不足|仅平台超管'
-B64ANY='{"k_pro":160,"k_fast":60,"fixed_pro":3000,"fixed_fast":1200}'
+B64ANY='{"k_pro":160,"k_fast":60,"fixed_pro":600,"fixed_fast":300,"fixed_lang_pro":2400,"fixed_lang_fast":900}'
 #   ★ 租管这一腿在 requireAdminUser 就被挡（"权限不足"），走不到 IsSuperAdmin 那支
 #   （"仅平台超管"）——两支文案都收下：真漏了超管判定时会由 Go 侧单测红在这里由 HTTP 级红，
 #   而把两支合并成一条正则才不会被「守卫链换人」这种等价改法假红。
@@ -3039,25 +3054,29 @@ req3 GET "$AH64" $ESTCFG
 [ "${R3ST:-}" = "200" ] && { PASS=$((PASS+1)); echo "PASS|T64-get-200"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-get-200(got ${R3ST:-?} body=${R3BODY:0:160}；401＝AH64 失效假绿，勿放宽)"; }
 ckq T64-default-kpro 160 "$(estv k_pro)"
 ckq T64-default-kfast 60 "$(estv k_fast)"
-ckq T64-default-fpro 3000 "$(estv fixed_pro)"
-ckq T64-default-ffast 1200 "$(estv fixed_fast)"
+# ★ 2026-10-28 计价批：固定项拆成 F0（每单）+F1（每语种）——pro 600+2400、fast 300+900，
+#   单语种合计仍是 3000/1200（与拆分前逐字相同，短单下限没变）。
+ckq T64-default-fpro 600 "$(estv fixed_pro)"
+ckq T64-default-ffast 300 "$(estv fixed_fast)"
+ckq T64-default-flpro 2400 "$(estv fixed_lang_pro)"
+ckq T64-default-flfast 900 "$(estv fixed_lang_fast)"
 printf '%s' "$R3BODY" | grep -qE '"formula":"[^"]' && { PASS=$((PASS+1)); echo "PASS|T64-formula-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-formula-echoed(公式没回显＝前端那段等式只能写死在组件里，与后端口径会漂)"; }
 printf '%s' "$R3BODY" | grep -qE '"points_tokens_rate":[1-9]' && { PASS=$((PASS+1)); echo "PASS|T64-rate-echoed"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-rate-echoed(汇率只读面缺失，管理台无法把 token 系数折成积分)"; }
 # ③ 四类非法输入整批拒收，且库里一行都不许多出来
-B64K0='{"k_pro":0,"k_fast":60,"fixed_pro":3000,"fixed_fast":1200}'
+B64K0='{"k_pro":0,"k_fast":60,"fixed_pro":600,"fixed_fast":300,"fixed_lang_pro":2400,"fixed_lang_fast":900}'
 req3 POST "$AH64" $ESTCFG "$B64K0"; ck3 T64-reject-k-zero 400 VALIDATION_ERROR '必须大于 0'
-B64NEG='{"k_pro":160,"k_fast":60,"fixed_pro":-1,"fixed_fast":1200}'
+B64NEG='{"k_pro":160,"k_fast":60,"fixed_pro":-1,"fixed_fast":300,"fixed_lang_pro":2400,"fixed_lang_fast":900}'
 req3 POST "$AH64" $ESTCFG "$B64NEG"; ck3 T64-reject-negative 400 VALIDATION_ERROR '不能为负数'
-B64BIG='{"k_pro":160,"k_fast":99999999,"fixed_pro":3000,"fixed_fast":1200}'
+B64BIG='{"k_pro":160,"k_fast":99999999,"fixed_pro":600,"fixed_fast":300,"fixed_lang_pro":2400,"fixed_lang_fast":900}'
 req3 POST "$AH64" $ESTCFG "$B64BIG"; ck3 T64-reject-over-max 400 VALIDATION_ERROR '超出合理范围'
-B64MISS='{"k_pro":160,"k_fast":60,"fixed_pro":3000}'
+B64MISS='{"k_pro":160,"k_fast":60,"fixed_pro":600,"fixed_lang_pro":2400,"fixed_lang_fast":900}'
 req3 POST "$AH64" $ESTCFG "$B64MISS"; ck3 T64-reject-missing-field 400 VALIDATION_ERROR '缺少 fixed_fast'
 EST1=$(ESTCNT); EST1=${EST1:-0}
 [ "$EST1" = "$EST0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reject-leaves-nothing(四键行数 ${EST0}→$EST1)"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reject-leaves-nothing(拒收却把行数从 $EST0 写成 ${EST1}＝半套配置，长短单口径会不一致)"; }
 # ④ 合法保存 → 读回等值 + 审计留痕（F 档允许 0＝关闭固定项，这里顺带锁一次）
 #   ★ 成功体是 {success:true, coefficients:{…}}，没有 code/message 两字段，故不走 ck3（它会等值比
 #   错误码），只判状态码 200 + success:true + 生效值读回。
-B64OK='{"k_pro":161,"k_fast":61,"fixed_pro":3001,"fixed_fast":0}'
+B64OK='{"k_pro":161,"k_fast":61,"fixed_pro":3001,"fixed_fast":0,"fixed_lang_pro":2401,"fixed_lang_fast":0}'
 req3 POST "$AH64" $ESTCFG "$B64OK"
 ck T64-save-ok '"success":true' "$R3BODY"
 req3 GET "$AH64" $ESTCFG
@@ -3065,6 +3084,8 @@ ckq T64-readback-kpro 161 "$(estv k_pro)"
 ckq T64-readback-kfast 61 "$(estv k_fast)"
 ckq T64-readback-fpro 3001 "$(estv fixed_pro)"
 ckq T64-readback-ffast-zero 0 "$(estv fixed_fast)"
+ckq T64-readback-flpro 2401 "$(estv fixed_lang_pro)"
+ckq T64-readback-flfast-zero 0 "$(estv fixed_lang_fast)"
 EST64DET=$(dbq "SELECT detail FROM audit_logs WHERE action='est_tokens_save' ORDER BY id DESC LIMIT 1" | tr -d '\r' | head -1)
 ck T64-audit-has-new-values 'k_pro=161' "$EST64DET"
 # ⑤ 脏值不伪装成生效值：绕过校验直插 'abc' → 生效值回**代码缺省**（不是上一批的 161），
@@ -3082,7 +3103,8 @@ req3 POST "$AH64" $ESTCFG "$B64R"
 ck T64-reset-ok '"success":true' "$R3BODY"
 req3 GET "$AH64" $ESTCFG
 ckq T64-reset-kpro 160 "$(estv k_pro)"
-ckq T64-reset-ffast 1200 "$(estv fixed_fast)"
+ckq T64-reset-ffast 300 "$(estv fixed_fast)"
+ckq T64-reset-flfast 900 "$(estv fixed_lang_fast)"
 RST64=$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ($ESTKEYS) AND value<>''" | tr -d '[:space:]')
 [ "${RST64:-0}" = "0" ] && { PASS=$((PASS+1)); echo "PASS|T64-reset-blanks-rows"; } || { FAIL=$((FAIL+1)); echo "FAIL|T64-reset-blanks-rows(还有 $RST64 行带值＝点「恢复缺省」只清了显示、库里仍生效)"; }
 # 收尾：把四键**恢复成进段之前的样子**，交还给下一轮（含现读这四键算等值锁的 T40）。
@@ -3090,7 +3112,8 @@ RST64=$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ($ESTKEYS) AND valu
 #   但若进段前运维确实配过值（例如批 H 调过 K），本段必须把那一行原值写回去，不能替他改数。
 dbq "DELETE FROM system_config WHERE key IN ($ESTKEYS)" >/dev/null
 for KV64 in "est_tokens_per_char_pro|$PRE64KPRO" "est_tokens_per_char_fast|$PRE64KFAST" \
-            "est_tokens_fixed_pro|$PRE64FPRO" "est_tokens_fixed_fast|$PRE64FFAST"; do
+            "est_tokens_fixed_pro|$PRE64FPRO" "est_tokens_fixed_fast|$PRE64FFAST" \
+            "est_tokens_fixed_lang_pro|$PRE64FLPRO" "est_tokens_fixed_lang_fast|$PRE64FLFAST"; do
   K64="${KV64%%|*}"; V64="${KV64#*|}"
   if [ -n "$V64" ]; then dbq "INSERT INTO system_config(key,value) VALUES('$K64','$V64')" >/dev/null; fi
 done
@@ -4635,6 +4658,198 @@ ckq T73-cleanup-no-orphan-ticket 0 "$(dbq "SELECT COUNT(*) FROM tickets WHERE ti
 # 跑完把两档钉回"没配"的形态：档位留在上界会跟着进后面的段与多实例矩阵，
 # 那正是"改了配置没反应"最难查的形态（同 T70 段头那条纪律）。
 ck T73-tier-defaults-after-cleanup '"retry_max":3' "$(get "$T73AHdr" "$T73CFG")"
+
+# ---------- T74 2026-10-28 计价与成本优化批：报价 v3 / 译文记忆两级 / LID 引擎档 ----------
+# 为什么这四件必须进 HTTP 级矩阵（单测各自锁了判据，但它们在单测里"永远成立"）：
+#   ① 报价三处同源：单测能证明公式相等，证明不了**真路由**上公开面读到的就是超管面那份系数
+#      （中间还隔着 estConfigFloat 的脏值回退链与 PointsTokensRate 的库读点）；
+#   ② TM 两级：单测用假 store，证明不了"真库 + 真进程 + 真工单链"上第二次真的不打上游；
+#   ③ tm_enabled=0：这是运维唯一的关闸路，只关内存不关库＝他以为关了而实际还在命中，成本账对不上；
+#   ④ LID：`lingua` 是纯 Go 依赖，但"health 报的引擎名"与"实现真用哪个库"是两件事，
+#      因此行为腿（health）与源码腿（不许 FromAllLanguages）一起判。
+# ★ 判据取向：所有"命中/节省"类结论一律由**库内事实或那一条腿自己的读数**给出，
+#   不拿"响应体里有没有某句话"当生效证据（AGENTS §三 那条"日志只抓没走到"）。
+T74AH="Authorization: Bearer $(tok $ADMIN_USER $ADMIN_PASS)"
+ck T74-admin-token '^.{20,}$' "${T74AH#Bearer }"
+
+# ① 公开报价 ↔ 超管六系数 ↔ 积分汇率：三处同源（现读现算，不写死 600/2400）。
+#   为什么用 python 现算而不是 grep 几个数字：库里的系数可被运维改过（本批之前 T64 会复位，
+#   但生产上可能是调过的值），写死 600 的断言在调过档的库上恒红，而恒红会被下一次"放宽判据"抹掉。
+T74EST=$(curl -s --max-time 30 "$B/api/admin/config/est-tokens" -H "$T74AH")
+T74META=$(curl -s --max-time 30 "$B/api/pricing/meta")
+T74CMP=$(python3 - "$T74EST" "$T74META" <<'PY' 2>/dev/null
+import json, sys
+try:
+    est = json.loads(sys.argv[1])
+    meta = json.loads(sys.argv[2])
+    c = est["coefficients"]
+    rate = float(est["points_tokens_rate"])
+    modes = {m.get("code"): m for m in meta.get("modes", [])}
+    bad = []
+    if rate <= 0:
+        bad.append("rate=%s" % rate)
+    for code in ("pro", "fast"):
+        m = modes.get(code) or {}
+        want = {
+            "points_fixed": (c["fixed_" + code] + c["fixed_lang_" + code]) / rate,
+            "points_fixed_per_lang": c["fixed_lang_" + code] / rate,
+            "points_per_1k_chars": c["k_" + code] * 1000 / rate,
+        }
+        for k, v in want.items():
+            got = m.get(k)
+            if got is None or abs(float(got) - v) > 1e-6 * max(1.0, abs(v)):
+                bad.append("%s.%s want=%.6f got=%s" % (code, k, v, got))
+    print("OK" if not bad else "BAD " + "; ".join(bad))
+except Exception as e:
+    print("BAD parse: %r" % (e,))
+PY
+)
+ckq T74-price-meta-matches-coeffs OK "${T74CMP:-<空>}"
+# 正向对照：上面那条等值锁若因"整段被删"而拿到空对象，python 会回 BAD（不会假绿）；
+#   这里再钉一次"公开面确实有积分口径字段"，让"删掉 modes 也绿"这种形态无处可躲。
+ck T74-price-meta-has-points '"points_fixed_per_lang"' "$T74META"
+ck T74-price-meta-has-money '"points_price_money":[0-9]' "$T74META"
+# 负向：公开面不许出内部 token 系数/汇率裸值（AGENTS §一·5 铁律）。
+ckn T74-price-meta-no-token-raw 'k_pro|k_fast|fixed_pro|fixed_fast|points_tokens_rate' "$T74META"
+
+# ② LID 引擎档：现读 lingua（lingua-go 纯 Go，无外部进程/权重）。
+T74H=$(curl -s --max-time 30 "$B/api/health")
+ck T74-health-lid-engine '"lid_engine":"lingua"' "$T74H"
+ck T74-health-lid-ready '"lid_ready":true' "$T74H"
+
+# ③ 译文记忆库表与七维列真在库里。
+#   为什么按方言各问一次：Go 单测只跑 SQLite，PG 的 EnsureColumns 走另一条 DDL 分支；
+#   缺列时读侧查不到那一维、命中率无声腰斩（同 T72 的 repair_attempts 那一族）。
+T74COLS(){ if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='translation_memory' AND column_name IN ('src_hash','src_lang','tgt_lang','mode','model_fp','context_hash','hits','source','out')" | tr -dc '0-9'
+  else
+    dbq "SELECT COUNT(*) FROM pragma_table_info('translation_memory') WHERE name IN ('src_hash','src_lang','tgt_lang','mode','model_fp','context_hash','hits','source','out')" | tr -dc '0-9'
+  fi; }
+ckq T74-tm-table-columns 9 "$(T74COLS)"
+
+# ④ TM 端到端：第一次零命中且真写行 → 第二次必须命中。
+#   ★ 命中判据取两层的**读数**（库内 hits 自增 / 命中日志 hits_a|hits_b>0），不拿"完成得更快"当证据：
+#     提速在 mock 上游下几乎测不出来，而"日志里那行 hits 是 0"是结构性的。
+TMPD74=$(mktemp -d)
+T74SFX=$(date +%s)
+T74L="${UAT_SERVER_LOG:-}"
+T74LOG0=0
+if [ -n "$T74L" ] && [ -f "$T74L" ]; then T74LOG0=$(grep -c '译文记忆命中' "$T74L" 2>/dev/null || true); T74LOG0=${T74LOG0:-0}; fi
+T74ROWS(){ local v; v=$(dbq "SELECT COUNT(*) FROM translation_memory WHERE tenant_id=$TAID AND src LIKE '%$1%'" | tr -dc '0-9'); printf '%s' "${v:-0}"; }
+T74HITS(){ local v; v=$(dbq "SELECT COALESCE(SUM(hits),0) FROM translation_memory WHERE tenant_id=$TAID AND src LIKE '%$1%'" | tr -dc '0-9'); printf '%s' "${v:-0}"; }
+# 命中日志增量：只看**基线之后新增**的行，且必须带 hits_a/hits_b>0
+# （misses 也会写日志，所以"有新日志"不能当命中证据）。
+# ⚠️ 基线必须**按阶段各取一次**：拿进段的基线去判关闭态，会把第二次那行 hits>0 也算进来，
+#    于是"关闸没生效"被读成"关闸生效"（本段首跑就是这个形态，属于判据自伤）。
+# ★ 基线是「**命中日志行**的条数」，所以必须先按同一个模式筛出命中日志行再 tail——
+#   旧写法直接拿这个条数去 `tail -n +N 整份日志`，把文件行号当成命中日志的序号：基线越大起点越靠前，
+#   于是第二单那 4 行 hits 被算进“关闭态命中”，关闸其实生效却判红（本段真踩两次的读数：
+#   `T74-tm-off-no-cache-hit|want=0|got=4`）。这条锁问的是“基线之后**新增的命中日志行**里有没有 hits>0”。
+T74NEWHITLOG(){ local base="${1:-0}"; if [ -z "$T74L" ] || [ ! -f "$T74L" ]; then printf 'na'; return; fi
+  grep '译文记忆命中' "$T74L" 2>/dev/null | tail -n +$((base + 1)) | grep -cE '"hits_(a|b)":[1-9]'; }
+T74LOGN(){ local v=0; if [ -n "$T74L" ] && [ -f "$T74L" ]; then v=$(grep -c '译文记忆命中' "$T74L" 2>/dev/null || true); fi; printf '%s' "${v:-0}"; }
+printf 'T74 译文记忆探针 %s：本季度营收稳步增长，毛利率同比提升两个百分点。\n第二段：请复核随附的发票明细与付款期限，并在本周内回复确认。\n' "$T74SFX" > "$TMPD74/t74a.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD74/t74a.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T74-tm-first-create '"success":true' "$R"
+T74TK1=$(printf '%s' "$R" | pv "['ticket']['id']")
+D74A=$(waittk "$H1" "${T74TK1:-0}")
+ck T74-tm-first-completed '"status":"completed"' "$D74A"
+ckq T74-tm-first-wrote-rows 1 "$([ "$(T74ROWS "T74 译文记忆探针 $T74SFX")" -ge 1 ] && echo 1 || echo 0)"
+# 第一次必须零命中：这是第二次读数的"对照腿"——没有它，第二次 hits=1 可能来自任何历史行。
+ckq T74-tm-first-zero-hits 0 "$(T74HITS "T74 译文记忆探针 $T74SFX")"
+T74LOG1=$T74LOG0
+if [ -n "$T74L" ] && [ -f "$T74L" ]; then T74LOG1=$(grep -c '译文记忆命中' "$T74L" 2>/dev/null || true); T74LOG1=${T74LOG1:-0}; fi
+# 第二次：同一份源文（不同文件名），必须命中 A 或 B 之一。
+cp "$TMPD74/t74a.txt" "$TMPD74/t74b.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD74/t74b.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T74-tm-second-create '"success":true' "$R"
+T74TK2=$(printf '%s' "$R" | pv "['ticket']['id']")
+D74B=$(waittk "$H1" "${T74TK2:-0}")
+ck T74-tm-second-completed '"status":"completed"' "$D74B"
+T74HITDB=$(T74HITS "T74 译文记忆探针 $T74SFX")
+T74HITLOG=$(T74NEWHITLOG "$T74LOG0")
+if [ "$T74HITDB" -ge 1 ] || [ "$T74HITLOG" != "0" ]; then
+  PASS=$((PASS+1)); echo "PASS|T74-tm-second-hit(db_hits=$T74HITDB log_hits=$T74HITLOG)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T74-tm-second-hit(db_hits=$T74HITDB log_hits=$T74HITLOG)⇒ 同文第二单两层都没命中：缓存键某维随单漂了（租户/源/目标/口径/模型/表头），或写回没落库"
+fi
+# 第二次仍必须完成（命中不许把交付链打断——命中段走的是"照常上报"那一条）。
+ckq T74-tm-second-still-wrote-rows 1 "$([ "$(T74ROWS "T74 译文记忆探针 $T74SFX")" -ge 1 ] && echo 1 || echo 0)"
+# ★ 关闭态的日志基线必须取在**第二单跑完之后**（本段首跑真踩：基线取早了，第二单那 4 行 hits 被算成
+#   "关闭后还命中"，于是关闸其实生效却判红＝判据自伤，读数 `T74-tm-off-no-cache-hit|want=0|got=4`）。
+T74LOG2=$(T74LOGN)
+
+# ⑤ tm_enabled=0：两层一起关（只关一层＝运维以为关了而实际还在命中）。
+#   ★ 第三单刻意把"老两行 + 一行新文本"拼在同一个文件里：
+#     · 老行若还被命中 ⇒ 日志 hits_a>0（缓存 A 没关住）；
+#     · 新行若还被写库 ⇒ 库内多出"关闭探针"行（缓存 B 没关住）。
+#   一条工单把两层各判一次，且不依赖任何"更快/更慢"的软读数。
+T74PREON=$(dbq "SELECT value FROM system_config WHERE key='tm_enabled'" | tr -d '\r' | head -1)
+dbcfg tm_enabled 0
+printf 'T74 译文记忆探针 %s：本季度营收稳步增长，毛利率同比提升两个百分点。\n第二段：请复核随附的发票明细与付款期限，并在本周内回复确认。\nT74 关闭探针 %s：关闭后这一行不应写入译文记忆。\n' "$T74SFX" "$T74SFX" > "$TMPD74/t74c.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD74/t74c.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T74-tm-off-create '"success":true' "$R"
+T74TK3=$(printf '%s' "$R" | pv "['ticket']['id']")
+D74C=$(waittk "$H1" "${T74TK3:-0}")
+ck T74-tm-off-completed '"status":"completed"' "$D74C"
+ckq T74-tm-off-no-new-rows 0 "$(T74ROWS "T74 关闭探针 $T74SFX")"
+T74OFFLOG=$(T74NEWHITLOG "$T74LOG2")
+ckq T74-tm-off-no-cache-hit 0 "$T74OFFLOG"
+# ── 判据自证（防恒真）：把开关钉回开，同一份"老文本"再跑必须重新命中；
+#    否则"关闭态零命中"可能只是判据没看对行（同 AGENTS §三 那条"反向对照必须真能红"）。
+if [ -n "$T74PREON" ]; then dbcfg tm_enabled "$T74PREON"; else dbq "DELETE FROM system_config WHERE key='tm_enabled'" >/dev/null; fi
+T74LOG3=$(T74LOGN)
+cp "$TMPD74/t74c.txt" "$TMPD74/t74d.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD74/t74d.txt" -F "target_langs=en" -F "mode=fast" --max-time 60)
+ck T74-tm-rehit-create '"success":true' "$R"
+T74TK4=$(printf '%s' "$R" | pv "['ticket']['id']")
+D74D=$(waittk "$H1" "${T74TK4:-0}")
+ck T74-tm-rehit-completed '"status":"completed"' "$D74D"
+T74REHIT=$(T74NEWHITLOG "$T74LOG3")
+if [ "$T74REHIT" = "na" ]; then
+  PASS=$((PASS+1)); echo "PASS|T74-tm-rehit-skip(未提供 UAT_SERVER_LOG，缓存 A 的开关腿只能靠源码锁)"
+else
+  # 重新打开后，同一份老文本必须回到"命中"读数（证明关闭态那个 0 不是解析失明）。
+  ckq T74-tm-rehit-after-reenable 1 "$([ "${T74REHIT:-0}" -ge 1 ] && echo 1 || echo 0)"
+fi
+
+# ⑥ 源码级防回退（行为侧已由 Go 单测逐条锁住，这里锁的是"别把判据改回旧口径"）。
+ROOT74="$(cd "$(dirname "$0")/../.." && pwd)"
+SRC74FILE=$(cat "$ROOT74/backend-go/internal/engine/file.go" 2>/dev/null || true)
+SRC74ENG=$(cat "$ROOT74/backend-go/internal/engine/engine.go" 2>/dev/null || true)
+SRC74TM=$(cat "$ROOT74/backend-go/internal/engine/tm_cache.go" 2>/dev/null || true)
+SRC74LID=$(cat "$ROOT74/backend-go/internal/fileproc/lid.go" 2>/dev/null || true)
+if [ -z "$SRC74FILE" ] || [ -z "$SRC74ENG" ] || [ -z "$SRC74TM" ] || [ -z "$SRC74LID" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T74-src-readable(有源文件读不到 ⇒ 下面几条 src 锁全部空转，判红而不是放过)"
+else
+  PASS=$((PASS+1)); echo "PASS|T74-src-readable"
+  ckF T74-src-hardgate-three 'const fileHardgateMaxAttempts = 3' "$SRC74FILE"
+  ckq T74-src-adaptive-batch-three 3 "$(printf '%s' "$SRC74FILE" | grep -c 'adaptiveBatchSize(prot')"
+  ckF T74-src-tm-writeback-usable 'if tmOn && e.fileTranslationUsable(ctx' "$SRC74ENG"
+  ckF T74-src-tm-mode-in-key 'h.Write([]byte(sc.mode))' "$SRC74TM"
+  ckF T74-src-tm-rev-in-key 'h.Write([]byte(tmPromptRev))' "$SRC74TM"
+  ckF T74-src-lid-engine-name 'lidEngineName = "lingua"' "$SRC74LID"
+  # ★ 负向锁必须吃**剥掉注释后**的源码：lid.go 的文件头与函数注释里刻意写着「禁止 FromAllLanguages()」
+  #   （那几句是写给下一个改的人看的口径），拿整份源码去 grep 会把说明文字判成违规
+  #   ——本段首跑真踩，读数 `forbidden[FromAllLanguages\(]|got[// ============ lid.go · 职责说明`。
+  #   只剥 `//` 行注释即可：本批禁的是**调用/引用**，而调用不可能落在 `//` 注释里。
+  SRC74LID_CODE=$(printf '%s' "$SRC74LID" | grep -v '^[[:space:]]*//' || true)
+  ckn T74-src-lid-no-fromall 'FromAllLanguages\(' "$SRC74LID_CODE"
+fi
+
+# ⑦ 收尾：只按显式 id 摘本段工单/轨迹/文件行，并按标记删本段写进记忆库的行。
+for T74I in "${T74TK1:-0}" "${T74TK2:-0}" "${T74TK3:-0}" "${T74TK4:-0}"; do
+  [ "${T74I:-0}" -gt 0 ] || continue
+  dbq "DELETE FROM ticket_state WHERE ticket_id=$T74I" >/dev/null
+  dbq "DELETE FROM ticket_files WHERE ticket_id=$T74I" >/dev/null
+  dbq "DELETE FROM ticket_segments WHERE ticket_id=$T74I" >/dev/null
+  dbq "DELETE FROM tickets WHERE id=$T74I" >/dev/null
+done
+dbq "DELETE FROM translation_memory WHERE tenant_id=$TAID AND (src LIKE '%T74 译文记忆探针 $T74SFX%' OR src LIKE '%T74 关闭探针 $T74SFX%')" >/dev/null
+rm -rf "$TMPD74"
+ckq T74-cleanup-tickets-gone 0 "$(dbq "SELECT COUNT(*) FROM tickets WHERE id IN (${T74TK1:-0},${T74TK2:-0},${T74TK3:-0},${T74TK4:-0})" | tr -dc '0-9')"
+ckq T74-cleanup-tm-rows-gone 0 "$(dbq "SELECT COUNT(*) FROM translation_memory WHERE tenant_id=$TAID AND (src LIKE '%T74 译文记忆探针 $T74SFX%' OR src LIKE '%T74 关闭探针 $T74SFX%')" | tr -dc '0-9')"
+ckq T74-cleanup-switch-restored "$T74PREON" "$(dbq "SELECT value FROM system_config WHERE key='tm_enabled'" | tr -d '\r' | head -1)"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

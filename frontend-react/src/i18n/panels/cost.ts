@@ -40,8 +40,9 @@ export const zh: Record<string, string> = {
   'cmp.needInput': '请先填写有效的源文字符数与目标语种数，再查看结果。',
   // —— 公式公示 ——
   'cmp.formulaTitle': '我们怎么算这笔价',
-  'cmp.formula': '预估积分 =（源文字符数 ÷ 1000 × 目标语种数 × 每千字积分档）+ 每次建单固定积分；预估费用 = 预估积分 × 每积分单价。',
-  'cmp.coefFixed': '{mode}每次建单固定积分：{v}',
+  'cmp.formula': '预估积分 = 单语种固定 +（语种数−1）× 每多语种固定 + 源文字符数 ÷ 1000 × 目标语种数 × 每千字积分档；预估费用 = 预估积分 × 每积分单价。',
+  'cmp.coefFixed': '{mode}单语种固定积分：{v}',
+  'cmp.coefFixedPerLang': '{mode}每多 1 个目标语种追加：{v}',
   'cmp.coefLinear': '{mode}每 1000 源字符 × 1 个目标语种：{v}',
   'cmp.coefPrice': '每积分单价：{p} 元',
   'cmp.formulaNote': '这里的系数与下单时的预检用的是同一条式子，你在页面上算出来的积分就是账单上的积分；上方数字随运营调档实时更新，以本页当前显示值为准。',
@@ -92,8 +93,9 @@ export const en: Record<string, string> = {
   'cmp.needInput': 'Enter a valid source character count and target language count to see the result.',
   // —— Published formula ——
   'cmp.formulaTitle': 'How we price it',
-  'cmp.formula': 'Estimated points = (source characters ÷ 1000 × target languages × points per 1k characters) + fixed points per order; estimated cost = estimated points × price per point.',
-  'cmp.coefFixed': '{mode} fixed points per order: {v}',
+  'cmp.formula': 'Estimated points = fixed for the first language + (languages − 1) × fixed per extra language + source characters ÷ 1000 × points per 1k × languages; estimated cost = points × price per point.',
+  'cmp.coefFixed': '{mode} fixed points for the first language: {v}',
+  'cmp.coefFixedPerLang': '{mode} added per extra target language: {v}',
   'cmp.coefLinear': '{mode} per 1,000 source characters × 1 target language: {v}',
   'cmp.coefPrice': 'Price per point: CNY {p}',
   'cmp.formulaNote': 'These coefficients are the same expression the pre-check applies when you place an order, so the points you read here are the points on the invoice. The numbers above follow operational adjustments in real time — treat the values currently shown on this page as authoritative.',

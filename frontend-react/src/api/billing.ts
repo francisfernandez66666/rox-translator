@@ -311,15 +311,20 @@ export async function adminQuoteCurrencySave(data: { currency: string; rates: Re
 
 // ============================================================================
 // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）计费预估系数的超管配置口
-// （/api/admin/config/est-tokens）。四键对应 system_config 的
-// est_tokens_per_char_pro|fast（线性系数 K）与 est_tokens_fixed_pro|fast（固定项 F），
+// （/api/admin/config/est-tokens）。六键对应 system_config 的
+// est_tokens_per_char_pro|fast（线性系数 K）与 est_tokens_fixed_pro|fast（每单固定项 F0）
+// 与 est_tokens_fixed_lang_pro|fast（每语种固定项 F1），
 // 决定建单前的余额预检：调小＝放行更多单（真烧穿的风险），调大＝更多单被"余额不足"拦下。
-// 口径红线：K 必须 >0（清零＝全放行，正是历史烧穿事故形态），F 可以配 0（显式退回纯线性）。
-// 四项必须一次交齐，后端整批校验通过才落库；reset:true 表示四键清空、回落代码缺省。
+// 口径红线：K 必须 >0（清零＝全放行，正是历史烧穿事故形态），F0/F1 可以配 0（显式退回纯线性）。
+// 六项必须一次交齐，后端整批校验通过才落库；reset:true 表示六键清空、回落代码缺省。
+// ★ 2026-10-28 计价批：从四项扩到六项——固定项拆成「每单 F0」+「每语种 F1」，
+// 单语种合计不变（pro 3000 / fast 1200），多语种按语种数线性补固定开销。
+// ⚠️ 后端提交面是六项硬校验：前端只发四项会被整批拒绝（"缺少 fixed_lang_pro"），
+// 所以本数组就是表单与提交体的唯一来源，两端不许各写一份。
 // ============================================================================
 
-/** 预估系数四项的键名（与后端白名单同源，防手写串键） */
-export const EST_TOKEN_FIELDS = ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast'] as const
+/** 预估系数六项的键名（与后端白名单同源，防手写串键） */
+export const EST_TOKEN_FIELDS = ['k_pro', 'k_fast', 'fixed_pro', 'fixed_fast', 'fixed_lang_pro', 'fixed_lang_fast'] as const
 /** EstTokenField：预估系数键的联合类型，与 EST_TOKEN_FIELDS 逐键同源 */
 export type EstTokenField = (typeof EST_TOKEN_FIELDS)[number]
 
@@ -335,12 +340,12 @@ export interface EstTokensCfg {
   points_tokens_rate?: number
 }
 
-/** 管理台：回显四个预估系数的生效值（读侧清洗后的可信值）＋库内原值＋代码缺省 */
+/** 管理台：回显六个预估系数的生效值（读侧清洗后的可信值）＋库内原值＋代码缺省 */
 export async function adminEstTokens(): Promise<AdminResp & EstTokensCfg> {
   return bizResp(() => request('/api/admin/config/est-tokens', { headers: authHeaders() }))
 }
 
-/** 管理台：保存四个预估系数（必须一次交齐）；传 { reset: true } 则清空回代码缺省 */
+/** 管理台：保存六个预估系数（必须一次交齐）；传 { reset: true } 则清空回代码缺省 */
 export async function adminEstTokensSave(
   data: Partial<Record<EstTokenField, number>> & { reset?: boolean },
 ): Promise<AdminResp & EstTokensCfg> {

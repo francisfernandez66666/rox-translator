@@ -264,9 +264,16 @@ func TestUpstreamDeadSkipsRemainingLangs(t *testing.T) {
 // 靶子刻意给**连续三槽**截断——早停阈值恰是 3：不带截断维时这一批必然判死，
 // 于是"没判死"这个结果只能来自那一条新腿（归属由下面两条读数当场自证，不靠注释声称）。
 func TestTruncatedSlotsAreNotJudgedUpstreamDead(t *testing.T) {
-	// 半截回复：第一槽闭合，第二槽开了个头就被砍 ⇒ 解析只有 s1 有内容，s2~s4 全空。
+	// 半截回复：**只翻第一段**（按内容认，不按位置认），第二槽开了个头就被砍 ⇒ 本批里只有
+	// 「源文第一段」那一槽有内容，其余全空。
+	//
+	// ⚠️ 为什么必须按内容锚定（2026-10-28 计价/成本批真踩）：夹具过去写成"prompt 含 `<s1>` 就回 Alpha."，
+	// 那是**位置式**假设。批量腿前面接了译文记忆（缓存 A/B）之后，上面那段「归属自证」先跑过一次
+	// BatchTranslateMarked，第一段已被记忆命中 ⇒ 端到端那一次的批量窗口从第二段开始，s1 变成了
+	// "第二段"，位置式假上游就把 Alpha. 配给了第二段。产品侧的 idx 映射是对的（s1 的译文就该落到
+	// 本次批量的第一段），坏的是夹具。按内容锚定后，无论批量窗口从哪一段开始，回话的永远只有真正的第一段。
 	reply := func(prompt string) string {
-		if strings.Contains(prompt, "<s1>") {
+		if strings.Contains(prompt, "<s1>"+bfL1+"</s1>") {
 			return "<s1>Alpha.</s1><s2>Beta"
 		}
 		return ""

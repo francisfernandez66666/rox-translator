@@ -34,6 +34,8 @@ interface MetaMode {
   code: string
   points_per_1k_chars: number
   points_fixed: number
+  /** 每多一个目标语种的固定增量（★ 2026-10-28 计价 v3；缺了它本用例算出来的期望值系统性偏低一个 F1） */
+  points_fixed_per_lang: number
 }
 /** /api/pricing/meta 出参（只声明本用例用到的字段，接口加字段不必改这里） */
 interface PricingMeta {
@@ -50,12 +52,15 @@ function num(txt: string): number {
   return Number(txt.replace(/,/g, '').replace(/[^\d.]/g, ''))
 }
 
-/** 页面侧算式（与后端建单预检同一条两段式）：固定项 + 千字线性项 × 语种数，最后取整。
+/** 页面侧算式（与后端建单预检同一条 v3 式子）：单语种固定 + 每多一语种的固定增量 + 千字线性项 × 语种数，最后取整。
  *  与 src/lib/priceCalc.ts 的 calcEstimatePoints 逐字同式——首页卡、/compare 页、后端三处
  *  必须算出同一个数，这条式子在测试里重写一遍是**有意的**：
- *  从被测代码 import 过来就变成自证，抓不到「前端整批算错但自洽」。 */
+ *  从被测代码 import 过来就变成自证，抓不到「前端整批算错但自洽」。
+ *  ★ 2026-10-28 计价 v3 起**必须带上 `points_fixed_per_lang`**：只加一次固定项的旧式在多语种下
+ *    会比页面少一个 `F1÷汇率`（实测 pro 1,000 字 × 2 语种：旧式 808、页面 814），
+ *    那是判据没跟上 v3 而不是页面错。 */
 function pointsOf(m: MetaMode, chars: number, langs: number): number {
-  return Math.round(m.points_fixed + (chars / 1000) * m.points_per_1k_chars * langs)
+  return Math.round(m.points_fixed + (langs - 1) * m.points_fixed_per_lang + (chars / 1000) * m.points_per_1k_chars * langs)
 }
 
 /** 取本次接口的系数；顺带把「接口通了但数据不可用」也判成链路红灯（宁缺勿错） */

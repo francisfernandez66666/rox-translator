@@ -6,6 +6,7 @@ require (
 	github.com/go-pdf/fpdf v0.9.0
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/lib/pq v1.12.3
+	github.com/pemistahl/lingua-go v1.4.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/xuri/excelize/v2 v2.11.0
 	github.com/yuin/goldmark v1.7.8
@@ -23,10 +24,13 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/richardlehane/mscfb v1.0.7 // indirect
 	github.com/richardlehane/msoleps v1.0.6 // indirect
+	github.com/shopspring/decimal v1.3.1 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xuri/efp v0.0.1 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
+	golang.org/x/exp v0.0.0-20221106115401-f9659909a136 // indirect
 	golang.org/x/sys v0.47.0 // indirect
+	google.golang.org/protobuf v1.31.0 // indirect
 	modernc.org/libc v1.74.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect

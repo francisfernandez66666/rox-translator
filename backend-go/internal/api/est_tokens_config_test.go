@@ -1,13 +1,13 @@
 // ============ 本文件职责中文说明 ============
 // 计费预估系数超管配置口（★ F-72 补口，2026-09-27 〇-X 第 5 项，api/est_tokens_config.go）单测：
 //
-//	A GET 未配置态：回显＝代码缺省、stored 四键皆空（"库里没表态"要能在界面上看出来）、
+//	A GET 未配置态：回显＝代码缺省、stored 六键皆空（"库里没表态"要能在界面上看出来）、
 //	  defaults 与 formula 在场（公式要能对客户公开，界面上的数必须和读侧用的是同一份）。
 //	B POST 合法保存 → 200 且回显新值；库里四行逐键等值；再 GET 稳定。
 //	C 校验先行、整批拒绝：缺项 / K 清零 / 负数 / 超上限 一律 400 且 message 可读中文，
 //	  ★ 拒绝后库内仍是上一批的值（半套参数＝短单与长单口径不一致，比不调更糟）；
 //	  反向对照：F 档配 0 必须 200（那是「明知短单低估仍退回纯线性」的合法选择，不许误伤）。
-//	D reset：四键清空、生效值回代码缺省（与从未配置过完全同形，不留 0 这种会被误读的中间态）。
+//	D reset：六键清空、生效值回代码缺省（与从未配置过完全同形，不留 0 这种会被误读的中间态）。
 //	E 鉴权分流：匿名 401、租户管理员 403（未登录与等级不足必须分流——前端只在 401 走重登录）。
 //	F 回显即可信值：库里被旁路写成脏值（"abc"）时，GET 回显的是读侧真正在用的缺省，
 //	  且 estimateTicketTokens 的取数入口（estTokensPerChar/estTokensFixed）同值——
@@ -25,6 +25,7 @@ package api
 import (
 	"database/sql"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -94,9 +95,22 @@ func (s *Server) estCfgMux() http.Handler {
 	return m
 }
 
-// estCfgBody 组装四项一次交齐的请求体（数值由各用例给定）。
+// estCfgBody 组装六项一次交齐的请求体（数值由各用例给定）。
+// ★ 2026-10-28 计价批：F 拆成「每单 F0」+「每语种 F1」，提交面从四项变六项；
+// 本助手固定用 F1 的代码缺省值，用例只关心 K 与 F0 时不必逐条重复两个数。
 func estCfgBody(kPro, kFast, fPro, fFast float64) map[string]interface{} {
-	return map[string]interface{}{"k_pro": kPro, "k_fast": kFast, "fixed_pro": fPro, "fixed_fast": fFast}
+	return map[string]interface{}{
+		"k_pro": kPro, "k_fast": kFast, "fixed_pro": fPro, "fixed_fast": fFast,
+		"fixed_lang_pro": defEstFixedLangPro, "fixed_lang_fast": defEstFixedLangFast,
+	}
+}
+
+// estCfgBody6 六项全给（需要同时改 F0 与 F1 的用例用）。
+func estCfgBody6(kPro, kFast, fPro, fFast, fLangPro, fLangFast float64) map[string]interface{} {
+	return map[string]interface{}{
+		"k_pro": kPro, "k_fast": kFast, "fixed_pro": fPro, "fixed_fast": fFast,
+		"fixed_lang_pro": fLangPro, "fixed_lang_fast": fLangFast,
+	}
 }
 
 // estCfgStoredOf 直读 system_config 某键的原始值（键不存在或值为空都回 ""，
@@ -134,11 +148,12 @@ func TestEstTokensConfigGetDefaultsAndAuthz(t *testing.T) {
 	}
 	eff, _ := resp["coefficients"].(map[string]interface{})
 	if eff["k_pro"] != defEstKPro || eff["k_fast"] != defEstKFast ||
-		eff["fixed_pro"] != defEstFixedPro || eff["fixed_fast"] != defEstFixedFast {
-		t.Fatalf("未配置时应回代码缺省 160/60/3000/1200，got %+v", eff)
+		eff["fixed_pro"] != defEstFixedPro || eff["fixed_fast"] != defEstFixedFast ||
+		eff["fixed_lang_pro"] != defEstFixedLangPro || eff["fixed_lang_fast"] != defEstFixedLangFast {
+		t.Fatalf("未配置时应回代码缺省 160/60/600/300/2400/900，got %+v", eff)
 	}
 	stored, _ := resp["stored"].(map[string]interface{})
-	for _, k := range []string{"k_pro", "k_fast", "fixed_pro", "fixed_fast"} {
+	for _, k := range []string{"k_pro", "k_fast", "fixed_pro", "fixed_fast", "fixed_lang_pro", "fixed_lang_fast"} {
 		if s, _ := stored[k].(string); s != "" {
 			t.Fatalf("未配置态 stored[%s] 应为空串（界面据此标注「走缺省」），got %q", k, s)
 		}
@@ -215,7 +230,7 @@ func TestEstTokensConfigSaveValidatesAllBeforeWriting(t *testing.T) {
 			}
 		}
 	}
-	// 缺项同样整体拒绝（四项一次交齐是「不留半套参数」的前提）
+	// 缺项同样整体拒绝（六项一次交齐是「不留半套参数」的前提）
 	code, resp = doJSON(t, h, http.MethodPost, "/api/admin/config/est-tokens", f.super,
 		map[string]interface{}{"k_pro": 150, "k_fast": 55, "fixed_pro": 2800})
 	if code != 400 {
@@ -298,11 +313,89 @@ func TestEstTokensConfigDirtyValueEchoesEffective(t *testing.T) {
 	if v := f.srv.estTokensFixed("pro"); v != eff["fixed_pro"] {
 		t.Fatalf("固定项回显与预检不一致：界面 %v / 预检 %v", eff["fixed_pro"], v)
 	}
-	// 脏值下建单预检仍按保守档放行判断（不放大、不清零）
+	// 脏值下建单预检仍按保守档放行判断（不放大、不清零）。
+	// ★ 2026-10-28 计价批公式：F0 + 语种数×(F1 + 字符数×K)；
+	// 这里 2 语种、1000 字符、pro 缺省档 = 600 + 2×(2400 + 1000×160) = 325,400。
 	if got := estimateTicketTokens(1000, 2, "pro", estParams{
 		kPro: f.srv.estTokensPerChar("pro"), kFast: f.srv.estTokensPerChar("fast"),
 		fixedPro: f.srv.estTokensFixed("pro"), fixedFast: f.srv.estTokensFixed("fast"),
-	}); got != int64(defEstFixedPro)+1000*2*int64(defEstKPro) {
+		fixedLangPro: f.srv.estTokensFixedLang("pro"), fixedLangFast: f.srv.estTokensFixedLang("fast"),
+	}); got != int64(defEstFixedPro)+2*(int64(defEstFixedLangPro)+1000*int64(defEstKPro)) {
 		t.Fatalf("脏值下预估应按 pro 保守缺省，got %d", got)
 	}
+}
+
+// F1 拆项：多语种按语种数线性补固定开销，单语种合计与旧形态（一次性 3000/1200）逐字相同。
+// ★ 这条是 2026-10-28 计价批的结构锁：旧形态 5 语种 × 100 字只算一次固定，
+// 多语种短单结构性低估（每语种一轮调用都带系统提示词与输出结构开销）。
+func TestEstimateTicketTokensSplitsFixedPerLang(t *testing.T) {
+	p := estParams{
+		kPro: defEstKPro, kFast: defEstKFast,
+		fixedPro: defEstFixedPro, fixedFast: defEstFixedFast,
+		fixedLangPro: defEstFixedLangPro, fixedLangFast: defEstFixedLangFast,
+	}
+	// 单语种：F0+F1 = 3000（pro）／1200（fast），与拆分前的单值逐字相同。
+	if got := estimateTicketTokens(100, 1, "pro", p); got != 3000+100*160 {
+		t.Fatalf("pro 单语种应等于旧单值档（F0+F1=3000），got %d", got)
+	}
+	if got := estimateTicketTokens(100, 1, "fast", p); got != 1200+100*60 {
+		t.Fatalf("fast 单语种应等于旧单值档（F0+F1=1200），got %d", got)
+	}
+	// 语种数翻倍：固定项跟着翻倍（旧形态只算一次），线性项也按语种数倍增。
+	if got, want := estimateTicketTokens(100, 2, "pro", p), int64(600+2*(2400+100*160)); got != want {
+		t.Fatalf("pro 双语的固定项必须按语种数计（got %d，want %d）", got, want)
+	}
+	// 差值锁：每多一个语种，增量恰为 F1 + 字符数×K。
+	one := estimateTicketTokens(500, 1, "pro", p)
+	five := estimateTicketTokens(500, 5, "pro", p)
+	if got, want := five-one, int64(4*(2400+500*160)); got != want {
+		t.Fatalf("每多一语的增量应恰为 F1+字符×K：got %d，want %d", got, want)
+	}
+	// 脏配置（F1 负数）回退 pro 缺省，不许把固定项往回扣。
+	dirty := p
+	dirty.fixedLangPro = -1
+	if got := estimateTicketTokens(100, 2, "pro", dirty); got != int64(600+2*(2400+100*160)) {
+		t.Fatalf("F1 负数应回退缺省，got %d", got)
+	}
+	// F1 允许显式 0（＝把每语种固定开销并进 K），0 是合法表态，不许回退。
+	zero := p
+	zero.fixedLangPro = 0
+	if got := estimateTicketTokens(100, 2, "pro", zero); got != int64(600+2*(0+100*160)) {
+		t.Fatalf("F1=0 应被尊重（合法表态），got %d", got)
+	}
+}
+
+// TestEstTokensWordingIsSix 存量文案锁（S10，AGENTS §一·5「界面/文案也是交付真值」）。
+//
+// 为什么值得一条机械锁：F 拆成 F0/F1 之后，这两个文件里散着十几处「四项/四键」——
+// 其中有些是**面向运营的报错串**（"预估系数必须四项一次提交，缺少 fixed_lang_pro"）。
+// 那种串是自相矛盾的证据：它告诉运营"少交了一项"，而实际要交六项；值班的人按它去补，
+// 永远补不对。文字比数字更容易漏改，所以留一条锁。
+//
+// 射程与例外：**历史记录行豁免**——带「计价批」或「2026-10-28」的行是"从四项变六项"的变更说明，
+// 抹掉它等于抹掉事故记录；只有"当下口径"的行才不许出现四项/四键。
+func TestEstTokensWordingIsSix(t *testing.T) {
+	for _, name := range []string{"est_tokens_config.go", "tickets.go"} {
+		src := readFile(t, name)
+		for i, line := range strings.Split(src, "\n") {
+			if !strings.Contains(line, "四项") && !strings.Contains(line, "四键") && !strings.Contains(line, "四个预估") {
+				continue
+			}
+			if strings.Contains(line, "计价批") || strings.Contains(line, "2026-10-28") {
+				continue // 变更记录行：留下"从四项变六项"的来龙去脉
+			}
+			t.Fatalf("%s:%d 仍是旧口径（%s）⇒ F 已拆成 F0/F1、提交面是六项；"+
+				"尤其『必须四项一次提交』那类面向运营的报错串会把人指向一个永远补不对的清单", name, i+1, strings.TrimSpace(line))
+		}
+	}
+}
+
+// readFile 读 internal/api 下的源码文件（go test 工作目录＝包目录）。
+func readFile(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(name)
+	if err != nil {
+		t.Fatalf("读取 %s 失败：%v ⇒ 本闸连射程都没有", name, err)
+	}
+	return string(b)
 }

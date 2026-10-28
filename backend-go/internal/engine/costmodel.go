@@ -223,6 +223,27 @@ func normalizeLangList(langs []string) []string {
 	return out
 }
 
+// HeaderContextAllowanceTokens 表头上下文进 system 前缀的 token 预估（★ 2026-10-28 P5）。
+// 参数 headerChars: 表头字符数（调用方已按 FILE_HEADER_CONTEXT_MAX_CHARS 截断）。
+// 返回: 折算 token 数；<=0 回 0（关闭 P5 或没有表头时与改造前完全等价）。
+//
+// 两条口径：
+//  1. **固定指令开销从真提示词现量**（`headerContextNoteEN` 代入空表头）：改模板即改预估，
+//     等值锁＝TestHeaderContextAllowanceDerivesFromRealPrompt（AGENTS §一·5④ 同一把尺子）。
+//  2. 表头内容是**源文**语种，而预估接口拿不到语种 ⇒ 按宽体（1 字符≈1 token）折算取上界。
+//     400 字符最多多算 ~300 token，比低估安全——低估会让客户按预估备的钱不够花。
+func HeaderContextAllowanceTokens(headerChars int) int64 {
+	if headerChars <= 0 {
+		return 0
+	}
+	// 与 /api/estimate 的入参钳位同档（0..4000）：预估腿不许被一个异常入参算成天价。
+	if headerChars > 4000 {
+		headerChars = 4000
+	}
+	fixed := ScriptTokens(fmt.Sprintf(headerContextNoteEN, ""))
+	return fixed + int64(headerChars)
+}
+
 // OcrFixAllowanceTokens 一次文件工单的 OCR 理解/纠错预估 allowance（主方案 §8.5）。
 //
 // 为什么要它：③ 的用量与翻译同一条通道（CallChat 自动计量与实时扣费），若预估侧不计入，

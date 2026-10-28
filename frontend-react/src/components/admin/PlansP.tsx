@@ -207,11 +207,15 @@ export function PlansP() {
   const [quoteEnv, setQuoteEnv] = useState<Record<string, string>>({})
   const [quoteReady, setQuoteReady] = useState(false)
   // ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）计费预估系数表单（仅超管）。
-  //   四键决定建单前的余额预检，因此表单必须把三态分清：库里配了什么（stored）、
+  //   六键决定建单前的余额预检，因此表单必须把三态分清：库里配了什么（stored）、
   //   系统实际在用哪个数（生效值）、代码缺省是多少（defaults）——
   //   库里躺着脏值时若只回显库值，管理员会以为改了参数其实系统压根没在用。
   //   estReady 同 payCfgReady/quoteReady 口径：没回显成功就禁提交，防空值整批覆盖。
-  const [estForm, setEstForm] = useState<Record<EstTokenField, string>>({ k_pro: '', k_fast: '', fixed_pro: '', fixed_fast: '' })
+  // ★ 2026-10-28 计价批：四键扩到六键（固定项拆成「每单 F0」+「每语种 F1」）。
+  //   后端提交面是六项硬校验，少发两项会被整批拒；故初值必须六键齐全（不是仅表单渲染时补齐）。
+  const [estForm, setEstForm] = useState<Record<EstTokenField, string>>({
+    k_pro: '', k_fast: '', fixed_pro: '', fixed_fast: '', fixed_lang_pro: '', fixed_lang_fast: '',
+  })
   const [estMeta, setEstMeta] = useState<{
     ready: boolean
     rows: Partial<Record<EstTokenField, { stored: string; dirty: boolean; def: number }>>
@@ -894,9 +898,10 @@ async function savePayChannels() {
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
 
-    // saveEstCfg ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）：保存四个计费预估系数。
-    // 客户端先把与服务端同口径的三道门挡住（四项齐全、非负、K>0），脏输入不进请求：
-    // 这四个数是"客户能不能建单"的闸门参数，报一句后端天书不如当场提示该填什么。
+    // saveEstCfg ★ 2026-09-27（〇-X 第 5 项 / F-72 补口）：保存六个计费预估系数。
+    // ★ 2026-10-28 计价批：固定项拆成 F0（每单）+F1（每语种），提交面由四项变六项。
+    // 客户端先把与服务端同口径的三道门挡住（六项齐全、非负、K>0），脏输入不进请求：
+    // 这六个数是"客户能不能建单"的闸门参数，报一句后端天书不如当场提示该填什么。
   async function saveEstCfg() {
     const nums: Partial<Record<EstTokenField, number>> = {}
     for (const k of EST_TOKEN_FIELDS) {
@@ -913,7 +918,7 @@ async function savePayChannels() {
       if (toastResp(r, t('common.save'))) await loadPkgs() // 回读生效值：与报价配置同一口径
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
-    // resetEstCfg 清空四键回代码缺省（必须二次确认：这是"把闸门交回出厂档位"的批量动作）
+    // resetEstCfg 清空六键回代码缺省（必须二次确认：这是"把闸门交回出厂档位"的批量动作）
   async function resetEstCfg() {
     if (!(await confirmDialog({ body: t('billing.estConfirmReset'), danger: true }))) return
     try {
@@ -1418,6 +1423,8 @@ async function savePayChannels() {
               ['k_fast', t('billing.estKFast')],
               ['fixed_pro', t('billing.estFixedPro')],
               ['fixed_fast', t('billing.estFixedFast')],
+              ['fixed_lang_pro', t('billing.estFixedLangPro')],
+              ['fixed_lang_fast', t('billing.estFixedLangFast')],
             ] as Array<[EstTokenField, string]>).map(([f, label]) => {
               const m = estMeta.rows[f]
               return (

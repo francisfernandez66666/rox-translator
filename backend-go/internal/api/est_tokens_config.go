@@ -2,11 +2,11 @@
 // 计费预估参数（★ F-72 两段式预估，2026-09-27 〇-W 落地、〇-X 第 5 项进管理台）的超管配置口。
 //
 // 接口（仅平台超管，鉴权/审计/「校验先行整批落库」写法参照 quote_currency.go）：
-//   - GET  /api/admin/config/est-tokens  回显四系数（生效值＋库内原值＋代码缺省＋公式与汇率）
-//   - POST /api/admin/config/est-tokens  保存 {"k_pro":160,"k_fast":60,"fixed_pro":3000,"fixed_fast":1200}
-//     或 {"reset":true}（四项一律回落代码缺省）。
+//   - GET  /api/admin/config/est-tokens  回显六系数（生效值＋库内原值＋代码缺省＋公式与汇率）
+//   - POST /api/admin/config/est-tokens  保存六项 {"k_pro":160,"k_fast":60,"fixed_pro":600,"fixed_fast":300,"fixed_lang_pro":2400,"fixed_lang_fast":900}
+//     或 {"reset":true}（六项一律回落代码缺省）。
 //
-// 为什么要这个口子：这四键此前只能靠 psql 往 system_config 插行（两库都没有这四行，
+// 为什么要这个口子：这几键此前只能靠 psql 往 system_config 插行（两库都没有这些行，
 // 线上跑的是代码缺省 160/60 + 3000/1200）。预检系数直接决定「客户能不能建单」，
 // 一个手滑的 SQL 就是全量放行或全量误拦，必须有表单、有校验、有审计。
 //
@@ -43,13 +43,17 @@ type estCfgField struct {
 	allowZero bool    // F 档允许 0（＝关闭固定项）；K 档不允许（0＝全放行）
 }
 
-// estCfgFields 管理台可配的四个预估系数，按 pro/fast × 线性 K／固定 F 两两成对。
-// 顺序即表单展示顺序，同时也是「四项必须一次交齐」的判据来源。
+// estCfgFields 管理台可配的**六个**预估系数，按 pro/fast × 线性 K／每单固定 F0／每语种固定 F1 三三成对。
+// 顺序即表单展示顺序，同时也是「六项必须一次交齐」的判据来源。
 var estCfgFields = []estCfgField{
 	{"k_pro", cfgEstKPro, defEstKPro, false},
 	{"k_fast", cfgEstKFast, defEstKFast, false},
 	{"fixed_pro", cfgEstFixedPro, defEstFixedPro, true},
 	{"fixed_fast", cfgEstFixedFast, defEstFixedFast, true},
+	// ★ 2026-10-28 计价批：F 拆成「每单 F0」+「每语种 F1」。
+	//   单语种合计仍是 pro=3000 / fast=1200，多语种按语种数线性补固定开销。
+	{"fixed_lang_pro", cfgEstFixedLangPro, defEstFixedLangPro, true},
+	{"fixed_lang_fast", cfgEstFixedLangFast, defEstFixedLangFast, true},
 }
 
 // estCfgMax 系数上限（防呆）：正常量级 K≤几百、F≤几万，这里给到千万，
@@ -81,9 +85,10 @@ func (s *Server) handleAdminEstTokens(w http.ResponseWriter, r *http.Request) {
 		"coefficients": effective,
 		"stored":       stored,
 		"defaults":     defaults,
-		"allow_zero":   map[string]bool{"k_pro": false, "k_fast": false, "fixed_pro": true, "fixed_fast": true},
-		"formula":      "est_tokens = F(模式) + 源字符数 × 目标语种数 × K(模式)",
-		"formula_note": "K 为线性系数（每字符×每语种 token），F 为每次建单的一次性开销（系统提示词、术语与上下文注入、输出结构）。短单由 F 兜底、长单由 K 决定量级。",
+		"allow_zero": map[string]bool{"k_pro": false, "k_fast": false, "fixed_pro": true,
+			"fixed_fast": true, "fixed_lang_pro": true, "fixed_lang_fast": true},
+		"formula":      "est_tokens = F0(模式) + 语种数 × (F1(模式) + 源字符数 × K(模式))",
+		"formula_note": "K 为线性系数（每字符×每语种 token）；F0 为每单固定开销（建单/解析/语言识别）；F1 为每语种固定开销（系统提示词、术语与上下文注入、输出结构）。短单由 F 兜底、长单由 K 决定量级；多语种按语种数线性增加 F1。",
 		"config_keys":  estCfgKeyNames(),
 		// 积分↔token 汇率只读回显：管理台据此把 token 系数折算成「一次大概多少积分」给客户/自己看。
 		// 改汇率是另一条链路（points_tokens_rate，随套餐出厂配置走），本口不提供写入口。
@@ -91,8 +96,8 @@ func (s *Server) handleAdminEstTokens(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleAdminEstTokensSave POST 保存四个预估系数。
-// 语义：四项必须一次交齐（缺项即整体拒绝，不留半套参数）；reset=true 时四项一律清空回落代码缺省。
+// handleAdminEstTokensSave POST 保存六个预估系数。
+// 语义：六项必须一次交齐（缺项即整体拒绝，不留半套参数）；reset=true 时六项一律清空回落代码缺省。
 func (s *Server) handleAdminEstTokensSave(w http.ResponseWriter, r *http.Request) {
 	u, err := s.requireEstCfgAdmin(w, r)
 	if err != nil {
@@ -100,21 +105,24 @@ func (s *Server) handleAdminEstTokensSave(w http.ResponseWriter, r *http.Request
 	}
 	// 指针字段：nil＝没提交这一项（与"提交了 0"必须可区分，否则 K 档会被静默清零）
 	var req struct {
-		KPro      *float64 `json:"k_pro"`
-		KFast     *float64 `json:"k_fast"`
-		FixedPro  *float64 `json:"fixed_pro"`
-		FixedFast *float64 `json:"fixed_fast"`
-		Reset     bool     `json:"reset"`
+		KPro          *float64 `json:"k_pro"`
+		KFast         *float64 `json:"k_fast"`
+		FixedPro      *float64 `json:"fixed_pro"`
+		FixedFast     *float64 `json:"fixed_fast"`
+		FixedLangPro  *float64 `json:"fixed_lang_pro"`
+		FixedLangFast *float64 `json:"fixed_lang_fast"`
+		Reset         bool     `json:"reset"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
-			"请求格式错误：需为 {\"k_pro\":160,\"k_fast\":60,\"fixed_pro\":3000,\"fixed_fast\":1200}"))
+			"请求格式错误：需一次提交六项 {\"k_pro\":160,\"k_fast\":60,\"fixed_pro\":600,\"fixed_fast\":300,\"fixed_lang_pro\":2400,\"fixed_lang_fast\":900}"))
 		return
 	}
 	submitted := map[string]*float64{
 		"k_pro": req.KPro, "k_fast": req.KFast, "fixed_pro": req.FixedPro, "fixed_fast": req.FixedFast,
+		"fixed_lang_pro": req.FixedLangPro, "fixed_lang_fast": req.FixedLangFast,
 	}
-	// —— 恢复缺省：把四键值写成空串，读侧（estConfigFloat）遇空即回代码缺省，
+	// —— 恢复缺省：把六键值写成空串，读侧（estConfigFloat）遇空即回代码缺省，
 	//    等于「库里不再表态」，与从未配置过的状态完全一致，不留下 0 这种会被误读的中间态。
 	if req.Reset {
 		for _, f := range estCfgFields {
@@ -124,17 +132,17 @@ func (s *Server) handleAdminEstTokensSave(w http.ResponseWriter, r *http.Request
 			}
 		}
 		s.Store.LogAudit(s.effTenant(r, u), u.ID, "est_tokens_reset", "system_config",
-			"四个预估系数已清空，回落代码缺省 "+estCfgAuditVals(defaultsByField()))
+			"六个预估系数已清空，回落代码缺省 "+estCfgAuditVals(defaultsByField()))
 		writeJSON(w, 200, map[string]interface{}{"success": true, "coefficients": s.estEffective()})
 		return
 	}
-	// —— 校验先行：四项都过才落库（半套参数＝短单与长单口径不一致，比不调更糟）
+	// —— 校验先行：六项都过才落库（半套参数＝短单与长单口径不一致，比不调更糟）
 	vals := make(map[string]float64, len(estCfgFields))
 	for _, f := range estCfgFields {
 		p := submitted[f.jsonField]
 		if p == nil {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
-				"预估系数必须四项一次提交，缺少 "+f.jsonField))
+				"预估系数必须六项一次提交，缺少 "+f.jsonField))
 			return
 		}
 		v := *p
@@ -192,7 +200,7 @@ func (s *Server) estEffective() map[string]float64 {
 	return out
 }
 
-// estCfgKeyNames system_config 四键名（管理台展示"改的是哪几行"，排障时可直接对着 psql 核）。
+// estCfgKeyNames system_config 六键名（管理台展示"改的是哪几行"，排障时可直接对着 psql 核）。
 func estCfgKeyNames() []string {
 	out := make([]string, 0, len(estCfgFields))
 	for _, f := range estCfgFields {

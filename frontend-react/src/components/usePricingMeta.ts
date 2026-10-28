@@ -15,8 +15,10 @@ import { request } from '@/api/core'
 export interface PricingModeMeta {
   /** 每「1000 源字符 × 1 个目标语种」的线性积分档 */
   per1k: number
-  /** 每次建单的一次性固定积分档（可能是小数，如 pro=7.5） */
+  /** 单语种时的固定积分合计（(F0+F1)÷汇率；可能是小数，如 pro=7.5） */
   fixed: number
+  /** 每多一个目标语种的固定增量（F1÷汇率，如 pro=6） */
+  fixedPerLang: number
 }
 
 /** PricingMetaSnapshot 一次取数的结果；ready=false 时数值一律不可用 */
@@ -46,10 +48,12 @@ export function usePricingMeta(): PricingMetaSnapshot {
         const code = String(m?.code || '')
         const per1k = Number(m?.points_per_1k_chars)
         const fixed = Number(m?.points_fixed)
+        const fixedPerLang = Number(m?.points_fixed_per_lang)
         // 逐档验数：任一系数不是有限非负数就整包判为不可用（宁缺勿错——
         // 半个系数也能算出一个"看起来很确定"的价，那种错没人能从页面上看出来）
-        if (!code || !Number.isFinite(per1k) || per1k < 0 || !Number.isFinite(fixed) || fixed < 0) return
-        modes[code] = { per1k, fixed }
+        if (!code || !Number.isFinite(per1k) || per1k < 0 || !Number.isFinite(fixed) || fixed < 0 ||
+            !Number.isFinite(fixedPerLang) || fixedPerLang < 0) return
+        modes[code] = { per1k, fixed, fixedPerLang }
       }
       const price = Number(r.points_price_money)
       if (!modes.fast || !modes.pro || !Number.isFinite(price) || price <= 0) return

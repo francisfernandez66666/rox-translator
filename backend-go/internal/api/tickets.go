@@ -15,8 +15,8 @@ package api
 // ★ F-72（2026-09-27 〇-W，用户批准）：建单余额预检的预估改「固定项＋线性项」两段式
 //   est = F(mode) + chars × langs × K(mode)；两档各自走 system_config
 //   （est_tokens_fixed_pro/fast 缺省 3000/1200、est_tokens_per_char_pro/fast 缺省 160/60），
-//   四键逐次现读、写入即生效（无需重启/发版）。★ 〇-X 第 5 项（2026-09-27）已补管理台表单：
-//   GET/POST /api/admin/config/est-tokens（见 est_tokens_config.go，仅平台超管，四项必须一次交齐），
+//   六键逐次现读、写入即生效（无需重启/发版）。★ 〇-X 第 5 项（2026-09-27）已补管理台表单：
+//   GET/POST /api/admin/config/est-tokens（见 est_tokens_config.go，仅平台超管，六项必须一次交齐），
 //   不再有「只能 psql 插行」的口径——两库当前仍**没有**这四行，未配置时走代码缺省 160/60 + 3000/1200。
 //   判据与取数依据见 estimateTicketTokens 上方注释。
 // ★ F-64②（批 I-10 2026-09-26）口径：本文件「HTTP 200 承载业务失败」的 21 处已全部改走
@@ -63,28 +63,42 @@ const (
 	// 与 K 分键的目的：调短单报价只动固定项，不必再把长单系数一起拽走（见 estimateTicketTokens 注释）。
 	cfgEstFixedPro  = "est_tokens_fixed_pro"
 	cfgEstFixedFast = "est_tokens_fixed_fast"
+	// cfgEstFixedLangPro/Fast = 「每多一个目标语种」的固定开销 F1 的配置键（★ 2026-10-28 计价批）。
+	// 与 F0 分键的原因：文件链是**每语种一轮调用**，固定指令开销随语种数线性增长；
+	// 只用一个「每单固定」会把多语种短单结构性低估（旧形态 5 语种 × 100 字只算一次固定）。
+	cfgEstFixedLangPro  = "est_tokens_fixed_lang_pro"
+	cfgEstFixedLangFast = "est_tokens_fixed_lang_fast"
 )
 
 // 预估缺省参数（配置缺失/非法时的保守回落值，单一来源，禁止在调用点再写字面量）。
 //
-//	K 档沿用 2026-09-25 批 D（F-41）实测 P99 上包络：pro=160、fast=60；
-//	F 档为 2026-09-27 〇-W（F-72）新增：pro=3,000 取「6–67 字短单实烧 p90=3,289」的整档
-//	（p50=1,735，取 p90 而非中位数是用户拍板的「宁高勿低」），fast=1,200 按线性系数同比
-//	60/160=0.375 折算后取整档。
+//	★ 2026-10-28 计价批（用户拍板 D1）：本批**只改结构、不改 K**。
+//	  F 从「每单一次性 3000/1200」拆成「每单 F0 + 每语种 F1」：
+//	  pro=600+2400×语种数、fast=300+900×语种数 —— 单语种合计与旧值逐字相同（3000/1200），
+//	  多语种则按语种数线性补固定开销（旧形态 5 语种 × 100 字只算一次固定，结构性低估）。
+//	  K 维持 pro=160 / fast=60：降价不靠调常数硬压，而靠本批同时上线的
+//	  「译文缓存 A+B + 动态批 + 3 轮硬闸」把真实消耗降下来，7 天后按生产实测的有效 K
+//	  再改配置降价（不改代码）。理由见方案《改造方案_计价与成本优化及遗留补齐_20261028.md》§2/§9-D1：
+//	  直接写死 K=20 会让 88 号那类大单的预估从 107 万掉到 23 万（真实消耗没变），
+//	  预估低于实烧＝建单闸门放行透支单，正是 F-41 的事故形态。
 const (
-	defEstKPro      = 160.0
-	defEstKFast     = 60.0
-	defEstFixedPro  = 3000.0
-	defEstFixedFast = 1200.0
+	defEstKPro          = 160.0
+	defEstKFast         = 60.0
+	defEstFixedPro      = 600.0  // 每单固定 F0（pro）
+	defEstFixedFast     = 300.0  // 每单固定 F0（fast）
+	defEstFixedLangPro  = 2400.0 // 每语种固定 F1（pro）
+	defEstFixedLangFast = 900.0  // 每语种固定 F1（fast）
 )
 
 // estParams 一次估算用到的两段式参数，全部由 system_config 现读后注入（纯函数便于字节级锁）。
 // 取数入口见 estTokensPerChar（线性项）与 estTokensFixed（固定项）。
 type estParams struct {
-	kPro      float64 // pro 线性系数 K：每「源字符 × 目标语种」的 token 数
-	kFast     float64 // fast 线性系数 K
-	fixedPro  float64 // pro 固定项 F：与字数无关的一次性开销（系统提示词、术语与上下文注入、输出结构）
-	fixedFast float64 // fast 固定项 F
+	kPro          float64 // pro 线性系数 K：每「源字符 × 目标语种」的 token 数
+	kFast         float64 // fast 线性系数 K
+	fixedPro      float64 // pro 每单固定项 F0（建单/解析/语言识别，与字数、语种数都无关）
+	fixedFast     float64 // fast 每单固定项 F0
+	fixedLangPro  float64 // pro 每语种固定项 F1（该系统提示词、术语/上下文、输出结构）
+	fixedLangFast float64 // fast 每语种固定项 F1
 }
 
 // estimateTicketTokens 估算文件/文本工单翻译的 token 消耗（纯函数，便于单测与字节级锁）。
@@ -114,19 +128,24 @@ func estimateTicketTokens(sourceChars int64, langCount int, mode string, p estPa
 	if sourceChars <= 0 || langCount <= 0 {
 		return 0
 	}
-	k, fixed := p.kPro, p.fixedPro
+	k, f0, f1 := p.kPro, p.fixedPro, p.fixedLangPro
 	if mode == "fast" {
-		k, fixed = p.kFast, p.fixedFast
+		k, f0, f1 = p.kFast, p.fixedFast, p.fixedLangFast
 	}
-	// 脏配置的回退方向必须是「更保守」：一律回退到 pro 档（160 / 3,000），
-	// 哪怕本单是 fast——回退到更低的 fast 档等于把闸门往放行方向挪，正是 F-41 的事故形态。
+	// 脏配置的回退方向必须是「更保守」：一律回退到 pro 档，哪怕本单是 fast——
+	// 回退到更低的 fast 档等于把闸门往放行方向挪，正是 F-41 的事故形态。
 	if k <= 0 {
 		k = defEstKPro
 	}
-	if fixed < 0 {
-		fixed = defEstFixedPro // 负数属脏配置，回退 pro 档；0 是合法的「关闭固定项」
+	if f0 < 0 {
+		f0 = defEstFixedPro // 负数属脏配置，回退 pro 档；0 是合法的「关闭固定项」
 	}
-	return int64(fixed) + int64(float64(sourceChars)*float64(langCount)*k)
+	if f1 < 0 {
+		f1 = defEstFixedLangPro
+	}
+	// 两段式（v3）：F0 + 语种数×(F1 + 源字符数×K)。单语种合计 = F0+F1（pro 仍是 3000），
+	// 多语种按语种数线性增加固定开销；整式一次取整，避免逐项截断后与页面浮点式子差 1 分。
+	return int64(f0 + float64(langCount)*(f1+float64(sourceChars)*k))
 }
 
 // estTokensPerChar 读取指定模式的每字符预估 token 系数 K（system_config 可调，缺省保守默认）。
@@ -150,6 +169,17 @@ func (s *Server) estTokensFixed(mode string) float64 {
 	key, def := cfgEstFixedPro, defEstFixedPro
 	if mode == "fast" {
 		key, def = cfgEstFixedFast, defEstFixedFast
+	}
+	return s.estConfigFloat(key, def, true)
+}
+
+// estTokensFixedLang 读取「每多一个目标语种」的固定开销 F1（★ 2026-10-28 计价批）。
+// 键：est_tokens_fixed_lang_pro（缺省 2,400）／ est_tokens_fixed_lang_fast（缺省 900）。
+// 0 合法：那是「每语种固定开销并进 K」的显式选择；只有缺失/非数字/负数才回退默认。
+func (s *Server) estTokensFixedLang(mode string) float64 {
+	key, def := cfgEstFixedLangPro, defEstFixedLangPro
+	if mode == "fast" {
+		key, def = cfgEstFixedLangFast, defEstFixedLangFast
 	}
 	return s.estConfigFloat(key, def, true)
 }
@@ -228,10 +258,12 @@ func (s *Server) precheckTicketBalance(tid int64, srcChars int64, langCount int,
 	}
 	// 两段式参数逐次现读（不缓存）：system_config 一改，下一单即生效（与批 H 回调 K 的口径一致）。
 	estimated := estimateTicketTokens(srcChars, langCount, mode, estParams{
-		kPro:      s.estTokensPerChar("pro"),
-		kFast:     s.estTokensPerChar("fast"),
-		fixedPro:  s.estTokensFixed("pro"),
-		fixedFast: s.estTokensFixed("fast"),
+		kPro:          s.estTokensPerChar("pro"),
+		kFast:         s.estTokensPerChar("fast"),
+		fixedPro:      s.estTokensFixed("pro"),
+		fixedFast:     s.estTokensFixed("fast"),
+		fixedLangPro:  s.estTokensFixedLang("pro"),
+		fixedLangFast: s.estTokensFixedLang("fast"),
 	})
 	grants, permanent, err := s.Store.TenantRemainTotal(tid)
 	if err != nil {

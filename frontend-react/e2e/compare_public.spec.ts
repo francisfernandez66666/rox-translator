@@ -29,6 +29,8 @@ interface MetaMode {
   code: string
   points_per_1k_chars: number
   points_fixed: number
+  /** 每多一个目标语种的固定增量（★ 2026-10-28 计价 v3；缺了它本用例算出来的期望值系统性偏低一个 F1） */
+  points_fixed_per_lang: number
 }
 /** /api/pricing/meta 出参（只声明本用例用到的字段，接口加字段不必改这里） */
 interface PricingMeta {
@@ -46,9 +48,14 @@ function num(txt: string): number {
   return Number(txt.replace(/,/g, '').replace(/[^\d.]/g, ''))
 }
 
-/** 页面侧算式（与后端建单预检同一条两段式）：固定项 + 千字线性项 × 语种数，最后取整 */
+/** 页面侧算式（与后端建单预检同一条 v3 式子）：单语种固定 + 每多一语种的固定增量 + 千字线性项 × 语种数，最后取整。
+ *  ★ 2026-10-28 计价 v3：`est = F0 + 语种数 × (F1 + 字符 × K)` 展开成
+ *    `(F0+F1) + (语种数-1)×F1 + 字符×K×语种数`，与 src/lib/priceCalc.ts 的 calcEstimatePoints 逐字同式。
+ *  ⚠️ 旧形态只加一次固定项（`points_fixed + 线性×语种数`），多语种时比页面少一个 `F1÷汇率`——
+ *    2026-10-28 实测就是这样把正确的页面（814）判成错的（期望 808）＝判据跟不上 v3，不是产品缺陷。
+ *    当日真实读数：pro 1,000 字符 × 2 语种，`points_fixed=7.5`、`fixed_per_lang=6` ⇒ 7.5+6+800=813.5→814。 */
 function pointsOf(m: MetaMode, chars: number, langs: number): number {
-  return Math.round(m.points_fixed + (chars / 1000) * m.points_per_1k_chars * langs)
+  return Math.round(m.points_fixed + (langs - 1) * m.points_fixed_per_lang + (chars / 1000) * m.points_per_1k_chars * langs)
 }
 
 /** 取本次接口的系数；顺带把「接口通了但数据不可用」也判成链路红灯（宁缺勿错） */
@@ -124,7 +131,12 @@ test.describe('官网比价与算价页 /compare（访客可达·报价与后端
 
     // 公示公式区块：公式原文 + 三条系数行（两档各一行 + 每积分单价一行）
     await expect(page.locator('.lc-cmp-formula'), '⇒ 公示公式没渲染').toBeVisible()
-    expect(await page.locator('.lc-cmp-coef li').count(), '⇒ 系数行数 ≠ 3（fast/pro/每积分单价）').toBe(3)
+    // ★ 2026-10-28 计价 v3：系数行由 3 行变 **4 行**——新增「每多一个语种的固定增量」（F1），
+    //   顺序＝固定项(F0+F1) / 每语种固定项(F1) / 线性项(K) / 每积分单价。
+    //   这里刻意按等值钉 4：这四行是**对外报价的口径声明**，少一行等于公示公式缺一项；
+    //   多一行则必须有对应的系数与词典文案（否则是渲染事故）。
+    expect(await page.locator('.lc-cmp-coef li').count(),
+      '⇒ 系数行数 ≠ 4（固定项/每语种固定项/线性项/每积分单价；v3 起由 3 行扩为 4 行）').toBe(4)
 
     // 公开面零 token 裸值（AGENTS §一·5）：整页文本里既不许出现 token 字样，
     // 也不许出现内部计量常数——24917 是充值尺子（分/百万 token）、33222 是它的上一版，

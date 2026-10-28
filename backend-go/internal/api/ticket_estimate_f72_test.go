@@ -14,20 +14,38 @@ package api
 
 import "testing"
 
-// TestEstTokensFixedDefaults 键缺失时走代码默认：pro=3,000 / fast=1,200。
+// TestEstTokensFixedDefaults 键缺失时走代码默认：
+// ★ 2026-10-28 计价批把固定项拆成「每单 F0」+「每语种 F1」——F0 pro=600 / fast=300、
+// F1 pro=2400 / fast=900，**单语种合计仍是 3,000 / 1,200**（与拆分前逐字相同，短单下限没动）。
 // 取数依据写死在断言里，改默认值必须连同这里一起改，逼改动的人重新交代证据。
 func TestEstTokensFixedDefaults(t *testing.T) {
 	s := f41StoreServer(t)
-	if got := s.estTokensFixed("pro"); got != 3000 {
-		t.Fatalf("缺省 F(pro) 应为 3000（短单实烧 p90=3,289 的整档）, got %v", got)
+	if got := s.estTokensFixed("pro"); got != 600 {
+		t.Fatalf("缺省 F0(pro) 应为 600, got %v", got)
 	}
-	if got := s.estTokensFixed("fast"); got != 1200 {
-		t.Fatalf("缺省 F(fast) 应为 1200（按 K 同比 60/160 取整档）, got %v", got)
+	if got := s.estTokensFixed("fast"); got != 300 {
+		t.Fatalf("缺省 F0(fast) 应为 300, got %v", got)
+	}
+	if got := s.estTokensFixedLang("pro"); got != 2400 {
+		t.Fatalf("缺省 F1(pro) 应为 2400, got %v", got)
+	}
+	if got := s.estTokensFixedLang("fast"); got != 900 {
+		t.Fatalf("缺省 F1(fast) 应为 900, got %v", got)
+	}
+	// 单语种合计＝拆分前的固定项（pro 3,000＝短单实烧 p90=3,289 的整档；fast 1,200）。
+	if got := s.estTokensFixed("pro") + s.estTokensFixedLang("pro"); got != 3000 {
+		t.Fatalf("pro 单语种固定合计应为 3000, got %v", got)
+	}
+	if got := s.estTokensFixed("fast") + s.estTokensFixedLang("fast"); got != 1200 {
+		t.Fatalf("fast 单语种固定合计应为 1200, got %v", got)
 	}
 	// mode 非 fast 的一切取值（含空串/未知）都必须落到更贵的 pro 档，不能落到 fast 或 0。
 	for _, m := range []string{"", "pro", "PRO", "ultra"} {
-		if got := s.estTokensFixed(m); got != 3000 {
-			t.Fatalf("mode=%q 应按 pro 档取 3000, got %v", m, got)
+		if got := s.estTokensFixed(m); got != 600 {
+			t.Fatalf("mode=%q 应按 pro 档取 F0=600, got %v", m, got)
+		}
+		if got := s.estTokensFixedLang(m); got != 2400 {
+			t.Fatalf("mode=%q 应按 pro 档取 F1=2400, got %v", m, got)
 		}
 	}
 }
@@ -65,14 +83,26 @@ func TestEstTokensFixedIllegalFallsBack(t *testing.T) {
 		if err := s.Store.SetConfig(cfgEstFixedFast, bad); err != nil {
 			t.Fatalf("SetConfig(%q) 失败: %v", bad, err)
 		}
-		if got := s.estTokensFixed("fast"); got != 1200 {
-			t.Fatalf("非法配置 %q 应回退 1200, got %v", bad, got)
+		if got := s.estTokensFixed("fast"); got != 300 {
+			t.Fatalf("非法配置 %q 应回退 F0=300, got %v", bad, got)
+		}
+	}
+	// 每语种固定项同样是「非法回退、0 合法」这一档。
+	for _, bad := range []string{"abc", "-1", "  ", "1e999"} {
+		if err := s.Store.SetConfig(cfgEstFixedLangFast, bad); err != nil {
+			t.Fatalf("SetConfig(%q) 失败: %v", bad, err)
+		}
+		if got := s.estTokensFixedLang("fast"); got != 900 {
+			t.Fatalf("非法配置 %q 应回退 F1=900, got %v", bad, got)
 		}
 	}
 	// 键彻底读不到（Store=nil）同样必须拿到默认：固定项丢失＝短单低估静默复发。
 	var nilStoreSrv Server
-	if got := nilStoreSrv.estTokensFixed("pro"); got != 3000 {
-		t.Fatalf("无 Store 时 F(pro) 应为 3000, got %v", got)
+	if got := nilStoreSrv.estTokensFixed("pro"); got != 600 {
+		t.Fatalf("无 Store 时 F0(pro) 应为 600, got %v", got)
+	}
+	if got := nilStoreSrv.estTokensFixedLang("pro"); got != 2400 {
+		t.Fatalf("无 Store 时 F1(pro) 应为 2400, got %v", got)
 	}
 }
 
@@ -96,7 +126,8 @@ func TestEstimateTicketTokensUsesBothTerms(t *testing.T) {
 	if longPure != 8000000 {
 		t.Fatalf("长单线性项锚点漂移（应为 800 万）: %d", longPure)
 	}
-	if delta := estimateTicketTokens(10000, 5, "pro", full) - longPure; delta != 3000 {
-		t.Fatalf("长单固定项增量应为 3000（占 800 万的 0.0375%%）, got %d", delta)
+	// ★ 2026-10-28 拆项后：5 语种的固定项是 F0 + 5×F1 = 600 + 5×2400 = 12,600（旧形态只加一次 3,000）。
+	if delta := estimateTicketTokens(10000, 5, "pro", full) - longPure; delta != 12600 {
+		t.Fatalf("长单固定项增量应为 12600（F0+5×F1，占 800 万的 0.158%%）, got %d", delta)
 	}
 }

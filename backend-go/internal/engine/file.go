@@ -2,7 +2,7 @@
 // 文件翻译：面向 docx/pptx/xlsx/pdf 等格式的整文件翻译主流程（复刻 skill.py _handle_file_translate）。
 // 支持 KB 语言（先 KB 直配、未命中批量模型补漏）与"其他语言"（纯批量模型），
 // 从用户 prompt 中解析"其他语言"（正则 + LLM 语言识别兜底），
-// 含 pro 模式批量审校、硬闸补漏（墙钟预算+最多 5 轮）与漏翻可见性（Untranslated），
+// 含 pro 模式批量审校、硬闸补漏（墙钟预算+最多 3 轮）与漏翻可见性（Untranslated），
 // 翻译完成后按语言分别写回产物文件（translated/<落盘名主干>/ 每上传件一个子目录）并统计 KB/模型命中数。
 // ★B3（方案 A2）：主流程挂载逐段事件回调 emit（segment_done/segment_final/segments_sealed），
 // 让 SSE 通道边翻边上屏；发射器与协议见 file_events.go，工单/非流式路径 emit=nil 零开销。
@@ -37,9 +37,47 @@ import (
 	"translator/internal/tenant"
 )
 
-// fileHardgateMaxAttempts 硬闸补漏轮次上限（★ 2026-10-21 用户令：所有翻译统一重试 5 次）。
-// 5 轮后仍缺失的段按原文交付，并由 UntranslatedSegments/GateWarnings 出声。
-const fileHardgateMaxAttempts = 5
+// fileHardgateMaxAttempts 硬闸补漏轮次上限（★ 2026-10-28 用户令：由 5 轮收敛为 3 轮，
+// 降低重试风暴造成的 token 放大；仍保留"每轮只补缺失段"的口径）。
+// 3 轮后仍缺失的段按原文交付，并由 UntranslatedSegments/GateWarnings 出声。
+const fileHardgateMaxAttempts = 3
+
+// adaptiveBatchSize 按「段数上限 + 源文 token 预算」算单批段数（★ 2026-10-28 计价/成本批）。
+//
+// 为什么不再写死 15/10：固定批大小在短行文档（表格/字幕）上把固定指令开销重复几十次，
+// 在长段落文档上又可能把一次请求顶到模型上下文上限。这里两个约束取小：
+//
+//	· maxSegs  ：单批段数上限（默认 40，防止行数过多导致对齐失败）；
+//	· maxTokens：单批源文 token 预算（默认 6,000，约占 8k 上下文的一半，给输出留余量）。
+//
+// 平均段长用 ScriptTokens 现算（与预估同一把尺子），不取字符数。
+func adaptiveBatchSize(texts []string, maxSegs, maxTokens int) int {
+	if maxSegs < 1 {
+		maxSegs = 1
+	}
+	if maxTokens < 1 {
+		maxTokens = 1
+	}
+	if len(texts) == 0 {
+		return maxSegs
+	}
+	var total int64
+	for _, t := range texts {
+		total += ScriptTokens(t)
+	}
+	avg := total / int64(len(texts))
+	if avg < 1 {
+		avg = 1
+	}
+	byTokens := int(int64(maxTokens) / avg)
+	if byTokens < 1 {
+		byTokens = 1
+	}
+	if byTokens < maxSegs {
+		return byTokens
+	}
+	return maxSegs
+}
 
 // FileTranslateResult 文件翻译结果
 type FileTranslateResult struct {
@@ -64,7 +102,13 @@ type FileTranslateData struct {
 	LangNames   map[string]string `json:"lang_names"`   // 目标语言代码 → 中文名
 	KBHits      int               `json:"kb_hits"`      // 知识库命中段数
 	ModelHits   int               `json:"model_hits"`   // 模型翻译段数
-	FileContext string            `json:"file_context"` // 文件内容摘要/上下文（预留）
+	// TMHits 本单译文记忆（缓存 A+B）命中段数，**全部目标语言合计**（★ 2026-10-28 计价与成本批）。
+	// 只记数、不记原文——客户内容不进日志/观测（AGENTS §一·13 那条"日志不留原文"同口径）。
+	// ⚠️ 与 `tm_review.hit_count`（同一句译文被重复看到几次的待审候选计数）**不是一回事**：
+	//   这一维答的是"这一单有多少段根本没打上游"，用来核对降价测算里的命中率。
+	// 零值不序列化（omitempty）：老客户端与"一次没命中"的形态逐字相同，不引入空字段噪音。
+	TMHits      int    `json:"tm_hits,omitempty"`
+	FileContext string `json:"file_context"` // 文件内容摘要/上下文（预留）
 	// Untranslated 硬闸结束后仍未译出的段数（按语言）。
 	// ★ 2026-08-26 漏翻可见性修复：此前预算耗尽/零进展熔断只写日志——「尾部表格漏翻」
 	//   在工单层面完全不可见，QA/审批无从发现。现随 Data 序列化进工单 payload，
@@ -574,6 +618,11 @@ func (e *Engine) translateSegmentMinimal(ctx context.Context, seg, lc string) (s
 func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[string]interface{}, prog Progress, emit SegmentEmit) *FileTranslateResult {
 	// 注入请求级用量记录器（供计量成本核算）
 	ctx = e.WithUsageRecorder(ctx)
+	// ★ 2026-10-28 计价与成本批：注入请求级「译文记忆命中数」计数器（S4 载荷 tm_hits）。
+	//   位置与用量记录器并列：两者都是「本单读数」，都在这一单的 ctx 里活、随这一单结束消失。
+	//   计数器由批量腿（含逐段兜底腿）在命中处自增，这里只负责建与最后读出——
+	//   三个语言协程并发跑，故必须是原子量（见 withTMHitCounter）。
+	ctx, tmHitsCounter := withTMHitCounter(ctx)
 	// ★ 文件/后台批任务：走专用 LLM 信号量池（容量更大、与交互池隔离），
 	//   避免长文档高并发打满共享交互信号量、饿死前台即时翻译、拖垮全站（整改）。
 	ctx = llm.WithFileMode(ctx)
@@ -731,6 +780,29 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 识别存疑是**事实**，不是承诺：只报计数，不进「未译出内容」清单（那清单只收没有译文的行）。
 			gateWarnings = append(gateWarnings, fmt.Sprintf("%d 行图片识别置信度偏低，译文可能基于不确定的识别结果", st.Unclear))
 		}
+	}
+
+	// ★ 2026-10-28 P5：表头上下文（默认关）。**一次文件单只抽一次**，缓存到本函数局部变量，
+	//   三个批量调用点共用同一份——每处各抽一次会让同一张表在不同语言下拿到不同的表头
+	//   （结构腿是同一次推理，但抽取时刻不同 ⇒ 清洗后的行文本可能已变），且白付 N 次子进程。
+	//   抽不出（没开结构腿/没表格/单元格里没文字）⇒ 空串，提示词逐字不变（不降级、不记 warning）。
+	fileHeaderCtx := ""
+	if fileproc.FileHeaderContextEnabled() {
+		if od, ok := fileproc.PendingOcrDoc(filePath); ok {
+			if sdoc, serr := fileproc.DetectStructure(ctx, filePath); serr == nil {
+				if len(sdoc.Tables) > 1 {
+					// 只取首张表的读数：上下文越长越容易被模型当成待译内容（见 table_header.go 头注第 3 条）。
+					observability.Info(ctx, "表头上下文只取首张表格", "file", filepath.Base(filePath), "tables", len(sdoc.Tables))
+				}
+				if hdr, hok := fileproc.TableHeaderContext(od.Lines, sdoc, fileproc.FileHeaderContextMaxChars()); hok {
+					fileHeaderCtx = hdr
+				}
+			}
+		}
+	}
+	if fileHeaderCtx != "" {
+		observability.Info(ctx, "表头上下文已注入批量提示词",
+			"file", filepath.Base(filePath), "chars", len([]rune(fileHeaderCtx)))
 	}
 
 	// ★ 嵌入管线级预取（评审整改 R2）：pro 模式且走 KB 语义检索时，
@@ -948,10 +1020,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					// ★ 品牌保护（2026-09-10）：把该语言源文中的品牌名替换为规定译法，
 					//   使模型输出 ROX 而非音译 Киджиш；返回的 batch 仍按原 needTexts 索引对应。
 					protSrc, _ := protectSourceByLang(needTexts, brandTermsAll[lc])
-					batch := e.BatchTranslate(ctx, protSrc, lc, 15,
+					batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, 40, 6000),
 						// ★B3：段回调升级为「进度+逐段 segment_done」；gidx=needModelIdx 将批下标映射回
 						// texts 全局段号（事件带原始源文而非品牌保护后的 protSrc，保证前端行对得上号）
-						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx))
+						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx),
+						// ★ P5：表头语境（关闭时为空串 ⇒ 提示词与记忆键逐字不变）
+						BatchOptions{HeaderContext: fileHeaderCtx})
 					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
 					if !fast {
 						batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -996,9 +1070,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				sendTexts[i] = texts[idx]
 			}
 			protSrc, _ := protectSourceByLang(sendTexts, brandTermsAll[lc])
-			batch := e.BatchTranslate(ctx, protSrc, lc, 15,
+			batch := e.BatchTranslateOpts(ctx, protSrc, lc, adaptiveBatchSize(protSrc, 40, 6000),
 				// ★B3：同 KB 路径——进度 + 逐段 segment_done（sendIdx 映射回全局段号/原始源文）
-				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx))
+				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx),
+				// ★ P5：表头语境（同上）
+				BatchOptions{HeaderContext: fileHeaderCtx})
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
 				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -1031,7 +1107,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   ① 墙钟预算 FILE_HARDGATE_MAX_SEC（默认 600s）——2026-08-26 漏翻整改：
 	//      预算检查从「仅轮首」细化为「轮首+逐段之间」，防止一轮内部超支导致
 	//      尾部段落（如末尾表格的「无」）从未获得补翻机会；
-	//   ② 轮次上限固定 5 轮（fileHardgateMaxAttempts），不再按「连续零进展」提前熔断——
+	//   ② 轮次上限固定 3 轮（fileHardgateMaxAttempts），不再按「连续零进展」提前熔断——
 	//      用户令要求 5 次机会必须给足；
 	//   ③ 每轮先小批量（bs=10，<sN> 显式配对）重译——对超短段（「无/有/日期」）
 	//      的抗回显性显著优于逐段单发，且吞吐高一个量级；批量后仍缺的段再逐段兜底。
@@ -1108,9 +1184,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
 			// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
 			protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
-			batch := e.BatchTranslate(ctx, protStill, lc, 10,
+			batch := e.BatchTranslateOpts(ctx, protStill, lc, adaptiveBatchSize(protStill, 40, 6000),
 				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
-				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx))
+				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
+				// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
+				BatchOptions{HeaderContext: fileHeaderCtx})
 			for i, m := range still {
 				// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
 				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
@@ -1157,7 +1235,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 			}
 		}
-		// ★ F-01（2026-10-24 用户令）：5% 阈值。硬闸 5 轮后仍超阈值 ⇒ 再做定向补译，
+		// ★ F-01（2026-10-24 用户令）：5% 阈值。硬闸 3 轮后仍超阈值 ⇒ 再做定向补译，
 		//   只送缺失段（极简指令腿），补回即止；不判失败、不退款、不自动整单重发。
 		if lang := leakedLangAt(lc, len(missingSegments(texts, langTranslations[lc])), len(texts), e.fileLeakRatio()); lang != "" {
 			calls := 0
@@ -1767,6 +1845,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				LangNames:            langNames,
 				KBHits:               kbHits,
 				ModelHits:            modelHits,
+				TMHits:               int(tmHitsCounter.Load()),
 				Untranslated:         untranslated,
 				UntranslatedSegments: untranslatedSegments,
 				SourceSegments:       texts,
@@ -1792,8 +1871,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			LangNames:    langNames,
 			KBHits:       kbHits,
 			ModelHits:    modelHits,
-			Untranslated: untranslated,     // 语言→未译出段数（>0 时审批台可见）
-			Translations: langTranslations, // 原文→译文（不序列化），工单执行器回写 TM
+			TMHits:       int(tmHitsCounter.Load()), // 本单命中段数（只记数，见字段注释）
+			Untranslated: untranslated,              // 语言→未译出段数（>0 时审批台可见）
+			Translations: langTranslations,          // 原文→译文（不序列化），工单执行器回写 TM
 			// 语言→仍未译出的源文段清单（每语言上限 200 条）：数量之外给出「缺哪几段」
 			UntranslatedSegments: untranslatedSegments,
 			// 有序源文段（不序列化）：工单执行器据此把精确配对落 ticket_segments 真值表
@@ -1928,7 +2008,7 @@ func (e *Engine) parseOtherLangsFromPrompt(ctx context.Context, text string) ([]
 // 于是"初翻模型没吐出来的那几行"在校对腿上**物理不存在**——而校对腿恰恰是链路上
 // 唯一一个可能由**另一族模型**（初翻 Hy、校对 GPT）经手的环节。
 // 现网实证（图片工单 136，`已实现=加权成本重放；浮动=市值-成本×数量；30s刷新`）：
-// 初翻 Hy 在 `<sN>` 批量形态下对这一槽吐空 → 校对腿跳过它 → 硬闸 5 轮 + 逐行补译 3 轮
+// 初翻 Hy 在 `<sN>` 批量形态下对这一槽吐空 → 校对腿跳过它 → 硬闸 3 轮 + 逐行补译 3 轮
 // 仍然全是 Hy 在打同一句话 → 最终按原文回落并在交付文档里点名。
 // 而同一句话走**单条腿**（试用接口实测）Hy 能给出
 // "Realized = Weighted Cost Replay; Floating = Market Value - Cost × Quantity; Refresh every 30s"。

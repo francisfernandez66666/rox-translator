@@ -96,6 +96,12 @@ type Engine struct {
 	//   仅测试注入缩短退避/次数用，生产恒为 0 走默认（maxAttempts=5、轮间 2s）。
 	retryMaxAttempts int
 	retrySleep       time.Duration
+
+	// ★ 2026-10-28 计价与成本批：译文记忆两级缓存（A=进程内 LRU，B=store.translation_memory）。
+	//   tm 由 tmOnce 惰性建一次（Engine 是进程级单例）；tmWrites 用于按条数节流清理。
+	tmOnce   sync.Once
+	tm       *tmLRU
+	tmWrites atomic.Int64
 }
 
 // cultureRule 单条语言文化规则（来自语言文化包安全句，approved 才生效）。
@@ -2170,6 +2176,16 @@ func (e *Engine) BatchTranslate(ctx context.Context, texts []string, targetLang 
 	return results
 }
 
+// BatchTranslateOpts 与 BatchTranslate 同一条实现，额外接受可选上下文（★ 2026-10-28 P5 表头上下文）。
+//
+// 为什么新开一口而不是给 BatchTranslate 加参数：50+ 处调用点里只要有一处传错，
+// 就是「某条腿没有上下文」的静默不一致——那种缺陷不会报错，只会让那一批的术语跟别的批不一样。
+// 老签名一律薄委托零值 options ⇒ 关闭 P5 时全链路字节等价。
+func (e *Engine) BatchTranslateOpts(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone, opts BatchOptions) []string {
+	results, _ := e.BatchTranslateMarkedOpts(ctx, texts, targetLang, batchSize, onBatchDone, opts)
+	return results
+}
+
 // wikiTermNoteEN / wikiTermNoteZH 专有名词的权威译名参照（★ 2026-10-27 用户要求：
 // 「实在不确定用词，可以查维基百科确认专有名词的多语言写法」）。
 //
@@ -2218,6 +2234,32 @@ const batchContextNote = " Before translating each item, infer its business cont
 	" Every item must produce an output: only symbols, numbers and code identifiers may stay untranslated." +
 	wikiTermNoteEN
 
+// headerContextNoteEN / headerContextNoteZH 表头语境提示句（★ 2026-10-28 P5）。
+//
+// 为什么批量腿只挂 EN：同 batchContextNote —— 纯 MT 模型会把 system 里的**中文**指令
+// 当成待译内容一起翻（现网实证见 minimalInstructionFromCtx 的注释）。ZH 版留给中文提示词腿
+// （校对腿/单条腿将来要用时直接取，别各写一份）。
+//
+// 句式刻意给两句硬约束：
+//  1. "只作语境"——不然模型会把表头也当成待译的一行，回吐里多出一条；
+//  2. "不要输出"——它同时钉住 `parseBatchOutput` 的条数契约（多吐一条就会把后面的段挤位）。
+const headerContextNoteEN = " The items below come from one table; for terminology consistency, the table's header" +
+	" row/column reads: %q. Use it only as terminology context: never translate it and never output it as an item."
+
+// headerContextNoteZH 中文版（同一口径，见上一条注释的用法限制）。
+const headerContextNoteZH = "以下条目来自同一张表格；为保持术语一致，该表的表头为：%q。表头只作术语语境参考：不要翻译它，也不要把它当作一个条目输出。"
+
+// headerContextNote 组装进 system 前缀的表头语境句；空表头回空串（关闭 P5 时逐字等价）。
+// ⚠️ 只走 headerContextNoteEN：见常量注释里的语种理由。
+func headerContextNote(header string) string {
+	h := strings.TrimSpace(header)
+	if h == "" {
+		return ""
+	}
+	// %q 会转义引号/换行：表头里有引号时，裸 %s 会让模型以为句子提前结束。
+	return fmt.Sprintf(headerContextNoteEN, h)
+}
+
 // BatchTranslateMarked 与 BatchTranslate 同一条实现，额外回吐「哪些槽位是被截断的」。
 // 参数：texts=待译段，targetLang=目标语言，batchSize=段块大小（0=按均长动态），onBatchDone=逐块回调。
 // 返回：results=与输入等长的译文（失败槽位为 `[翻译失败]`）；
@@ -2228,7 +2270,13 @@ const batchContextNote = " Before translating each item, infer its business cont
 // 截空槽位与"上游没返回"在字节上**完全同形**（都是空串／`[翻译失败]`）。调用方据此判
 // "上游整条不通"，就会把**可救的行**一起打成原文——截空是预算不够，单独重拨并抬高预算能救回来。
 // ⚠️ 这一档与上游断分不开的那一版如果单独上线，现网投的是客户成品，所以两条同批改（九-3 的原由）。
+// BatchTranslateMarked 批量翻译（老签名，零改动调用点）：内部委托 opts 版。
 func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone) ([]string, map[int]bool) {
+	return e.BatchTranslateMarkedOpts(ctx, texts, targetLang, batchSize, onBatchDone, BatchOptions{})
+}
+
+// BatchTranslateMarkedOpts 批量翻译（带可选上下文）。返回译文与「长度截断」槽位集合。
+func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, targetLang string, batchSize int, onBatchDone BatchChunkDone, opts BatchOptions) ([]string, map[int]bool) {
 	cfg := e.Cfg
 	result := make([]string, len(texts))
 	truncated := map[int]bool{}
@@ -2296,18 +2344,80 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 	sysBatch := translateInstruction(batchSrc, targetLang, uiLangFromCtx(ctx)) +
 		e.batchTermLayer(ctx, e.tenantID(ctx), targetLang) +
 		batchContextNote +
+		// ★ P5：表头语境只加在 system 前缀、且空表头时逐字不加（关闭开关 ⇒ 提示词与改造前逐字相同）。
+		//   放在编号契约之前是刻意的：契约那句必须在末尾，模型对"最后一句是指令"最敏感。
+		headerContextNote(opts.HeaderContext) +
 		"\n请按编号逐条翻译用户消息中的条目，用 <sN>...</sN> 包裹每条翻译结果："
-	runChunk := func(start int, chunk []string) int {
-		// 构造 <sN> 标记
-		var sb strings.Builder
-		for i, t := range chunk {
-			sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
-		}
-		messages := []map[string]string{
-			{"role": "system", "content": sysBatch},
-			{"role": "user", "content": sb.String()},
-		}
 
+	// ★ 2026-10-28 计价与成本批：先查译文记忆（A 进程内 + B 跨单库表），只把**未命中**的段送模型。
+	//   为什么放在批量层而不是调用方：这是「一次模型调用能翻多少字」的唯一咽喉，
+	//   file.go / 逐行补译 / 即时链都从这里过；放到各调用方＝迟早漏掉一条腿。
+	//   命中段照旧回调上报（进度与逐段上屏零变化），但不再消耗上游 token。
+	//
+	// ⚠️ 作用域（tmScope）的七个维度一个都不能省：租户/源/目标/提示词口径/模型指纹/表头上下文/代次，
+	//   少一维就是「换了模型或改了提示词，旧译文继续投」。计费档（pro/fast）刻意不进键——
+	//   它不是翻译输入，进键只会让同一段在两档下各存一份、命中率腰斩。
+	tmTid := tenant.FromContext(ctx)
+	tmOn := e.tmEnabled(tmTid)
+	sc := tmScope{
+		tid:     tmTid,
+		srcLang: batchSrc,
+		tgtLang: targetLang,
+		mode:    tmPromptMode(sysBatch),
+		modelFP: tmModelFingerprint(usageProvider(base), model),
+		ctxHash: tmHeaderContextHash(opts.HeaderContext),
+	}
+	tmHits := map[int]string{}
+	tmHitsACnt, tmHitsBCnt := 0, 0
+	if tmOn {
+		tmHits, tmHitsACnt, tmHitsBCnt = e.tmLookupBatch(ctx, sc, texts)
+	}
+	runIdx := make([][]int, 0, 4) // 连续未命中段的下标（保持 onBatchDone 的 start+j 语义）
+	for i := range texts {
+		if v, ok := tmHits[i]; ok {
+			result[i] = v
+			continue
+		}
+		tmMisses.Add(1)
+		if n := len(runIdx); n > 0 && runIdx[n-1][len(runIdx[n-1])-1] == i-1 {
+			runIdx[n-1] = append(runIdx[n-1], i)
+		} else {
+			runIdx = append(runIdx, []int{i})
+		}
+	}
+	// 每次批量腿一行命中读数（只记数，不记原文/译文）；A/B 分开计数便于判断是哪一层在起作用。
+	tmLogBatch(ctx, targetLang, len(texts), tmHitsACnt, tmHitsBCnt, len(texts)-len(tmHits))
+	// report 单调上报：缓存命中段先报（done=i+1），随后的模型分块报 start+len(chunk)，
+	// 两者看似会让进度回退——这里统一取「历史最大值」，把进度条钉成单调不减。
+	// ⚠️ 不给 done 造第二套口径：仍以「本批已完成的段数」为语义，只是取 max。
+	var reported atomic.Int64
+	report := func(upto, start int, sources, results []string) {
+		if onBatchDone == nil {
+			return
+		}
+		for {
+			cur := reported.Load()
+			nxt := int64(upto)
+			if nxt < cur {
+				nxt = cur
+			}
+			if reported.CompareAndSwap(cur, nxt) {
+				onBatchDone(int(nxt), len(texts), start, sources, results)
+				return
+			}
+		}
+	}
+	// 缓存命中段先上屏（源的顺序按段序，前端行序稳定）。
+	if tmOn {
+		for i := range result {
+			if result[i] != "" {
+				report(i+1, i, []string{texts[i]}, []string{result[i]})
+			}
+		}
+	}
+
+	// budgetFor 一次批量调用的输出预算（既有公式，未变）：按源文总字数 ×4，下限 2048、上限 8192。
+	budgetFor := func(chunk []string) int {
 		maxTokens := 2048
 		totalChars := 0
 		for _, t := range chunk {
@@ -2319,13 +2429,44 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 		if maxTokens > 8192 {
 			maxTokens = 8192
 		}
-
+		return maxTokens
+	}
+	// leafBudget 叶子档预算（★ 2026-10-28 截断二分）：系数从 4 抬到 8，仍钳在 2048..8192。
+	// 为什么只抬这一档：`finish_reason=length` 是**输出被预算砍断**，同一个预算再拨一次
+	// 只会再砍断一次（白烧一枪）；而整批抬预算会让正常块也付更贵的价，故只在叶子抬。
+	leafBudget := func(chunk []string) int {
+		runes := 0
+		for _, t := range chunk {
+			runes += len([]rune(t))
+		}
+		n := runes * 8
+		if n < 2048 {
+			n = 2048
+		}
+		if n > 8192 {
+			n = 8192
+		}
+		return n
+	}
+	// callBatch 一次真实调用（含 429/网络错误的避峰重拨一次），返回内容与结束原因。
+	// ⚠️ 抽成函数是刻意的：二分重试会让同一个块**多拨几枪**，若把调用体抄在递归两处，
+	// 「重拨条件里少写一个 isNetworkError」这类改动就只改到一半——那时表现为
+	// 「整块能救、被二分的半块救不回来」，而日志里两处都写着成功重试过。
+	callBatch := func(chunk []string, maxTokens int) (string, string, error) {
+		var sb strings.Builder
+		for i, t := range chunk {
+			sb.WriteString(fmt.Sprintf("<s%d>%s</s%d>\n", i+1, t, i+1))
+		}
+		messages := []map[string]string{
+			{"role": "system", "content": sysBatch},
+			{"role": "user", "content": sb.String()},
+		}
 		content, finish, err := e.LLM.CallChat(ctx, base, key, model, messages, maxTokens, hunyuan, cfg.FallbackTemp)
 		// 429/网络错误 → 429 先 sleep 5s 避峰，再用 fallback 模型重试一次
 		//（base/key 沿用解析结果，不再回退 cfg.Online* 常量）
 		if err != nil && (isRateLimited(err) || isNetworkError(err)) {
 			if isRateLimited(err) && !sleepCtx(ctx, 5*time.Second) {
-				return 0 // ★ D9：批量链取消止损（该块计 0 命中）
+				return "", "", err // ★ D9：批量链取消止损（该块计 0 命中）
 			}
 			content, finish, err = e.LLM.CallChat(ctx, base, key, cfg.HunyuanFallbackModel, messages, maxTokens, false, cfg.FallbackTemp)
 		}
@@ -2333,18 +2474,42 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 			// 记录批量路径实际使用的供应商与模型（usageRecord 已加锁，多 chunk 并发安全）
 			e.NoteUsageModel(ctx, usageProvider(base), model)
 		}
+		return content, finish, err
+	}
 
+	// runChunk 翻一个块；块被 max_tokens 砍断时**先二分再抬预算**（★ 2026-10-28 截断二分）。
+	//
+	// 为什么二分而不是"整块重拨一次抬预算的"：截断是输出总长超预算，与批内**总字数**成正比；
+	// 整块重拨要么仍被砍断（预算抬不动那么高），要么把 8192 顶到天花板后还是砍断。
+	// 砍成两半后每半的字数减半，同样的预算就够用——成本是「多一枪、少一段白等」。
+	// 深度上限 2（1+2+4 个块）＋叶再各重拨一次 ⇒ 单个原始块最坏 11 枪，且全程受 sem 并发闸约束。
+	//
+	// ⚠️ `truncated` 的唯一写点就在本函数**叶子之后**那一处：二分救回来的行不进截断档，
+	//   否则 orchestrator 会把"救回来了"读成"被截断"（那两条判据读同一张 map）。
+	var runChunk func(idx []int, chunk []string, depth int) int
+	runChunk = func(idx []int, chunk []string, depth int) int {
+		content, finish, err := callBatch(chunk, budgetFor(chunk))
+		if err == nil && finish == "length" {
+			if len(chunk) > 1 && depth < batchSplitMaxDepth {
+				mid := len(chunk) / 2
+				h := runChunk(idx[:mid], chunk[:mid], depth+1)
+				h += runChunk(idx[mid:], chunk[mid:], depth+1)
+				return h
+			}
+			// 叶子（单段或已达深度上限）：抬预算再拨一次——这是"可救的行"的最后一次机会。
+			content, finish, err = callBatch(chunk, leafBudget(chunk))
+		}
 		parsed := parseBatchOutput(content, len(chunk))
-		// ★ 2026-10-26 八-3c：这一块**吐到一半被 max_tokens 砍断**（finish_reason=length）时，
-		//   块内没拿到内容的槽位记成「截断档」——那是预算不够，**不是上游不通**。
-		//   只认 length 这一档、只记没内容的槽、且只在请求本身成功时记：
+		// ★ 2026-10-26 八-3c：这一块**吐到一半被 max_tokens 砍断**（finish_reason=length）且
+		//   走到这里（叶子仍截断）时，块内没拿到内容的槽位记成「截断档」——那是预算不够，
+		//   **不是上游不通**。只认 length 这一档、只记没内容的槽、且只在请求本身成功时记：
 		//   正常结束却缺段＝模型漏编号（解析层的事，重拨同一批也未必好），err≠nil 时整块一个内容都没有
 		//   （那才该走上游断那一档），两者混进这里都会把判据往错误方向推。
 		if err == nil && finish == "length" {
 			tm.Lock()
 			for i, tr := range parsed {
-				if strings.TrimSpace(tr) == "" && start+i < len(result) {
-					truncated[start+i] = true
+				if strings.TrimSpace(tr) == "" && i < len(idx) {
+					truncated[idx[i]] = true
 				}
 			}
 			tm.Unlock()
@@ -2353,41 +2518,58 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 		mu.Lock()
 		for i, tr := range parsed {
 			if i < len(chunk) && tr != "" {
-				result[start+i] = PostProcessTranslation(tr, targetLang)
+				final := PostProcessTranslation(tr, targetLang)
+				result[idx[i]] = final
 				hit++
+				// ★ 只把**通过可用性判据**的译文写回记忆：回填原文/失败占位/指令回显一律不写，
+				//   否则下一次命中就把"没翻"当成"翻好了"直出（比漏翻更难发现）。
+				//   判据必须是 fileTranslationUsable（＝九类 + 指令回显 + 长文爆炸），
+				//   只过 IsTranslationUsable 会让"提示词回显"被存进记忆、下一单直出给客户。
+				if tmOn && e.fileTranslationUsable(ctx, chunk[i], final, targetLang) {
+					e.tmStore(ctx, sc, chunk[i], final)
+				}
 			}
 		}
 		mu.Unlock()
 		return hit
 	}
 
-	// 第一遍：动态批大小分块并发；解析率 <90% 的块记录待二次收编
-	type poorRange struct{ start, end int }
+	// 第一遍：动态批大小分块并发；解析率 <90% 的块记录待二次收编。
+	// ★ 2026-10-28：按「连续未命中段」分run送模型（缓存命中段已在上方上报并回填 result）。
+	type poorRange struct{ idx []int }
 	var poor []poorRange
 	var poorMu sync.Mutex
-	for start := 0; start < len(texts); start += bs {
-		end := start + bs
-		if end > len(texts) {
-			end = len(texts)
-		}
-		chunk := texts[start:end]
-		wg.Add(1)
-		go func(start int, chunk []string) {
-			defer wg.Done()
-			defer recoverPipeline("batch_chunk") // 整改 D4
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			hit := runChunk(start, chunk)
-			if hit < len(chunk)*9/10 && len(chunk) > 5 {
-				poorMu.Lock()
-				poor = append(poor, poorRange{start: start, end: start + len(chunk)})
-				poorMu.Unlock()
+	for _, run := range runIdx {
+		for s0 := 0; s0 < len(run); s0 += bs {
+			e0 := s0 + bs
+			if e0 > len(run) {
+				e0 = len(run)
 			}
-			if onBatchDone != nil {
+			idx := run[s0:e0]
+			chunk := make([]string, len(idx))
+			for i, gi := range idx {
+				chunk[i] = texts[gi]
+			}
+			wg.Add(1)
+			go func(idx []int, chunk []string) {
+				defer wg.Done()
+				defer recoverPipeline("batch_chunk") // 整改 D4
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				hit := runChunk(idx, chunk, 0)
+				if hit < len(chunk)*9/10 && len(chunk) > 5 {
+					poorMu.Lock()
+					poor = append(poor, poorRange{idx: idx})
+					poorMu.Unlock()
+				}
 				// ★B3：本块译文快照随进度一并上报（此时本 goroutine 持有该块写权，读取安全）
-				onBatchDone(start+len(chunk), len(texts), start, chunk, result[start:start+len(chunk)])
-			}
-		}(start, chunk)
+				snap := make([]string, len(idx))
+				for i, gi := range idx {
+					snap[i] = result[gi]
+				}
+				report(idx[len(idx)-1]+1, idx[0], chunk, snap)
+			}(idx, chunk)
+		}
 	}
 	wg.Wait()
 
@@ -2395,14 +2577,14 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 	//   把「批量格式漂移」就地修复，避免大段退化到逐段兜底。
 	for _, pr := range poor {
 		const sub = 5
-		for s0 := pr.start; s0 < pr.end; s0 += sub {
+		for s0 := 0; s0 < len(pr.idx); s0 += sub {
 			e0 := s0 + sub
-			if e0 > pr.end {
-				e0 = pr.end
+			if e0 > len(pr.idx) {
+				e0 = len(pr.idx)
 			}
 			allSet := true
-			for i := s0; i < e0; i++ {
-				if strings.TrimSpace(result[i]) == "" {
+			for _, gi := range pr.idx[s0:e0] {
+				if strings.TrimSpace(result[gi]) == "" {
 					allSet = false
 					break
 				}
@@ -2410,15 +2592,19 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 			if allSet {
 				continue
 			}
-			chunk := texts[s0:e0]
+			idx := pr.idx[s0:e0]
+			chunk := make([]string, len(idx))
+			for i, gi := range idx {
+				chunk[i] = texts[gi]
+			}
 			wg.Add(1)
-			go func(start int, chunk []string) {
+			go func(idx []int, chunk []string) {
 				defer wg.Done()
 				defer recoverPipeline("batch_retry_chunk") // 整改 D4
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				runChunk(start, chunk)
-			}(s0, chunk)
+				runChunk(idx, chunk, 0)
+			}(idx, chunk)
 		}
 	}
 	wg.Wait()
@@ -2440,6 +2626,11 @@ func (e *Engine) BatchTranslateMarked(ctx context.Context, texts []string, targe
 			out := "[翻译失败]"
 			if err == nil && strings.TrimSpace(s2) != "" {
 				out = s2
+				// ★ 2026-10-28：逐段兜底拿到的译文同样值得记忆（它已经花了一次上游调用）。
+				//   判据与批量腿**同一条**（fileTranslationUsable），作用域也用同一份（sc）。
+				if tmOn && e.fileTranslationUsable(ctx, texts[i], out, targetLang) {
+					e.tmStore(ctx, sc, texts[i], out)
+				}
 			}
 			mu.Lock()
 			result[i] = out

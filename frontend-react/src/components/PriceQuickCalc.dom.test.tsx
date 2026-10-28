@@ -32,8 +32,8 @@ const META = {
   unit: 'points',
   points_price_money: 0.099668,
   modes: [
-    { code: 'fast', points_per_1k_chars: 150, points_fixed: 3 },
-    { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5 },
+    { code: 'fast', points_per_1k_chars: 150, points_fixed: 3, points_fixed_per_lang: 2.25 },
+    { code: 'pro', points_per_1k_chars: 400, points_fixed: 7.5, points_fixed_per_lang: 6 },
   ],
 }
 
@@ -60,7 +60,7 @@ const money = (v: number) => '¥' + fmtNum(v, { min: 2, max: 2 })
 /** 首页卡的专业档预估积分（与后端建单预检同一条两段式：固定项 + 千字线性项 × 语种数） */
 function expectPoints(chars: number, langs: number): number {
   const pro = META.modes.find((m) => m.code === 'pro')!
-  return Math.round(pro.points_fixed + (chars / 1000) * pro.points_per_1k_chars * langs)
+  return Math.round(pro.points_fixed + (langs - 1) * pro.points_fixed_per_lang + (chars / 1000) * pro.points_per_1k_chars * langs)
 }
 
 /** renderCard 只挂首页卡；外层 MemoryRouter 是为了能和 /compare 页同树渲染时不报 hook 缺失 */

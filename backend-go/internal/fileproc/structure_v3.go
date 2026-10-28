@@ -1,8 +1,12 @@
 // ============ structure_v3.go · 职责说明 ============
-// PP-StructureV3 接入骨架（S2）：只取版面/表格几何，**不取识别文本**。
+// PP-StructureV3 接入（S2）：只取版面/表格几何，**不取识别文本**。
 //
-// 本批刻意只交付骨架（主方案 §6 与《接入方案_结构保真》§10 的开工判据）：
-// spike S0–S5 未在部署机全绿之前，真实推理不接、开关默认 off——避免"没做完"被当成"没问题"。
+// ★ 2026-10-28 计价与成本批：`structure_v3.py` 的 `page` 已接真实推理（版面 + 表格两档模型），
+//
+//	协议级自证见 `structure_page_selftest.py`（零权重、零 GPU）与 `structure_page_wire_gate_test.go`
+//	（脚本真跑一遍、stdout 喂给下面的解析器）。
+//	⚠️ 开关**仍然默认 off**：真机上 S0–S5 六条读数（权重体积/许可/耗时/内存/三档失败）没跑完之前
+//	不许在这台机器上打开——本批完成的是"代码 + 协议级自证"那一半。
 //
 // 三条硬口径：
 //  1. 默认关：`OCR_STRUCTURE=on|1|true` 才启用；未设/其它值一律视为关（配置面回滚，不换二进制）；
@@ -71,8 +75,13 @@ func structureAssetsDir() string {
 type StructureProbe struct {
 	OK      bool   // probe 是否回 OK
 	Version string // paddleocr 版本（OK 时非空）
-	Models  int    // 权重份数
-	Reason  string // 不就绪原因（MISSING 行的原文，已去前缀）
+	Models  int    // 权重份数（平铺与分档两种投放形态都算）
+	// Layout / Table 是**实际会被推理用到的那个模型目录名**（★ 2026-10-28 S2）。
+	// 排障时它回答的是「这台机器加载的是哪一份权重」——版本换了但 probe 仍 OK 的那种漂移，
+	// 靠这两个读数才看得出来。
+	Layout string
+	Table  string
+	Reason string // 不就绪原因（MISSING 行的原文，已去前缀）
 }
 
 // probeRe 解析 probe 的两态输出（只在 Go 侧解析，不把脚本输出直接透给健康面）。
@@ -99,6 +108,13 @@ func parseStructureProbe(out string) StructureProbe {
 				if n, err := strconv.Atoi(strings.TrimPrefix(kv, "models=")); err == nil {
 					p.Models = n
 				}
+			}
+			// 未知键一律忽略（向后兼容：脚本将来多打几个读数不许把解析打坏）。
+			if strings.HasPrefix(kv, "layout=") {
+				p.Layout = strings.TrimPrefix(kv, "layout=")
+			}
+			if strings.HasPrefix(kv, "table=") {
+				p.Table = strings.TrimPrefix(kv, "table=")
 			}
 		}
 		return p
@@ -138,6 +154,37 @@ var (
 // structureHealthTTL probe 缓存时长（与派发探针的 TTL 口径一致：不是 sync.Once）。
 const structureHealthTTL = 600 * time.Second
 
+// structureONNXCount 现数权重份数（顶层平铺 + 一层子目录，与脚本 probe 的 models= 同一把尺子）。
+func structureONNXCount() int {
+	n := 0
+	dir := structureAssetsDir()
+	top, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	for _, e := range top {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(e.Name()), ".onnx") {
+			n++
+		}
+	}
+	for _, e := range top {
+		if !e.IsDir() {
+			continue
+		}
+		if sub, serr := os.ReadDir(filepath.Join(dir, e.Name())); serr == nil {
+			for _, f := range sub {
+				if !f.IsDir() && strings.HasSuffix(strings.ToLower(f.Name()), ".onnx") {
+					n++
+				}
+			}
+		}
+	}
+	return n
+}
+
 // StructureHealthWord 健康面状态词：off / ok / degraded，以及实际引擎档。
 //
 // degraded 与 off 必须分开：前者是"配了但不可用"（该有人去修），后者是"主动没开"（正常态）。
@@ -158,22 +205,19 @@ func StructureHealthWord(ctx context.Context) (word, engine string) {
 		return "degraded", "-"
 	}
 	// 引擎档：权重若是 onnx 转出来的（本方案首选 B 路线）报 onnx；否则按 paddle。
+	// ★ 2026-10-28：分档投放（`layout/`、`table/` 各一份）也要认——只扫顶层会把分档部署读成 paddle。
 	engine = "paddle"
-	if entries, err := os.ReadDir(structureAssetsDir()); err == nil {
-		for _, e := range entries {
-			if strings.HasSuffix(strings.ToLower(e.Name()), ".onnx") {
-				engine = "onnx"
-				break
-			}
-		}
+	if structureONNXCount() > 0 {
+		engine = "onnx"
 	}
 	return "ok", engine
 }
 
 // DetectStructure 单页/整件结构识别（唯一出口：换引擎/换模型只改这里，调用方零改动）。
 //
-// 本批骨架：即便开关打开，也只会拿到 ErrStructureUnavailable（脚本 page 尚未接入真实推理）。
-// 调用方按 §5.2 的降级表处理——走几何重建，**不判失败**。
+// 调用方按 §5.2 的降级表处理——四档失败都走几何重建，**不判失败、不退款**：
+// Unavailable（没开/缺权重/版本形状不匹配）、Timeout、BadInput（坏图）、Empty（这页真没块）。
+// 本函数只做"把脚本读数换成结构体"，任何形状判断都在脚本那一侧（唯一适配层）。
 func DetectStructure(ctx context.Context, path string) (StructureDoc, error) {
 	doc := StructureDoc{}
 	if !StructureEnabled() {

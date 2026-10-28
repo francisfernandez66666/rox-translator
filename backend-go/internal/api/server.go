@@ -523,7 +523,7 @@ func (s *Server) routesBilling() {
 	s.mux.HandleFunc("/api/admin/pay/channels/save", s.handleAdminPayChannelsSave)
 	// ★ #75（2026-09-23）多币种报价：报价币种 + 汇率倍率的超管配置口（GET 回显 / POST 保存，无密文项）
 	s.mux.HandleFunc("/api/admin/config/quote-currency", s.handleAdminQuoteCurrency)
-	// ★ F-72（2026-09-27 〇-X 第 5 项）计费预估系数（K/F × pro/fast 四键）的超管配置口：
+	// ★ F-72（2026-09-27 〇-X 第 5 项）计费预估系数（K/F0/F1 × pro/fast 六键，2026-10-28 由四键拆出 F1）的超管配置口：
 	// 没这个口子之前调档只能 psql 插 system_config 行，手滑一次就是全量放行或全量误拦
 	s.mux.HandleFunc("/api/admin/config/est-tokens", s.handleAdminEstTokens)
 	// ★ 2026-10-26 裁决九-4：逐行翻译两条档位（补译轮数／上游断早停连续数）给运营配的口子。

@@ -39,9 +39,12 @@ type pricingMode struct {
 	Code string `json:"code"`
 	// PointsPer1kChars 每「1000 源字符 × 1 个目标语种」的线性积分档（＝K×1000÷积分汇率）。
 	PointsPer1kChars float64 `json:"points_per_1k_chars"`
-	// PointsFixed 每次建单的一次性固定积分档（＝F÷积分汇率；出厂缺省 pro=7.5 / fast=3）。
+	// PointsFixed 单语种时的固定积分合计（＝(F0+F1)÷积分汇率；出厂 pro=7.5 / fast=3）。
 	// 带小数是刻意的：前端要用它跑与后端同一的浮点式子，这里先取整就等于把误差塞进客户账单。
 	PointsFixed float64 `json:"points_fixed"`
+	// PointsFixedPerLang 每多一个目标语种的固定增量（＝F1÷积分汇率；出厂 pro=6 / fast=2.25）。
+	// 前端式子：fixed + (langs-1)×fixedPerLang + chars/1000×per1k×langs。
+	PointsFixedPerLang float64 `json:"points_fixed_per_lang"`
 }
 
 // handlePricingMeta GET /api/pricing/meta —— 公开算价元数据（匿名可达、只读）。
@@ -58,14 +61,16 @@ func (s *Server) handlePricingMeta(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"modes": []pricingMode{
 			{
-				Code:             "fast",
-				PointsPer1kChars: pointsFromTokensFloat(s.estTokensPerChar("fast")*1000, rate),
-				PointsFixed:      pointsFromTokensFloat(s.estTokensFixed("fast"), rate),
+				Code:               "fast",
+				PointsPer1kChars:   pointsFromTokensFloat(s.estTokensPerChar("fast")*1000, rate),
+				PointsFixed:        pointsFromTokensFloat(s.estTokensFixed("fast")+s.estTokensFixedLang("fast"), rate),
+				PointsFixedPerLang: pointsFromTokensFloat(s.estTokensFixedLang("fast"), rate),
 			},
 			{
-				Code:             "pro",
-				PointsPer1kChars: pointsFromTokensFloat(s.estTokensPerChar("pro")*1000, rate),
-				PointsFixed:      pointsFromTokensFloat(s.estTokensFixed("pro"), rate),
+				Code:               "pro",
+				PointsPer1kChars:   pointsFromTokensFloat(s.estTokensPerChar("pro")*1000, rate),
+				PointsFixed:        pointsFromTokensFloat(s.estTokensFixed("pro")+s.estTokensFixedLang("pro"), rate),
+				PointsFixedPerLang: pointsFromTokensFloat(s.estTokensFixedLang("pro"), rate),
 			},
 		},
 		// 每积分对应人民币（元）＝积分汇率（token/积分）× 尺子（分/百万 token）÷ 1e8。
