@@ -49,3 +49,10 @@
 :(exclude)短视频分镜_*.html
 :(exclude)coding_daily_*.html
 :(exclude)vibe_images/
+# ★ 2026-10-28 计价批补两条：同族新形态，两类都是「生成出来的图像/会话导出件」，不是运行代码。
+#   ① promo_poster/：品牌亮相海报的生成物（多张 2:3 大图 + spec.json），属营销物料取证；
+#   ② ses_*.json：一次会话/一次抓取的完整导出（单份可达数 MB），属排障取证。
+#   两条都是**未跟踪**目录，正常情况下不会进 BASE..HEAD；补在这里是为了兜住"某天顺手 git add ."——
+#   那种提交一旦进历史，push_code_only 的「全量差异 − 代码清单」就会把它们当代码推上公开仓库。
+:(exclude)promo_poster/
+:(exclude)ses_*.json
