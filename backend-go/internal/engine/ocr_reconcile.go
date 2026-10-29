@@ -104,7 +104,7 @@ func (e *Engine) OcrFixEnabled() bool {
 	return v != "off" && v != "0" && v != "false"
 }
 
-// OcrFixHealth 健康面状态词：off（主动关）/ degraded（没有能干活的人）/ ok。
+// OcrFixHealth 健康面状态词：off（主动关）/ degraded（没有能干活的人）/ backoff（零产出冷却中）/ ok。
 //
 // 两个词必须分开：degraded 是"该有人去配"，off 是"正常态"。写成同一个词，
 // 现网就会出现"运营以为关了、其实是坏的"（主方案 §8.8）。
@@ -120,11 +120,16 @@ func (e *Engine) OcrFixHealth(ctx context.Context) string {
 	if e == nil || e.Cfg == nil || e.LLM == nil {
 		return "degraded"
 	}
-	base, key, model, stageActive := e.resolveModelForStage(ctx, config.StageOcrFix)
+	// ★ 熔断窗口单独一个词：`backoff` 的动作是**等**（模型慢/不答，冷却到期自己会再试），
+	//   `degraded` 的动作是**去配**（这一档压根没有能干活的人）。混成一个词，读的人会对错病因下手。
+	if e.ocrFixCooling() {
+		return "backoff"
+	}
+	b, k, m, stageActive := e.ocrFixStageModel(ctx)
 	if !stageActive {
 		return "degraded"
 	}
-	if strings.TrimSpace(base) != "" && strings.TrimSpace(key) != "" && strings.TrimSpace(model) != "" {
+	if strings.TrimSpace(b) != "" && strings.TrimSpace(k) != "" && strings.TrimSpace(m) != "" {
 		return "ok"
 	}
 	return "degraded"
@@ -209,20 +214,27 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 	if len(pending) == 0 {
 		return finish()
 	}
-	base, key, model, stageOK := e.resolveModelForStage(ctx, config.StageOcrFix)
-	// ★ 2026-10-29：模型腿**只在显式配了 `ocr_fix` 阶段模型时才跑**。
-	//   旧形态在没有阶段模型时回落到全局主模型，而现网全局是一个**翻译模型**
-	//   （tencent/Hunyuan-MT-7B）——让它按 JSON 判定二十行文字，每次都要等满预算再超时：
-	//   六次运行全是 `calls:3, tokens:0, latency_ms:44998`，等于每张图白等 45 秒且零收益。
-	//   ⇒ 没配阶段模型就是"这一腿没有能干活的人"，立刻收手并如实记账（no_stage_model），
-	//   由文档内佐证那条确定性腿承担主要修正。
-	if !stageOK {
+	// ★ 2026-10-29：模型腿**只认「`ocr_fix` 这张卡自己显式配了模型」**——不走 resolveModelForStage
+	//   那条 `ai_initial` → 全局主模型的回落链。回落链在别的阶段是对的，唯独这一档的活是
+	//   "按 JSON 判定文字"，而现网初翻/全局都是**翻译模型**（tencent/Hunyuan-MT-7B）：
+	//   六次运行全是 `calls:3, tokens:0, latency_ms:44998`＝每张图白等 45 秒、零收益，
+	//   而 `/api/health.ocr_fix` 因为"回落得到东西"一直报 ok——**读数与事实相反**是本仓最坏那一族。
+	//   ⇒ 没配这一档就是"这条腿没有能干活的人"：立刻收手、如实记 `no_stage_model`，
+	//   由上面那条确定性腿承担主要修正；运营在第八张卡配一个通用指令模型，这条腿当场生效。
+	b, k, m, stageActive := e.ocrFixStageModel(ctx)
+	if !stageActive {
 		st.Reasons["no_stage_model"] += len(pending)
 		e.ocrMarkFallback(doc, pending, &st)
 		return finish()
 	}
-	if strings.TrimSpace(base) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(model) == "" {
+	if strings.TrimSpace(b) == "" || strings.TrimSpace(k) == "" || strings.TrimSpace(m) == "" {
 		st.Reasons["no_model"] += len(pending)
+		e.ocrMarkFallback(doc, pending, &st)
+		return finish()
+	}
+	// ★ 2026-10-29：模型腿的熔断窗口内**一次都不拨**（与主模型那只 breaker 分账，见 Engine 字段注释）。
+	if cooling := e.ocrFixCooling(); cooling {
+		st.Reasons["backoff"] += len(pending)
 		e.ocrMarkFallback(doc, pending, &st)
 		return finish()
 	}
@@ -263,7 +275,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		cctx, cancel := context.WithTimeout(ctx, to)
 		callStart := time.Now()
 		before := ocrCollectorTotal(ctx)
-		content, finishReason, cerr := e.LLM.CallChat(cctx, base, key, model,
+		content, finishReason, cerr := e.LLM.CallChat(cctx, b, k, m,
 			[]map[string]string{
 				{"role": "system", "content": ocrFixPrompt},
 				{"role": "user", "content": string(payload)},
@@ -306,7 +318,91 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			}
 		}
 	}
+	// 本轮产出没产出，决定熔断计数（判据只看 tokens：模型真答了才会有 usage 读数，
+	// 而 fixed/kept 为零可能只是"这一图本来就没毛病"，拿它当失败会把好模型也押进冷却）。
+	e.ocrFixNoteOutcome(ctx, st.Tokens)
 	return finish()
+}
+
+// ocrFixFailStreak 触发 ③ 模型腿熔断的**连续零产出轮数**（env `OCR_FIX_FAIL_STREAK`，默认 3，钳 1~10）。
+func ocrFixFailStreak() int {
+	if v := strings.TrimSpace(os.Getenv("OCR_FIX_FAIL_STREAK")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < 1 {
+				n = 1
+			}
+			if n > 10 {
+				n = 10
+			}
+			return n
+		}
+	}
+	return 3
+}
+
+// ocrFixBackoff 熔断后的冷却时长（env `OCR_FIX_BACKOFF_SEC`，默认 600s，钳 1~3600s）。
+//
+// 下界取 1s 而不是 30s 只为一件事：让"冷却到期会自己再试一次"这条判据能被单测真的跑到
+// （把下界抬到 30s，那条断言就只能靠 sleep 或者根本没人写——于是这一族只有"进"没有"出"）。
+func ocrFixBackoff() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("OCR_FIX_BACKOFF_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			if n < 1 {
+				n = 1
+			}
+			if n > 3600 {
+				n = 3600
+			}
+			return time.Duration(n) * time.Second
+		}
+	}
+	return 600 * time.Second
+}
+
+// ocrFixCooling ③ 模型腿是否处于零产出冷却窗口内。**唯一读点**——
+// 拨不拨（ReconcileOcrDoc）与健康面报什么词（OcrFixHealth）必须问同一个问题，
+// 两处各判一次迟早长出一句"health 说 ok、实际根本没拨"（AGENTS §一·5 那一族多把尺子）。
+func (e *Engine) ocrFixCooling() bool { return e.ocrFixBreaker().IsOpen() }
+
+// ocrFixStageModel ③ 模型腿的**档位判据唯一读点**：只认 `ocr_fix` 这张卡自己配的模型。
+//
+// 为什么单独收一个函数而不调 `resolveModelForStage`：后者在 ocr_fix 没配时会继续回落到
+// `ai_initial` 的阶段模型／全局主模型，并把 `stageActive` 一起报成 true——
+// 现网 `/api/health.ocr_fix` 因此一直报 ok，而 ③ 六次运行全是 `tokens:0 全 timeout`
+// （回落过去的是**翻译模型** tencent/Hunyuan-MT-7B，它答不了"按 JSON 判定二十行"）。
+// ⇒ 这一档没有"不配也能跑"：没配就是不拨。
+func (e *Engine) ocrFixStageModel(ctx context.Context) (base, key, model string, configured bool) {
+	return e.resolveStageModel(ctx, config.StageOcrFix)
+}
+
+// ocrFixBreaker 取（并按需建）③ 模型腿的熔断器。
+//
+// 懒建是因为 `Engine{}` 零值在单测与启动早期都要能用；构造参数在那一刻从 env 读，
+// 之后改 env 需要重启进程才生效（与 kill-switch `OCR_FIX` 同一档，不是新的配置面）。
+// 复用本包既有的 `Breaker`（主模型那只同形），不另造第二套熔断语义。
+func (e *Engine) ocrFixBreaker() *Breaker {
+	e.ocrFixBreakMu.Lock()
+	defer e.ocrFixBreakMu.Unlock()
+	if e.ocrFixBreak == nil {
+		e.ocrFixBreak = NewBreaker(ocrFixFailStreak(), ocrFixBackoff())
+	}
+	return e.ocrFixBreak
+}
+
+// ocrFixNoteOutcome 按本轮的真实 token 记一笔：有产出即清零，零产出计一次失败。
+//
+// 只在**真拨过**之后调用（`no_stage_model`/`off`/`cancelled` 那些提前返回的分支不算失败：
+// 压根没拨＝没资格记账，否则一次上层取消就能把这条腿押进冷却）。
+func (e *Engine) ocrFixNoteOutcome(ctx context.Context, tokens int64) {
+	if tokens > 0 {
+		e.ocrFixBreaker().Reset()
+		return
+	}
+	if e.ocrFixBreaker().Fail("zero_tokens") {
+		observability.Warn(ctx, "ocr_fix 模型腿连续零产出，进入冷却",
+			"streak", ocrFixFailStreak(), "backoff_sec", int(ocrFixBackoff().Seconds()),
+			"reason", "zero_tokens")
+	}
 }
 
 // ocrFixResult 一条模型回执。

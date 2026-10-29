@@ -68,6 +68,15 @@ type Engine struct {
 	// ★ 主模型熔断恢复：Hunyuan 连续失败超阈值 → 直接降级；冷却后自动恢复
 	breaker *Breaker
 
+	// ★ 2026-10-29：③（ocr_fix）**模型腿自己的熔断**。
+	//   现网实证：这条腿连着六次运行全是 `calls:3, tokens:0, latency_ms:44998`——
+	//   配了的模型答不出这份判定题，却每张图白等满 45 秒预算（译文第一的原则下，
+	//   这是"零收益的确定性劣化"）。⇒ 连续零产出后先冷却，窗口内直接不拨、走确定性腿；
+	//   与主模型那只 breaker 分开是刻意的：③ 坏了不该把初翻也熔断。
+	//   状态只留内存（不落库：落库＝运营换了模型，库里那份冷却还继续押着新的不发）。
+	ocrFixBreakMu sync.Mutex
+	ocrFixBreak   *Breaker
+
 	// ★ 错误率监控：记录最近 N 次 LLM 调用成败（看门狗/告警用）
 	errMu      sync.Mutex
 	errRing    []bool // true=成功 false=失败

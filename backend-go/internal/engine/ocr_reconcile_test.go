@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"translator/internal/config"
 	"translator/internal/fileproc"
+	"translator/internal/llm"
 	"translator/internal/textscript"
 )
 
@@ -474,7 +476,7 @@ func TestOcrFixCallReasonWords(t *testing.T) {
 		got[m[2]] = true
 	}
 	// dup_index 由 parseOcrFixReply 的 error 文案出（不是下标字面量），所以不在这一份直接名单里。
-	want := map[string]bool{"off": true, "no_model": true, "no_stage_model": true, "budget": true, "schema": true, "truncated": true}
+	want := map[string]bool{"off": true, "no_model": true, "no_stage_model": true, "budget": true, "schema": true, "truncated": true, "backoff": true}
 	for k := range got {
 		if !want[k] {
 			t.Errorf("reasons 里长出未登记的直接档位 %q", k)
@@ -484,5 +486,193 @@ func TestOcrFixCallReasonWords(t *testing.T) {
 		if !got[k] {
 			t.Errorf("登记的直接档位 %q 在代码里找不到了（档位名单与实现漂移）", k)
 		}
+	}
+}
+
+// TestOcrFixModelLegBreakerEnv 熔断两档 env 的默认与钳位（档位本身就是判据的一部分）。
+func TestOcrFixModelLegBreakerEnv(t *testing.T) {
+	if got := ocrFixFailStreak(); got != 3 {
+		t.Fatalf("默认连续零产出轮数应为 3，实得 %d", got)
+	}
+	if got := ocrFixBackoff(); got != 600*time.Second {
+		t.Fatalf("默认冷却应为 600s，实得 %v", got)
+	}
+	cases := map[string][2]int{ // env → {streak 读数, backoff 秒读数}
+		"0":   {1, 600},
+		"99":  {10, 600},
+		"abc": {3, 600},
+		"2":   {2, 600},
+	}
+	for v, want := range cases {
+		t.Setenv("OCR_FIX_FAIL_STREAK", v)
+		if got := ocrFixFailStreak(); got != want[0] {
+			t.Errorf("OCR_FIX_FAIL_STREAK=%q 得 %d，期望 %d", v, got, want[0])
+		}
+	}
+	for v, want := range map[string]int{"": 600, "1": 1, "0": 1, "99999": 3600, "xyz": 600} {
+		t.Setenv("OCR_FIX_BACKOFF_SEC", v)
+		if got := ocrFixBackoff(); got != time.Duration(want)*time.Second {
+			t.Errorf("OCR_FIX_BACKOFF_SEC=%q 得 %v，期望 %ds", v, got, want)
+		}
+	}
+}
+
+// TestOcrFixModelLegBreakerTripsAndRecovers 熔断的**进与出**都要跑一次。
+//
+// 只测"进"的那批锁是本仓反复栽过的形态：一条只有进没有出的熔断＝把一次抖动钉成永久关闭
+// （AGENTS §一·5 那条「失败不写状态，不许把一次网络抖动钉成这个语种永远翻不了」同一族）。
+// 冷却下界刻意放到 1s，所以"到期自己再试"这一条能被真实跑到，而不是靠 sleep 或靠读注释。
+func TestOcrFixModelLegBreakerTripsAndRecovers(t *testing.T) {
+	t.Setenv("OCR_FIX_FAIL_STREAK", "2")
+	t.Setenv("OCR_FIX_BACKOFF_SEC", "1")
+	e := &Engine{}
+	e.ocrFixNoteOutcome(context.Background(), 0)
+	if e.ocrFixBreaker().IsOpen() {
+		t.Fatal("一轮零产出就熔断＝把偶发抖动当故障")
+	}
+	e.ocrFixNoteOutcome(context.Background(), 0)
+	if !e.ocrFixBreaker().IsOpen() {
+		t.Fatal("连续两轮零产出必须熔断（否则每张图继续白等满 45s 预算）")
+	}
+	// 成功一次即清零并关窗（判据只看 tokens：模型真答了才会有 usage 读数）。
+	e.ocrFixNoteOutcome(context.Background(), 512)
+	if e.ocrFixBreaker().IsOpen() {
+		t.Fatal("有产出后仍处熔断＝把修好的模型继续押在冷却里")
+	}
+	// 到期自动半开：再走两轮零产出、等过冷却窗口，必须自己放开。
+	e2 := &Engine{}
+	e2.ocrFixNoteOutcome(context.Background(), 0)
+	e2.ocrFixNoteOutcome(context.Background(), 0)
+	if !e2.ocrFixBreaker().IsOpen() {
+		t.Fatal("夹具没进熔断，下面那条'到期'判据无从谈起")
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if e2.ocrFixBreaker().IsOpen() {
+		t.Fatal("冷却到期必须放开再试一次（只有进没有出的熔断是第二起事故）")
+	}
+}
+
+// TestOcrFixHealthWords 健康面四个状态词各自对应的真形态，逐档点名。
+//
+// `backoff`（等）与 `degraded`（去配）必须分得开——两者动作不同：
+// 混成一个词，读的人会对着"该去配模型"的现场抬超时，或对着"模型暂时不答"的现场去改配置。
+func TestOcrFixHealthWords(t *testing.T) {
+	e := &Engine{Cfg: &config.Config{}, LLM: &llm.Client{}}
+	t.Setenv("OCR_FIX", "off")
+	if got := e.OcrFixHealth(context.Background()); got != "off" {
+		t.Fatalf("kill-switch 关着必须报 off，实得 %q", got)
+	}
+	t.Setenv("OCR_FIX", "")
+	t.Setenv("OCR_FIX_FAIL_STREAK", "1")
+	e2 := &Engine{Cfg: &config.Config{}, LLM: &llm.Client{}}
+	e2.ocrFixNoteOutcome(context.Background(), 0)
+	if got := e2.OcrFixHealth(context.Background()); got != "backoff" {
+		t.Fatalf("熔断窗口内必须报 backoff（动作是等），实得 %q", got)
+	}
+	// 没配 ocr_fix 阶段卡片（含 St==nil）＝degraded（动作是去配），**不许**报 ok。
+	e3 := &Engine{Cfg: &config.Config{}, LLM: &llm.Client{}}
+	if got := e3.OcrFixHealth(context.Background()); got != "degraded" {
+		t.Fatalf("没配 ocr_fix 阶段模型必须报 degraded，实得 %q", got)
+	}
+}
+
+// TestOcrFixBreakerWiredAtGuard 熔断判据必须在**守卫入口**被真调用（判据级代替不了守卫级，AGENTS §三）。
+//
+// 只测 `ocrFixBreaker()`/`ocrFixNoteOutcome()` 本身的语义，把这两行从 ReconcileOcrDoc 里摘掉它完全无感——
+// 表现就是"熔断单测全绿、现网照旧每张图白等 45 秒"。⇒ 按代码行现扫调用点。
+func TestOcrFixBreakerWiredAtGuard(t *testing.T) {
+	code := ocrReconcileCodeLines(t)
+	for _, must := range []string{
+		"if cooling := e.ocrFixCooling(); cooling {",      // 拨之前先问窗口（唯一读点）
+		"e.ocrFixNoteOutcome(ctx, st.Tokens)",             // 拨过之后必须记这一笔
+		`st.Reasons["backoff"]`,                           // 窗口内如实出声，不许静默
+		"b, k, m, stageActive := e.ocrFixStageModel(ctx)", // 只认这一档自己配的模型（两处共用一个助手）
+	} {
+		if !strings.Contains(code, must) {
+			t.Errorf("③ 模型腿守卫入口缺少 %q（熔断/档位判据被摘掉时不会有任何症状）", must)
+		}
+	}
+	// 两处读点必须共用那两个助手，不许在任一侧再造一次直调
+	// （"health 说 ok、实际根本没拨"就是两处各判一次的产物）。
+	for _, must := range []string{
+		"if e.ocrFixCooling() {", // OcrFixHealth 那一侧
+		"func (e *Engine) ocrFixCooling() bool",
+		"func (e *Engine) ocrFixStageModel(",
+	} {
+		if !strings.Contains(code, must) {
+			t.Errorf("③ 的单一读点缺失 %q", must)
+		}
+	}
+	// 反向：不许再走 resolveModelForStage 那条回落链（它会把 ai_initial／全局翻译模型算成"配好了"）。
+	if strings.Contains(code, "resolveModelForStage(ctx, config.StageOcrFix)") {
+		t.Error("③ 又吃回落链了：`ai_initial`／全局模型被算成 ocr_fix 配好了（现网 tokens=0 全 timeout 而 health 报 ok 的机理）")
+	}
+}
+
+// ocrReconcileCodeLines 读本文件并剥掉 Go 注释（判据只许落在代码行上，
+// 否则说明注释里那句"这里不许再走回落链"会自己把负向锁喂饱）。
+func ocrReconcileCodeLines(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile("ocr_reconcile.go")
+	if err != nil {
+		t.Fatalf("读 ocr_reconcile.go 失败: %v", err)
+	}
+	out := make([]string, 0, 512)
+	for _, ln := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(ln), "//") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// TestOcrFixSkipsModelLegWhileCooling 冷却窗口内**行为级**不拨，并同刻跑一条反向对照。
+//
+// 为什么必须两条一起：只测"进冷却就不拨"，判据会被一条根本不生效的守卫喂绿
+// （摘掉 `IsOpen()` 那一档，测试看到的仍是 calls=0——因为夹具压根没配阶段模型）。
+// 这里用**真配了 ocr_fix 阶段卡片**的库，指到一个必然秒退的连接（127.0.0.1:1），
+// 于是"没拨"与"拨了但失败"两个读数能分开：冷却里 calls=0，对照里 calls>0 且记 upstream。
+func TestOcrSkipsModelLegWhileCoolingBehaviour(t *testing.T) {
+	st := newTestStore(t)
+	setStageModels(t, st, config.StageModels{
+		config.StageOcrFix: {Provider: "ocr_fix", APIBase: "http://127.0.0.1:1/v1", APIKey: "sk-cooling-probe", Model: "cooling/Probe"},
+	})
+	old := config.C
+	cfg := config.Default()
+	cfg.DatabaseDriver = "sqlite"
+	config.C = cfg
+	t.Cleanup(func() { config.C = old })
+	t.Setenv("OCR_FIX", "")
+	t.Setenv("OCR_FIX_FAIL_STREAK", "1")
+	t.Setenv("OCR_FIX_BACKOFF_SEC", "60")
+
+	cooling := &Engine{St: st, Cfg: cfg, LLM: llm.NewClient(cfg)}
+	cooling.ocrFixNoteOutcome(context.Background(), 0) // 先制造一轮零产出 ⇒ 进冷却
+	if !cooling.ocrFixCooling() {
+		t.Fatal("夹具没能进入冷却窗口，下面的判据无从谈起")
+	}
+	got := cooling.ReconcileOcrDoc(context.Background(), ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "zzzq", Final: "zzzq", Verdict: fileproc.OcrVerdictClean, Conf: 0.90},
+	))
+	if got.Calls != 0 {
+		t.Fatalf("冷却窗口内一次都不该拨，实得 calls=%d reasons=%v", got.Calls, got.Reasons)
+	}
+	if got.Reasons["backoff"] != 1 {
+		t.Fatalf("必须记 backoff＝1（静默不拨＝把冷却写成没毛病），实得 %v", got.Reasons)
+	}
+	if got.Fallback != 1 {
+		t.Fatalf("冷却里的行必须按 fail-open keep 交付，实得 fallback=%d", got.Fallback)
+	}
+	// 反向对照：同一份配置、没进冷却 ⇒ 必须真拨一次（否则上面那条绿灯是空转）。
+	probe := &Engine{St: st, Cfg: cfg, LLM: llm.NewClient(cfg)}
+	got2 := probe.ReconcileOcrDoc(context.Background(), ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "zzzq", Final: "zzzq", Verdict: fileproc.OcrVerdictClean, Conf: 0.90},
+	))
+	if got2.Calls == 0 {
+		t.Fatal("对照失败：没进冷却时这条腿一次都没被拨 ⇒ 上面『calls=0』不是熔断的功劳，判据射程是空的")
+	}
+	if got2.Reasons["backoff"] != 0 {
+		t.Fatalf("对照组不该出现 backoff，实得 %v", got2.Reasons)
 	}
 }
