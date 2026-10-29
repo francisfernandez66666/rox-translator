@@ -775,8 +775,8 @@ func enforceLatinIdentifierVerbatim(lc string, tr map[string]string) {
 		if !latinIdentifierToken(src) {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(src)) {
-			continue // 模型本来就照抄了：零动作，也不许把空白/大小写"修"一遍
+		if strings.TrimSpace(v) == src {
+			continue // 逐字照抄才算"没动"——标识符的大小写是键名的一部分
 		}
 		tr[src] = src
 	}
