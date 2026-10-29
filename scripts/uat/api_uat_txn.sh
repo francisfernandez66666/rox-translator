@@ -544,7 +544,19 @@ ck T14-anon-balance '401|未登录|success.*false' "$(curl -s $B/api/billing/bal
 
 # ---------- T15 本次开发专项：PG 方言修复端到端锁定（2026-09-12） ----------
 # ckn <名称> <禁止正则> <响应> —— 反向断言：命中即失败（用于驱动错误泄漏检测）
-ckn(){ if echo "$3" | grep -qE "$2"; then FAIL=$((FAIL+1)); echo "FAIL|$1|forbidden[$2]|got[${3:0:220}]"; else PASS=$((PASS+1)); echo "PASS|$1"; fi; }
+# ★ 2026-10-30：grep rc=2（正则非法，如未转义的 `(`）必须判红，不许当成"没命中"放行。
+#   实测踩过：`ConfigInt("text_line_` 括号不配平 ⇒ grep 报 parentheses not balanced ⇒ rc=2 ⇒
+#   旧写法落进 else 判 PASS，这条锁从写下来那天起就是空转的（同 AGENTS §三「假成功不会让闸门红」）。
+ckn(){
+  echo "$3" | grep -qE "$2"; local rc=$?
+  if [ "$rc" = "0" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|$1|forbidden[$2]|got[${3:0:220}]"
+  elif [ "$rc" = "2" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|$1|判据自身失效（grep rc=2：正则 [$2] 非法）——这不是「没命中」，是这条锁没法判"
+  else
+    PASS=$((PASS+1)); echo "PASS|$1"
+  fi
+}
 
 # ① /status 健康位分离：ok=基础设施（db_ok/breaker），degraded=业务告警位
 R=$(curl -s $B/status)
@@ -4626,7 +4638,9 @@ if [ -z "$T73FILE" ] || [ -z "$T73GUARD" ] || [ -z "$T73LINES" ] || [ -z "$T73FL
 else
   PASS=$((PASS+1)); echo "PASS|T73-src-files-readable"
 fi
-ckF T73-src-delivery-pickups-wrapped 'tr := deliveryTranslations(langTranslations[lc])' "$T73FILE"
+# ★ 2026-10-30：取译文这一跳的形态随「拒译话术逐句剥离」批变成 deliveryTranslations(lc, …)，
+#   旧锁还钉着单参形态 ⇒ 恒红。判据本体（每次取译文都要过交付卫生链）不变，只改靶子形态。
+ckF T73-src-delivery-pickups-wrapped 'tr := deliveryTranslations(lc, langTranslations[lc])' "$T73FILE"
 ckF T73-src-image-retry-wired 'unresolved, imgUpstreamDead := e.retryImageSegments(ctx, texts, tr, lc)' "$T73FILE"
 ckF T73-src-notes-appended 'if uerr := fileproc.AppendUntranslatedNotes(imgPath, unresolved); uerr != nil {' "$T73FILE"
 ckF T73-src-strip-reuses-ruler 'if !refusalResidue(src, out) {' "$T73GUARD"
@@ -4634,9 +4648,13 @@ ckF T73-src-empty-strip-falls-back-source 'return strings.TrimSpace(src)' "$T73G
 ckF T73-src-ladder-delegates-engine 'return w.Engine.RetryLineUntilUsable(ctx, src, lc)' "$T73LINES"
 ckF T73-src-feedback-skips-backfilled 'if p.UnresolvedLines[lc] > 0 {' "$T73FLOW"
 ckF T73-src-alert-says-quality-flagged '已标记「质检存疑」' "$T73FLOW"
-cknF T73-src-no-manual-promise-in-alert '已标记待人工复核' "$T73FLOW"
-ckn T73-src-orchestrator-stops-reading-tiers 'ConfigInt("text_line_' "$T73LINES"
-ckn T73-src-no-bare-model-source 'p.Sources[lc] = "model"' "$T73LINES"
+# ★ 2026-10-30 修三处判据自伤（都属「锁看得见、但从来没判过」那一族）：
+#   ① 函数名写成 cknF（本文件只有 ckF/ckn）⇒ 三处 cknF 里唯一这一条根本没执行；
+#   ② 正则里的 `(` 未转义 ⇒ grep rc=2，旧 ckn 把 rc=2 当成「没命中」判 PASS；
+#   ③ `[lc]` 是字符类（匹配单个 l 或 c）⇒ 真靶子 `p.Sources[lc] = "model"` 结构性匹配不上。
+ckn T73-src-no-manual-promise-in-alert '已标记待人工复核' "$T73FLOW"
+ckn T73-src-orchestrator-stops-reading-tiers 'ConfigInt\("text_line_' "$T73LINES"
+ckn T73-src-no-bare-model-source 'p\.Sources\[lc\] = "model"' "$T73LINES"
 ckF T73-roster-has-approved-tier 'SourceApproved' "$T73FLOW"
 ckF T73-spec-registers-sources-roster 'model_with_source_fallback' "$(cat "$ROOT73/backend-go/internal/api/openapi.v1.json" 2>/dev/null || true)"
 ckF T73-doc-registers-sources-roster 'model_with_source_fallback' "$(cat "$ROOT73/backend-go/internal/api/admin_openapi.go" 2>/dev/null || true)"
