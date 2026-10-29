@@ -696,7 +696,7 @@ func TestOcrFixNoThinkingWired(t *testing.T) {
 	}
 	// 接线：必须挂在这次调用的 ctx 上，且 CallChat 用的是**挂过的** ctx。
 	for _, must := range []string{
-		"callCtx := llm.WithChatExtraParams(cctx, ocrFixNoThinking())",
+		"callCtx := llm.WithChatExtraParams(llm.WithInteractive(llm.WithoutFileMode(cctx)), ocrFixNoThinking())",
 		"e.LLM.CallChat(callCtx, b, k, m,",
 	} {
 		if !strings.Contains(code, must) {
@@ -707,6 +707,14 @@ func TestOcrFixNoThinkingWired(t *testing.T) {
 	for _, banned := range []string{`Getenv("OCR_FIX_THINKING")`, `Getenv("OCR_FIX_DISABLE_THINKING")`, `Getenv("OCR_FIX_REASONING")`} {
 		if strings.Contains(code, banned) {
 			t.Errorf("③ 长出了复开推理的开关 %s ⇒ 用户明令不留这一档（关了它这条腿就退回白等 45 秒的老形态）", banned)
+		}
+	}
+	// ③ 必须**不进文件池**（★ 2026-10-29 第三次归因）：排在 fileChatSem(6) 后面时，
+	// 图片件自己那批翻译把池占满（实测 waited=18.17s/inflight=6）⇒ 15s 预算在队列里就耗光，
+	// 请求根本没到模型。这一条与"关思维链"是两件事，缺哪一件这条腿都不动。
+	for _, must := range []string{"llm.WithoutFileMode(cctx)", "llm.WithInteractive("} {
+		if !strings.Contains(code, must) {
+			t.Errorf("③ 又回到文件池里排队了（缺 %q）⇒ 每枪 15s 预算会在队列里耗光，模型压根收不到请求", must)
 		}
 	}
 	// 只有 ③ 这一腿关思考：审校/补译那两腿是真需要推理的，不许顺手一起关。

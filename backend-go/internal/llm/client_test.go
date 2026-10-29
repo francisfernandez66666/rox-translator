@@ -469,3 +469,28 @@ func TestChatExtraParamsLandInPayload(t *testing.T) {
 		t.Error("保留键被拒时不该连带丢掉合法的那个私有键")
 	}
 }
+
+// TestWithoutFileModeShadowsOnlyThisCall 影子覆盖：本支不进文件池，**调用方那棵树一个字不动**。
+//
+// 这条判据的来历是现网一次三次归因（前两次都错在"以为请求发出去了"）：
+// ③ 继承了文件模式的 ctx ⇒ 排在 fileChatSem(6) 后面，被图片件自己那批翻译堵住，
+// 15s 预算在**队列里**就耗光，日志上与"模型太慢"同形（都是 timeout）。
+// ⇒ 修法只翻这一支的标记，同一工单里其余腿照旧走文件池——所以"另一棵树不动"本身就是判据。
+func TestWithoutFileModeShadowsOnlyThisCall(t *testing.T) {
+	fileCtx := WithFileMode(context.Background())
+	if !isFileMode(fileCtx) {
+		t.Fatal("夹具没挂上文件模式，下面的判据无从谈起")
+	}
+	one := WithoutFileMode(fileCtx)
+	if isFileMode(one) {
+		t.Fatal("这一支必须不再算文件模式（否则还排在 fileChatSem 后面）")
+	}
+	if !isFileMode(fileCtx) {
+		t.Fatal("调用方那棵树被改了：同一工单的翻译腿会跟着丟掉文件池（那是另一条腿的性能事故）")
+	}
+	// 非文件模式上调用＝空操作，不制造新的 ctx 值（与不调用逐字等价）。
+	plain := context.Background()
+	if got := WithoutFileMode(plain); got != plain {
+		t.Fatal("本来就不是文件模式时必须原样返回，不许额外包一层")
+	}
+}

@@ -282,7 +282,12 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		//   所以这里不设 env 开关（与 kill-switch `OCR_FIX` 不同档：那个关的是整条腿，这里关的是"先想一遍"）。
 		//   换成别的模型也照发这一字段：OpenAI 兼容的供应商对未知字段一般忽略；
 		//   万一某家回 400，表现是这条腿 fail-open 保留原识别（零收益、零破坏），不会把工单打回。
-		callCtx := llm.WithChatExtraParams(cctx, ocrFixNoThinking())
+		// ★ 2026-10-29 第三次归因（前两版都没修到点上）：③ 继承文件模式的 ctx ⇒ 排在 fileChatSem(6) 后面，
+		//   而图片件自己那批翻译正好把这个池占满（实测 `kind=fileChat waited=18.17s inflight=6`）：
+		//   15 秒预算**在队列里**就耗光，请求根本没到模型。日志上与"模型太慢"同形，所以
+		//   关思维链/换模型/抬超时都不动。⇒ 这一支走**交互通道**（不进文件池），
+		//   它是用户正在等的同步判定，不是后台批任务。
+		callCtx := llm.WithChatExtraParams(llm.WithInteractive(llm.WithoutFileMode(cctx)), ocrFixNoThinking())
 		callStart := time.Now()
 		before := ocrCollectorTotal(ctx)
 		content, finishReason, cerr := e.LLM.CallChat(callCtx, b, k, m,

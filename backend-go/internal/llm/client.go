@@ -198,6 +198,24 @@ func WithFileMode(ctx context.Context) context.Context {
 	return context.WithValue(ctx, fileModeKey{}, true)
 }
 
+// WithoutFileMode 让**这一次调用**不占用文件/后台批任务专用池（影子覆盖 fileModeKey）。
+//
+// ★ 2026-10-29 现网实证（第三次归因，前两次都错在"以为请求发出去了"）：
+// ③（ocr_fix）跑在文件工单内部，于是继承了 `WithFileMode` ⇒ 它排在 `fileChatSem`（cap 6）后面，
+// 而图片件自己那一批翻译正好把这个池占满（实测 `[llm-queue] kind=fileChat waited=18.17s inflight=6`）。
+// 15 秒的单次预算**在队列里就耗光**，请求根本没到模型——日志上却与"模型太慢"同形（都是 timeout）。
+// 表现：`calls:3, tokens:0, latency_ms:44999`，且关掉思维链、换模型、抬超时**全都不动**。
+// 它不是"后台批任务"，而是用户正在等的同步判定 ⇒ 走交互通道（保留槽＋后台槽双通道）。
+//
+// 为什么用"影子覆盖"而不是新造一套 ctx 树：`context.WithValue` 后写的同名键优先，
+// 于是本函数只在**这一支**上把标记翻成 false，调用方那棵树一个字不动（同一个工单的翻译腿照旧走文件池）。
+func WithoutFileMode(ctx context.Context) context.Context {
+	if !isFileMode(ctx) {
+		return ctx
+	}
+	return context.WithValue(ctx, fileModeKey{}, false)
+}
+
 // isFileMode 读取文件模式标记。
 func isFileMode(ctx context.Context) bool {
 	v, _ := ctx.Value(fileModeKey{}).(bool)
