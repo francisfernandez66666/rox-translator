@@ -197,22 +197,37 @@ func TestParseOcrFixReply(t *testing.T) {
 	}
 }
 
-// TestOcrFixGroupsBudget 每份文件 ≤2 次、每次 ≤60 行，超出部分跳过。
+// TestOcrFixGroupsBudget 每份文件 ≤ocrFixMaxCalls 次、每次 ≤ocrFixMaxLinesPerCall 行，超出部分跳过。
+// ★ 2026-10-29：期望值改成**从常量派生**（旧版写死 2 组/60 行，改了批量就整条红而读数指不到哪变）。
 func TestOcrFixGroupsBudget(t *testing.T) {
-	pending := make([]int, 0, 130)
-	for i := 0; i < 130; i++ {
-		pending = append(pending, i)
+	mk := func(n int) []int {
+		p := make([]int, 0, n)
+		for i := 0; i < n; i++ {
+			p = append(p, i)
+		}
+		return p
 	}
+	// 远超上限：组数封顶、每组不超上限、其余记 skipped。
+	pending := mk(ocrFixMaxCalls*ocrFixMaxLinesPerCall + 50)
 	groups, skipped := ocrFixGroups(pending)
-	if len(groups) != 2 {
-		t.Fatalf("130 行应分 2 组，得 %d", len(groups))
+	if len(groups) != ocrFixMaxCalls {
+		t.Fatalf("应分 %d 组，得 %d", ocrFixMaxCalls, len(groups))
 	}
-	if len(groups[0]) != 60 || len(groups[1]) != 60 || skipped != 10 {
-		t.Fatalf("分组/跳过读数不对：%d/%d skipped=%d", len(groups[0]), len(groups[1]), skipped)
+	for i, g := range groups {
+		if len(g) > ocrFixMaxLinesPerCall {
+			t.Fatalf("第 %d 组 %d 行，超过单批上限 %d", i, len(g), ocrFixMaxLinesPerCall)
+		}
 	}
-	g1, s1 := ocrFixGroups(pending[:50])
-	if len(g1) != 1 || s1 != 0 {
-		t.Fatalf("50 行应 1 组：%d skipped=%d", len(g1), s1)
+	if skipped != 50 {
+		t.Fatalf("超出上限应跳过 50 行，得 %d", skipped)
+	}
+	// 恰好 2.5 批：3 组、最后一组不满、不跳过。
+	partial, s2 := ocrFixGroups(mk(ocrFixMaxLinesPerCall * 5 / 2))
+	if len(partial) != 3 || s2 != 0 {
+		t.Fatalf("2.5 批应切 3 组且不跳过：%d 组 skipped=%d", len(partial), s2)
+	}
+	if len(partial[2]) != ocrFixMaxLinesPerCall/2 {
+		t.Fatalf("末组应只有半批，得 %d", len(partial[2]))
 	}
 }
 
@@ -280,8 +295,9 @@ func TestOcrFixTimeoutEnv(t *testing.T) {
 		if got := ocrFixCallTimeout(); got != want {
 			t.Errorf("OCR_FIX_TIMEOUT_SEC=%q 得 %v，期望 %v", v, got, want)
 		}
-		if got := ocrFixTotalBudget(); got != 2*want {
-			t.Errorf("总预算应为单次两倍：%v vs %v", got, 2*want)
+		// ★ 2026-10-29：总预算改为三次单调用（20 行/次 × 3 批的等待封顶）。
+		if got := ocrFixTotalBudget(); got != 3*want {
+			t.Errorf("总预算应为单次三倍：%v vs %v", got, 3*want)
 		}
 	}
 }

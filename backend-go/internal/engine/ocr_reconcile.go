@@ -35,16 +35,21 @@ import (
 
 // OCR_FIX 的预算与上限（改这些必须同步主方案 §8.3 与单测）。
 const (
-	ocrFixMaxLinesPerCall = 60
-	ocrFixMaxCalls        = 2
+	// ★ 2026-10-29 二次收敛：60 行/次 → **20 行/次**、2 次 → 4 次。
+	//   现网实证：58 个候选塞进一枪，15s 预算下 **tokens=0 全 timeout**（模型一个字都没回）——
+	//   载荷越大首包越慢，抬超时治不了本。切小批后每次请求的输入/输出都小一个量级，
+	//   总覆盖行数反而不降（20×4=80 ≥ 旧的 60×2=120？不，旧的 120 更大，但旧的整批超时=实际 0 行）。
+	ocrFixMaxLinesPerCall = 20
+	ocrFixMaxCalls        = 4
 	// ocrFixCallTimeoutDefault 单次调用默认超时；`OCR_FIX_TIMEOUT_SEC` 可覆盖（钳 2~60s）。
 	// ★ 2026-10-29 由 8s 抬到 15s：现网一单 17 个候选**全部** timeout（模型一次要判 17 行，
 	//   跨境 + 推理模型的首包延迟就吃掉 8s），等于这条腿对客户完全没生效。
 	//   抬到 15s 保住"一次工单不超过半分钟"的总等待（总预算=两次单调用=30s），
 	//   同时把上限放到 60s 供运维按链路状况显式放宽。
 	ocrFixCallTimeoutDefault = 15 * time.Second
-	// ocrFixTotalBudgetDefault 整份文档的 ③ 总预算（默认＝两次单调用）。
-	ocrFixTotalBudgetDefault = 30 * time.Second
+	// ocrFixTotalBudgetDefault 整份文档的 ③ 总预算（默认＝三次单调用＝45s；
+	// 用 3 而不是 4 是给客户等待封顶：19~40 行（2~3 批）能跑完，80 行那种大图第 4 批留给下次。
+	ocrFixTotalBudgetDefault = 45 * time.Second
 	ocrFixMaxPayloadBytes    = 64 << 10
 	// ocrFixMaxTokens 单次回执的 max_tokens：60 行 × 每行约 12 token（含 JSON 骨架）留一倍余量。
 	ocrFixMaxTokens = 1600
@@ -69,13 +74,13 @@ func ocrFixCallTimeout() time.Duration {
 	return ocrFixCallTimeoutDefault
 }
 
-// ocrFixTotalBudget 整份文档的总预算＝两次单调用（与"每份文件 ≤2 次"同源）。
-func ocrFixTotalBudget() time.Duration { return 2 * ocrFixCallTimeout() }
+// ocrFixTotalBudget 整份文档的总预算＝三次单调用（等待封顶；批次上限另由 ocrFixMaxCalls 管）。
+func ocrFixTotalBudget() time.Duration { return 3 * ocrFixCallTimeout() }
 
 // OcrReconcileStats 一次 ③ 的读数（日志与 GateWarnings 的唯一来源，见主方案 §4.5）。
 type OcrReconcileStats struct {
 	Candidates int            // 送进 ③ 的行数
-	Calls      int            // 实际拨出次数（≤2）
+	Calls      int            // 实际拨出次数（≤ ocrFixMaxCalls）
 	Fixed      int            // 采纳 fix 的行数
 	Kept       int            // 明确 keep 的行数
 	NotText    int            // 采纳 not_text（最终丢弃）的行数
@@ -84,6 +89,7 @@ type OcrReconcileStats struct {
 	Skipped    int            // 超出预算未送审的行数（fail-open keep）
 	Reasons    map[string]int // 失败原因计数：off/no_model/timeout/upstream/schema/dup_index/budget
 	Tokens     int64          // 本次 ③ 的真实 token（内部成本读数，不外发）
+	LatencyMs  int64          // 本次 ③ 的墙钟总耗时（排障读数：区分"模型慢"与"没拨通"）
 }
 
 // OcrFixEnabled 读 kill-switch：`OCR_FIX=off|0|false` 关闭，其余（含空）开启。
@@ -174,7 +180,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		observability.Info(ctx, "ocr_fix",
 			"candidates", st.Candidates, "calls", st.Calls, "fixed", st.Fixed, "kept", st.Kept,
 			"not_text", st.NotText, "fallback", st.Fallback, "unclear", st.Unclear,
-			"skipped", st.Skipped, "tokens", st.Tokens, "reasons", st.Reasons)
+			"skipped", st.Skipped, "tokens", st.Tokens, "latency_ms", st.LatencyMs, "reasons", st.Reasons)
 		return st
 	}
 	if !e.OcrFixEnabled() {
@@ -223,6 +229,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			payload, _ = json.Marshal(items)
 		}
 		cctx, cancel := context.WithTimeout(ctx, to)
+		callStart := time.Now()
 		before := ocrCollectorTotal(ctx)
 		content, _, cerr := e.LLM.CallChat(cctx, base, key, model,
 			[]map[string]string{
@@ -231,6 +238,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			}, ocrFixMaxTokens, false, 0.0)
 		cancel()
 		st.Calls++
+		st.LatencyMs += time.Since(callStart).Milliseconds()
 		if after := ocrCollectorTotal(ctx); after > before {
 			st.Tokens += after - before
 		}
@@ -460,26 +468,26 @@ func (e *Engine) ocrMarkFallback(doc *fileproc.OcrDoc, idxs []int, st *OcrReconc
 	}
 }
 
-// ocrFixGroups 把待判行分成至多两组（≤60 行/组），并返回因超出预算而未送审的行数。
+// ocrFixGroups 把待判行分成至多 ocrFixMaxCalls 组（每组 ≤ ocrFixMaxLinesPerCall 行），
+// 并返回因超出上限而未送审的行数。
 func ocrFixGroups(pending []int) ([][]int, int) {
-	// 顺序由调用方排好（quarantine 先于 uncertain，组内阅读顺序）；
-	// 这里只按数量切：≤60 一组；61~120 对半；>120 取前 60 + 接下来 60，其余跳过。
-	if len(pending) <= ocrFixMaxLinesPerCall {
-		return [][]int{pending}, 0
+	// 顺序由调用方排好（quarantine 先于 uncertain 先于 clean）；这里只按数量切：
+	// 每组 ≤ ocrFixMaxLinesPerCall 行、至多 ocrFixMaxCalls 组，其余记 skipped（fail-open keep）。
+	// ★ 2026-10-29 改成按常量通用切分：旧实现对 61~120 行走"对半"，切出来的组可能远超 20 行，
+	//   小批收敛就不成立了（"对半"那段是 60 行时代的产物）。
+	var groups [][]int
+	for i := 0; i < len(pending) && len(groups) < ocrFixMaxCalls; i += ocrFixMaxLinesPerCall {
+		end := i + ocrFixMaxLinesPerCall
+		if end > len(pending) {
+			end = len(pending)
+		}
+		groups = append(groups, pending[i:end])
 	}
-	if len(pending) <= 2*ocrFixMaxLinesPerCall {
-		mid := len(pending) / 2
-		return [][]int{pending[:mid], pending[mid:]}, 0
+	covered := 0
+	for _, g := range groups {
+		covered += len(g)
 	}
-	first := pending[:ocrFixMaxLinesPerCall]
-	rest := pending[ocrFixMaxLinesPerCall:]
-	second := rest
-	skipped := 0
-	if len(rest) > ocrFixMaxLinesPerCall {
-		second = rest[:ocrFixMaxLinesPerCall]
-		skipped = len(rest) - ocrFixMaxLinesPerCall
-	}
-	return [][]int{first, second}, skipped
+	return groups, len(pending) - covered
 }
 
 // ocrFixItems ③ 的请求载荷。
@@ -497,6 +505,7 @@ type ocrFixItem struct {
 	Reason     string        `json:"reason"`
 	Script     string        `json:"script"`
 	Candidates []string      `json:"candidates,omitempty"`
+	LatencyMs  int64         `json:"latency_ms,omitempty"`
 	Column     []ocrFixCount `json:"column,omitempty"`
 	Neighbors  []string      `json:"neighbors,omitempty"`
 }

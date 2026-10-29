@@ -259,6 +259,7 @@ func OcrFixAllowanceTokens(imageFiles int) int64 {
 	fixed := ScriptTokens(ocrFixPrompt) // 现量，不写第二份字面量
 	// 每行：原识别 + 候选/邻居/JSON 骨架（输入侧约 40 token）＋ 回执（输出侧约 16 token）。
 	const perLineInput, perLineOutput = int64(40), int64(16)
-	calls := int64(imageFiles) * 2
-	return calls*fixed + int64(imageFiles)*2*60*(perLineInput+perLineOutput)
+	// ★ 2026-10-29：③ 改成「20 行/次、≤4 次」，固定开销与行预算同步改（预估/实扣同尺）。
+	calls := int64(imageFiles) * 4
+	return calls*fixed + int64(imageFiles)*4*20*(perLineInput+perLineOutput)
 }
