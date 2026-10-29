@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,17 +80,20 @@ func ocrFixTotalBudget() time.Duration { return 3 * ocrFixCallTimeout() }
 
 // OcrReconcileStats 一次 ③ 的读数（日志与 GateWarnings 的唯一来源，见主方案 §4.5）。
 type OcrReconcileStats struct {
-	Candidates int            // 送进 ③ 的行数
-	Calls      int            // 实际拨出次数（≤ ocrFixMaxCalls）
-	Fixed      int            // 采纳 fix 的行数
-	Kept       int            // 明确 keep 的行数
-	NotText    int            // 采纳 not_text（最终丢弃）的行数
-	Fallback   int            // 因不可用/超时/解析失败/未过闸而按 keep 处理的行数
-	Unclear    int            // low_conf_hard 且未拿到 fix 的行数（存疑读数，不改变交付）
-	Skipped    int            // 超出预算未送审的行数（fail-open keep）
-	Reasons    map[string]int // 失败原因计数：off/no_model/timeout/upstream/schema/dup_index/budget
-	Tokens     int64          // 本次 ③ 的真实 token（内部成本读数，不外发）
-	LatencyMs  int64          // 本次 ③ 的墙钟总耗时（排障读数：区分"模型慢"与"没拨通"）
+	Candidates int // 送进 ③ 的行数
+	Calls      int // 实际拨出次数（≤ ocrFixMaxCalls）
+	Fixed      int // 采纳 fix 的行数
+	Kept       int // 明确 keep 的行数
+	NotText    int // 采纳 not_text（最终丢弃）的行数
+	Fallback   int // 因不可用/超时/解析失败/未过闸而按 keep 处理的行数
+	Unclear    int // low_conf_hard 且未拿到 fix 的行数（存疑读数，不改变交付）
+	Skipped    int // 超出预算未送审的行数（fail-open keep）
+	DocFixed   int // 由**确定性**文档内佐证修掉的行数（不经模型，见 fixDocTruncations）
+	// Reasons 失败原因计数：off/no_model/no_stage_model/timeout/cancelled/upstream/schema/
+	// dup_index/truncated/budget。**这些词是对外排障契约**，逐字钉在单测里。
+	Reasons   map[string]int
+	Tokens    int64 // 本次 ③ 的真实 token（内部成本读数，不外发）
+	LatencyMs int64 // 本次 ③ 的墙钟总耗时（排障读数：区分"模型慢"与"没拨通"）
 }
 
 // OcrFixEnabled 读 kill-switch：`OCR_FIX=off|0|false` 关闭，其余（含空）开启。
@@ -100,10 +104,14 @@ func (e *Engine) OcrFixEnabled() bool {
 	return v != "off" && v != "0" && v != "false"
 }
 
-// OcrFixHealth 健康面状态词：off（主动关）/ degraded（配了但取不到模型）/ ok。
+// OcrFixHealth 健康面状态词：off（主动关）/ degraded（没有能干活的人）/ ok。
 //
-// 两个词必须分开：degraded 是"该有人去修"，off 是"正常态"。写成同一个词，
+// 两个词必须分开：degraded 是"该有人去配"，off 是"正常态"。写成同一个词，
 // 现网就会出现"运营以为关了、其实是坏的"（主方案 §8.8）。
+//
+// ★ 2026-10-29：ok 的判据收紧到**显式配了 `ocr_fix` 阶段模型**（stageActive）。
+// 回落全局主模型不再算 ok——现网全局是翻译模型，它答不了这份判定题，六次运行全是
+// `tokens:0 / timeout`，而健康面一直写着 ok（读数与事实相反）。没有阶段模型 = degraded。
 func (e *Engine) OcrFixHealth(ctx context.Context) string {
 	if !e.OcrFixEnabled() {
 		return "off"
@@ -112,8 +120,11 @@ func (e *Engine) OcrFixHealth(ctx context.Context) string {
 	if e == nil || e.Cfg == nil || e.LLM == nil {
 		return "degraded"
 	}
-	if base, key, model, ok := e.resolveModelForStage(ctx, config.StageOcrFix); ok &&
-		strings.TrimSpace(base) != "" && strings.TrimSpace(key) != "" && strings.TrimSpace(model) != "" {
+	base, key, model, stageActive := e.resolveModelForStage(ctx, config.StageOcrFix)
+	if !stageActive {
+		return "degraded"
+	}
+	if strings.TrimSpace(base) != "" && strings.TrimSpace(key) != "" && strings.TrimSpace(model) != "" {
 		return "ok"
 	}
 	return "degraded"
@@ -178,7 +189,8 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			}
 		}
 		observability.Info(ctx, "ocr_fix",
-			"candidates", st.Candidates, "calls", st.Calls, "fixed", st.Fixed, "kept", st.Kept,
+			"candidates", st.Candidates, "calls", st.Calls, "fixed", st.Fixed, "doc_fixed", st.DocFixed,
+			"kept", st.Kept,
 			"not_text", st.NotText, "fallback", st.Fallback, "unclear", st.Unclear,
 			"skipped", st.Skipped, "tokens", st.Tokens, "latency_ms", st.LatencyMs, "reasons", st.Reasons)
 		return st
@@ -188,9 +200,29 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		e.ocrMarkFallback(doc, pending, &st)
 		return finish()
 	}
-	base, key, model, ok := e.resolveModelForStage(ctx, config.StageOcrFix)
-	if !ok || strings.TrimSpace(base) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(model) == "" {
-		st.Reasons["no_model"] = len(pending)
+	// ★ 2026-10-29 ③-a：确定性「文档内佐证」修正（不经模型、不花一秒）。
+	//   现网实证：`manua`（丢尾字母）在六次运行里一次都没被模型修掉——③ 的模型腿在全局
+	//   翻译模型下每次都是 `tokens:0 / timeout`。而这一族错字在文档里**自带证据**：
+	//   同一个词在别处写对过。用这份证据治，可机械复算、无需重试，也不引入新的猜测。
+	//   finish 的存疑读数按**收手时**的待判集算：被确定性腿修掉的行已有明确结论，不再算存疑。
+	pending = fixDocTruncations(doc, pending, &st)
+	if len(pending) == 0 {
+		return finish()
+	}
+	base, key, model, stageOK := e.resolveModelForStage(ctx, config.StageOcrFix)
+	// ★ 2026-10-29：模型腿**只在显式配了 `ocr_fix` 阶段模型时才跑**。
+	//   旧形态在没有阶段模型时回落到全局主模型，而现网全局是一个**翻译模型**
+	//   （tencent/Hunyuan-MT-7B）——让它按 JSON 判定二十行文字，每次都要等满预算再超时：
+	//   六次运行全是 `calls:3, tokens:0, latency_ms:44998`，等于每张图白等 45 秒且零收益。
+	//   ⇒ 没配阶段模型就是"这一腿没有能干活的人"，立刻收手并如实记账（no_stage_model），
+	//   由文档内佐证那条确定性腿承担主要修正。
+	if !stageOK {
+		st.Reasons["no_stage_model"] += len(pending)
+		e.ocrMarkFallback(doc, pending, &st)
+		return finish()
+	}
+	if strings.TrimSpace(base) == "" || strings.TrimSpace(key) == "" || strings.TrimSpace(model) == "" {
+		st.Reasons["no_model"] += len(pending)
 		e.ocrMarkFallback(doc, pending, &st)
 		return finish()
 	}
@@ -231,7 +263,7 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		cctx, cancel := context.WithTimeout(ctx, to)
 		callStart := time.Now()
 		before := ocrCollectorTotal(ctx)
-		content, _, cerr := e.LLM.CallChat(cctx, base, key, model,
+		content, finishReason, cerr := e.LLM.CallChat(cctx, base, key, model,
 			[]map[string]string{
 				{"role": "system", "content": ocrFixPrompt},
 				{"role": "user", "content": string(payload)},
@@ -244,6 +276,15 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 		}
 		if cerr != nil {
 			st.Reasons[ocrFixCallReason(cerr)] += len(g)
+			e.ocrMarkFallback(doc, g, &st)
+			continue
+		}
+		// ★ 2026-10-29：出栈必读 finish_reason。回执被 max_tokens 截断时 JSON 一定不完整，
+		//   旧形态把它记成 `schema`（"模型答的不是 JSON"）——而真凶是"答到一半被掐了"，
+		//   处置完全不同（前者该换提示词/模型，后者该抬预算或减批次）。
+		//   同 AGENTS §19 那条：截断档**不许**并进上游断/超时的计数里。
+		if finishReason == "length" {
+			st.Reasons["truncated"] += len(g)
 			e.ocrMarkFallback(doc, g, &st)
 			continue
 		}
@@ -466,6 +507,122 @@ func (e *Engine) ocrMarkFallback(doc *fileproc.OcrDoc, idxs []int, st *OcrReconc
 		}
 		st.Fallback++
 	}
+}
+
+// ocrDocTokenRe 「词」的形状：以字母开头，可含字母/数字/下划线（`double_bump` 这类标识符也算一个词）。
+var ocrDocTokenRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*`)
+
+// fixDocTruncations 用**文档自身的词表**修正「丢尾字符/首字符」那一族识别错字，返回仍需送模型的行走。
+//
+// 为什么要有这一条（2026-10-29 用户实证）：`manua` 这一族在六次现网运行里一次都没被模型修掉，
+// 而它恰恰是客户最容易看见的错——模型腿慢到超时（详见 ReconcileOcrDoc 的 no_stage_model 口径）。
+// 但这类错字**在文件里有现成的证据**：同一个词在别处写对过。判据只吃这份证据，不猜、不补全。
+//
+// 五条同时成立才动（缺一不可，任何一条不满足就原样交给后面的模型腿）：
+//  1. 待修词 T：全篇**只出现 1 次**，长度 ≥5，纯 ASCII 字母/数字/下划线；
+//  2. 佐证词 U：全篇出现 **≥2 次**，且比 T 多**恰好一个字符**、多出来的那个在最前或最后
+//     （即 T 是 U 丢了一个边字符后剩下的那段——OCR 截断的典型形态）；
+//  3. 多出来的那个字符**不是 `s`/`S`**：英文单复数与第三人称恰好长这一族
+//     （items/orders/totals），不排掉就会把合法的单数改成复数——那是"改对形、改错义"；
+//  4. 满足条件的 U **唯一**：出现两个不同的候选就放弃（宁可留给模型，也不在两个都像的词里挑）；
+//  5. 该行置信度 **< 0.95**：认得很自信的文本不动（启发式只配纠正"连识别器自己都不确定"的字）。
+//
+// 替换形态取 U 在文中出现最多的那个原样大小写（`Manual` 就还是 `Manual`），
+// 且每行最多改一处——一行里两处都符合判据时，第二处留给下一轮/模型，不让修正在同一行上叠加。
+func fixDocTruncations(doc *fileproc.OcrDoc, pending []int, st *OcrReconcileStats) []int {
+	if doc == nil || len(pending) == 0 {
+		return pending
+	}
+	count, forms := ocrDocTokenStats(doc)
+	rest := make([]int, 0, len(pending))
+	for _, idx := range pending {
+		ln := &doc.Lines[idx]
+		if ln.ConfMissing || ln.Conf >= 0.95 {
+			rest = append(rest, idx)
+			continue
+		}
+		fixed, ok := truncationFix(ln.Text, count, forms)
+		if !ok {
+			rest = append(rest, idx)
+			continue
+		}
+		ln.Final = fixed
+		st.DocFixed++
+		st.Fixed++
+	}
+	return rest
+}
+
+// ocrDocTokenStats 统计全篇每个词（小写归一）的出现次数，以及每个词的各个原样写法的次数。
+func ocrDocTokenStats(doc *fileproc.OcrDoc) (map[string]int, map[string]map[string]int) {
+	count := make(map[string]int, len(doc.Lines)*4)
+	forms := make(map[string]map[string]int, len(doc.Lines)*4)
+	for i := range doc.Lines {
+		for _, tok := range ocrDocTokenRe.FindAllString(doc.Lines[i].Text, -1) {
+			lc := strings.ToLower(tok)
+			count[lc]++
+			if forms[lc] == nil {
+				forms[lc] = make(map[string]int, 2)
+			}
+			forms[lc][tok]++
+		}
+	}
+	return count, forms
+}
+
+// truncationFix 对一行文本试一次"截断错字"修正；返回改好的整行与是否成立。
+func truncationFix(text string, count map[string]int, forms map[string]map[string]int) (string, bool) {
+	target, cand, found := "", "", false
+	for _, tok := range ocrDocTokenRe.FindAllString(text, -1) {
+		if len(tok) < 5 || count[strings.ToLower(tok)] != 1 {
+			continue
+		}
+		lc := strings.ToLower(tok)
+		for other, n := range count {
+			if n < 2 || len(other) != len(lc)+1 {
+				continue
+			}
+			var extra byte
+			switch {
+			case strings.HasPrefix(other, lc):
+				extra = other[len(other)-1]
+			case strings.HasSuffix(other, lc):
+				extra = other[0]
+			default:
+				continue
+			}
+			if extra == 's' || extra == 'S' {
+				continue // 单复数/第三人称那一族：形状对得上，语义不一定对得上
+			}
+			if found && other != cand {
+				return "", false // 两个不同的佐证词同时成立：不猜
+			}
+			target, cand, found = tok, other, true
+		}
+	}
+	if !found {
+		return "", false
+	}
+	repl := majorityForm(forms[cand])
+	if repl == "" {
+		return "", false
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(target) + `\b`)
+	if !re.MatchString(text) {
+		return "", false
+	}
+	return re.ReplaceAllLiteralString(text, repl), true
+}
+
+// majorityForm 取一个词在文中出现最多的那个原样写法（次数相同取字典序小的，保证可复算）。
+func majorityForm(m map[string]int) string {
+	best, bestN := "", 0
+	for f, n := range m {
+		if n > bestN || (n == bestN && f < best) {
+			best, bestN = f, n
+		}
+	}
+	return best
 }
 
 // ocrFixGroups 把待判行分成至多 ocrFixMaxCalls 组（每组 ≤ ocrFixMaxLinesPerCall 行），
@@ -747,12 +904,19 @@ func ocrCollectorTotal(ctx context.Context) int64 {
 }
 
 // ocrFixCallReason 把调用错误归到 reason 档（排障只数不数内容）。
+//
+// ★ 2026-10-29：`context.Canceled` 与 `DeadlineExceeded` 必须分档。现网实证：一单里三次调用
+// 只花了两千多毫秒却全记成 `timeout`——那是**上层把这一单的 ctx 取消了**（重试/放弃），
+// 不是模型慢。混成一档会把排查指向"换模型/抬超时"，而真凶在上一层。
 func ocrFixCallReason(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.DeadlineExceeded) {
 		return "timeout"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "cancelled"
 	}
 	return "upstream"
 }

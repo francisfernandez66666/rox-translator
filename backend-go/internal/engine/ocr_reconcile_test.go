@@ -2,6 +2,9 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +301,188 @@ func TestOcrFixTimeoutEnv(t *testing.T) {
 		// ★ 2026-10-29：总预算改为三次单调用（20 行/次 × 3 批的等待封顶）。
 		if got := ocrFixTotalBudget(); got != 3*want {
 			t.Errorf("总预算应为单次三倍：%v vs %v", got, 3*want)
+		}
+	}
+}
+
+// TestFixDocTruncations 确定性「文档内佐证」修正：治 `manua` 那一族（丢尾字符）。
+//
+// ★ 为什么必须有不依赖模型的这条路：现网六次运行里 ③ 的模型腿全是 `tokens:0 / timeout`
+// （全局模型是翻译模型，答不了这份判定题），而 `manua` 恰是客户最容易看见的那一类错字。
+// 本判据只吃"同一个词在文件里写对过"这一份证据，可机械复算。
+func TestFixDocTruncations(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  *fileproc.OcrDoc
+		want string // 修正后的 Final；空串表示必须保持原样
+	}{
+		{
+			name: "丢尾字母：manua → manual（本文件出现两次）",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Conf: 0.914},
+				fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "manual 0.00", Final: "manual 0.00", Conf: 0.99},
+			),
+			want: "manual",
+		},
+		{
+			name: "丢首字母：anual → manual",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "anual", Final: "anual", Conf: 0.80},
+				fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.98},
+			),
+			want: "manual",
+		},
+		{
+			name: "单复数不动：order 有 orders×2 佐证也不改",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "order", Final: "order", Conf: 0.80},
+				fileproc.OcrLine{Index: 1, Text: "orders", Final: "orders", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "orders", Final: "orders", Conf: 0.98},
+			),
+			want: "",
+		},
+		{
+			name: "两个不同佐证词 ⇒ 不猜",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "appleq", Final: "appleq", Conf: 0.70},
+				fileproc.OcrLine{Index: 1, Text: "appler", Final: "appler", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "appler", Final: "appler", Conf: 0.98},
+				fileproc.OcrLine{Index: 3, Text: "apple", Final: "apple", Conf: 0.98},
+				fileproc.OcrLine{Index: 4, Text: "apple", Final: "apple", Conf: 0.98},
+			),
+			want: "",
+		},
+		{
+			name: "高置信文本不动（conf ≥0.95）",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Conf: 0.99},
+				fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.98},
+			),
+			want: "",
+		},
+		{
+			name: "待修词本身出现两次 ⇒ 不是孤立错字，不动",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Conf: 0.80},
+				fileproc.OcrLine{Index: 1, Text: "manua", Final: "manua", Conf: 0.80},
+				fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.98},
+				fileproc.OcrLine{Index: 3, Text: "manual", Final: "manual", Conf: 0.98},
+			),
+			want: "",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			st := &OcrReconcileStats{Reasons: map[string]int{}}
+			rest := fixDocTruncations(c.doc, []int{0}, st)
+			got := c.doc.Lines[0].Final
+			if c.want == "" {
+				if got != "manua" && got != "anual" && got != "order" && got != "appleq" {
+					t.Fatalf("不该改，却改成了 %q", got)
+				}
+				if st.DocFixed != 0 {
+					t.Fatalf("DocFixed 应为 0，实得 %d", st.DocFixed)
+				}
+				if len(rest) != 1 {
+					t.Fatalf("未修正的行必须原样送回模型腿，实得 %v", rest)
+				}
+				return
+			}
+			if got != c.want {
+				t.Fatalf("修正结果 %q，期望 %q", got, c.want)
+			}
+			if st.DocFixed != 1 || st.Fixed != 1 {
+				t.Fatalf("DocFixed/Fixed 应各为 1，实得 %d/%d", st.DocFixed, st.Fixed)
+			}
+			if len(rest) != 0 {
+				t.Fatalf("修好的行不该再送模型，实得 %v", rest)
+			}
+		})
+	}
+}
+
+// TestReconcileNoStageModelSkipsModelLeg 没配 `ocr_fix` 阶段模型时，模型腿必须**立刻收手**。
+//
+// 现网实证：全局主模型是翻译模型（tencent/Hunyuan-MT-7B），它答不了这份判定题——
+// 六次运行全是 `calls:3, tokens:0, latency_ms:44998`，每张图白等 45 秒且零收益。
+// 新口径是"没配阶段模型就不拨"，并如实记账 `no_stage_model`（不是 timeout，也不是 no_model）。
+func TestReconcileNoStageModelSkipsModelLeg(t *testing.T) {
+	e := &Engine{} // 无 St/无 LLM：resolveModelForStage 必然回落，stageActive=false
+	// 一号夹具：一行确定性腿修不掉的字母行 ⇒ 必须走到模型腿那里并记 no_stage_model。
+	doc := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "zzzq", Final: "zzzq", Verdict: fileproc.OcrVerdictClean, Conf: 0.914},
+	)
+	st := e.ReconcileOcrDoc(context.Background(), doc)
+	if st.Calls != 0 {
+		t.Fatalf("没有阶段模型时一次都不该拨，实得 calls=%d", st.Calls)
+	}
+	if st.Reasons["no_stage_model"] == 0 {
+		t.Fatalf("必须记 no_stage_model，实得 %v", st.Reasons)
+	}
+	if st.Reasons["timeout"] != 0 || st.Reasons["no_model"] != 0 {
+		t.Fatalf("不许把「没配阶段模型」记成 timeout/no_model，实得 %v", st.Reasons)
+	}
+	// 二号夹具：确定性腿能修掉的那一行先落地，剩下 2 行仍按 fail-open 记账（不是 timeout）。
+	doc2 := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Verdict: fileproc.OcrVerdictClean, Conf: 0.914},
+		fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+		fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Verdict: fileproc.OcrVerdictClean, Conf: 0.98},
+	)
+	st2 := e.ReconcileOcrDoc(context.Background(), doc2)
+	if doc2.Lines[0].Final != "manual" {
+		t.Fatalf("确定性腿应把 manua 修成 manual，实得 %q", doc2.Lines[0].Final)
+	}
+	if st2.DocFixed != 1 {
+		t.Fatalf("DocFixed 应为 1，实得 %d", st2.DocFixed)
+	}
+	if st2.Reasons["no_stage_model"] != 2 || st2.Reasons["timeout"] != 0 {
+		t.Fatalf("剩下 2 行应按 no_stage_model 记账（且不得记成 timeout），实得 %v", st2.Reasons)
+	}
+}
+
+// TestOcrFixCallReasonWords ③ 的失败原因档位名是**对外排障契约**，逐字钉住（AGENTS §13 同族纪律）。
+//
+// ★ 2026-10-29 新增 `cancelled` 一档并与 `timeout` 分开：现网三次调用只花两千多毫秒却全记 timeout
+// （那是上层取消了这一单的 ctx），混档会把人引去"换模型/抬超时"，而真凶在上一层。
+func TestOcrFixCallReasonWords(t *testing.T) {
+	cases := []struct {
+		err  error
+		want string
+	}{{nil, ""},
+		{context.DeadlineExceeded, "timeout"},
+		{context.Canceled, "cancelled"},
+		{fmt.Errorf("wrap: %w", context.DeadlineExceeded), "timeout"},
+		{fmt.Errorf("wrap: %w", context.Canceled), "cancelled"},
+		{fmt.Errorf("上游 500"), "upstream"},
+	}
+	for _, c := range cases {
+		if got := ocrFixCallReason(c.err); got != c.want {
+			t.Errorf("ocrFixCallReason(%v)=%q，期望 %q", c.err, got, c.want)
+		}
+	}
+	// 名单锁：本文件实际写进 reasons 的档位名，必须**恰好**是登记的那几支
+	// （多一个＝没登记，少一个＝写了个永远不会出现的档位名）。判据按代码行现扫，不靠注释里那句声明。
+	raw, err := os.ReadFile("ocr_reconcile.go")
+	if err != nil {
+		t.Fatalf("读 ocr_reconcile.go 失败: %v", err)
+	}
+	got := map[string]bool{}
+	for _, m := range regexp.MustCompile(`st\.Reasons\[("([a-z_]+)")\]`).FindAllStringSubmatch(string(raw), -1) {
+		got[m[2]] = true
+	}
+	// dup_index 由 parseOcrFixReply 的 error 文案出（不是下标字面量），所以不在这一份直接名单里。
+	want := map[string]bool{"off": true, "no_model": true, "no_stage_model": true, "budget": true, "schema": true, "truncated": true}
+	for k := range got {
+		if !want[k] {
+			t.Errorf("reasons 里长出未登记的直接档位 %q", k)
+		}
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("登记的直接档位 %q 在代码里找不到了（档位名单与实现漂移）", k)
 		}
 	}
 }

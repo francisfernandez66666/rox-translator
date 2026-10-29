@@ -59,6 +59,13 @@ type OcrDoc struct {
 	Profile   textscript.Profile
 	CleanedOK bool // ② 是否真跑过（false ⇒ 全部按 clean 处理，等于回旧行为）
 	Version   int  // 当前固定为 1
+	// Base ② 清洗完成那一刻的交付文本快照（去重、阅读顺序），此后**永不改写**。
+	//
+	// ★ 2026-10-29 立：它是 ④ 判「文本有没有被别的链路换掉」的唯一基准。
+	// 旧形态拿"调用方手里的 texts"和"③ 改完的 Final"比 —— 而 ③ 的修正必然让两者不等，
+	// 于是每一次采纳的修正都被判成 Stale 丢掉（现网实证：`manua` 换几版都修不掉，
+	// 因为修好的字在 Commit 那一步被整份退回）。基准必须是「③ 之前」的读数。
+	Base []string
 }
 
 // OcrDocVersion 当前结构版本（改 OcrLine/OcrDoc 的字段语义时必须 +1）。
@@ -218,6 +225,8 @@ func BuildOcrDoc(srcPath string, res ocrResult) (doc *OcrDoc) {
 		doc.Columns = cols
 		doc.CleanedOK = true
 	}()
+	// ② 之后的交付文本快照：③（engine）拿到 doc 时就以它为基线判"有没有被别的链路换掉"。
+	doc.Base = doc.Texts()
 	return doc
 }
 
@@ -228,7 +237,8 @@ func BuildOcrDoc(srcPath string, res ocrResult) (doc *OcrDoc) {
 //  2. 去重与 trim 与 Extractor.add 同一语义；texts 顺序＝阅读顺序首次出现；
 //  3. 映射不去重：重复文本的多个框都该被画；
 //  4. 任一行 Box 缺失/不成对 ⇒ 不写映射（回退"仅译文 .md"），但 texts 照常返回；
-//  5. 不同源保护：currentTexts 非空且与 Final 序列不等 ⇒ Stale，不重建映射、不覆盖 texts；
+//  5. 不同源保护：currentTexts 非空且与「② 之后的快照 doc.Base」不等 ⇒ Stale，
+//     不重建映射、不覆盖 texts。**基准绝不是 finalTexts**——那样 ③ 的每一次修正都会自己触发 Stale。
 //  6. 幂等：同一路径重复调用等价（覆盖同一份映射）。
 func CommitOcrDoc(path string, doc *OcrDoc, currentTexts []string) ([]string, OcrCommitStats) {
 	st := OcrCommitStats{}
@@ -245,7 +255,15 @@ func CommitOcrDoc(path string, doc *OcrDoc, currentTexts []string) ([]string, Oc
 			st.Delivered++
 		}
 	}
-	if currentTexts != nil && !sameStrings(currentTexts, finalTexts) {
+	// ★ 2026-10-29：基准取 doc.Base（② 完成时的快照）。调用方手里的 currentTexts 只有在
+	//   **没有**被别的链路（PDF overlay 等）替换过时才等于 Base；不等即说明这次 commit 对不上
+	//   当前这份 texts，按旧口径退回避让。Base 缺失（手工构造的 doc）时退回 finalTexts 比较，
+	//   即"没有基线就不敢改"——宁可退回旧行为，也不拿猜测覆盖文本。
+	base := doc.Base
+	if base == nil {
+		base = finalTexts
+	}
+	if currentTexts != nil && !sameStrings(currentTexts, base) {
 		st.Stale = true
 		return currentTexts, st
 	}

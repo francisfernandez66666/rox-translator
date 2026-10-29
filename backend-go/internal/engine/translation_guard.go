@@ -22,6 +22,7 @@ import (
 	"strings"
 	"unicode"
 
+	"translator/internal/fileproc"
 	"translator/internal/textscript"
 )
 
@@ -56,6 +57,9 @@ func RenderSafeTranslations(tr map[string]string) map[string]string {
 		// 现网实证：开/关按钮被识别成 `0`，回填把绿色开关整个盖成一个 "0"——控件没了。
 		// 这类行本来就无可译内容（数字/符号/单字母/单假名，AGENTS §19 族二「原样保留」），
 		// 画上去的"译文"与原字形一致时不但没有任何收益，还会抹掉底下的图形。⇒ 一律缺席。
+		// ⚠️ 光在这里缺席**不够**：回填层对"映射里没有这个键"的处理是「保留原文＝把识别出的
+		//   `0` 画回去」，所以真正的不画发生在 fileproc.RenderTranslatedImage 的整框跳过那一支
+		//   （同一把尺子 IsIdentityOnlyText）。两处必须同时在位。
 		if renderIdentityOnly(src) {
 			continue
 		}
@@ -70,16 +74,11 @@ func RenderSafeTranslations(tr map[string]string) map[string]string {
 
 // renderIdentityOnly 源文去空白后恰好一个字符、且该字符不是汉字。
 //
-// 为什么只排除汉字：单字中文（如「是」「买」）是可译正文，必须照常回填；
-// 而数字、标点、货币符号、单个拉丁字母、单假名（含「の」——它正是开关被误读的那种）都属于
-// "本来就没有可译内容"的一档，原样保留才是正确交付。
+// ★ 判据本体已下沉 fileproc.IsIdentityOnlyText（唯一实现）：回填阶段要按**同一把尺子**决定
+// "这一框画不画"——engine 只决定"译不译"。两处各写一份的话，迟早出现「不译但照画」：
+// 2026-10-29 现网实证正是这个形态（开关被读成 `0`，不翻译之后仍被当作"保留原文"画了回去）。
 func renderIdentityOnly(src string) bool {
-	t := strings.TrimSpace(src)
-	rs := []rune(t)
-	if len(rs) != 1 {
-		return false
-	}
-	return !unicode.Is(unicode.Han, rs[0])
+	return fileproc.IsIdentityOnlyText(src)
 }
 
 // IsTranslationUsable 判定一份候选译文能否作为交付（文件主链 5 个写入点的唯一口径）。

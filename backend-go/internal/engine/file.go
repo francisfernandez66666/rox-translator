@@ -1634,9 +1634,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					}
 					// ★ 2026-10-21 UAT 收口 M9：图形符号整行（箭头/三角/emoji）被剔除不重画——
 					//   原图标逐像素保留，但客户在完成页上要能读到"这一行不是漏译"。只计数、不判失败。
+					// ★ 2026-10-29 同计数并入第二档：单字符非汉字的行（开关被误读成 `0`/`O` 那一族）
+					//   同样整框不画。它们既不是漏译、也不该进 Residue（那会让客户收到一条
+					//   指向不存在问题的「有 N 行未译出」提示，而真正的漏译被淹在里面）。
 					if stats.Dropped > 0 {
 						observability.Info(ctx, "图片原位回填剔除图形符号行（原样保留）", "lang", lc, "dropped", stats.Dropped, "total", stats.Total)
-						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填有 %d 行图形符号（箭头/图标）已原样保留，未重绘", config.LangNames[lc], stats.Dropped))
+						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填有 %d 行图形符号／图标类误读（箭头、开关、单字符）已原样保留，未重绘", config.LangNames[lc], stats.Dropped))
 					}
 				}
 				continue

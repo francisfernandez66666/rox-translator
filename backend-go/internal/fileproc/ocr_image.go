@@ -39,6 +39,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // ImageRenderScriptEnv ocr_translate_image.py 路径覆盖环境变量（开发/测试用）。
@@ -214,10 +215,29 @@ type ImageRenderStats struct {
 	Total   int // 送进回填的总行数（= 该图 OCR 坐标框数）
 	Painted int // 真正带回译文的行数
 	Residue int // 未译出、由原文顶上的行数（>0 时调用方须出声，不许静默）
-	// Dropped 图形符号整行（箭头/三角/emoji）被**剔除不重画**的条数（★ 2026-10-21 M9）。
-	// 这些行不可译，原图标逐像素保留才是正确交付；>0 时调用方须在 GateWarnings 出声，
+	// Dropped 原样保留、**不重绘**的条数，两个来源同计这一个读数：
+	//  ① 图形符号整行（箭头/三角/emoji，由回填脚本自报 dropped=，★ 2026-10-21 M9）；
+	//  ② 单字符非汉字的行（开关/图标被误读成 `0`/`O`/`√` 那一族，见 IsIdentityOnlyText，★ 2026-10-29）。
+	// 这些行不可译，原像素逐点保留才是正确交付；>0 时调用方须在 GateWarnings 出声，
 	// 否则客户会以为"这一行漏翻了"而找不到成因。
 	Dropped int
+}
+
+// IsIdentityOnlyText 判定一行 OCR 文本「没有可译内容、也不该被重绘」：去空白后恰好一个字符，且不是汉字。
+//
+// ★ 2026-10-29 用户实证（第二次复发）：开关按钮被识别成 `0`，原位回填把绿色开关整个盖成一个 "0"
+// ——控件没了。这类行（数字/符号/单拉丁字母/单假名）本来就没有可译内容（AGENTS §19 族二「原样保留」），
+// 而把它按原字形重画一遍没有任何收益：认对了＝与原像素逐点一致（白画），认错了＝抹掉底下的图形。
+// ⇒ 回填阶段**整框不参与**（既不抹也不画），原图像素原样保留，这比「把原文画回去」严格更优。
+//
+// 为什么住在 fileproc 而不是 engine：判「画不画」与判「译不译」必须是同一把尺子，
+// 而绘制发生在本包（engine.RenderSafeTranslations 薄委托到本函数，禁再各写一份）。
+func IsIdentityOnlyText(s string) bool {
+	rs := []rune(strings.TrimSpace(s))
+	if len(rs) != 1 {
+		return false
+	}
+	return !unicode.Is(unicode.Han, rs[0])
 }
 
 // imageDroppedRe 从回填脚本的 INFO 行里取 dropped 计数。
@@ -266,6 +286,14 @@ func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[
 	lines := make([]imageRenderLine, 0, len(boxes))
 	stats := ImageRenderStats{Total: len(boxes)}
 	for _, b := range boxes {
+		// ★ 2026-10-29：单字符非汉字（开关/图标被读成 `0`/`O`/`√`/`2`）**整框不参与回填**。
+		//   旧形态在这里走「未译出 ⇒ 保留原文」那一支，把识别出的 `0` 画回开关位置——用户看到的就是
+		//   「开关变成了 0」。这类行没有可译内容，也不算「未译出」（进 Residue 只会让客户收到一条
+		//   指向不存在问题的质量提示），单独计入 Dropped（原样保留、不重绘）。
+		if IsIdentityOnlyText(b.Text) {
+			stats.Dropped++
+			continue
+		}
 		t := tr[b.Text]
 		if strings.TrimSpace(t) == "" {
 			t = b.Text // 未译出的行保留原文：把原文抹掉却不写东西＝图片上出现一块空洞
@@ -294,7 +322,7 @@ func RenderTranslatedImage(ctx context.Context, srcPath, outPath string, tr map[
 	bin, argv := wrapNice(pyBin(), []string{render, "render", srcPath, "--out", outPath, "--lines", tmp})
 	_, stderr, err := runSubprocess(ctx, imageRenderTimeout(), bin, argv, nil)
 	// ★ M9：剔除读数只解析、不参与成败判定（图已经画好了；这是给 GateWarnings 的计数）。
-	stats.Dropped = parseImageDropped(string(stderr))
+	stats.Dropped += parseImageDropped(string(stderr))
 	if err != nil {
 		if msg := friendlyOcrError(string(stderr)); msg != "" {
 			return stats, &ImageRenderError{Reason: ImageReasonRenderFailed, Msg: msg}
