@@ -99,6 +99,8 @@ type OcrReconcileStats struct {
 // OcrFixEnabled 读 kill-switch：`OCR_FIX=off|0|false` 关闭，其余（含空）开启。
 //
 // 关掉是**配置面回滚**（改 env + 重启进程），不需要换二进制——这是主方案 §8.8 的口径。
+// ★ 射程＝**只有模型腿**：不经模型的「文档内佐证」那条确定性腿不受这一档影响（它零 token、零等待，
+// 关掉它没有任何收益，只会把已经能修对错字的能力一起摘掉——2026-10-29 傍晚现网实证）。
 func (e *Engine) OcrFixEnabled() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("OCR_FIX")))
 	return v != "off" && v != "0" && v != "false"
@@ -108,6 +110,7 @@ func (e *Engine) OcrFixEnabled() bool {
 //
 // 两个词必须分开：degraded 是"该有人去配"，off 是"正常态"。写成同一个词，
 // 现网就会出现"运营以为关了、其实是坏的"（主方案 §8.8）。
+// ★ `off` 说的是**模型腿**（这一档不拨上游）；确定性佐证腿照跑，所以看到 off 不等于"错字没人管"。
 //
 // ★ 2026-10-29：ok 的判据收紧到**显式配了 `ocr_fix` 阶段模型**（stageActive）。
 // 回落全局主模型不再算 ok——现网全局是翻译模型，它答不了这份判定题，六次运行全是
@@ -200,18 +203,21 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			"skipped", st.Skipped, "tokens", st.Tokens, "latency_ms", st.LatencyMs, "reasons", st.Reasons)
 		return st
 	}
-	if !e.OcrFixEnabled() {
-		st.Reasons["off"] = len(pending)
-		e.ocrMarkFallback(doc, pending, &st)
-		return finish()
-	}
 	// ★ 2026-10-29 ③-a：确定性「文档内佐证」修正（不经模型、不花一秒）。
 	//   现网实证：`manua`（丢尾字母）在六次运行里一次都没被模型修掉——③ 的模型腿在全局
 	//   翻译模型下每次都是 `tokens:0 / timeout`。而这一族错字在文档里**自带证据**：
 	//   同一个词在别处写对过。用这份证据治，可机械复算、无需重试，也不引入新的猜测。
 	//   finish 的存疑读数按**收手时**的待判集算：被确定性腿修掉的行已有明确结论，不再算存疑。
+	// ★★ 这一腿必须排在 kill-switch **之前**（2026-10-29 傍晚同批实证）：`OCR_FIX=off` 关的是
+	//   "要不要拨模型"，不是"要不要修错字"。旧顺序把它一起关掉 ⇒ 现网 `manua` 当场复发，
+	//   而屏幕上没有任何一条读数指向"是那条开关杀的"（off 只报"这一档关了"）。
 	pending = fixDocTruncations(doc, pending, &st)
 	if len(pending) == 0 {
+		return finish()
+	}
+	if !e.OcrFixEnabled() {
+		st.Reasons["off"] = len(pending)
+		e.ocrMarkFallback(doc, pending, &st)
 		return finish()
 	}
 	// ★ 2026-10-29：模型腿**只认「`ocr_fix` 这张卡自己显式配了模型」**——不走 resolveModelForStage

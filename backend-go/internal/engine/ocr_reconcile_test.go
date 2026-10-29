@@ -111,6 +111,27 @@ func TestReconcileFailOpenWhenOff(t *testing.T) {
 	if st.Unclear != 1 {
 		t.Fatalf("low_conf_hard 未修复应记 1 条存疑，得 %d", st.Unclear)
 	}
+	// ★ 2026-10-29 傍晚补的第二态（现网实证）：`OCR_FIX=off` 只关**模型腿**。
+	// 上面那份夹具刻意让佐证词只出现一次（确定性腿的判据要 ≥2），所以它测不到这一态；
+	// 这里补一份"文档自带证据"的：关掉开关后 `manua` 仍必须被修成 `manual`——
+	// 旧顺序把这条零 token 的腿排在开关之后，现网 `manua` 就是这么复发的，而屏幕上一条读数都指不到开关。
+	e2 := &Engine{}
+	doc2 := ocrTestDoc(
+		fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Verdict: fileproc.OcrVerdictQuarantine,
+			Reason: fileproc.OcrReasonLowConfHard, Conf: 0.4},
+		fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Conf: 0.9},
+		fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.9},
+	)
+	st2 := e2.ReconcileOcrDoc(context.Background(), doc2)
+	if st2.DocFixed != 1 || doc2.Lines[0].Final != "manual" {
+		t.Fatalf("off 档把确定性佐证腿一起关了：doc_fixed=%d 第0行=%q（应为 1 / manual）", st2.DocFixed, doc2.Lines[0].Final)
+	}
+	if st2.Calls != 0 {
+		t.Fatalf("off 档一次模型都不许拨，实得 calls=%d", st2.Calls)
+	}
+	if st2.Reasons["off"] != 2 {
+		t.Fatalf("off 读数只该记**剩下**的待判行（佐证腿已修掉的那行不该再算），实得 %+v", st2.Reasons)
+	}
 }
 
 // TestApplyOcrFixGates 采纳闸六条：候选命中/改一字符/超距/数字变动/字符集变动/not_text 限定。
