@@ -676,3 +676,42 @@ func TestOcrSkipsModelLegWhileCoolingBehaviour(t *testing.T) {
 		t.Fatalf("对照组不该出现 backoff，实得 %v", got2.Reasons)
 	}
 }
+
+// TestOcrFixNoThinkingWired ③「写死不推理」的形状、接线，以及**不许长出开关**这一条。
+//
+// 用户明令：这一腿不留"换了模型再复开推理"的空间。所以除了正向判形状与接线，
+// 还要有一条负向锁钉住"这里没有 env 开关"——否则下一位遇到某家供应商回 400 时，
+// 最省事的动作就是顺手加一个 `OCR_FIX_THINKING`，那条腿就会悄悄退回思考模式，
+// 而症状还是老样子（tokens=0 全 timeout），没人会想到是开关被谁打开了。
+func TestOcrFixNoThinkingWired(t *testing.T) {
+	code := ocrReconcileCodeLines(t)
+	// 形状：只发一个键，值就是 disabled。
+	got := ocrFixNoThinking()
+	if len(got) != 1 {
+		t.Fatalf("③ 的私有字段只该有 thinking 一个键，实得 %v", got)
+	}
+	th, ok := got["thinking"].(map[string]interface{})
+	if !ok || th["type"] != "disabled" {
+		t.Fatalf("thinking 必须是 {\"type\":\"disabled\"}，实得 %v", got["thinking"])
+	}
+	// 接线：必须挂在这次调用的 ctx 上，且 CallChat 用的是**挂过的** ctx。
+	for _, must := range []string{
+		"callCtx := llm.WithChatExtraParams(cctx, ocrFixNoThinking())",
+		"e.LLM.CallChat(callCtx, b, k, m,",
+	} {
+		if !strings.Contains(code, must) {
+			t.Errorf("③ 的调用点缺少 %q（注入了但没挂到这次调用的 ctx 上＝死码，现网零症状）", must)
+		}
+	}
+	// 负向：这一腿不许出现"用 env 决定要不要关思考"的形态。
+	for _, banned := range []string{`Getenv("OCR_FIX_THINKING")`, `Getenv("OCR_FIX_DISABLE_THINKING")`, `Getenv("OCR_FIX_REASONING")`} {
+		if strings.Contains(code, banned) {
+			t.Errorf("③ 长出了复开推理的开关 %s ⇒ 用户明令不留这一档（关了它这条腿就退回白等 45 秒的老形态）", banned)
+		}
+	}
+	// 只有 ③ 这一腿关思考：审校/补译那两腿是真需要推理的，不许顺手一起关。
+	// 数的是**调用形态**而不是裸函数名——函数定义那一行也含函数名，按裸词数会把定义算成调用点（本仓老坑）。
+	if n := strings.Count(code, "llm.WithChatExtraParams("); n != 1 {
+		t.Errorf("关思考的注入点应为 1 处（只有 ③），实得 %d 处 ⇒ 别的腿被顺手关了，那是拿质量换延迟", n)
+	}
+}

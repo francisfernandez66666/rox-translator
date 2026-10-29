@@ -409,3 +409,63 @@ func TestObservabilityStreamTTFT(t *testing.T) {
 		t.Fatalf("TTFT 样本应 +1，实际 +%d", after.TtftSamples-before.TtftSamples)
 	}
 }
+
+// TestChatExtraParamsLandInPayload 厂商私有字段必须进请求体，且**改不动标准字段**。
+//
+// 本批唯一的用途＝③（ocr_fix）关掉 GLM-Z1 的思维链。为什么值得单开一条注入腿并配锁：
+// 一个写错的 extra 把 `model`/`messages` 换掉，症状是"译文突然变差"而不是报错——
+// 读数全正常、内容错，是本仓最难查的那一类。⇒ 标准字段一律以入参为准，私有字段只能新增。
+func TestChatExtraParamsLandInPayload(t *testing.T) {
+	var captured map[string]interface{}
+	c, srv := h2TestClient(t, map[string]func(map[string]interface{}){"cap": func(m map[string]interface{}) { captured = m }})
+	defer srv.Close()
+	msgs := []map[string]string{{"role": "user", "content": "hello"}}
+
+	// ① 不挂 ⇒ 请求体里连 thinking 这个键都不该出现（与改造前逐字等价，不是"挂了个空值"）。
+	if _, _, err := c.CallChat(context.Background(), srv.URL+"/v1", "k", "m", msgs, 100, false, 0.3); err != nil {
+		t.Fatalf("CallChat(未挂): %v", err)
+	}
+	if _, has := captured["thinking"]; has {
+		t.Fatal("未挂私有字段时请求体不该出现 thinking（空值也算改了请求体）")
+	}
+
+	// ② 挂上 ⇒ 必须原样出现在请求体里。
+	ctx := WithChatExtraParams(context.Background(), map[string]interface{}{
+		"thinking": map[string]interface{}{"type": "disabled"},
+	})
+	if _, _, err := c.CallChat(ctx, srv.URL+"/v1", "k", "real-model", msgs, 100, false, 0.3); err != nil {
+		t.Fatalf("CallChat(挂了): %v", err)
+	}
+	th, has := captured["thinking"]
+	if !has {
+		t.Fatal("私有字段没进请求体 ⇒ ③ 的思维链根本没被关掉，这条注入腿是死码")
+	}
+	thm, _ := th.(map[string]interface{})
+	if thm["type"] != "disabled" {
+		t.Fatalf("thinking.type 应为 disabled，实得 %v", thm["type"])
+	}
+
+	// ③ 反向对照：extra 里写标准字段名**不许覆盖**入参。
+	bad := WithChatExtraParams(context.Background(), map[string]interface{}{
+		"model": "evil-model", "messages": "evil", "max_tokens": 999999, "temperature": 0.9,
+		"thinking": map[string]interface{}{"type": "disabled"},
+	})
+	if _, _, err := c.CallChat(bad, srv.URL+"/v1", "k", "real-model", msgs, 100, false, 0.3); err != nil {
+		t.Fatalf("CallChat(脏 extra): %v", err)
+	}
+	if captured["model"] != "real-model" {
+		t.Errorf("model 被 extra 覆盖了：实得 %v", captured["model"])
+	}
+	if got, _ := captured["max_tokens"].(float64); got != 100 {
+		t.Errorf("max_tokens 被 extra 覆盖了：实得 %v", captured["max_tokens"])
+	}
+	if got, _ := captured["temperature"].(float64); got != 0.3 {
+		t.Errorf("temperature 被 extra 覆盖了：实得 %v", captured["temperature"])
+	}
+	if _, ok := captured["messages"].([]interface{}); !ok {
+		t.Errorf("messages 被 extra 覆盖成标量了：实得 %T", captured["messages"])
+	}
+	if _, has := captured["thinking"]; !has {
+		t.Error("保留键被拒时不该连带丢掉合法的那个私有键")
+	}
+}

@@ -273,9 +273,19 @@ func (e *Engine) ReconcileOcrDoc(ctx context.Context, doc *fileproc.OcrDoc) OcrR
 			payload, _ = json.Marshal(items)
 		}
 		cctx, cancel := context.WithTimeout(ctx, to)
+		// ★ 2026-10-29 用户明令：**这一腿写死不推理，不留"换了模型再复开推理"的空间**。
+		//   第八张卡现配的是 `THUDM/GLM-Z1-9B-0414`（GLM-**Z1** 是推理系）——它先吐一长段思维链再给 JSON，
+		//   而这一腿的预算是 `max_tokens=1600` ＋ 单次 15 s ⇒ 思考链把预算与时间一起吃光：
+		//   六次运行全是 `calls:3, tokens:0, latency_ms:44998`。
+		//   **不是模型不行，是拿思考模型干一件不该想的活**：判定"这行是不是文字/少没少一个字符"
+		//   没有需要推理的中间步骤，思维链在这里纯属成本与延迟。
+		//   所以这里不设 env 开关（与 kill-switch `OCR_FIX` 不同档：那个关的是整条腿，这里关的是"先想一遍"）。
+		//   换成别的模型也照发这一字段：OpenAI 兼容的供应商对未知字段一般忽略；
+		//   万一某家回 400，表现是这条腿 fail-open 保留原识别（零收益、零破坏），不会把工单打回。
+		callCtx := llm.WithChatExtraParams(cctx, ocrFixNoThinking())
 		callStart := time.Now()
 		before := ocrCollectorTotal(ctx)
-		content, finishReason, cerr := e.LLM.CallChat(cctx, b, k, m,
+		content, finishReason, cerr := e.LLM.CallChat(callCtx, b, k, m,
 			[]map[string]string{
 				{"role": "system", "content": ocrFixPrompt},
 				{"role": "user", "content": string(payload)},
@@ -997,6 +1007,15 @@ func ocrCollectorTotal(ctx context.Context) int64 {
 		return uc.Total()
 	}
 	return -1
+}
+
+// ocrFixNoThinking ③ 发给上游的厂商私有字段：关掉思维链（写死，无开关）。
+//
+// 形制只在这里出现一次：`llm.WithChatExtraParams` 是唯一注入口，
+// 而"③ 不推理"这一条只有这一个消费者——不要在别的腿上也顺手关一遍
+// （审校/补译那两腿是真的需要推理的，关了就是拿质量换延迟）。
+func ocrFixNoThinking() map[string]interface{} {
+	return map[string]interface{}{"thinking": map[string]interface{}{"type": "disabled"}}
 }
 
 // ocrFixCallReason 把调用错误归到 reason 档（排障只数不数内容）。

@@ -548,6 +548,40 @@ func TermConstraintsFromCtx(ctx context.Context) []TermConstraint {
 	return cs
 }
 
+// chatExtraKey ctx 存取键：本次调用要附加的**厂商私有请求体字段**（如 SiliconFlow 对 GLM-Z1 系的
+// `thinking:{"type":"disabled"}`）。
+//
+// 为什么走 ctx 而不是把 CallChat 的八个参数撑成十个：与 termConstraintsKey 同一条形制——
+// 这类字段是"某一条腿知道自己打的是哪一家、要什么行为"的局部知识，
+// 塞进公共签名会让所有 40+ 个调用点都跟着改，而其中绝大多数永远用不到。
+type chatExtraKey struct{}
+
+// WithChatExtraParams 挂一组厂商私有字段到本次调用（nil/空 ⇒ 与不挂完全等价）。
+// ⚠️ 只该由"知道自己打的是哪一家"的那条腿挂：全局默认挂上，
+// 就是给所有供应商发一个它们可能不认的字段（表现是偶发 400，而 400 在降级链里会被读成"上游断了"）。
+func WithChatExtraParams(ctx context.Context, extra map[string]interface{}) context.Context {
+	if len(extra) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, chatExtraKey{}, extra)
+}
+
+// ChatExtraParamsFromCtx 读取厂商私有字段（无则 nil）。导出给引擎侧与断言用。
+func ChatExtraParamsFromCtx(ctx context.Context) map[string]interface{} {
+	m, _ := ctx.Value(chatExtraKey{}).(map[string]interface{})
+	return m
+}
+
+// chatReservedPayloadKeys OpenAI 兼容体的**标准字段**：厂商私有字段永远不许覆盖它们。
+//
+// 为什么要在这一层挡而不是指望调用方写对：一个写错的 extra 把 `model`/`messages` 换掉，
+// 症状是"译文突然变差"而不是报错——最难查的那一类（读数正常、内容错）。
+// 标准字段一律以本函数的入参为准，私有字段只配**新增**键。
+var chatReservedPayloadKeys = map[string]bool{
+	"model": true, "messages": true, "max_tokens": true,
+	"temperature": true, "top_p": true, "top_k": true, "repetition_penalty": true, "stream": true,
+}
+
 // chatPayload 为 OpenAI 兼容 chat/completions 请求体（map 形态便于附加厂商私有字段）。
 type chatPayload map[string]interface{}
 
@@ -566,6 +600,14 @@ func (c *Client) CallChat(ctx context.Context, baseURL, apiKey, model string, me
 	// ★ H2：声明支持约束解码的供应商——随请求注入术语约束（OpenAI 兼容扩展字段）
 	if cs := TermConstraintsFromCtx(ctx); len(cs) > 0 && c.SupportsConstraints {
 		payload["x_term_constraints"] = cs
+	}
+	// ★ 2026-10-29：厂商私有字段（本批唯一的用途＝③ 关掉 GLM-Z1 的思维链）。
+	// 合并顺序放在标准字段**之后**并跳过保留键 ⇒ 私有字段只能新增，改不动 model/messages/max_tokens。
+	for k, v := range ChatExtraParamsFromCtx(ctx) {
+		if chatReservedPayloadKeys[k] {
+			continue
+		}
+		payload[k] = v
 	}
 	if hunyuan {
 		// 混元模型：附加专属采样参数（温度/核采样/惩罚）
