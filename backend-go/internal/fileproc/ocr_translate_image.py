@@ -104,6 +104,11 @@ FG_MIN_INK_PX = 12
 # ★ 2026-10-19 本批：**软换行机会**（断词修复）。token 比框宽时先在分隔符后断（`Yuan/`＋`time`），
 #   不再一律按字符硬切（旧形态把 `Synchronized` 切成 `Synchronize`＋`d`）。
 SOFT_BREAK_AFTER = "/-_·\\|,;：、，；"
+# ★ 2026-10-29 用户令：拉丁词被**按字符硬切**时，前段末尾补连字符（`homelander` → `home-`／`lander`）。
+#   拉丁文字里"两个并排的完整词"会被读成一个短语（`home lander`），换行处不挂符号就是歧义本体；
+#   印刷排版对不得不拆的词本来就有加软连字符的通行做法，这里取同一条。
+#   只对**词内**硬切生效（断点两侧都是 ASCII 字母/数字）；CJK 逐字可断，挂符号反而多出原文没有的笔画。
+HARD_BREAK_MARK = "-"
 # 扩框（长译文放不下时向右扩进均匀空白区）的步长与上限，以及「均匀」的标准差门槛。
 EXPAND_STEP = 4
 EXPAND_MAX_PX = 24
@@ -556,6 +561,11 @@ def _tokenize(text: str):
     return out
 
 
+def _latin_alnum(ch: str) -> bool:
+    """ASCII 字母或数字（**刻意不含 CJK**）：只有这类字符之间的断点才叫"词内硬切"。"""
+    return ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ("0" <= ch <= "9")
+
+
 def _break_token(chain, token: str, max_w: float):
     """单个 token 自身比框还宽（超长英文词/URL）：**先在分隔符后断**，实在没有分隔符才按字符硬切。
 
@@ -563,6 +573,11 @@ def _break_token(chain, token: str, max_w: float):
       `Yuan/time` 被切成两截，肉眼就是"词被劈开"。分隔符（`/ - _ ·` 等）本来就是可读断点：
       按它断出来的 `Yuan/`＋`time` 是正常排版，且断完每段都更短、往往不必再降字号。
       每段仍要能装进 max_w：装不下就对该段再按字符硬切（老口径只在"连分隔符都救不了"时生效）。
+    ★ 2026-10-29 本批：硬切出来的**前段**补 `HARD_BREAK_MARK`（`home`＋`lander` → `home-`＋`lander`），
+      并把符号宽度算进装得下的判据——符号不能成为新的越框来源。
+      返回 (段列表, 是否发生过按字符硬切)。**为什么不再由调用方看段尾符号判**（旧 `_hard_split`）：
+      `-` 本身就在 `SOFT_BREAK_AFTER` 里，"段尾是不是分隔符"这条判据会把补了符号的硬切读成软断，
+      `_layout` 于是停止降字号（把"能不劈词"那一档的收益退回去了）。
     """
     chunks, buf = [], ""
     for ch in token:
@@ -572,7 +587,7 @@ def _break_token(chain, token: str, max_w: float):
             buf = ""
     if buf:
         chunks.append(buf)
-    pieces = []
+    pieces, hard = [], False
     for ck in chunks:
         if pieces and _measure(chain, pieces[-1] + ck) <= max_w:
             pieces[-1] += ck     # 贪心合并：能装就装，尽量少断
@@ -582,20 +597,34 @@ def _break_token(chain, token: str, max_w: float):
             continue
         cur = ""
         for ch in ck:
-            if cur and _measure(chain, cur + ch) > max_w:
-                pieces.append(cur)
-                cur = ch
+            if cur:
+                # 判"能不能再塞一个字符"时按**将来可能挂符号**的宽度算：cur 末尾是拉丁字符时，
+                # 下一刀若落在词内就要多占一个连字符；现在不预留，flush 那一刻就必然超框。
+                # cur 末尾是分隔符/空格 ⇒ 那一刀永远是软断点，不占符号宽（别白少一个字符）。
+                probe = cur + ch
+                if _latin_alnum(cur[-1]):
+                    probe += HARD_BREAK_MARK
+                if _measure(chain, probe) > max_w:
+                    if _latin_alnum(cur[-1]) and _latin_alnum(ch):
+                        cur += HARD_BREAK_MARK
+                    pieces.append(cur)
+                    hard = True
+                    cur = ch
+                else:
+                    cur += ch
             else:
                 cur += ch
         if cur:
             pieces.append(cur)
-    return pieces or [token]
+    return (pieces or [token]), hard
 
 
 def _wrap_text_dbg(chain, text: str, max_w: float):
     """`_wrap_text` 的实现体：多返回一位 `hard`＝本轮是否用了**按字符硬切**（词被劈开）。
 
     返回 (行列表, hard)。`hard` 只作 `_layout` 的档位选择依据，不影响交付形态。
+    ★ 2026-10-29：hard 由 `_break_token` 自己报（它知道哪一刀是硬切），**不再**由调用方看段尾符号反推
+    ——`-` 同时是软断点和硬切补的符号，按符号反推会把硬切读成软断。
     """
     if max_w <= 0 or _measure(chain, text) <= max_w:
         return [text], False
@@ -603,8 +632,8 @@ def _wrap_text_dbg(chain, text: str, max_w: float):
     for tok in _tokenize(text):
         if not cur:
             if _measure(chain, tok) > max_w:
-                pieces = _break_token(chain, tok, max_w)
-                hard = hard or _hard_split(pieces)
+                pieces, tok_hard = _break_token(chain, tok, max_w)
+                hard = hard or tok_hard
                 lines.extend(pieces[:-1])
                 cur = pieces[-1]
             else:
@@ -615,8 +644,8 @@ def _wrap_text_dbg(chain, text: str, max_w: float):
         else:
             lines.append(cur)
             if _measure(chain, tok) > max_w:
-                pieces = _break_token(chain, tok, max_w)
-                hard = hard or _hard_split(pieces)
+                pieces, tok_hard = _break_token(chain, tok, max_w)
+                hard = hard or tok_hard
                 lines.extend(pieces[:-1])
                 cur = pieces[-1]
             else:
@@ -624,21 +653,6 @@ def _wrap_text_dbg(chain, text: str, max_w: float):
     if cur:
         lines.append(cur)
     return ([l for l in lines if l] or [text]), hard
-
-
-def _hard_split(pieces) -> bool:
-    """本次 token 拆分里**出现了按字符硬切**吗？判据＝拆出的段数多于"分隔符段数"。
-
-    为什么这么判而不是"看有没有分隔符"：`Yuan/time` 断成 2 段属软断（正常排版），
-    而 `Synchronized` 断成 2 段是硬切——两者段数相同、形态完全不同，只能问
-    "这些段是不是都恰好落在分隔符结束处"（软断的每段都以 SOFT_BREAK_AFTER 结尾，末段除外）。
-    """
-    if len(pieces) <= 1:
-        return False
-    for p in pieces[:-1]:
-        if not p or p[-1] not in SOFT_BREAK_AFTER:
-            return True
-    return False
 
 
 def _wrap_text(chain, text: str, max_w: float):

@@ -66,7 +66,7 @@ var capShapeLegs = []string{
 	"L40", "L41", "L42",
 	// ★ 2026-10-28 主方案 P0-B/P0-C/P4：box_thresh / 相对面积 / 行高自适应阅读顺序 /
 	//   conf 口径 / 白边 / confs 契约 / 新腿接线。
-	"L43", "L44", "L45", "L46", "L47", "L48", "L49",
+	"L43", "L44", "L45", "L46", "L47", "L48", "L49", "L50",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -226,6 +226,15 @@ var capShapeMutations = []capShapeMutation{
 		"垂直邻近判据放宽（隔半页的两行也并组，字号归一变成了跨块传染）"},
 	{"L42", capShapeImgFile, `if r[3] > 0 and r[0] > 0`, `if r[0] > 0`,
 		"-1 哨兵档混进分组（并列取较时会把整组钉成 -1，进 _chain 被悄悄抬成 8px 蚂蚁字）"},
+	// ★ 2026-10-29 用户令批：拉丁词**不得不**按字符拆开时前段挂连字符（`momentu`＋`m` 读成两个词）。
+	// 三枚各治一病：不挂符号／符号宽度没预留（加完反而超框把字裁掉）／硬切判据算了但不报出去
+	// （`_layout` 于是停止降字号，"能不劈词就不劈"那一档的收益被退回去）。
+	{"L50", capShapeImgFile, `                    if _latin_alnum(cur[-1]) and _latin_alnum(ch):`, `                    if False:`,
+		"词内硬切不再补连字符（`momentu`＋`m` 又被读成两个词）"},
+	{"L50", capShapeImgFile, `                    probe += HARD_BREAK_MARK`, `                    pass`,
+		"硬切不预留符号宽（挂完连字符那一行比框还宽 ⇒ 字被裁半截）"},
+	{"L50", capShapeImgFile, `    return (pieces or [token]), hard`, `    return (pieces or [token]), False`,
+		"硬切读数不往外报（`_layout` 停止降字号 ⇒ 劈词优先的旧形态复活）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。

@@ -494,6 +494,49 @@ def leg_l49_pipeline_calls_new_stages():
     assert len(got) == 2, "同一行两个分离色块被并成一框（实得 %d 框）⇒ 框粒度回归源又长回来了" % len(got)
 
 
+@leg("L50")
+def leg_l50_hard_break_marks_latin_word_end():
+    """★ 2026-10-29 用户令：拉丁词**不得不**按字符拆开时，前段末尾挂连字符。
+
+    现网实证：表格里 `momentum` 被画成 `momentu`＋`m`。拉丁文字里"两段并排的完整词"
+    读起来是一个短语（`home lander`＝两个词），换行处不挂符号就是歧义本体；
+    印刷排版对拆词本来有加软连字符的通行做法（`home-`／`lander`），这里取同一条。
+
+    四条腿各治一病，缺一条这条锁就不完整：
+      ① 词内硬切的每一段（末段除外）都以符号收尾，剥掉符号逐字等于源词（**只加不减字符**）；
+      ② **符号宽度必须算进"装得下"的判据**：把 max_w 钉在恰好装得下 `Synchron` 那一档，
+         不预留就会产出 `Synchron-`（比框还宽＝字被裁掉，比劈词更坏）；
+      ③ 分隔符软断**不挂符号**（`Yuan/`＋`time` 是正常排版，加符号＝凭空造出原文没有的字符）；
+      ④ CJK 逐字可断**不挂符号**（中文没有拆词概念，挂上去是脏字符）。
+    """
+    chain = IMG._chain(19)
+    mark = IMG.HARD_BREAK_MARK
+    # ①＋② 词内硬切：取"恰好装得下 Synchron"这一档——不预留符号宽就会在这一档超框。
+    src = "Synchronized"
+    max_w = IMG._measure(chain, "Synchron")
+    lines, hard = IMG._wrap_text_dbg(chain, src, max_w)
+    assert hard is True and len(lines) >= 2, "夹具自证不过：这一档没走到词内硬切（%r hard=%r）" % (lines, hard)
+    assert all(l.endswith(mark) for l in lines[:-1]), \
+        "词内硬切没挂连字符（%r）——客户读到的是两个词，不是被换行拆开的一个词" % (lines,)
+    stripped = "".join(l[:-1] if l.endswith(mark) else l for l in lines)
+    assert stripped == src, "挂符号把字符弄丢了（%r → %r）" % (lines, stripped)
+    over = [l for l in lines if IMG._measure(chain, l) > max_w + 1e-6]
+    assert not over, "符号宽度没算进判据，行宽超框（%r）⇒ 加完连字符反而把字裁掉" % (over,)
+    # ③ 分隔符软断不挂符号。
+    soft_w = IMG._measure(chain, "Yuan/time") - 4
+    assert IMG._measure(chain, "Yuan/") <= soft_w < IMG._measure(chain, "Yuan/time"), \
+        "夹具自证不过：这一档要么装得下整个 token、要么连 `Yuan/` 都装不下"
+    soft, soft_hard = IMG._wrap_text_dbg(chain, "Yuan/time", soft_w)
+    assert soft == ["Yuan/", "time"] and soft_hard is False, \
+        "软断形态变了（%r hard=%r）——在可读断点断词不需要符号" % (soft, soft_hard)
+    assert all(not l.endswith(mark) for l in soft[:-1]), "软断也挂了符号（%r）" % (soft,)
+    # ④ CJK 逐字断行不挂符号。
+    cjk_w = IMG._measure(chain, "同步")
+    cjk, _ = IMG._wrap_text_dbg(chain, "同步协调机制", cjk_w)
+    assert "".join(cjk) == "同步协调机制", "中文断行把字符弄丢了（%r）" % (cjk,)
+    assert all(mark not in l for l in cjk), "中文行被挂了连字符（%r）＝原文里没有的脏字符" % (cjk,)
+
+
 @leg("L10")
 def leg_l10_read_wave_int16_mono():
     """16-bit 单声道 PCM：读回 (float32[-1,1], 采样率)。"""
@@ -1037,10 +1080,15 @@ def leg_l34_break_token_prefers_separator_break():
     assert IMG._wrap_text(chain, "Yuan/time", max_w) == ["Yuan/", "time"], \
         "`_wrap_text` 的旧签名/返回值变样了（既有调用点会跟着坏）"
     # 没有分隔符的超长词：只能按字符硬切，同样不许丢字符。
+    # ★ 2026-10-29 口径翻转（用户令）：硬切出来的**前段必须挂连字符**——`home`＋`lander` 在拉丁文字里
+    # 读起来是"两个词"，而 `home-`＋`lander` 才说得出"这是一个被换行拆开词"。所以这里剥掉行尾符号后
+    # 逐字等于源词（字符一个不少），且非末段一律以符号收尾（见 L50 专测这条形态）。
     w2 = IMG._measure(chain, "Synchroniz")
     lines2, hard2 = IMG._wrap_text_dbg(chain, "Synchronized", w2)
     assert hard2 is True, "无分隔符超长词没被认出是硬切（实读 hard=%r）" % (hard2,)
-    assert len(lines2) >= 2 and "".join(lines2) == "Synchronized", "硬切把字符丢了（%r）" % (lines2,)
+    assert len(lines2) >= 2, "硬切只出一段（%r）" % (lines2,)
+    joined = "".join(l[:-1] if l.endswith(IMG.HARD_BREAK_MARK) else l for l in lines2)
+    assert joined == "Synchronized", "硬切把字符丢了（%r → %r）" % (lines2, joined)
 
 
 @leg("L35")
