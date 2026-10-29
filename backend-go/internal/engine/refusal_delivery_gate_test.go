@@ -54,7 +54,7 @@ func TestDeliveryRefusalStripCoversEveryPickup(t *testing.T) {
 	}
 	text := stripGoCommentsForGate(string(b))
 	raw := strings.Count(text, "tr := langTranslations[lc]")
-	wrapped := strings.Count(text, "tr := deliveryTranslations(langTranslations[lc])")
+	wrapped := strings.Count(text, "tr := deliveryTranslations(lc, langTranslations[lc])")
 	if raw != 0 {
 		t.Errorf("交付取值口有 %d 处仍在裸读 langTranslations ⇒ 回绝话术可能从那里漏进首页/正文", raw)
 	}
@@ -83,7 +83,7 @@ func TestDeliveryStripReusesSameRuler(t *testing.T) {
 
 // N1 交付正文与 .md 首行：整段回绝必须换成原文出货，那句回绝话一个字都不留。
 func TestArtifactMdFirstLineHasNoRefusal(t *testing.T) {
-	tr := deliveryTranslations(map[string]string{refusalTarget.src: refusalTarget.bad})
+	tr := deliveryTranslations("en", map[string]string{refusalTarget.src: refusalTarget.bad})
 	dir := t.TempDir()
 	p := filepath.Join(dir, "a-en.md")
 	if err := fileproc.WriteTranslationMd(p, []string{refusalTarget.src}, tr); err != nil {
@@ -107,7 +107,7 @@ func TestArtifactMdFirstLineHasNoRefusal(t *testing.T) {
 
 // N2 对照表那一格（xlsx 交付形态的"首页"）：同一份清洗过的 map 喂进去，格子里不许有话术。
 func TestComparisonCellHasNoRefusal(t *testing.T) {
-	tr := deliveryTranslations(map[string]string{refusalTarget.src: refusalTarget.bad})
+	tr := deliveryTranslations("en", map[string]string{refusalTarget.src: refusalTarget.bad})
 	v := tr[refusalTarget.src]
 	if strings.Contains(strings.ToLower(v), "unable to provide") {
 		t.Errorf("对照表单元格取值仍带话术，实得 %q", v)
@@ -126,7 +126,7 @@ func TestComparisonCellHasNoRefusal(t *testing.T) {
 // 这里锁的是"交付值本身干净 ⇒ 由它派生的名字自然干净"这一层，文件名那一腿自身的判据
 // 由 file_name_test.go 钉（同一把尺子的第二个面），两侧合起来才叫四个口都收住。
 func TestArtifactBaseNameHasNoRefusal(t *testing.T) {
-	tr := deliveryTranslations(map[string]string{refusalTarget.src: refusalTarget.bad})
+	tr := deliveryTranslations("en", map[string]string{refusalTarget.src: refusalTarget.bad})
 	nameBase := tr[refusalTarget.src]
 	if strings.Contains(strings.ToLower(nameBase), "unable to provide") {
 		t.Errorf("取名主干里仍含回绝话术，实得 %q", nameBase)
@@ -156,7 +156,7 @@ func TestStripKeepsLegalTranslationAboutRefusal(t *testing.T) {
 	if got := stripRefusalSentences(src, out); got != out {
 		t.Errorf("源文自己就谈这件事时不许剥（豁免腿被摘就是删客户正文），实得 %q", got)
 	}
-	if got := deliveryTranslations(map[string]string{src: out})[src]; got != out {
+	if got := deliveryTranslations("en", map[string]string{src: out})[src]; got != out {
 		t.Errorf("咽喉这一层同样要走豁免，实得 %q", got)
 	}
 }
@@ -169,7 +169,7 @@ func TestStripIsNoOpForCleanValues(t *testing.T) {
 		t.Errorf("干净译文被改写了（清洗只许动坏形态），实得 %q", got)
 	}
 	tr := map[string]string{src: out, "另一段": "Another note."}
-	if got := deliveryTranslations(tr); got[src] != out || got["另一段"] != "Another note." {
+	if got := deliveryTranslations("en", tr); got[src] != out || got["另一段"] != "Another note." {
 		t.Errorf("整张表必须逐值原样返回，实得 %+v", got)
 	}
 }

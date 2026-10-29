@@ -644,7 +644,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 而文档件错一行只是正文少一句。图片件段数本就少（几十段量级），收紧上限多出的固定指令开销
 	// 远小于文档件——自适应 40 那一档是为长文档/表格省指令开销设计的（计价批口径），不该覆盖到图片。
 	imgSegCap := 40
-	if fileproc.IsImageFormat(ext) {
+	// ★ 2026-10-29 用户令「对于 ocr 结果，ai 只补全，不发散翻译」：
+	//   这一份文件的内容**是不是 OCR 出来的**，决定批量提示词要不要挂「只直译」那一句
+	//   （`BatchOptions.LiteralOCR`）。图片件与扫描件 PDF 都算（后者走同一条 OCR 识别腿），
+	//   所以判据在下面 `PendingOcrDoc` 命中时也会翻成 true——**不在三处调用点各判一次**。
+	ocrSourced := fileproc.IsImageFormat(ext)
+	if ocrSourced {
 		imgSegCap = 15
 	}
 	// ★ P4：图片件的 OCR 坐标缓存在提取期入列并**钉住**（在途），这里用 defer 保证
@@ -775,6 +780,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// 否则「图没回填/识别存疑」对客户与审批台都是静默的（file_delivery_honesty_gate_test.go 的判据）。
 	gateWarnings := make([]string, 0, 4)
 	if doc, ok := fileproc.PendingOcrDoc(filePath); ok {
+		ocrSourced = true // 扫描件 PDF 的内容同样是 OCR 出来的，交付口径与图片件一致
 		st := e.ReconcileOcrDoc(ctx, doc)
 		if t2, cst := fileproc.CommitOcrDoc(filePath, doc, texts); !cst.Stale {
 			texts = t2
@@ -1034,7 +1040,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						// texts 全局段号（事件带原始源文而非品牌保护后的 protSrc，保证前端行对得上号）
 						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx),
 						// ★ P5：表头语境（关闭时为空串 ⇒ 提示词与记忆键逐字不变）
-						BatchOptions{HeaderContext: fileHeaderCtx})
+						BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
 					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
 					if !fast {
 						batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -1083,7 +1089,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★B3：同 KB 路径——进度 + 逐段 segment_done（sendIdx 映射回全局段号/原始源文）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx),
 				// ★ P5：表头语境（同上）
-				BatchOptions{HeaderContext: fileHeaderCtx})
+				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
 				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -1197,7 +1203,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
 				// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
-				BatchOptions{HeaderContext: fileHeaderCtx})
+				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
 			for i, m := range still {
 				// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
 				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
@@ -1454,7 +1460,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if deliveryText {
 		// —— 纯文案模式：交付 {base}_{lang}.md，不做任何 office 格式回写 ——
 		for _, lc := range finalLangs {
-			tr := deliveryTranslations(langTranslations[lc])
+			tr := deliveryTranslations(lc, langTranslations[lc])
 			if len(tr) == 0 {
 				continue
 			}
@@ -1554,7 +1560,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
 		for _, lc := range finalLangs {
-			tr := deliveryTranslations(langTranslations[lc])
+			tr := deliveryTranslations(lc, langTranslations[lc])
 			if len(tr) == 0 {
 				continue
 			}
@@ -2132,7 +2138,7 @@ func writeMultiSheetXlsx(srcPath, outputDir, baseName string, langs []string, la
 	defer f.Close()
 
 	for _, lc := range langs {
-		tr := deliveryTranslations(langTranslations[lc])
+		tr := deliveryTranslations(lc, langTranslations[lc])
 		if len(tr) == 0 {
 			continue
 		}

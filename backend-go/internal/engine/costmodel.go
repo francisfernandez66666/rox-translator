@@ -244,6 +244,23 @@ func HeaderContextAllowanceTokens(headerChars int) int64 {
 	return fixed + int64(headerChars)
 }
 
+// LiteralOCRAllowanceTokens 图片件「只直译」指令进 system 前缀的 token 预估（★ 2026-10-29 用户令）。
+//
+// 为什么必须计入：那一句是**每个批块**都拼进 system 的固定指令开销（`optionalLiteralOCRNote`），
+// 不计入就是预估与实扣两把尺子（AGENTS §一·5④：预估偏低 ⇒ 客户按预估备的钱不够花）。
+// 参数 imageFiles=本次请求里的图片件数，langs=目标语言数。
+//
+// 上界口径与 `OcrFixAllowanceTokens` 同族：每份图片件按 6 个批块估
+// （图片件单批上限 15 段、界面截图实测 ≤90 段 ⇒ ≤6 块；宁可多算，不许少算）。
+// ⚠️ 改 literalOCRNote 必须同步这条 allowance，并由等值锁从**真常量**现量（不写第二份字面量）。
+func LiteralOCRAllowanceTokens(imageFiles, langs int) int64 {
+	if imageFiles <= 0 || langs <= 0 {
+		return 0
+	}
+	const chunksPerImageFile = 6
+	return int64(imageFiles) * int64(langs) * chunksPerImageFile * ScriptTokens(literalOCRNote)
+}
+
 // OcrFixAllowanceTokens 一次文件工单的 OCR 理解/纠错预估 allowance（主方案 §8.5）。
 //
 // 为什么要它：③ 的用量与翻译同一条通道（CallChat 自动计量与实时扣费），若预估侧不计入，

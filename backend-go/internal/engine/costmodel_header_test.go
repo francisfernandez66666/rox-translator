@@ -207,7 +207,7 @@ func TestHeaderContextWiringIsSingleSourced(t *testing.T) {
 			"func headerContextNote", "headerContextNoteEN",
 			"headerContextNote(opts.HeaderContext)", "BatchTranslateMarkedOpts",
 		},
-		"file.go": {"BatchOptions{HeaderContext: fileHeaderCtx}"},
+		"file.go": {"BatchOptions{HeaderContext: fileHeaderCtx"},
 	}
 	for file, mustRef := range wiring {
 		src := readEngineSource(t, file)
@@ -268,7 +268,9 @@ func headerContextCallSiteViolations(src string) []string {
 	if strings.Contains(before, "fileHeaderCtx =") {
 		v = append(v, "开关之前就给 fileHeaderCtx 赋值 ⇒ 关着开关也会注入")
 	}
-	if sites := strings.Count(code, "BatchOptions{HeaderContext: fileHeaderCtx}"); sites != 3 {
+	// ★ 锚点只取**前缀**（不写闭括号）：BatchOptions 后来加了 LiteralOCR 这一维，
+	// 按整串字面量数会把"加了第三个开关"判成"漏了表头"——那是锚漂，不是回归（2026-10-29 真红过一次）。
+	if sites := strings.Count(code, "BatchOptions{HeaderContext: fileHeaderCtx"); sites != 3 {
 		v = append(v, fmt.Sprintf("三处批量调用点都必须带表头 opts，实际 %d 处 ⇒ 漏掉的那条腿静默没有上下文", sites))
 	}
 	if strings.Contains(code, "e.BatchTranslate(ctx") {
@@ -293,8 +295,11 @@ func TestHeaderContextCallSitesAreGated(t *testing.T) {
 		t.Fatal("反证①未判红：把开关写成恒真必须被抓（关着开关也起子进程）")
 	}
 
-	// 反证②：摘掉一处 opts（模拟"某条腿漏传"）⇒ 计数必须变 2 并判红
-	m2 := strings.Replace(src, "BatchOptions{HeaderContext: fileHeaderCtx}", "BatchOptions{}", 1)
+	// 反证②：摘掉一处 opts（模拟"某条腿漏传"）⇒ 计数必须变 2 并判红。
+	// 同样按前缀摘：整串字面量在 BatchOptions 加第二个开关后就不存在了，
+	// 拿它做锚点会让这枚反证**静默空转**（strings.Replace 找不到就是原串，然后靠 m2==src 才报错——
+	// 那正是本仓「反证被自己的锚点喂饱」那一族，2026-10-29 真踩）。
+	m2 := strings.Replace(src, "BatchOptions{HeaderContext: fileHeaderCtx", "BatchOptions{", 1)
 	if m2 == src {
 		t.Fatal("反证②未命中锚点（调用点形态变了，请同步本锁）")
 	}

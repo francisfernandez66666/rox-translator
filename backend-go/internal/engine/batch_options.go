@@ -34,7 +34,38 @@ const batchSplitMaxDepth = 2
 type BatchOptions struct {
 	// HeaderContext 表头上下文（已按 FILE_HEADER_CONTEXT_MAX_CHARS 截断）；空＝无上下文。
 	HeaderContext string
+	// LiteralOCR 这一批段块来自**图片 OCR**（界面截图/扫描件），交付要求是「只直译、不发散」。
+	//
+	// ★ 2026-10-29 用户令：「翻译时，对于 ocr 结果，ai 只补全，不发散翻译」。
+	// 现网实证：图上「战法」列的值本来就是英文键 `manual`，交付成了 `handbook`；
+	// `卖出胜负`(4 字) 成了 "Sell the outcome of the competition"(35 字) ——
+	// 前者是**把代码键意译成同义词**（已由 enforceLatinIdentifierVerbatim 机械收口），
+	// 后者是**把 UI 短标签解释成一句散文**（这一档只能靠指令收，见 literalOCRNote）。
+	//
+	// 关掉（false）时提示词与改造前**逐字等价**、记忆键也不变（同 HeaderContext 那条纪律）。
+	LiteralOCR bool
 }
+
+// tmContextHash 把「会改变译文的全部上下文」折成记忆键的那一个维度。
+//
+// ★ 为什么折成一维而不是给 tmScope 再加一个字段：`ctxHash` 在库里是**一列文本**
+// （`translation_memory.context_hash`），加维度＝加迁移；而这一维的语义本来就是
+// "system 前缀里那些不在源文里的东西"，表头与直译指令都属这一族。
+// 两条不变式：① 两个开关都关时必须是 ""（与改造前的键逐字相同，历史命中不作废）；
+// ② 只开直译档时也必须非空——否则图片件的"直译译文"会被当成同一段的正常译文复用。
+func tmContextHash(opts BatchOptions) string {
+	base := tmHeaderContextHash(opts.HeaderContext)
+	if !opts.LiteralOCR {
+		return base
+	}
+	if base == "" {
+		return tmLiteralOCRMark
+	}
+	return base + tmLiteralOCRMark
+}
+
+// tmLiteralOCRMark 直译档进记忆键的标记（前导 `|` 保证与表头哈希的十六进制段不会粘连同形）。
+const tmLiteralOCRMark = "|lit"
 
 // tmHeaderContextHash 表头上下文进记忆键的指纹：空/纯空白 ⇒ ""（与"没有上下文"完全等价，
 // 保证关闭 P5 时缓存键与改造前逐字相同）。

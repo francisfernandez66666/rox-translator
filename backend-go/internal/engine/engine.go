@@ -2269,6 +2269,36 @@ func headerContextNote(header string) string {
 	return fmt.Sprintf(headerContextNoteEN, h)
 }
 
+// literalOCRNote 图片 OCR 批次的「只直译、不发散」指令（★ 2026-10-29 用户令
+// 「翻译时，对于 ocr 结果，ai 只补全，不发散翻译」）。
+//
+// 现网实证（同一张界面截图）：`卖出胜负`(4 字) 被译成 "Sell the outcome of the competition"(35 字)，
+// `加权成本重放` 被写成 "Weighted Cost Amortization"——**把 UI 短标签解释成一句散文**。
+// 这类发散在文字交付里只是难看，在图片原位回填里会把相邻格子压住（客户看到的是"字跑到别处"）。
+//
+// 三条句式约束，各自钉一种现网形态：
+//  1. "keep it as short as the original"——短格不许展开成句；
+//  2. "never paraphrase / replace a word with a synonym"——`manual→handbook` 那一族（机械腿另收）；
+//  3. "already in the target language, or looks like an identifier ⇒ output exactly as it is"——
+//     英文键名（`dragon`/`fac_1`/`momentum`）本来就不该动。
+//
+// ⚠️ 只走英文：与 headerContextNoteEN 同一理由——纯 MT 模型会把 system 里的中文指令当成待译内容一起翻。
+// ⚠️ 这一句**必须进记忆键**（`tmContextHash`）：改了交付口径却不换键，
+// 等于让"直译档"复用"发散档"的旧译文——那就是 §22 那条「换模型/改了提示词，旧译文继续投」。
+const literalOCRNote = " These items are OCR text taken from a product screenshot. Translate each item literally," +
+	" and keep it as short as the original: never explain, paraphrase, expand an abbreviation, add a subject or" +
+	" article, or swap a word for a synonym. If an item is already written in the target language, or looks like" +
+	" an identifier (lowercase letters, digits, '_' or '.'), output it exactly as it is."
+
+// optionalLiteralOCRNote 开档才拼那一句（关档回空串 ⇒ sysBatch 与改造前逐字相同，
+// 与 headerContextNote「空表头逐字不加」同一条纪律：新档位不许把非图片件的提示词一起换掉）。
+func optionalLiteralOCRNote(on bool) string {
+	if !on {
+		return ""
+	}
+	return literalOCRNote
+}
+
 // BatchTranslateMarked 与 BatchTranslate 同一条实现，额外回吐「哪些槽位是被截断的」。
 // 参数：texts=待译段，targetLang=目标语言，batchSize=段块大小（0=按均长动态），onBatchDone=逐块回调。
 // 返回：results=与输入等长的译文（失败槽位为 `[翻译失败]`）；
@@ -2356,6 +2386,9 @@ func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, t
 		// ★ P5：表头语境只加在 system 前缀、且空表头时逐字不加（关闭开关 ⇒ 提示词与改造前逐字相同）。
 		//   放在编号契约之前是刻意的：契约那句必须在末尾，模型对"最后一句是指令"最敏感。
 		headerContextNote(opts.HeaderContext) +
+		// ★ 2026-10-29 图片 OCR 档：只直译、不发散（关档时逐字不加，提示词与改造前等价）。
+		//   位置与表头语境同一档（编号契约那句必须在末尾）。
+		optionalLiteralOCRNote(opts.LiteralOCR) +
 		"\n请按编号逐条翻译用户消息中的条目，用 <sN>...</sN> 包裹每条翻译结果："
 
 	// ★ 2026-10-28 计价与成本批：先查译文记忆（A 进程内 + B 跨单库表），只把**未命中**的段送模型。
@@ -2374,7 +2407,7 @@ func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, t
 		tgtLang: targetLang,
 		mode:    tmPromptMode(sysBatch),
 		modelFP: tmModelFingerprint(usageProvider(base), model),
-		ctxHash: tmHeaderContextHash(opts.HeaderContext),
+		ctxHash: tmContextHash(opts),
 	}
 	tmHits := map[int]string{}
 	tmHitsACnt, tmHitsBCnt := 0, 0

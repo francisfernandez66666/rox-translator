@@ -732,15 +732,88 @@ func sameFoldAll(lines []string) bool {
 }
 
 // deliveryTranslations 交付前统一过一遍回绝话术剥离（采纳判据之外的第二道，口径见 stripRefusalSentences）。
-func deliveryTranslations(langTr map[string]string) map[string]string {
+func deliveryTranslations(lc string, langTr map[string]string) map[string]string {
 	if len(langTr) == 0 {
 		return langTr
 	}
+	// 回绝话术那一档与目标语言无关，先逐段剥；标识符那一档要看「交付给谁」，放在后面。
 	out := make(map[string]string, len(langTr))
 	for src, v := range langTr {
 		out[src] = stripRefusalSentences(src, v)
 	}
+	enforceLatinIdentifierVerbatim(lc, out)
 	return out
+}
+
+// enforceLatinIdentifierVerbatim 目标语是英文、而源段本身就是一枚**拉丁标识符**时，交付值只能是它自己。
+//
+// ★ 2026-10-29 用户实证：图上「战法」列的值本来就是 `manual`（英文键名），
+// 交付出来成了 `handbook`——**OCR 已经修对了，是翻译那一腿把一个代码键当英文散文意译了**。
+// 同一列的 `dragon`/`double_bump`/`N_shape`/`fac_1` 都因为带 `_`/数字被 `isCodeLikeSegment` 预填保住了，
+// 唯独"纯小写字母"这一形状够不到那条判据（那条刻意不收纯字母：`AWS→亚马逊云科技` 是正译）。
+//
+// 三条边界，一条比一条窄，缺一不可：
+//  1. **只在目标语 == en 时生效**：中文文档里的英文键翻成日文/法文时确实该翻（`manual→マニュアル`），
+//     这一档只管"源串已经是英文字母串"这种**没有东西可翻**的形态；
+//  2. **只在文档里确实有汉字时生效**（按本语言的**全部源段**判，不看单段）：
+//     一份法语文档里的 `livre` 是真正文词，必须照翻成 book；一份中文 UI 截图里的
+//     单个小写 ASCII 串几乎只可能是应用自己的键名（`manual`/`momentum`/`fac_1`）；
+//  3. **只认「单个、全小写、仅由 a-z0-9 与 _ . 组成、含字母、长度 3~24」这一形状**：
+//     带空格的正常句、首字母大写的 `Hello`/`Buy`、纯大写缩写 `AWS` 一律不碰。
+//
+// 动作＝**回落源串本身**（不是丢弃该段）：这些格子要的就是那串字符，丢了就是缺格。
+// 与 §19 族二同一取向：这类段本来就没有可译内容，报"未译出"是把设计当缺陷，
+// 而把它意译成同义词是把客户的代码键改坏了——比漏一格更坏。
+func enforceLatinIdentifierVerbatim(lc string, tr map[string]string) {
+	if lc != "en" || len(tr) == 0 {
+		return
+	}
+	if !docHasHan(tr) {
+		return
+	}
+	for src, v := range tr {
+		if !latinIdentifierToken(src) {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(src)) {
+			continue // 模型本来就照抄了：零动作，也不许把空白/大小写"修"一遍
+		}
+		tr[src] = src
+	}
+}
+
+// docHasHan 这批源段里有没有汉字（有 ⇒ 这是一份中文环境的文档，英文小写串是键名不是正文）。
+func docHasHan(tr map[string]string) bool {
+	for src := range tr {
+		for _, r := range src {
+			if unicode.Is(unicode.Han, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// latinIdentifierToken 单个全小写拉丁标识符：`manual`/`momentum`/`fac_1`/`v2.2` 命中，
+// `Buy`/`Hello`/`double bump`（带空格）/`0.00`（不含字母）/`AWS`（大写）一律不命中。
+func latinIdentifierToken(s string) bool {
+	t := strings.TrimSpace(s)
+	r := []rune(t)
+	if len(r) < 3 || len(r) > 24 {
+		return false
+	}
+	hasLetter := false
+	for _, c := range r {
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '_', c == '.':
+			if c >= 'a' && c <= 'z' {
+				hasLetter = true
+			}
+		default:
+			return false // 空格、连字符、大写、任何非 ASCII 都退出这一档
+		}
+	}
+	return hasLetter
 }
 
 // stripRefusalSentences 从一段译文里剥掉**开头的**模型回绝整句，保留其后的真实译文。

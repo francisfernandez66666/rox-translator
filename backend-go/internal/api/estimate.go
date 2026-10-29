@@ -135,6 +135,12 @@ func (s *Server) estimateTokens(req estimateReq, mode string) (int64, int64) {
 		minTokens += allow
 		maxTokens += allow
 	}
+	// ★ 2026-10-29 用户令「对 ocr 结果只补全、不发散翻译」：图片件的批量提示词多挂一句
+	//   「只直译」指令，那是**每块都付**的固定开销 ⇒ 同一条尺子计入预估（与 ③ 的 allowance 同一族）。
+	if allow := engine.LiteralOCRAllowanceTokens(req.ImageFiles, len(req.TargetLangs)); allow > 0 {
+		minTokens += allow
+		maxTokens += allow
+	}
 	// ★ 2026-10-28 P5：表头上下文（默认关）。**只在开关打开时才计价**——
 	//   关着的时候产品压根不注入表头，照它收费＝让客户为一件没发生的事备钱。
 	//   与 image_files 一样是可选字段，缺省 0 ⇒ 老客户端读数字节等价。
