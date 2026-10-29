@@ -739,10 +739,71 @@ func deliveryTranslations(lc string, langTr map[string]string) map[string]string
 	// 回绝话术那一档与目标语言无关，先逐段剥；标识符那一档要看「交付给谁」，放在后面。
 	out := make(map[string]string, len(langTr))
 	for src, v := range langTr {
-		out[src] = stripRefusalSentences(src, v)
+		out[src] = stripTrailingSymbolGarbage(stripRefusalSentences(src, v))
 	}
 	enforceLatinIdentifierVerbatim(lc, out)
 	return out
+}
+
+// symbolGarbageOps 行尾残渣的"结构符"集合：括号与运算符。
+// 刻意**不收**逗号/句号/冒号/货币符号——正常译文本来就以它们收尾（`Total: ￥1,003.00` 结尾是金额），
+// 收进来就会把合法数字当成残渣剥掉（那是"砍模型写对的"，比留着残渣坏得多）。
+func isSymbolGarbageOp(r rune) bool {
+	switch r {
+	case '(', ')', '（', '）', '[', ']', '【', '】', '{', '}',
+		'=', '＝', '+', '＋', '-', '－', '×', '*', '＊', '/', '／', '%', '％':
+		return true
+	}
+	return false
+}
+
+// stripTrailingSymbolGarbage 剥掉译文末尾那段「模型把源文的标点/运算符/数字又吐了一遍」的残渣。
+//
+// ★ 2026-10-29 现网实证（同一张界面截图）：源文 `已实现=加权成本重放；浮动=市值-成本×数量；30s 刷新`
+// 交付成 `Realized=…; …; 30s refresh （） =；=-×；30` —— 尾巴那串 `（） =；=-×；30`
+// **不含任何字母**，是把源行的标点与数字重新拼了一遍，读起来像乱码，也确实占着版面。
+// 它**不是**独立的一行符号（那些行早已被 identity 预填挡在上游，本图 11 个单字符框就是证据），
+// 所以 §19 的「行尾骨架」判据（只认中文句读）也盖不到它。
+//
+// 判据（三条同时成立才剥，缺一不可）：
+//  1. 从末尾往回走、**遇到任何书写体系的字母就停**——残渣的定义是"后面这段没有词"；
+//  2. 这段至少 2 个字符（单个 `)`／`：` 是正常收尾，不是残渣）；
+//  3. 这段里**结构符（括号/运算符）≥2 个**——纯数字（`1,003.00`）、单个冒号都不算，
+//     所以"以金额/编号收尾"的正常译文一个字节都不会被吃掉。
+//
+// 剥完若为空（整段都是残渣）⇒ **保留原值**：宁可留一节残渣，也不交付空行（§19 族一「绝不留白」）。
+func stripTrailingSymbolGarbage(out string) string {
+	s := strings.TrimRight(out, " \t")
+	rs := []rune(s)
+	cut := len(rs)
+	for cut > 0 {
+		r := rs[cut-1]
+		if unicode.IsLetter(r) {
+			break // 字母＝词的边界，残渣到此为止
+		}
+		cut--
+	}
+	tail := rs[cut:]
+	if len(tail) < 2 {
+		return out
+	}
+	ops := 0
+	for _, r := range tail {
+		if isSymbolGarbageOp(r) {
+			ops++
+		}
+	}
+	if ops < 2 {
+		return out
+	}
+	rest := strings.TrimRight(string(rs[:cut]), " \t")
+	// 收尾处残留的分隔符一并收干净（`refresh ；` ⇒ `refresh`），但**不碰字母**。
+	rest = strings.TrimRight(rest, ";；,，、·|")
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return out // 整段都是残渣：保留原值，绝不留白
+	}
+	return rest
 }
 
 // enforceLatinIdentifierVerbatim 目标语是英文、而源段本身就是一枚**拉丁标识符**时，交付值只能是它自己。
