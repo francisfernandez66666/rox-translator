@@ -109,6 +109,9 @@ SOFT_BREAK_AFTER = "/-_·\\|,;：、，；"
 #   印刷排版对不得不拆的词本来就有加软连字符的通行做法，这里取同一条。
 #   只对**词内**硬切生效（断点两侧都是 ASCII 字母/数字）；CJK 逐字可断，挂符号反而多出原文没有的笔画。
 HARD_BREAK_MARK = "-"
+# ★ 2026-10-29：`_box_rect` 每边自带 1px 边距 ⇒ **相邻两行天然重叠 ≤2px**（贴边，不是碰撞）。
+#   框间重叠消解对这种贴边一律放行：夹它等于白扣两行各 1px 行高，而字号地板按行高算 ⇒ 白降一档。
+PAD_TOUCH_PX = 2
 # 扩框（长译文放不下时向右扩进均匀空白区）的步长与上限，以及「均匀」的标准差门槛。
 EXPAND_STEP = 4
 EXPAND_MAX_PX = 24
@@ -566,6 +569,71 @@ def _latin_alnum(ch: str) -> bool:
     return ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ("0" <= ch <= "9")
 
 
+def _resolve_box_overlap(rects):
+    """★ 2026-10-29：**互相重叠的框沿重叠带中线各让一半**（同 AGENTS §21 那条「框的粒度」纪律的另一半）。
+
+    现网实证（同一张参照图）：卡片里「0胜 / 0负」的框与下面「卖出胜负」的框垂直重叠十几个像素，
+    而每个框都要在自己的地盘里**抹底＋画字** ⇒ 后画的那一把先画的抹掉半截、两行字叠在一起
+    （用户报的"字跑到别处"那一族）。识别侧的框重叠治不了（那是检测框的膨胀本性），
+    但交付侧**不许两个框共用像素**——共用就必然有一行被抹。
+
+    五条口径（一条放宽就会造出更坏的形态）：
+      · **只夹部分重叠**：谁也没包住谁才夹；包含关系原样留着（大框是容器，小框本来就该在里面画）；
+      · **贴边不算碰撞**（重叠 ≤ `PAD_TOUCH_PX` 直接放行）：`_box_rect` 每边自带 1px 边距，
+        相邻两行天然"重叠 2px"，夹它等于白扣两行各 1px 行高（字号地板按 inner_h 算 ⇒ 白降一档）；
+      · **夹哪一轴＝重叠较短的那一轴**：上下叠放的框重叠带是"扁"的（y 小 x 大）⇒ 夹 y，
+        左右并排 ⇒ 夹 x。夹错轴会把整行文字推出框外；
+      · **中线取重叠带的中点**（不是两框中心的中点）：重叠 12px 就各让 6px，改动最小、对称；
+      · **夹完任一维度 ≤0 就放弃这一对**：宁可留重叠，也不造出一个画不了字（或把正文夹没）的框。
+    返回 (新 rects, 被夹过的框数)。
+    """
+    out = list(rects)
+    trimmed = 0
+    n = len(out)
+    for i in range(n):
+        a = out[i]
+        if not a:
+            continue
+        for j in range(i + 1, n):
+            b = out[j]
+            if not b:
+                continue
+            ax0, ay0, ax1, ay1 = a
+            bx0, by0, bx1, by1 = b
+            ow = min(ax1, bx1) - max(ax0, bx0)
+            oh = min(ay1, by1) - max(ay0, by0)
+            if ow <= 0 or oh <= 0:
+                continue    # 不相交（含只共边的情况）
+            if min(ow, oh) <= PAD_TOUCH_PX:
+                continue    # 只重叠 1~2px＝`_box_rect` 那 1px 边距造成的"贴边"，不是碰撞；
+                            # 夹它等于白扣相邻两行各 1px 行高（字号地板按 inner_h 算，白降一档）
+            if (ax0 <= bx0 and ay0 <= by0 and bx1 <= ax1 and by1 <= ay1) or \
+               (bx0 <= ax0 and by0 <= ay0 and ax1 <= bx1 and ay1 <= by1):
+                continue    # 包含关系：小框在大框地盘里画，属正常层级，不夹
+            if oh <= ow:
+                mid = int((max(ay0, by0) + min(ay1, by1)) / 2)
+                if ay0 <= by0:
+                    na = (ax0, ay0, ax1, max(ay0 + 1, mid))
+                    nb = (bx0, min(by1 - 1, max(mid, by0)), bx1, by1)
+                else:
+                    nb = (bx0, by0, bx1, max(by0 + 1, mid))
+                    na = (ax0, min(ay1 - 1, max(mid, ay0)), ax1, ay1)
+            else:
+                mid = int((max(ax0, bx0) + min(ax1, bx1)) / 2)
+                if ax0 <= bx0:
+                    na = (ax0, ay0, max(ax0 + 1, mid), ay1)
+                    nb = (min(bx1 - 1, max(mid, bx0)), by0, bx1, by1)
+                else:
+                    nb = (bx0, by0, max(bx0 + 1, mid), by1)
+                    na = (min(ax1 - 1, max(mid, ax0)), ay0, ax1, ay1)
+            if na[2] <= na[0] or na[3] <= na[1] or nb[2] <= nb[0] or nb[3] <= nb[1]:
+                continue    # 夹到画不了字：放弃这一对，宁可留重叠
+            a, out[i] = na, na
+            b, out[j] = nb, nb
+            trimmed += 1
+    return out, trimmed
+
+
 def _break_token(chain, token: str, max_w: float):
     """单个 token 自身比框还宽（超长英文词/URL）：**先在分隔符后断**，实在没有分隔符才按字符硬切。
 
@@ -876,6 +944,10 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
                 if r is not None and (r[2] <= r[0] or r[3] <= r[1]):
                     r = None
         rects.append(r)
+    # ★ 2026-10-29：进绘制前先做一次**框间重叠消解**（判据与四条口径见 `_resolve_box_overlap`）。
+    #   必须在这里做、且只做一次：`blockers_all`（扩框不许压进邻框）、抹底矩形、贴字的裁剪
+    #   三处都吃同一份 rects——在下游各夹一遍就是三把尺子（本仓反复踩过的那一族）。
+    rects, overlap_trimmed = _resolve_box_overlap(rects)
     blockers_all = [r for r in rects if r]
 
     # ★ 2026-10-19（缺陷②）：量墨迹/取底色/试扩框的**参照系一律是"绘制前的原图"**。
@@ -1023,6 +1095,10 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
     #   （fileproc.ImageRenderStats.Dropped → engine/file.go），不许只活在这一行日志里。
     print("INFO:painted=%d/%d overflow=%d blank_skipped=%d dropped=%d"
           % (painted, len(lines), overflowed, blank_skipped, dropped), file=sys.stderr)
+    # 重叠消解单独一行（不并进上面那行：`dropped=%d"` 那个字面量是 Go 侧静态锁的锚点，
+    # 追加字段会把锚点截断——同 AGENTS §一·5「注释/锚点」那一族的形）。
+    if overlap_trimmed:
+        print("INFO:overlap_trimmed=%d" % overlap_trimmed, file=sys.stderr)
     return 0
 
 

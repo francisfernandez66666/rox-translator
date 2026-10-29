@@ -537,6 +537,53 @@ def leg_l50_hard_break_marks_latin_word_end():
     assert all(mark not in l for l in cjk), "中文行被挂了连字符（%r）＝原文里没有的脏字符" % (cjk,)
 
 
+@leg("L51")
+def leg_l51_overlapping_boxes_split_by_midline():
+    """★ 2026-10-29 用户复跑实证：两个框**共用像素** ⇒ 后画的把先画的抹掉半截（字叠字）。
+
+    现网形态＝卡片里「0胜 / 0负」的框与下面「卖出胜负」的框垂直重叠十几个像素，
+    两框各自抹底＋画字，客户看到两行字叠在一起（"字跑到别处"那一族）。
+    五条腿各治一病：
+      ① 上下叠放 ⇒ 沿 **y** 夹、各让重叠带的一半，夹完两框不再共像素；
+      ② 左右并排 ⇒ 沿 **x** 夹（夹错轴会把整行推出框外）；
+      ③ **包含关系不动**（大框是容器，小框本来就该在里面画——夹它等于把正文夹没）；
+      ④ 不相交的／**只共 1px 边距的相邻两行**原样返回（两条负向对照：证明判据不是恒真，
+         否则 ① 的红可能只是"全都改了"；贴边那一档还防住"白扣两行各 1px 行高 ⇒ 全站白降字号"）；
+      ⑤ 接线腿：`cmd_render` 真调了它（函数写对但没被调用＝白修）。
+    """
+    import inspect
+
+    R = IMG._resolve_box_overlap
+    # ① 上下叠放：A=[0,100,200,140]、B=[20,130,180,170] ⇒ y 向重叠带 130..140，中线 135
+    out, n = R([(0, 100, 200, 140), (20, 130, 180, 170)])
+    assert n == 1, "上下叠放的两个框没被夹（实读 trimmed=%d）" % n
+    a, b = out
+    assert a[3] == b[1] == 135, "没按重叠带中线各让一半（实读 %r %r）" % (a, b)
+    assert a[0] == 0 and a[1] == 100 and a[2] == 200, "夹错了不该动的维度（%r）" % (a,)
+    assert b[0] == 20 and b[2] == 180 and b[3] == 170, "夹错了不该动的维度（%r）" % (b,)
+    # ② 左右并排（x 向重叠 10、y 向重叠 40）⇒ 必须夹 x
+    out2, n2 = R([(0, 0, 100, 40), (90, 5, 190, 45)])
+    assert n2 == 1, "左右并排的两个框没被夹（trimmed=%d）" % n2
+    assert out2[0][2] == out2[1][0] == 95, "没沿 x 夹（实读 %r %r）——夹错轴会把整行推出框外" % (out2[0], out2[1])
+    assert out2[0][3] == 40 and out2[1][3] == 45, "沿 x 夹时动了 y（%r）" % (out2,)
+    # ③ 包含关系原样
+    big, small = (0, 0, 400, 300), (100, 100, 160, 120)
+    out3, n3 = R([big, small])
+    assert n3 == 0 and out3 == [big, small], "包含关系被夹了（trimmed=%d，%r）⇒ 小框会被大框的抹底吃掉" % (n3, out3)
+    # ④ 不相交原样（负向对照）
+    far = [(0, 0, 50, 20), (60, 0, 110, 20)]
+    out4, n4 = R(far)
+    assert n4 == 0 and out4 == far, "不相交的框被动了（trimmed=%d）⇒ 这条判据恒真，① 的红不作数" % n4
+    # ④b **贴边不算碰撞**：`_box_rect` 每边自带 1px 边距 ⇒ 相邻两行天然重叠 2px。
+    #     夹它等于白扣两行各 1px 行高，而字号地板按行高算 ⇒ 全站文字白降一档（比"字叠字"更坏）。
+    near = [(10, 19, 190, 41), (10, 39, 190, 61)]
+    out4b, n4b = R(near)
+    assert n4b == 0 and out4b == near, "只共 1px 边距的相邻两行被夹了（trimmed=%d）⇒ 白降字号" % n4b
+    # ⑤ 接线：cmd_render 必须真调（且只调一次——两处各夹一遍就是两把尺子）
+    src = inspect.getsource(IMG.cmd_render)
+    assert src.count("_resolve_box_overlap(rects)") == 1, "重叠消解没接进 cmd_render（或接了两次）"
+
+
 @leg("L10")
 def leg_l10_read_wave_int16_mono():
     """16-bit 单声道 PCM：读回 (float32[-1,1], 采样率)。"""
@@ -993,8 +1040,12 @@ def leg_l31_ink_measured_on_frozen_reference():
         ])
         assert rc == 0, "两行重叠框渲染失败（rc=%d）" % rc
         ref = _rgb_image(arr)
-        r0 = IMG._box_rect(box_b)
-        left, top, right, bottom = IMG._expand_rect(ref, r0, [IMG._box_rect(box_a)])
+        # ★ 2026-10-29：期望值必须按**管线真正用的那份几何**算——本批在 `cmd_render` 里加了一步
+        #   框间重叠消解（L51），这条夹具自己重算几何却手抄 `_box_rect`，会量到一条已不存在的管线。
+        #   所以这里改为复用同一个 `_resolve_box_overlap`（不是把期望值调宽，判据一字未动）。
+        rects, _tn = IMG._resolve_box_overlap([IMG._box_rect(box_a), IMG._box_rect(box_b)])
+        r0 = rects[1]
+        left, top, right, bottom = IMG._expand_rect(ref, r0, [rects[0]])
         iw, ih = max(1, right - left - 2), max(1, bottom - top - 2)
         want_px = IMG._layout("Bottom", iw, ih, IMG._font_floor(16, ih), 16)[0]
         bad_px = IMG._layout("Bottom", iw, ih, IMG._font_floor(27, ih), 27)[0]

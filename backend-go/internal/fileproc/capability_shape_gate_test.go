@@ -66,7 +66,7 @@ var capShapeLegs = []string{
 	"L40", "L41", "L42",
 	// ★ 2026-10-28 主方案 P0-B/P0-C/P4：box_thresh / 相对面积 / 行高自适应阅读顺序 /
 	//   conf 口径 / 白边 / confs 契约 / 新腿接线。
-	"L43", "L44", "L45", "L46", "L47", "L48", "L49", "L50",
+	"L43", "L44", "L45", "L46", "L47", "L48", "L49", "L50", "L51",
 }
 
 // capShapeMutation 一枚变异：把某个真实脚本的一处实现改坏，要求指定那条腿判红。
@@ -235,6 +235,21 @@ var capShapeMutations = []capShapeMutation{
 		"硬切不预留符号宽（挂完连字符那一行比框还宽 ⇒ 字被裁半截）"},
 	{"L50", capShapeImgFile, `    return (pieces or [token]), hard`, `    return (pieces or [token]), False`,
 		"硬切读数不往外报（`_layout` 停止降字号 ⇒ 劈词优先的旧形态复活）"},
+	// ★ 2026-10-29 用户复跑实证批：两个框**共用像素** ⇒ 后画的把先画的抹掉半截（"字叠字"）。
+	// 四枚各治一病：不夹／夹错轴／把整条重叠带给一边／函数写对却没接进 cmd_render（白修）。
+	{"L51", capShapeImgFile, `            if (ax0 <= bx0 and ay0 <= by0 and bx1 <= ax1 and by1 <= ay1) or \`,
+		`            if False and (ax0 <= bx0 and ay0 <= by0 and bx1 <= ax1 and by1 <= ay1) or \`,
+		"包含关系不再放行（小框被夹到画不了字＝正文被夹没）"},
+	{"L51", capShapeImgFile, `            if oh <= ow:`, `            if oh >= ow:`,
+		"夹错了轴（上下叠放的框被横向切开 ⇒ 整行文字推出框外）"},
+	{"L51", capShapeImgFile, `                mid = int((max(ay0, by0) + min(ay1, by1)) / 2)`,
+		`                mid = int(min(ay1, by1))`,
+		"中线改成整条带让给一边（下框被抹掉全部重叠区 ⇒ 字仍被邻行吃掉）"},
+	{"L51", capShapeImgFile, `PAD_TOUCH_PX = 2`, `PAD_TOUCH_PX = 0`,
+		"贴边当碰撞（相邻两行各被白扣 1px 行高 ⇒ 字号地板白降一档）"},
+	{"L51", capShapeImgFile, `    rects, overlap_trimmed = _resolve_box_overlap(rects)`,
+		`    rects, overlap_trimmed = rects, 0`,
+		"重叠消解没接进 cmd_render（函数在、没人调＝白修，两框继续共用像素）"},
 }
 
 // capShapeLegLineRe 抓自证脚本的读数行（`LEG L07 OK` / `LEG L07 FAIL <原因>`）。
