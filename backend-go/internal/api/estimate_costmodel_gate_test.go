@@ -99,25 +99,25 @@ func TestEstimateApplyMarkupNeverBelowRealTokens(t *testing.T) {
 func TestEstimateTokensDelegatesToEngine(t *testing.T) {
 	s := &Server{}
 	// 有正文 → 即时翻译那一腿
-	m, x := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "zh"}, "pro")
+	m, x := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "zh"}, "pro", 0)
 	em, ex := engine.EstimateChatTokens(estScreenshotText, []string{"zh"}, "pro", "", "zh")
 	if m != em || x != ex {
 		t.Fatalf("接口与引擎必须同值（这里是第二处算式）: %d/%d vs %d/%d", m, x, em, ex)
 	}
 	// 只有段数 → 文件/工单那一腿
-	m2, x2 := s.estimateTokens(estimateReq{SegmentCount: 12, TargetLangs: []string{"en"}, Mode: "fast"}, "fast")
+	m2, x2 := s.estimateTokens(estimateReq{SegmentCount: 12, TargetLangs: []string{"en"}, Mode: "fast"}, "fast", 0)
 	em2, ex2 := engine.EstimateSegmentTokens(12, []string{"en"}, "fast", "", "")
 	if m2 != em2 || x2 != ex2 {
 		t.Fatalf("段数档必须逐字委托: %d/%d vs %d/%d", m2, x2, em2, ex2)
 	}
 	// 正文优先级：同时给了 text 与 segment_count 时按正文算（前端工作台就是这一形态）
-	m3, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, SegmentCount: 9999, TargetLangs: []string{"zh"}, Mode: "pro"}, "pro")
+	m3, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, SegmentCount: 9999, TargetLangs: []string{"zh"}, Mode: "pro"}, "pro", 0)
 	if m3 != m {
 		t.Fatalf("有正文时必须走正文那一腿, got %d vs %d", m3, m)
 	}
 	// ui_lang 必须真的进公式（中英文提示词是两套，长度不同）
-	mZH, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "zh"}, "pro")
-	mEN, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "en"}, "pro")
+	mZH, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "zh"}, "pro", 0)
+	mEN, _ := s.estimateTokens(estimateReq{Text: estScreenshotText, TargetLangs: []string{"zh"}, Mode: "pro", UILang: "en"}, "pro", 0)
 	if mZH == mEN {
 		t.Fatal("ui_lang 没参与计算：英文界面访客会看到按中文提示词量出的区间")
 	}
@@ -200,7 +200,7 @@ func TestEstimateHandlerNoOldFormula(t *testing.T) {
 	// 反证：把 handler 换回旧公式（句数 × 每句系数 × 轮数 × 2.5）必须当场判红
 	degenerate := strings.Replace(
 		src,
-		"minTokens, maxTokens := s.estimateTokens(req, mode)",
+		"minTokens, maxTokens := s.estimateTokens(req, mode, tid)",
 		"sents := countSentences(req.Text)\n\tbase := int64(2*rate) * sents\n\tminTokens, maxTokens := base, int64(float64(base)*2.5)",
 		1)
 	if degenerate == src {
@@ -246,7 +246,7 @@ func estimateFormulaWiringViolations(t *testing.T, src string) []string {
 		{
 			anchor:  "func (s *Server) handleTranslationEstimate",
 			banned:  []string{"2*rate", "* 2.5", "countSentences(req.Text)"},
-			mustRef: []string{"s.estimateTokens(req, mode)", "modeMarkup(", "PointsFromTokens(", "atLeastOne("},
+			mustRef: []string{"s.estimateTokens(req, mode, tid)", "modeMarkup(", "PointsFromTokens(", "atLeastOne("},
 		},
 		{
 			anchor:  "func (s *Server) estimateTokens",

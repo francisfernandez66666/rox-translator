@@ -265,7 +265,7 @@ func LiteralOCRAllowanceTokens(imageFiles, langs int) int64 {
 //
 // 为什么要它：③ 的用量与翻译同一条通道（CallChat 自动计量与实时扣费），若预估侧不计入，
 // 预估与实扣就变成两把尺子（AGENTS §一·5④）。这里给的是**上界口径**：
-// 每份文件最多 2 次调用、每次最多 60 行，按"固定指令开销（从真提示词现量）＋每行载荷"折算。
+// 每份文件最多 4 次调用、每次 ≤20 行（总预算 3 次单调用），按"固定指令开销（从真提示词现量）＋每行载荷"折算。
 //
 // ⚠️ 改 ocrFixPrompt 必须同步改这条 allowance，并由 TestOcrFixAllowanceDerivesFromRealPrompt
 // 等值锁钉住（改模板即改预估，同 §一·5④ 那条）。

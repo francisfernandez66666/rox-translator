@@ -639,10 +639,13 @@ var ocrDocTokenRe = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_]*`)
 //  1. 待修词 T：全篇**只出现 1 次**，长度 ≥5，纯 ASCII 字母/数字/下划线；
 //  2. 佐证词 U：全篇出现 **≥2 次**，且比 T 多**恰好一个字符**、多出来的那个在最前或最后
 //     （即 T 是 U 丢了一个边字符后剩下的那段——OCR 截断的典型形态）；
-//  3. 多出来的那个字符**不是 `s`/`S`**：英文单复数与第三人称恰好长这一族
-//     （items/orders/totals），不排掉就会把合法的单数改成复数——那是"改对形、改错义"；
+//  3. 多出来的那个字符**不是 `s`/`S`**（英文单复数与第三人称恰好长这一族），
+//     也**不是数字**（标识符/编号：`nshape1` vs `nshape12`）；
 //  4. 满足条件的 U **唯一**：出现两个不同的候选就放弃（宁可留给模型，也不在两个都像的词里挑）；
-//  5. 该行置信度 **< 0.95**：认得很自信的文本不动（启发式只配纠正"连识别器自己都不确定"的字）。
+//  5. 置信度分两档（★ 2026-10-29 第十一轮）：
+//     低置信（<0.95）走文档级（本函数原口径）；
+//     **高置信（≥0.95）只修全小写 token**——高置信错字恰恰是现网主流（`manua`/`double_bum`），
+//     但大写开头的是 UI 标签与句子（`Close`/`Closed`/`Trade`），文档级 +1 字符启发式在这里必然误伤。
 //
 // 替换形态取 U 在文中出现最多的那个原样大小写（`Manual` 就还是 `Manual`），
 // 且每行最多改一处——一行里两处都符合判据时，第二处留给下一轮/模型，不让修正在同一行上叠加。
@@ -654,11 +657,18 @@ func fixDocTruncations(doc *fileproc.OcrDoc, pending []int, st *OcrReconcileStat
 	rest := make([]int, 0, len(pending))
 	for _, idx := range pending {
 		ln := &doc.Lines[idx]
-		if ln.ConfMissing || ln.Conf >= 0.95 {
+		if ln.ConfMissing {
 			rest = append(rest, idx)
 			continue
 		}
-		fixed, ok := truncationFix(ln.Text, count, forms)
+		// ★ 2026-10-29 第十一轮：高置信行**不再**一律跳过（旧口径正是 `manua` 修不掉的入口）。
+		//   但高置信档只认**全小写 token**：这一档的真实形态是"代码键／标识符少看了一个字符"
+		//   （`manua`／`double_bum`／`momentu`）；大写开头的是 UI 标签与句子（`Close`／`Closed`／`Trade`），
+		//   它们与 `Closed`／`Traded` 只差一个字符 ⇒ 文档级「+1 字符」启发式在这里必然误伤。
+		//   低置信档保持原口径（文档级、不限大小写）。
+		//   `ConfMissing` 仍跳过：没有置信度就没有"高置信"这一档可言。
+		lowerOnly := ln.Conf >= 0.95
+		fixed, ok := truncationFix(ln.Text, count, forms, lowerOnly)
 		if !ok {
 			rest = append(rest, idx)
 			continue
@@ -688,11 +698,14 @@ func ocrDocTokenStats(doc *fileproc.OcrDoc) (map[string]int, map[string]map[stri
 }
 
 // truncationFix 对一行文本试一次"截断错字"修正；返回改好的整行与是否成立。
-func truncationFix(text string, count map[string]int, forms map[string]map[string]int) (string, bool) {
+func truncationFix(text string, count map[string]int, forms map[string]map[string]int, lowerOnly bool) (string, bool) {
 	target, cand, found := "", "", false
 	for _, tok := range ocrDocTokenRe.FindAllString(text, -1) {
 		if len(tok) < 5 || count[strings.ToLower(tok)] != 1 {
 			continue
+		}
+		if lowerOnly && tok != strings.ToLower(tok) {
+			continue // 高置信档只修全小写（代码键／标识符），见 fixDocTruncations 的注释
 		}
 		lc := strings.ToLower(tok)
 		for other, n := range count {
@@ -710,6 +723,13 @@ func truncationFix(text string, count map[string]int, forms map[string]map[strin
 			}
 			if extra == 's' || extra == 'S' {
 				continue // 单复数/第三人称那一族：形状对得上，语义不一定对得上
+			}
+			// ★ 2026-10-29 第十一轮：插入的是**数字**一律不碰。可达性已核：
+			//   `ocrDocTokenRe` 允许 `[A-Za-z0-9_]`，`nshape1`（出现 1 次）会被
+			//   `nshape12`（出现 2 次）以"前缀 +1 字符"命中；放开高置信档后没有这条，
+			//   标识符／编号会被"修正"。
+			if extra >= '0' && extra <= '9' {
+				continue
 			}
 			if found && other != cand {
 				return "", false // 两个不同的佐证词同时成立：不猜
@@ -1025,9 +1045,17 @@ func ocrCollectorTotal(ctx context.Context) int64 {
 // 形制只在这里出现一次：`llm.WithChatExtraParams` 是唯一注入口，
 // 而"③ 不推理"这一条只有这一个消费者——不要在别的腿上也顺手关一遍
 // （审校/补译那两腿是真的需要推理的，关了就是拿质量换延迟）。
-func ocrFixNoThinking() map[string]interface{} {
+// noThinkingExtra 关思考的厂商私有字段——**全仓唯一一份 map**（ocr_fix 与文档级判域共用）。
+//
+// 为什么写死、不留开关：主模型可能是推理系（GLM-Z1 那一族），先吐思维链再给 JSON
+// 会把 max_tokens 与超时一起吃光（ocr_fix 六次运行全是 tokens:0 / timeout 就是这条）。
+// 留一个"复开推理"的 env 开关，下一个人遇到某家回 400 就会打开它，症状原样复发。
+func noThinkingExtra() map[string]interface{} {
 	return map[string]interface{}{"thinking": map[string]interface{}{"type": "disabled"}}
 }
+
+// ocrFixNoThinking ③ 的关思考参数（保留本名：既有接线与变异体锚点都按它命名）。
+func ocrFixNoThinking() map[string]interface{} { return noThinkingExtra() }
 
 // ocrFixCallReason 把调用错误归到 reason 档（排障只数不数内容）。
 //

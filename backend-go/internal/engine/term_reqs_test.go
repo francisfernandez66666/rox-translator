@@ -31,8 +31,9 @@ func TestTermReqsSkipsTargetScriptMismatch(t *testing.T) {
 	}
 	e := NewEngine(config.Default(), nil, nil, nil)
 	e.St = st
-	gc := e.newGateCtx(tenant.WithTenant(context.Background(), 1))
-	reqs := gc.termReqs("我们提供中文服务", "en")
+	ctx := tenant.WithTenant(context.Background(), 1)
+	gc := e.newGateCtx(ctx)
+	reqs := gc.termReqs(ctx, "我们提供中文服务", "en")
 	if len(reqs) != 1 {
 		t.Fatalf("脏术语应按书写系统被跳过，只留 1 条正常术语，实际 %d 条：%+v", len(reqs), reqs)
 	}

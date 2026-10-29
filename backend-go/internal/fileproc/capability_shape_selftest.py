@@ -584,6 +584,65 @@ def leg_l51_overlapping_boxes_split_by_midline():
     assert src.count("_resolve_box_overlap(rects)") == 1, "重叠消解没接进 cmd_render（或接了两次）"
 
 
+@leg("L52")
+def leg_l52_request_more_width_before_word_break():
+    """★ 2026-10-29 第十轮：**劈词之前再要一次宽度**（`momentum` 被劈成 `momentu-`+`m`）。
+
+    真因：框宽按源文（2 个汉字）量，英文整词装不下 ⇒ `_layout` 一路降到地板仍 `hard` ⇒
+    `_break_token` 按字符硬切（连字符合规，但词被劈开）。右侧其实还有空白没用上（常规扩框只到 24px）。
+
+    四条腿：① 扩得出来就不劈；② 扩不出来照旧劈（用户令不回退）；③ 扩了也不够时不许假装成功；
+             ④ 接线与纯度（`cmd_render` 真调、`_layout_expand` 本体不碰图像）。
+    """
+    import inspect
+    from PIL import Image
+
+    want = "momentum"
+    ink_h, box_h = 20, 40
+    floor = IMG._font_floor(ink_h, box_h)
+    need = IMG._measure(IMG._chain(floor), want)
+    bw = max(8, int(need) - 40)          # 常规扩框（24px）之后仍差一截
+    box = (20, 10, 20 + bw, 10 + box_h)
+    img = Image.new("RGB", (bw + 260, 80), "white")
+
+    left, top, right, bottom = IMG._expand_rect(img, box, [])
+    w0 = max(1, right - left - 2)
+    h0 = max(1, bottom - top - 2)
+
+    # 夹具自证：常规扩框后确实还装不下、确实走硬切
+    px0, lines0, _, grown0 = IMG._layout_expand(want, w0, h0, floor, ink_h, lambda: None)
+    assert grown0 is None
+    assert IMG._needs_word_break(want, w0, px0), "夹具自证不过：常规扩框后竟然装得下"
+    assert any(l.endswith(IMG.HARD_BREAK_MARK) for l in lines0[:-1]), "夹具自证不过：窄框没走到硬切"
+
+    # ① 二次扩框成功 ⇒ 不劈
+    px, lines, _, grown = IMG._layout_expand(
+        want, w0, h0, floor, ink_h,
+        lambda: IMG._expand_rect(img, box, [], IMG.EXPAND_HARD_MAX_PX))
+    assert grown is not None, "劈词之前没再要一次宽度（EXPAND_HARD_MAX_PX 退化？）"
+    assert not IMG._needs_word_break(want, grown[4], px), "扩出来的宽度仍然要劈词（二次扩框没起作用）"
+    assert not any(l.endswith(IMG.HARD_BREAK_MARK) for l in lines), "扩得出来却仍然劈词（%r）" % (lines,)
+
+    # ② 扩不出来（邻框挡住）⇒ 照旧劈且挂符号
+    px2, lines2, _, grown2 = IMG._layout_expand(want, w0, h0, floor, ink_h, lambda: None)
+    assert grown2 is None
+    assert any(l.endswith(IMG.HARD_BREAK_MARK) for l in lines2[:-1]), "扩不出来时没挂连字符（用户令不回退）"
+
+    # ③ 二次扩框也不够（长词）⇒ 不许假装成功
+    long = "Donaudampfschifffahrtsgesellschaft"
+    px3, _, _, grown3 = IMG._layout_expand(
+        long, w0, h0, floor, ink_h, lambda: (20, 10, 20 + w0 + 24, 10 + box_h))
+    assert grown3 is None and IMG._needs_word_break(long, w0, px3), "长词被假装排下了（会造成裁字）"
+
+    # ④ 接线与纯度
+    render = inspect.getsource(IMG.cmd_render)
+    assert "_layout_expand(" in render, "cmd_render 没调用 _layout_expand（函数写对、没接线＝白修）"
+    assert "EXPAND_HARD_MAX_PX" in render, "二次扩框的上限没进 cmd_render"
+    pure = inspect.getsource(IMG._layout_expand)
+    assert "_expand_rect(" not in pure and "Image" not in pure, \
+        "`_layout_expand` 本体碰了图像（纯函数腿会全部要造图）"
+
+
 @leg("L10")
 def leg_l10_read_wave_int16_mono():
     """16-bit 单声道 PCM：读回 (float32[-1,1], 采样率)。"""

@@ -345,7 +345,7 @@ func TestPlatformCost08AD2_SelfLedgeredSkipsSecondRow(t *testing.T) {
 // 任一侧改名/增删而另一侧没跟上，平台成本就会重新落回客户的额度里（且没有任何报错）。
 // 这是典型的「改名式破坏」，只能靠这种同形锁拦，靠读代码发现不了。
 func TestPlatformCost08AD2_LabelListsAgree(t *testing.T) {
-	reasons := []string{llm.PlatformKBEmbed, llm.PlatformSystemTask, llm.PlatformPackScrape, llm.PlatformEvals}
+	reasons := []string{llm.PlatformKBEmbed, llm.PlatformSystemTask, llm.PlatformPackScrape, llm.PlatformEvals, llm.PlatformDomainDetect}
 	for _, r := range reasons {
 		if !strings.Contains(store.PlatformTaskTypeExclPred, "'"+r+"'") {
 			t.Fatalf("额度侧谓词漏掉平台标签 %q ⇒ 该标签的用量会继续吃客户日额/部门预算：%s",
@@ -358,7 +358,7 @@ func TestPlatformCost08AD2_LabelListsAgree(t *testing.T) {
 			len(reasons), n, store.PlatformTaskTypeExclPred)
 	}
 	// 尺子字面值等值锁（与 store 侧 realDebitPred 那条同族）
-	if store.PlatformTaskTypeExclPred != "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals')" {
+	if store.PlatformTaskTypeExclPred != "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals','domain_detect')" {
 		t.Fatalf("额度侧谓词字面值被改动：%q", store.PlatformTaskTypeExclPred)
 	}
 }

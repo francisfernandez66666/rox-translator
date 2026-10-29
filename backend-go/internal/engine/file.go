@@ -30,6 +30,7 @@ import (
 
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
+	"translator/internal/domain"
 	"translator/internal/fileproc"
 	"translator/internal/gate"
 	"translator/internal/llm"
@@ -848,6 +849,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	}
 
 	// 第2步：翻译
+	// ★ 2026-10-29 第十二轮：文档级领域词表（只进本单提示词；开关关/低置信/查不到 ⇒ 不做）。
+	//   一次/单；文件链预算 5s（异步工单可以多等）。同时挂进 ctx，给末段补译（SingleLangTranslate）用。
+	var glossaryProf *domain.Profile
+	glossaryLim := e.glossaryLimits("file")
+	if prof := e.glossaryProfile(ctx, e.tenantID(ctx), "file", sampleTexts(texts, 2000), finalLangs, glossaryLim); prof != nil {
+		glossaryProf = prof
+		ctx = WithGlossary(ctx, prof, glossaryLim.MaxTerms)
+	}
 	// 下面三个聚合量会被「每语言一个 goroutine、语言内再每段一个 goroutine」并发写入，
 	// 因此一律配锁访问（Go 并发写 map 是直接 fatal，不是可恢复 error）。
 	kbHits := 0
@@ -1040,7 +1049,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						// texts 全局段号（事件带原始源文而非品牌保护后的 protSrc，保证前端行对得上号）
 						se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, needModelIdx),
 						// ★ P5：表头语境（关闭时为空串 ⇒ 提示词与记忆键逐字不变）
-						BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
+						BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced, Glossary: glossaryProf.TermsFor(lc, glossaryLim.MaxTerms), GlossaryLabel: glossaryProf.DisplayLabel()})
 					// ★ pro 模式批量审校：本块一次 LLM 调用逐条修正，失败/不符原样保留
 					if !fast {
 						batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -1089,7 +1098,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★B3：同 KB 路径——进度 + 逐段 segment_done（sendIdx 映射回全局段号/原始源文）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, sendIdx),
 				// ★ P5：表头语境（同上）
-				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
+				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced, Glossary: glossaryProf.TermsFor(lc, glossaryLim.MaxTerms), GlossaryLabel: glossaryProf.DisplayLabel()})
 			// ★ pro 模式批量审校（同上：整块一次调用）
 			if !fast {
 				batch = e.reviewBatchSafe(ctx, protSrc, batch, lc,
@@ -1203,7 +1212,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
 				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
 				// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
-				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced})
+				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced, Glossary: glossaryProf.TermsFor(lc, glossaryLim.MaxTerms), GlossaryLabel: glossaryProf.DisplayLabel()})
 			for i, m := range still {
 				// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
 				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
@@ -1597,6 +1606,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★ 2026-10-29：单行源文 → 单行译文收敛（模型回「manual\nManual」会把两行画进一个框）。
 				tr = normalizeImageTranslations(tr)
 				unresolved, imgUpstreamDead := e.retryImageSegments(ctx, texts, tr, lc)
+				// ★ 2026-10-29 第十一轮：末段补译写回 tr 之后，**整份再走一遍交付卫生链**。
+				//   :1341 的术语/质量闸、:1563 的 deliveryTranslations、:1598 的 normalizeImageTranslations
+				//   都排在 retryImageSegments 之前；补译填出来的那几行因此绕过了它们
+				//   （术语不覆盖 / manual→handbook 不被拉回 / manual\nManual 不被收敛）。
+				//   三条腿都幂等（拒译句剥离、尾残渣剥离、标识符逐字、单行收敛），不会二次损坏。
+				tr = normalizeImageTranslations(deliveryTranslations(lc, tr))
 				if ierr := fileproc.WriteTranslationMd(imgPath, texts, tr); ierr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], ierr.Error())}
 				}

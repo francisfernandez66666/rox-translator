@@ -49,11 +49,15 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
-	s.feedbackMigrate()             // 老库补 replies 列（幂等，BBS 回复线程）
-	s.backfillAPIOwnership()        // ★ 历史 Key/任务强绑定回填（幂等）
-	s.backfillPaymentsFenC2()       // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
-	s.TmReviewMigrate()             // TM 待审池建表（幂等）
-	s.TranslationMemoryMigrate()    // ★ 2026-10-28 计价与成本批：跨单译文记忆表（缓存 B，幂等）
+	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
+	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
+	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
+	s.TmReviewMigrate()          // TM 待审池建表（幂等）
+	s.TranslationMemoryMigrate() // ★ 2026-10-28 计价与成本批：跨单译文记忆表（缓存 B，幂等）
+	// ★ 2026-10-29 第十二轮：文档级领域词表缓存表（幂等；建表失败直接报错，别让词表功能静默失效）
+	if err := s.DomainProfileMigrate(); err != nil {
+		return nil, err
+	}
 	s.KBPackGrantsMigrate()         // ★ H3 KB 包级读/写/管理授权表（幂等）
 	s.SCIMMigrate()                 // ★ H10 SCIM 2.0 配置表 + users.scim_external_id（幂等）
 	s.QuotaGrantMigrate()           // ★ 双桶台账建表（幂等；此前漏挂导致新库缺表）

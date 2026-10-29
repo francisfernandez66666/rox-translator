@@ -338,6 +338,7 @@ func TestFixDocTruncations(t *testing.T) {
 		name string
 		doc  *fileproc.OcrDoc
 		want string // 修正后的 Final；空串表示必须保持原样
+		why  string // 失败信息里要能读出病因（变异体按它判红）
 	}{
 		{
 			name: "丢尾字母：manua → manual（本文件出现两次）",
@@ -347,6 +348,7 @@ func TestFixDocTruncations(t *testing.T) {
 				fileproc.OcrLine{Index: 2, Text: "manual 0.00", Final: "manual 0.00", Conf: 0.99},
 			),
 			want: "manual",
+			why:  "低置信丢尾字母必须修",
 		},
 		{
 			name: "丢首字母：anual → manual",
@@ -356,6 +358,7 @@ func TestFixDocTruncations(t *testing.T) {
 				fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.98},
 			),
 			want: "manual",
+			why:  "丢首字母必须修",
 		},
 		{
 			name: "单复数不动：order 有 orders×2 佐证也不改",
@@ -365,6 +368,7 @@ func TestFixDocTruncations(t *testing.T) {
 				fileproc.OcrLine{Index: 2, Text: "orders", Final: "orders", Conf: 0.98},
 			),
 			want: "",
+			why:  "单复数不许被 +1 字符启发式改写",
 		},
 		{
 			name: "两个不同佐证词 ⇒ 不猜",
@@ -376,15 +380,19 @@ func TestFixDocTruncations(t *testing.T) {
 				fileproc.OcrLine{Index: 4, Text: "apple", Final: "apple", Conf: 0.98},
 			),
 			want: "",
+			why:  "两个不同佐证不许猜",
 		},
 		{
-			name: "高置信文本不动（conf ≥0.95）",
+			// ★ 2026-10-29 第十轮翻转：旧口径「conf ≥0.95 不动」正是 `manua` 修不掉的入口。
+			//   翻转依据＝`truncationFix` 的结构护栏与置信度无关；高置信错字恰恰是现网主流形态。
+			name: "高置信也修（conf ≥0.95，但有文档内佐证）",
 			doc: ocrTestDoc(
 				fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Conf: 0.99},
 				fileproc.OcrLine{Index: 1, Text: "manual", Final: "manual", Conf: 0.98},
 				fileproc.OcrLine{Index: 2, Text: "manual", Final: "manual", Conf: 0.98},
 			),
-			want: "",
+			want: "manual",
+			why:  "高置信错字必须进确定性腿",
 		},
 		{
 			name: "待修词本身出现两次 ⇒ 不是孤立错字，不动",
@@ -395,6 +403,36 @@ func TestFixDocTruncations(t *testing.T) {
 				fileproc.OcrLine{Index: 3, Text: "manual", Final: "manual", Conf: 0.98},
 			),
 			want: "",
+			why:  "待修词出现两次不许改",
+		},
+		{
+			name: "数字插入不动（高置信）",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "nshape1", Final: "nshape1", Conf: 0.99},
+				fileproc.OcrLine{Index: 1, Text: "nshape12", Final: "nshape12", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "nshape12", Final: "nshape12", Conf: 0.98},
+			),
+			want: "",
+			why:  "数字插入不许当错字修",
+		},
+		{
+			name: "高置信但大写标签不动（Close 有 Closed×2 也不改）",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "Close", Final: "Close", Conf: 0.99},
+				fileproc.OcrLine{Index: 1, Text: "Closed", Final: "Closed", Conf: 0.98},
+				fileproc.OcrLine{Index: 2, Text: "Closed", Final: "Closed", Conf: 0.98},
+			),
+			want: "",
+			why:  "大写标签不许被 +1 字符启发式改写",
+		},
+		{
+			name: "高置信但无佐证不动",
+			doc: ocrTestDoc(
+				fileproc.OcrLine{Index: 0, Text: "manua", Final: "manua", Conf: 0.99},
+				fileproc.OcrLine{Index: 1, Text: "other", Final: "other", Conf: 0.98},
+			),
+			want: "",
+			why:  "无佐证不许改",
 		},
 	}
 	for _, c := range cases {
@@ -402,26 +440,36 @@ func TestFixDocTruncations(t *testing.T) {
 			st := &OcrReconcileStats{Reasons: map[string]int{}}
 			rest := fixDocTruncations(c.doc, []int{0}, st)
 			got := c.doc.Lines[0].Final
+			// ★ 反向断言（方案 §3.5）：未命中档位的行必须与源文**逐字相等**——
+			//   防 truncationFix 返回整行重写时顺手改动别的词。
+			for i := 1; i < len(c.doc.Lines); i++ {
+				if c.doc.Lines[i].Final != c.doc.Lines[i].Text {
+					t.Fatalf("%s：未命中档位的行被顺带改写（line %d: %q → %q）",
+						c.why, i, c.doc.Lines[i].Text, c.doc.Lines[i].Final)
+				}
+			}
 			if c.want == "" {
-				if got != "manua" && got != "anual" && got != "order" && got != "appleq" {
-					t.Fatalf("不该改，却改成了 %q", got)
+				// ★ 2026-10-29 第十一轮：期望值＝与源文**逐字相等**（旧写法是四个字面量的白名单，
+				//   新增档位会被它判成"改了"＝判据自伤）。
+				if got != c.doc.Lines[0].Text {
+					t.Fatalf("%s（不该改的档：%q → %q）", c.why, c.doc.Lines[0].Text, got)
 				}
 				if st.DocFixed != 0 {
-					t.Fatalf("DocFixed 应为 0，实得 %d", st.DocFixed)
+					t.Fatalf("%s：DocFixed 应为 0，实得 %d", c.why, st.DocFixed)
 				}
 				if len(rest) != 1 {
-					t.Fatalf("未修正的行必须原样送回模型腿，实得 %v", rest)
+					t.Fatalf("%s：未修正的行必须原样送回模型腿，实得 %v", c.why, rest)
 				}
 				return
 			}
 			if got != c.want {
-				t.Fatalf("修正结果 %q，期望 %q", got, c.want)
+				t.Fatalf("%s（修正结果 %q，期望 %q）", c.why, got, c.want)
 			}
 			if st.DocFixed != 1 || st.Fixed != 1 {
-				t.Fatalf("DocFixed/Fixed 应各为 1，实得 %d/%d", st.DocFixed, st.Fixed)
+				t.Fatalf("%s：DocFixed/Fixed 应各为 1，实得 %d/%d", c.why, st.DocFixed, st.Fixed)
 			}
 			if len(rest) != 0 {
-				t.Fatalf("修好的行不该再送模型，实得 %v", rest)
+				t.Fatalf("%s：修好的行不该再送模型，实得 %v", c.why, rest)
 			}
 		})
 	}

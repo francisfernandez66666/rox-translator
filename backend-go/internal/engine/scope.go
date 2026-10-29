@@ -18,6 +18,33 @@ import (
 	"translator/internal/kb"
 )
 
+// packAllowSet 把 PackScope 折成「可见包白名单」：企业/组织链/行业/角色/语言文化。
+//
+// ★ 只消费 BuildUserPackScope 的结果，不在这里重写任何匹配规则（industry/persona/locale 的
+// 判定全在 store 侧那一处；这里再写一遍就是第二把尺子）。
+// ★ 跨部门包（CrossDeptPacks）刻意不进：BuildPackScope 给它们的语义是「仅参考例句、不直接采用」，
+// 拉进术语硬闸会把"参考"变成"强制"。
+func packAllowSet(scope *kb.PackScope) map[int64]bool {
+	out := map[int64]bool{}
+	if scope == nil {
+		return out
+	}
+	for _, m := range []map[int64]bool{scope.TenantPackIDs, scope.SharedPackIDs,
+		scope.PersonaPackIDs, scope.UniversalPackIDs} {
+		for id := range m {
+			if id > 0 {
+				out[id] = true
+			}
+		}
+	}
+	for id := range scope.ChainPacks {
+		if id > 0 {
+			out[id] = true
+		}
+	}
+	return out
+}
+
 // userOrgKey context 键：当前请求用户的组织 ID（0=未挂组织/匿名）。
 type userOrgKey struct{}
 

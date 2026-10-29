@@ -74,7 +74,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 	// mode 归一与扣费腿同一个函数（fast 之外一律 pro，别让两侧对「未知档」的理解不一样）
 	mode := normalizeTaskMode(req.Mode)
 	tid := s.effTenant(r, u)
-	minTokens, maxTokens := s.estimateTokens(req, mode)
+	minTokens, maxTokens := s.estimateTokens(req, mode, tid)
 	// markup 与扣费腿同一个解析口（租户策略全局值 ＋ 该模式因子，模式因子优先）
 	markup := modeMarkup(s.effectivePolicyCached(tid), mode)
 	minTokens = applyMarkup(minTokens, markup)
@@ -122,7 +122,7 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 
 // estimateTokens 按请求形态选一条预估腿（有正文＝即时翻译形态，只有段数＝文件/工单形态）。
 // 参数 req: 已解析入参；mode: 归一后的模式档。返回: (真实 token 下限, 上限)，两者都 ≥1。
-func (s *Server) estimateTokens(req estimateReq, mode string) (int64, int64) {
+func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64, int64) {
 	var minTokens, maxTokens int64
 	if req.Text != "" {
 		minTokens, maxTokens = engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, "", req.UILang)
@@ -140,6 +140,14 @@ func (s *Server) estimateTokens(req estimateReq, mode string) (int64, int64) {
 	if allow := engine.LiteralOCRAllowanceTokens(req.ImageFiles, len(req.TargetLangs)); allow > 0 {
 		minTokens += allow
 		maxTokens += allow
+	}
+	// ★ 2026-10-29 第十二轮：文档级领域词表进 system 前缀（每块都付）⇒ 开了才计、关了不计
+	//   （与下面 HeaderContext 同一纪律：不为一件没发生的事收钱）。
+	if tid > 0 && engine.DomainGlossaryEnabled(s.Store, tid) {
+		if allow := engine.GlossaryAllowanceTokens(req.ImageFiles, len(req.TargetLangs), engine.GlossaryMaxTerms(s.Store, "file")); allow > 0 {
+			minTokens += allow
+			maxTokens += allow
+		}
 	}
 	// ★ 2026-10-28 P5：表头上下文（默认关）。**只在开关打开时才计价**——
 	//   关着的时候产品压根不注入表头，照它收费＝让客户为一件没发生的事备钱。

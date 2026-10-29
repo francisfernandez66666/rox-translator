@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"translator/internal/config"
+	"translator/internal/domain"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -404,5 +405,40 @@ func TestTMHitsWiredIntoHandleFile(t *testing.T) {
 	}
 	if n := strings.Count(src, "TMHits:"); n != 2 {
 		t.Fatalf("Data 字面量里 TMHits 应为 2 处（成功路径 + 零交付失败路径），实际 %d 处 ⇒ 有一档载荷永远没有命中数", n)
+	}
+}
+
+// TestTMKeySeparatesGlossary 加词表的那一单不许复用"没有词表"的旧译文（第十二轮 G8 行为腿）。
+//
+// 与 tm_context_key_test.go 的等值锁分工：那条锁的是"键里有没有这一维"，
+// 这条跑真批量腿，证明"键不同 ⇒ 记忆不串"（只测键的字符串会漏掉"键算了但没用上"这一形态）。
+func TestTMKeySeparatesGlossary(t *testing.T) {
+	u := &tmStubUpstream{good: "Hello"}
+	e := tmTestEngine(t, u)
+	texts := []string{"你好"}
+	ctx := tenant.WithTenant(context.Background(), 1)
+	run := func(opts BatchOptions) {
+		t.Helper()
+		out, _ := e.BatchTranslateMarkedOpts(ctx, texts, "en", 0, nil, opts)
+		if len(out) != 1 || strings.TrimSpace(out[0]) == "" {
+			t.Fatalf("批量腿没产出译文：%v", out)
+		}
+	}
+	run(BatchOptions{})
+	if u.calls.Load() != 1 {
+		t.Fatalf("首次应拨一次上游，实读 %d", u.calls.Load())
+	}
+	run(BatchOptions{})
+	if u.calls.Load() != 1 {
+		t.Fatalf("同参数第二次应命中记忆（不拨上游），实读 %d", u.calls.Load())
+	}
+	gl := []domain.Term{{Src: "你好", Tgt: "Hi"}}
+	run(BatchOptions{Glossary: gl, GlossaryLabel: "问候"})
+	if u.calls.Load() != 2 {
+		t.Fatalf("带词表必须换键重翻（复用无词表旧译文＝改了口径没改），实读 calls=%d", u.calls.Load())
+	}
+	run(BatchOptions{Glossary: gl, GlossaryLabel: "问候"})
+	if u.calls.Load() != 2 {
+		t.Fatalf("同一词表第二次应再次命中记忆，实读 calls=%d", u.calls.Load())
 	}
 }

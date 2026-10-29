@@ -149,10 +149,21 @@ func (s *Server) startAuditRetention() {
 		t := time.NewTicker(6 * time.Hour)
 		defer t.Stop()
 		s.pruneAuditOnce()
+		s.pruneDomainProfilesOnce()
 		for range t.C {
 			s.pruneAuditOnce()
+			s.pruneDomainProfilesOnce()
 		}
 	}()
+}
+
+// pruneDomainProfilesOnce 清过期的文档级领域词表缓存（与审计清理同一个 6h 节拍）。
+// 失败静默：词表是可选增强，清理失败不该影响任何主流程（过期行本身也不会被读到）。
+func (s *Server) pruneDomainProfilesOnce() {
+	if s.Store == nil {
+		return
+	}
+	_ = s.Store.PruneDomainProfiles(time.Now())
 }
 
 // pruneAuditOnce 执行一次审计日志清理：按保留天数计算截止时间，删除早于该时间的记录。

@@ -188,6 +188,9 @@ func isInteractive(ctx context.Context) bool {
 	return v
 }
 
+// InteractiveFromContext 导出读点（engine 按链分预算用；交互链对首字延迟敏感）。
+func InteractiveFromContext(ctx context.Context) bool { return isInteractive(ctx) }
+
 // fileModeKey ctx 存取键：文件/后台批任务（大文档翻译、批量模型补漏等）置位后，
 // doChat/embedChunk 改用「文件专用信号量池」（容量更大、与交互池隔离），
 // ★ 避免长文档高并发打满共享交互信号量、饿死前台即时翻译、乃至拖垮全站。

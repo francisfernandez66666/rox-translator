@@ -237,7 +237,7 @@ func TestPlatformCostPredsAreSingleSource(t *testing.T) {
 	if RealDebitPred != "charge_kind IN ('','charge')" {
 		t.Fatalf("实扣谓词被改动：%q（空串代表 P1-2 之前的历史实扣行，去掉即抹掉老账）", RealDebitPred)
 	}
-	if PlatformTaskTypeExclPred != "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals')" {
+	if PlatformTaskTypeExclPred != "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals','domain_detect')" {
 		t.Fatalf("额度侧/平台标签谓词被改动：%q", PlatformTaskTypeExclPred)
 	}
 	if CustomerUsagePred != PlatformTaskTypeExclPred+" AND "+UnattributedTraceExclPred {

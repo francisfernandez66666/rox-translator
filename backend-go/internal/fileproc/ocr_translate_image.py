@@ -116,6 +116,10 @@ PAD_TOUCH_PX = 2
 EXPAND_STEP = 4
 EXPAND_MAX_PX = 24
 EXPAND_UNIFORM_STD = 14.0
+# ★ 2026-10-29 第十轮：**劈词之前再要一次宽度**用的上限。
+#   `EXPAND_MAX_PX=24` 是"常规长译文"的礼貌性扩框；一个整词被劈开时值得再要更多，
+#   但仍是"只进均匀空白、不压邻框"（`_expand_rect` 的既有判据一字不动），所以放大上限不会造成新的压字。
+EXPAND_HARD_MAX_PX = 96
 # ★ 2026-10-26 用户令：「同一区域的字号归一要做。按框/块/表格/行高相近来判断同一区域。」
 #   现网形态＝同一张表格的行里 11px 与 30px 并存（字号按每一行自己的框独立算出来的）。
 #   下面三个数是「同一区域」的两腿判据（行高相近 **且** 垂直邻近/同表格行）——
@@ -731,6 +735,42 @@ def _wrap_text(chain, text: str, max_w: float):
     return _wrap_text_dbg(chain, text, max_w)[0]
 
 
+def _needs_word_break(text: str, max_w: float, px: int) -> bool:
+    """给定宽度与字号，这段文本是否**必须按字符劈词**（`_wrap_text_dbg` 的 hard 位）。
+
+    为什么单独抽一个函数：`_layout` 的返回值里没有 hard（它只用 hard 决定要不要继续降字号），
+    而重试判据只关心这一个布尔；把 `_layout` 改成四返回值会牵动两处调用点，
+    收益不抵风险（复用 `_wrap_text_dbg` 那一把尺子，不造第二把）。
+    """
+    return _wrap_text_dbg(_chain(px), text, max_w)[1]
+
+
+def _layout_expand(text, w, h, floor, ink_h, expand):
+    """先按既有口径排版；**必须劈词时**再要一次宽度（`expand()`）并重排。
+
+    返回 (px, lines, overflow, geom)。geom=None ⇒ 没扩（或扩了也仍然要劈词），调用方保持原几何；
+    geom=(left, top, right, bottom, inner_w, inner_h) ⇒ 用新几何画。
+
+    为什么收成纯函数（只吃回调、不碰像素）：`_layout` 是纯排版，扩框要读像素与邻框；
+    把图像依赖塞进去会让自证腿全部要造图。`expand()` 返回新矩形或 None，由调用方决定怎么要宽度。
+    """
+    px, lines, overflow = _layout(text, w, h, floor, ink_h)
+    if not _needs_word_break(text, w, px):
+        return px, lines, overflow, None
+    r = expand()
+    if not r:
+        return px, lines, overflow, None
+    l2, t2, r2, b2 = r
+    w2 = max(1, r2 - l2 - 2)
+    if w2 <= w:
+        return px, lines, overflow, None
+    h2 = max(1, b2 - t2 - 2)
+    px2, lines2, ov2 = _layout(text, w2, h2, floor, ink_h)
+    if _needs_word_break(text, w2, px2):
+        return px, lines, overflow, None
+    return px2, lines2, ov2, (l2, t2, r2, b2, w2, h2)
+
+
 def _layout(text: str, w: int, h: int, floor: int, ink_h: int, region_px: int = 0):
     """定最终字号与折行：优先按原行高起、尽量单行；放不下就**换行**；换行也放不下才降到地板。
 
@@ -1021,7 +1061,15 @@ def cmd_render(src: str, out: str, lines_path: str) -> int:
         inner_h = max(1, bottom - top - 2)
         floor = _font_floor(ink_h, inner_h)
         # ③ 第一遍定字号：先按**本行自己**的既有逻辑算（区域众数要等全场都算完才有）。
-        size, draw_lines, overflow = _layout(text, inner_w, inner_h, floor, ink_h)
+        # ★ 2026-10-29 第十轮：**劈词之前先再要一次宽度**——只加"再要一次"，不动"要不要劈"的既有判据：
+        #   扩不出来（右侧紧贴表格边框/有字）就照旧劈、照旧挂连字符（用户令不回退）；扩出来能不劈就不劈。
+        #   只调一次，且下游三处几何（抹底/裁剪/贴字）统一吃下面这份 left/top/right/bottom。
+        size, draw_lines, overflow, grown = _layout_expand(
+            text, inner_w, inner_h, floor, ink_h,
+            lambda: _expand_rect(ref_img, r0, blockers_wo, EXPAND_HARD_MAX_PX))
+        if grown is not None:
+            left, top, right, bottom = grown[0], grown[1], grown[2], grown[3]
+            inner_w, inner_h = grown[4], grown[5]
         # ④ 文字色优先**沿用原字体色**（从原文墨迹估计），估不准才按底色亮度反差回落。
         #    ★ 2026-10-19 用户令：产物必须用**原背景色 + 原字体色**——旧形态只按底色二选一，
         #    蓝徽章上的白字被画成黑字。patch 是**绘制前的原图**裁片（与量墨迹同一参照系）。

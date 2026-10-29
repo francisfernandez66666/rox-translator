@@ -28,17 +28,17 @@ func estBaseReq() estimateReq {
 func TestEstimateHeaderContextCharsDefaultIsZero(t *testing.T) {
 	s := &Server{}
 	t.Setenv("FILE_HEADER_CONTEXT", "on") // 连开关打开时也要等价（缺省就是 0）
-	m0, x0 := s.estimateTokens(estBaseReq(), "pro")
+	m0, x0 := s.estimateTokens(estBaseReq(), "pro", 0)
 
 	r := estBaseReq()
 	r.HeaderContextChars = 0
-	m1, x1 := s.estimateTokens(r, "pro")
+	m1, x1 := s.estimateTokens(r, "pro", 0)
 	if m0 != m1 || x0 != x1 {
 		t.Fatalf("header_context_chars 缺省 0 必须与不传等价：%d/%d vs %d/%d", m1, x1, m0, x0)
 	}
 	// 负数是脏值：折回 0，不许倒扣（倒扣会让预估比真实成本低，客户备的钱不够）。
 	r.HeaderContextChars = -50
-	if m2, x2 := s.estimateTokens(r, "pro"); m2 != m0 || x2 != x0 {
+	if m2, x2 := s.estimateTokens(r, "pro", 0); m2 != m0 || x2 != x0 {
 		t.Fatalf("负数字符数必须折回 0，实际 %d/%d（基准 %d/%d）", m2, x2, m0, x0)
 	}
 }
@@ -57,8 +57,8 @@ func TestEstimateHeaderContextCharsCountedOnlyWhenEnabled(t *testing.T) {
 
 	// ① 关闭档（默认）⇒ 不加价
 	t.Setenv("FILE_HEADER_CONTEXT", "off")
-	baseM, baseX := s.estimateTokens(estBaseReq(), "pro")
-	offM, offX := s.estimateTokens(r, "pro")
+	baseM, baseX := s.estimateTokens(estBaseReq(), "pro", 0)
+	offM, offX := s.estimateTokens(r, "pro", 0)
 	if offM != baseM || offX != baseX {
 		t.Fatalf("FILE_HEADER_CONTEXT=off 时不许计表头钱：%d/%d vs 基准 %d/%d ⇒ 客户为没发生的事备钱",
 			offM, offX, baseM, baseX)
@@ -66,7 +66,7 @@ func TestEstimateHeaderContextCharsCountedOnlyWhenEnabled(t *testing.T) {
 
 	// ② 打开档 ⇒ 逐字多一条 allowance（下限与上限一起抬，区间形状不变）
 	t.Setenv("FILE_HEADER_CONTEXT", "on")
-	onM, onX := s.estimateTokens(r, "pro")
+	onM, onX := s.estimateTokens(r, "pro", 0)
 	if onM != baseM+allow || onX != baseX+allow {
 		t.Fatalf("开启后预估应恰好 +%d：%d/%d，实际 %d/%d ⇒ 要么没接上，要么另算了一份字数",
 			allow, baseM+allow, baseX+allow, onM, onX)
@@ -74,7 +74,7 @@ func TestEstimateHeaderContextCharsCountedOnlyWhenEnabled(t *testing.T) {
 
 	// ③ 上界钳位：异常入参按 4000 计（与 engine 的钳位同档），不许线性膨胀成天价
 	r.HeaderContextChars = 999999
-	capM, _ := s.estimateTokens(r, "pro")
+	capM, _ := s.estimateTokens(r, "pro", 0)
 	if want := baseM + engine.HeaderContextAllowanceTokens(4000); capM != want {
 		t.Fatalf("超上限应钳在 4000（基准+%d），实际 %d ⇒ 一个异常入参能把预估算成天价",
 			engine.HeaderContextAllowanceTokens(4000), capM)

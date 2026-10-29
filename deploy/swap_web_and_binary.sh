@@ -130,7 +130,17 @@ cf_api() {
               -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
   [ -n "$payload" ] && args+=(-H "Content-Type: application/json" -d "$payload")
   [ -n "$extra" ] && args+=("$extra")
-  curl "${args[@]}" "$url" 2>/dev/null || echo 000
+  local code="" rc=0
+  code=$(curl "${args[@]}" "$url" 2>/dev/null) || rc=$?
+  # ★ 2026-10-29 第十一轮：真 curl 在连接被拒/等满 max-time 时**自己就会往 stdout 打 000**（rc≠0），
+  #   旧写法 `|| echo 000` 再补一个 ⇒ 读成 "000000"，下游 `[ "$code" = "000" ]` 恒假
+  #   ⇒ 重拨腿在生产一次都不会触发（本机实测：curl 127.0.0.1:1 ⇒ code=[000000]）。
+  #   现口径＝把「这一跳没走完」归一成**唯一一个** 000：rc≠0 / 空 / 000 开头，一律 000。
+  if [ "$rc" -ne 0 ] || [ -z "$code" ]; then echo 000; return 0; fi
+  case "$code" in
+    000*) echo 000 ;;
+    *)    echo "$code" ;;
+  esac
 }
 
 cf_purge() {
@@ -153,6 +163,7 @@ cf_purge() {
     bad "CF purge 取不到 zone id（HTTP=${code}，zone=${CF_ZONE_NAME}）⇒ 边缘缓存没清，落位不会开始"
     return 1
   fi
+  CF_ZONE_ID="$zone"   # ★ 尾随 purge 复用（避免二次查 zone）
   # ② purge_everything：全 zone 一次清完（主站／演示站／租户品牌域共用这一个 zone）。
   code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp")
   [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp" --http1.1)
@@ -165,6 +176,45 @@ cf_purge() {
   # 重拨只对「这一跳没走完」；4xx/5xx 与 success:false 一律不重拨——摇绿灯就是把白屏窗口藏起来。
   bad "CF purge 未成功（HTTP=${code}）⇒ 边缘缓存没清，落位不会开始（此刻源站仍是完整上一代）"
   return 1
+}
+
+# ---- 1b2. CF 尾随 purge（★ 2026-10-29 第十一轮）：清掉「purge 与落位之间」被边缘重新缓存的旧 HTML ----
+# 为什么要有第二次：purge 成功到 commit 完成之间（两次 mv + chown -R + find，秒级），源站还在发上一代 HTML；
+# 这一秒里任何回源都会把旧 HTML 按 Edge TTL 2h 重新写进边缘；commit 之后旧入口 JS 已移走
+# ⇒ 那张被重新缓存的旧 HTML 指向 404 的 JS（白屏 ≤2h，正是这条腿要消灭的形态）。
+# 口径：**非阻塞**（此刻 web 已落位，判死会留「web 新 + bin 旧」的混合半态），但必须出一行可见读数，
+#      且 ok／off／skipped／failed 四态不同形。
+cf_purge_tail() {
+  if [ "${CF_PURGE_OFF:-0}" = "1" ]; then
+    echo "CF_PURGE_TAIL=off（CF_PURGE_OFF=1）"; return 0
+  fi
+  if [ "${CF_PURGE_TAIL:-on}" = "off" ]; then
+    echo "CF_PURGE_TAIL=off（显式关 ⇒ 落位窗口内被重新缓存的旧 HTML 可能留 ≤2h）"; return 0
+  fi
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "CF_PURGE_TAIL=skipped（未配 token）"; return 0
+  fi
+  local tmp code zone="${CF_ZONE_ID:-}"
+  tmp=$(mktemp)
+  if [ -z "$zone" ]; then
+    code=$(cf_api "https://api.cloudflare.com/client/v4/zones?name=${CF_ZONE_NAME}" GET "" "$tmp")
+    [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones?name=${CF_ZONE_NAME}" GET "" "$tmp" --http1.1)
+    zone=$(grep -oE '"id":"[a-f0-9]{32}"' "$tmp" 2>/dev/null | head -1 | cut -d'"' -f4)
+  fi
+  if [ -z "$zone" ]; then
+    rm -f "$tmp"
+    echo "CF_PURGE_TAIL=failed（取不到 zone id，HTTP=${code:-?}）⇒ 源站已是新代，重跑一次 purge 即可"
+    return 0
+  fi
+  code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp")
+  [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp" --http1.1)
+  if grep -q '"success":true' "$tmp" 2>/dev/null; then
+    echo "CF_PURGE_TAIL=ok（zone=${zone}）"
+  else
+    echo "CF_PURGE_TAIL=failed（HTTP=${code}）⇒ 边缘可能残留旧 HTML ≤2h；重跑一次 purge 即可"
+  fi
+  rm -f "$tmp"
+  return 0
 }
 
 for d in $DEPLOY_DIRS; do stage_site "$d/web" "$(basename "$d")"; done
@@ -185,6 +235,9 @@ if [ "$FAIL" -gt 0 ]; then
   exit "$FAIL"
 fi
 for d in $DEPLOY_DIRS; do commit_site "$d/web" "$(basename "$d")"; done
+# ★ 2026-10-29 第十一轮：尾随 purge —— 清掉「purge 与落位之间」被边缘重新缓存的旧 HTML。
+#   非阻塞；只在落位全部成功时跑（commit 失败时源站是半态，清缓存没有意义）。
+if [ "$FAIL" -eq 0 ]; then cf_purge_tail; fi
 
 # ---- 2. 二进制：备份 → 落到临时名 → mv rename → 现读 sha 比对 ----
 for d in $DEPLOY_DIRS; do

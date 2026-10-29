@@ -33,10 +33,29 @@ type gateCtx struct {
 	orgID  int64
 	// ★ H1 术语强制：本批译文共享的术语命中缓存（key=srcLang|source|lang）
 	termCache map[string][]gate.TermRequirement
+	// ★ 2026-10-29 第十一轮（T-B）：本请求的 KB 可见包白名单（每请求只装配一次）。
+	//   用集合而不是 *kb.PackScope，免得 gates.go 为一个字段类型再 import internal/kb。
+	allow map[int64]bool
+}
+
+// kbAllow 懒装配本请求的可见包白名单（企业/组织链/行业/角色/语言文化）。
+//
+// 为什么懒：纯模型请求（无 KB）不该为它多查几跳；第一次真要用术语时才装配，
+// 之后同一个 gateCtx 复用（gateCtx 是每请求一份）。
+func (g *gateCtx) kbAllow(ctx context.Context) map[int64]bool {
+	if g.allow == nil {
+		g.allow = packAllowSet(g.e.userScope(ctx, g.tid))
+	}
+	return g.allow
 }
 
 // termReqs 查询并缓存「源文命中 → 该语种规定译法」的 KB 术语要求（layer=1）。
-func (g *gateCtx) termReqs(source, lang string) []gate.TermRequirement {
+//
+// ★ 2026-10-29 第十一轮（T-B）：查询范围从「本租户」扩到**当前用户的 KB 可见域**
+// （企业/组织链/行业/角色/语言文化；装配规则只由 BuildUserPackScope 一处负责）。
+// 为什么不是「tenant 0 全量」：tenant 0 下挂着所有行业包和所有角色包，全量放进来
+// ＝财务租户拿到销售术语、两个行业互相冲突（本仓「多把尺子」那一族）。
+func (g *gateCtx) termReqs(ctx context.Context, source, lang string) []gate.TermRequirement {
 	if g.e == nil || g.e.St == nil || g.tid <= 0 {
 		return nil
 	}
@@ -45,27 +64,38 @@ func (g *gateCtx) termReqs(source, lang string) []gate.TermRequirement {
 	if v, ok := g.termCache[key]; ok {
 		return v
 	}
+	ents, err := g.e.St.FindTermsBySubstringAllowed(srcLang, source, g.kbAllow(ctx))
+	if err != nil {
+		ents = nil
+	}
+	seen := map[string]bool{}
 	var out []gate.TermRequirement
-	if ents, err := g.e.St.FindTermsBySubstring(g.tid, g.orgID, srcLang, source); err == nil {
-		for _, ent := range ents {
-			if ent == nil || ent.Layer != 1 || ent.TargetLang != lang {
-				continue
-			}
-			if strings.TrimSpace(ent.SourceText) == "" || strings.TrimSpace(ent.TargetText) == "" {
-				continue
-			}
-			// ★ 2026-10-26 P2-03：目标文本书写系统与目标语言明显不符的脏术语（如 target_lang=en
-			//   却把目标写成中文「英语」）不得进入硬闸——否则任何含源词的正文都会被判「未体现」。
-			//   入库/导入侧也会拦（api/kb.go、api/admin_kb.go），这里是第二道防线，防存量脏行。
-			//   品牌术语（module=brand）豁免：品牌名可能刻意保留汉字（如中文品牌在英文文案里
-			//   仍写中文），不能按“书写系统不符”判脏。
-			if ent.Module != "brand" && !gate.TargetTextMatchesLang(lang, ent.TargetText) {
-				observability.Warn(context.Background(), "跳过目标书写系统不符的术语",
-					"term_id", ent.ID, "target_lang", lang, "source_len", len([]rune(ent.SourceText)))
-				continue
-			}
-			out = append(out, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})
+	for _, ent := range ents {
+		if ent == nil || ent.Layer != 1 || ent.TargetLang != lang {
+			continue
 		}
+		if strings.TrimSpace(ent.SourceText) == "" || strings.TrimSpace(ent.TargetText) == "" {
+			continue
+		}
+		// ★ 2026-10-26 P2-03：目标文本书写系统与目标语言明显不符的脏术语（如 target_lang=en
+		//   却把目标写成中文「英语」）不得进入硬闸——否则任何含源词的正文都会被判「未体现」。
+		//   入库/导入侧也会拦（api/kb.go、api/admin_kb.go），这里是第二道防线，防存量脏行。
+		//   品牌术语（module=brand）豁免：品牌名可能刻意保留汉字（如中文品牌在英文文案里
+		//   仍写中文），不能按“书写系统不符”判脏。
+		if ent.Module != "brand" && !gate.TargetTextMatchesLang(lang, ent.TargetText) {
+			observability.Warn(context.Background(), "跳过目标书写系统不符的术语",
+				"term_id", ent.ID, "target_lang", lang, "source_len", len([]rune(ent.SourceText)))
+			continue
+		}
+		// ★ 2026-10-29 第十一轮：同一个 source 只留一条（按 SQL 的 pack_type 优先级取第一条）。
+		//   RunWithTerms 要求**每条**要求的 target 都出现；两条不同译法会让这句话永远过不了闸
+		//   （每段重翻 + 一条 KB术语遵循 警告），这正是 T-A-0 查重的根因。
+		k := strings.ToLower(ent.SourceText) + "\x00" + ent.TargetLang
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})
 	}
 	g.termCache[key] = out
 	return out
@@ -96,10 +126,34 @@ func (e *Engine) newGateCtx(ctx context.Context) gateCtx {
 	return gc
 }
 
+// strictLabelTerm 固定标签的确定性译法：源段逐字等于某条术语源文、≤8 字、且唯一命中。
+//
+// 为什么需要这一档（2026-10-29 第十一轮 T-C）：现有硬闸只在「译文残留中文源词」时确定性覆写
+// （gate.ForceTerms），全英文译文走的是「重翻一次 + 警告」——那一句到底对不对是概率性的。
+// 固定 UI 标签（`卖出胜负` 这类）本来就是"一个词对应一个译法"，可以确定性收口。
+//
+// 边界三条，一条都不许放宽：逐字相等（不是包含）、≤8 字（长句仍走重翻）、唯一命中（两条不同译法不猜）。
+func strictLabelTerm(source string, terms []gate.TermRequirement) (string, bool) {
+	s := strings.TrimSpace(source)
+	if s == "" || len([]rune(s)) > 8 {
+		return "", false
+	}
+	hit, n := "", 0
+	for _, t := range terms {
+		if strings.TrimSpace(t.Source) == s && strings.TrimSpace(t.Target) != "" {
+			hit, n = t.Target, n+1
+		}
+	}
+	if n != 1 {
+		return "", false
+	}
+	return hit, true
+}
+
 // check 对单条译文执行约束闸门（gate.Run 8 项硬校验）与语言文化闸门（culture.Run 避雷词/格式/语气）。
 // retry=true 时若约束项首轮不过，则带反馈让模型重翻一次（仅文本主路径使用，文件主路径为成本考虑不重翻）。
 // 返回（修正后译文，警告列表）；任何情况下均不静默丢弃译文内容（仅以警告形式透出）。
-func (g gateCtx) check(source, lang, translated string, retry bool, e *Engine, ctx context.Context) (string, []string) {
+func (g *gateCtx) check(source, lang, translated string, retry bool, e *Engine, ctx context.Context) (string, []string) {
 	var warnings []string
 	tr := translated
 	if strings.TrimSpace(tr) == "" {
@@ -108,7 +162,7 @@ func (g gateCtx) check(source, lang, translated string, retry bool, e *Engine, c
 	// 1) 约束闸门：数字/金额/单位/专有名词一致性等硬校验
 	// ★ H1 术语强制 100%：命中术语且译文残留源术语字面 → 直接以规定译法覆写；
 	//   剩余违规（第三种写法）带术语要求重翻一次，仍违规则记警告（不静默放行）。
-	terms := g.termReqs(source, lang)
+	terms := g.termReqs(ctx, source, lang)
 	if len(terms) > 0 {
 		if forced, n := gate.ForceTerms(source, tr, terms); n > 0 {
 			tr = forced
@@ -135,7 +189,18 @@ func (g gateCtx) check(source, lang, translated string, retry bool, e *Engine, c
 			}
 		}
 		if gr = gate.RunWithTerms(source, lang, tr, terms); !gr.Pass {
-			warnings = append(warnings, fmt.Sprintf("%s 译文未通过质量校验(%s)", langLabel(lang), firstGateFail(gr.Checks)))
+			// ★ 2026-10-29 第十一轮（T-C）：固定标签（源段逐字等于术语源文、≤8 字、唯一命中）
+			//   直接采用规定译法——否则全英文译文只能靠重翻一次（概率性）。长句/包含关系不走这一档。
+			if fixed, ok := strictLabelTerm(source, terms); ok && fixed != tr {
+				tr = fixed
+				if gr = gate.RunWithTerms(source, lang, tr, terms); gr.Pass {
+					warnings = append(warnings, fmt.Sprintf("%s 固定标签按术语表采用 %q", langLabel(lang), fixed))
+				} else {
+					warnings = append(warnings, fmt.Sprintf("%s 固定标签按术语表采用 %q；仍有其他校验未通过(%s)", langLabel(lang), fixed, firstGateFail(gr.Checks)))
+				}
+			} else {
+				warnings = append(warnings, fmt.Sprintf("%s 译文未通过质量校验(%s)", langLabel(lang), firstGateFail(gr.Checks)))
+			}
 		}
 	}
 	// 2) 语言文化闸门：输出侧避雷词 / 格式 / 语气校验（仅警告透出，不在主路径静默丢弃）

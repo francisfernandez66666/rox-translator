@@ -86,11 +86,13 @@ case " $* " in
     case " $* " in *purge_cache*) ep=purge ;; esac
     if [ -n "${STUB_CF_FAIL_ONCE:-}" ]; then
       marker="${STUB_CF_FAIL_MARKER_DIR:-/tmp}/stub_cf_failed_${ep}"
-      if [ ! -f "$marker" ]; then : > "$marker"; echo 000; exit 0; fi
+      # ★ 2026-10-29 第十一轮：真 curl 失败是「打 000 **且** 退出码非零」，旧桩 `exit 0`
+      #   让执行体的 `|| echo 000` 形同虚设 ⇒ T8d 在**坏的执行体上照样绿**（本批实测）。
+      if [ ! -f "$marker" ]; then : > "$marker"; echo 000; exit 7; fi
     fi
     # STUB_CF_CODE=000 ＝ **整条不通**：真 curl 在连接被拒／等满 max-time 时不落任何响应体，
     # 桩必须照做（写了体再回 000 会让执行体从旧体里 grep 到 zone id，把"链路断了"读成"通了"）。
-    if [ "${STUB_CF_CODE:-200}" = "000" ]; then echo 000; exit 0; fi
+    if [ "${STUB_CF_CODE:-200}" = "000" ]; then echo 000; exit 7; fi
     # ⚠️ 默认体**不许**写成 `${VAR:-{"json":...}}`：bash 的参数展开在第一个 `}` 处收尾，
     # 会把 JSON 的引号与大括号一起吞掉（首跑真踩：桩落盘 `{result:[{id:...}}`，执行体 grep 不到 id，
     # 于是"链路通了"被读成"取不到 zone id"——红得像是执行体的错）。只有显式赋值这一种形态。
@@ -393,6 +395,8 @@ expect_zero "$T8A" "T8a purge 正测"
 expect "T8a_受理行在位" "$(grep -c 'CF purge 已受理' "$W8A")" "1"
 expect "T8a_仍判发版成功" "$(grep -c 'SWAP_ALL_OK=1' "$W8A")" "1"
 expect "T8a_确实落位了" "$([ "$(cat "$H/opt/translator/web/index.html")" != "old-entry" ] && echo yes || echo NO)" "yes"
+# T8h 尾随 purge（token + success）⇒ 落位之后必须再清一次，且不改变发版判定。
+expect "T8h_尾随purge受理" "$(grep -c 'CF_PURGE_TAIL=ok' "$W8A")" "1"
 
 # T8b 反证（主判据）：API 回 success:false ⇒ 必须 ABORT 且**树一个字节未动**＝purge 真的排在落位之前
 build_trees
@@ -439,6 +443,8 @@ expect_zero "$T8E" "T8e 显式关"
 expect "T8e_出显式关行" "$(grep -c 'CF_PURGE=off' "$W8E")" "1"
 expect "T8e_不拨API" "$(grep -c 'CF purge 已受理' "$W8E")" "0"
 expect "T8e_关掉不影响发版判定" "$(grep -c 'SWAP_ALL_OK=1' "$W8E")" "1"
+# T8i 尾随 purge 在 CF_PURGE_OFF=1 时同样显式关（"没清缓存"的两种形态必须不同形）。
+expect "T8i_尾随purge显式关" "$(grep -c 'CF_PURGE_TAIL=off' "$W8E")" "1"
 
 # T8f 未配 token：⇒ 出一行"没配"，与"显式关"**不同形**（"什么都没出"与两种"没清缓存"必须分得开），
 # 且不阻塞——换源链不该因可选的第三方动作整体不能走。
@@ -457,8 +463,8 @@ echo
 # 同时留一条**下界**断言：窗口段的腿被误删时，派生读数会掉到 7 以下并当场点名，不会让末行跟着缩水。
 T7_LEGS=$(grep -c '^# T7[a-g] ' "$0" 2>/dev/null || echo 0)
 expect "T7_窗口腿枚数下界(≥7)" "$([ "${T7_LEGS:-0}" -ge 7 ] && echo yes || echo NO)" "yes"
-T8_LEGS=$(grep -c '^# T8[a-f] ' "$0" 2>/dev/null || echo 0)
-expect "T8_purge腿枚数下界(≥6)" "$([ "${T8_LEGS:-0}" -ge 6 ] && echo yes || echo NO)" "yes"
+T8_LEGS=$(grep -c '^# T8[a-i] ' "$0" 2>/dev/null || echo 0)
+expect "T8_purge腿枚数下界(≥8)" "$([ "${T8_LEGS:-0}" -ge 8 ] && echo yes || echo NO)" "yes"
 if [ "$BAD_EXPECT" -eq 0 ]; then
   echo "SWAPTEST_ALL_OK=1 八段（T1 正测＋T2–T6 五枚反证＋T7 窗口探针 ${T7_LEGS} 腿＋T8 purge ${T8_LEGS} 腿）全部命中期望；夹具树在 $H"
   exit 0

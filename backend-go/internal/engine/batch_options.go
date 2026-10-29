@@ -20,6 +20,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"strings"
+
+	"translator/internal/domain"
 )
 
 // batchSplitMaxDepth 截断二分的深度上限（★ 2026-10-28 成本批）。
@@ -44,6 +46,11 @@ type BatchOptions struct {
 	//
 	// 关掉（false）时提示词与改造前**逐字等价**、记忆键也不变（同 HeaderContext 那条纪律）。
 	LiteralOCR bool
+	// Glossary 本单领域词表（2026-10-29 第十二轮；按目标语各取一份，空＝不注入）。
+	// 只进提示词（用户拍板"做参考"）：不进 RunWithTerms、不写平台包。
+	Glossary []domain.Term
+	// GlossaryLabel 词表的领域中文名（只用于提示词那一句话；空时渲染成 domain-specific）。
+	GlossaryLabel string
 }
 
 // tmContextHash 把「会改变译文的全部上下文」折成记忆键的那一个维度。
@@ -55,6 +62,9 @@ type BatchOptions struct {
 // ② 只开直译档时也必须非空——否则图片件的"直译译文"会被当成同一段的正常译文复用。
 func tmContextHash(opts BatchOptions) string {
 	base := tmHeaderContextHash(opts.HeaderContext)
+	// ★ 2026-10-29 第十二轮：本单领域词表也是"会改变译文的上下文"——不折进键，
+	//   加词表的那一单会直接复用"没有词表"的旧译文（literalOCRNote 那次同形）。
+	base = joinTmMark(base, tmGlossaryHash(opts.Glossary))
 	if !opts.LiteralOCR {
 		return base
 	}
@@ -62,6 +72,17 @@ func tmContextHash(opts BatchOptions) string {
 		return tmLiteralOCRMark
 	}
 	return base + tmLiteralOCRMark
+}
+
+// joinTmMark 把一段标记并入记忆键：空标记不改变原值（关档与"没判出来"必须逐字等价）。
+func joinTmMark(base, mark string) string {
+	if mark == "" {
+		return base
+	}
+	if base == "" {
+		return mark
+	}
+	return base + mark
 }
 
 // tmLiteralOCRMark 直译档进记忆键的标记（前导 `|` 保证与表头哈希的十六进制段不会粘连同形）。

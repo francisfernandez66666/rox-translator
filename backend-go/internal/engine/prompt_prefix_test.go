@@ -184,10 +184,13 @@ func TestB4BatchTermLayer(t *testing.T) {
 			t.Errorf("术语层不应包含 %q（可见域/过滤回归）", ban)
 		}
 	}
-	// 字典序：手机(手 E6) < 蓝牙(E8 93) < 车控(E8 BD)
-	i1, i2, i3 := strings.Index(text, "手机"), strings.Index(text, "蓝牙"), strings.Index(text, "车控")
+	// 定序（★ 2026-10-29 T-B 新口径）：**企业包优先**，同包内按 source_text。
+	//   旧口径是全局按 source_text（手机<蓝牙<车控）；T-B 让术语层吃行业/角色包后，
+	//   必须让"客户自己的术语"排在平台共享包前面，否则 topN 截断会先把租户词挤掉。
+	//   期望：蓝牙、车控（租户包，按字节 蓝 E8 93 < 车 E8 BD）→ 手机（locale 包）。
+	i1, i2, i3 := strings.Index(text, "蓝牙"), strings.Index(text, "车控"), strings.Index(text, "手机")
 	if !(i1 >= 0 && i1 < i2 && i2 < i3) {
-		t.Errorf("术语层应按 source_text 定序:\n%s", text)
+		t.Errorf("术语层应先企业包（蓝牙<车控）再共享包（手机）:\n%s", text)
 	}
 
 	// 缓存语义：60s 内改库不重查；清缓存后新词生效

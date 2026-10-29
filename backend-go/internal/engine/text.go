@@ -16,6 +16,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/gate"
+	"translator/internal/llm"
 	"translator/internal/observability"
 	"translator/internal/tenant"
 )
@@ -259,6 +260,19 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		}
 		directOther = parsed
 		cleanText = cleaned
+	}
+	// ★ 2026-10-29 第十二轮：文档级领域词表（文本/即时链；只进本单提示词，失败即不做）。
+	//   即时链预算 600ms（超时进后台预热）、文本链 4s；低置信/查不到 ⇒ 不做。
+	{
+		chain := "text"
+		if llm.InteractiveFromContext(ctx) {
+			chain = "instant"
+		}
+		lim := e.glossaryLimits(chain)
+		targets := append(append([]string{}, kbTarget...), directOther...)
+		if prof := e.glossaryProfile(ctx, e.tenantID(ctx), chain, cleanText, targets, lim); prof != nil {
+			ctx = WithGlossary(ctx, prof, lim.MaxTerms)
+		}
 	}
 
 	// ★ 2026-10-17 用户令：快速模式不再旁路知识库——fast 与 pro 都走 KB 直配；

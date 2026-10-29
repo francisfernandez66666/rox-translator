@@ -36,6 +36,9 @@ const (
 	// PlatformEvals LLM-as-Judge 抽样质检：客户没有下单这一步，
 	// 它是平台自己的质量投入，不该出现在客户的积分消耗里。
 	PlatformEvals = "evals"
+	// PlatformDomainDetect 文档级领域判定（2026-10-29 第十二轮）：客户没有直接下单这一步，
+	// 它是平台为"行业/职业用语适配"付的固定成本；词表进 prompt 的那部分仍按真实用量由客户承担。
+	PlatformDomainDetect = "domain_detect"
 )
 
 // WithPlatformCost 标注「本 ctx 上的模型用量由平台承担」。

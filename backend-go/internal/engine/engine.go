@@ -97,6 +97,14 @@ type Engine struct {
 	termLayerMu    sync.Mutex
 	termLayerCache map[string]termLayerEntry
 
+	// ★ 2026-10-29 第十二轮：文档级领域词表（进程内缓存 + 懒建 wiki 客户端；见 glossary.go）
+	glossaryMu     sync.Mutex
+	glossaryCache  map[string]glossaryEntry
+	glossaryWiki   *wikiClient
+	glossaryDay    map[int64]int   // 每租户当日判定次数（in-process；跨重启归零可接受）
+	glossaryDayKey string          // 上面那张表的日历键（2006-01-02）
+	glossaryCall   glossaryLLMCall // 测试注入口（生产恒 nil）
+
 	// ★ 2026-09-09 可靠性改造测试钩子：单语翻译器（nil 时默认走 SingleLangTranslate）。
 	//   仅测试注入 fake 用，生产恒为 nil，不影响既有行为。
 	singleLangFn func(ctx context.Context, zhText, targetLang string, examples []*kb.Row, sourceLang, stage string) (string, error)
@@ -1381,52 +1389,75 @@ func buildExamplesPrompt(zhText, targetLang string, examples []*kb.Row) string {
 }
 
 // batchTermLayer ★ B4（方案 B Phase 1.3）：租户×目标语言的固定术语层摘要。
-// 取租户可见域（自有包 + 平台共享 locale 包，enabled）内的 L1 术语条目，
-// 按 source_text 字典序、id 升序取前 termLayerTopN 条渲染成「源 → 译」清单。
-// 与单语路径的 per-request 检索不同，这里是**租户级静态层**：渲染文本按 (tenant,lang)
-// 缓存 60s，供文件批量主负载的全部批次共享同一 system 前缀（缓存可前置工程），
-// 同时补齐调研发现的「批量路径完全没有术语注入」的质量口径不一致。
+// ★ 2026-10-29 第十一轮（T-B）：可见域从「本租户 + 平台 locale」扩到**当前用户的 KB scope**
+// （企业/组织链/行业/角色/语言文化；规则只在 BuildUserPackScope 一处）。
+// 按 pack_type 优先级（企业 > 角色 > 行业 > 其它）、source_text、id 取前 termLayerTopN 条，
+// 渲染成「源 → 译」清单。渲染文本按 (tenant, scope指纹, lang) 缓存 60s，供全部批次共享同一 system 前缀。
 // 查询失败显式告警并返回空（批量翻译照常进行，不阻断）。
 func (e *Engine) batchTermLayer(ctx context.Context, tid int64, targetLang string) string {
 	if e.St == nil || tid <= 0 || targetLang == "" {
 		return ""
 	}
-	key := fmt.Sprintf("%d|%s", tid, targetLang)
+	// ★ 可见域随「组织链 + job_role」而变 ⇒ 缓存键必须带上 scope 指纹，
+	//   否则「前端开发」与「销售」两个用户会互相串术语层（cjkCacheScopeKey 是那一维的唯一实现）。
+	scope := e.userScope(ctx, tid)
+	key := fmt.Sprintf("%d|%s|%s", tid, cjkCacheScopeKey(scope), targetLang)
 	e.termLayerMu.Lock()
 	defer e.termLayerMu.Unlock()
 	if te, ok := e.termLayerCache[key]; ok && time.Now().Before(te.ExpiresAt) {
 		return te.Text
 	}
-	rows, err := db.Query(e.St.DB(), db.CurrentDialect(), `
+	allow := packAllowSet(scope)
+	ids := make([]int64, 0, len(allow))
+	for id := range allow {
+		if id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	text := ""
+	if len(ids) > 0 {
+		ph := strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")
+		q := `
 		SELECT e.source_text, e.target_text
 		FROM kb_entries e
 		JOIN kb_packages p ON p.id = e.package_id
 		WHERE e.layer=1 AND e.target_lang=?
 		  AND e.source_text <> '' AND e.target_text <> ''
 		  AND COALESCE(p.enabled,1)=1
-		  AND (p.tenant_id=? OR (p.tenant_id=0 AND p.pack_type='locale'))
-		ORDER BY e.source_text, e.id
-		LIMIT ?`, targetLang, tid, termLayerTopN*2) // 超采 2 倍给 Go 侧超长过滤留余量
-	if err != nil {
-		observability.Error(ctx, "batchTermLayer 查询租户术语层失败（批量路径本轮无术语注入）", "err", err, "lang", targetLang, "tenant", tid)
-		return ""
-	}
-	defer rows.Close()
-	var pairs []string
-	for rows.Next() && len(pairs) < termLayerTopN {
-		var src, tgt string
-		if err := rows.Scan(&src, &tgt); err != nil {
-			continue
+		  -- ★ 刻意不筛 p.role：语言文化包是 role='gate'，它们的 layer=1 条目一直是提示词词表的一部分
+		  --   （与术语硬闸不同——那条只认 role='source'；在 2026-10-29 T-B 改造里差点被顺手加回来）。
+		  AND e.package_id IN (` + ph + `)
+		ORDER BY CASE p.pack_type WHEN 'tenant' THEN 0 WHEN 'persona' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END,
+		         e.source_text, e.id
+		LIMIT ?`
+		args := make([]interface{}, 0, len(ids)+2)
+		args = append(args, targetLang)
+		for _, id := range ids {
+			args = append(args, id)
 		}
-		// 与单语路径同口径：只收 ≤30 字短术语，防模型复述长句
-		if len([]rune(src)) > 30 {
-			continue
+		args = append(args, termLayerTopN*2) // 超采 2 倍给 Go 侧超长过滤留余量
+		rows, err := db.Query(e.St.DB(), db.CurrentDialect(), q, args...)
+		if err != nil {
+			observability.Error(ctx, "batchTermLayer 查询术语层失败（批量路径本轮无术语注入）", "err", err, "lang", targetLang, "tenant", tid)
+			return ""
 		}
-		pairs = append(pairs, src+" → "+tgt)
-	}
-	text := ""
-	if len(pairs) > 0 {
-		text = "\n【租户术语层（源文遇到以下术语必须采用对应译法；本清单不是待译内容，不得复述）】\n" + strings.Join(pairs, "\n") + "\n"
+		defer rows.Close()
+		var pairs []string
+		for rows.Next() && len(pairs) < termLayerTopN {
+			var src, tgt string
+			if err := rows.Scan(&src, &tgt); err != nil {
+				continue
+			}
+			// 与单语路径同口径：只收 ≤30 字短术语，防模型复述长句
+			if len([]rune(src)) > 30 {
+				continue
+			}
+			pairs = append(pairs, src+" → "+tgt)
+		}
+		if len(pairs) > 0 {
+			text = "\n【租户术语层（源文遇到以下术语必须采用对应译法；本清单不是待译内容，不得复述）】\n" + strings.Join(pairs, "\n") + "\n"
+		}
 	}
 	if e.termLayerCache == nil {
 		e.termLayerCache = map[string]termLayerEntry{}
@@ -1713,6 +1744,13 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
 		dynNotes.WriteString(fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml))
+	}
+	// ★ 2026-10-29 第十二轮：本单领域词表进 **user 尾**（dynNotes），不进 system 前缀——
+	//   那条 system 前缀是刻意做成稳定可缓存的（B4 Phase 1），塞 per-request 词表会把缓存前缀打碎。
+	if prof, maxTerms := glossaryFromCtx(ctx); prof != nil {
+		if terms := prof.TermsFor(targetLang, maxTerms); len(terms) > 0 {
+			dynNotes.WriteString(glossaryNote(prof.DisplayLabel(), terms))
+		}
 	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples)
 
@@ -2389,6 +2427,9 @@ func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, t
 		// ★ 2026-10-29 图片 OCR 档：只直译、不发散（关档时逐字不加，提示词与改造前等价）。
 		//   位置与表头语境同一档（编号契约那句必须在末尾）。
 		optionalLiteralOCRNote(opts.LiteralOCR) +
+		// ★ 2026-10-29 第十二轮：本单领域词表（空词表逐字不加；位置与表头/直译同一档，
+		//   编号契约必须在末尾）。
+		glossaryNote(opts.GlossaryLabel, opts.Glossary) +
 		"\n请按编号逐条翻译用户消息中的条目，用 <sN>...</sN> 包裹每条翻译结果："
 
 	// ★ 2026-10-28 计价与成本批：先查译文记忆（A 进程内 + B 跨单库表），只把**未命中**的段送模型。
