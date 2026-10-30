@@ -239,12 +239,17 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 		// 幂等：本已归零（重复调用/零余额租户），直接提交空事务
 		return 0, tx.Commit()
 	}
-	// ② 有界消费：台账行先于永久余额；台账内试用/临期先于付费 plan（与正常扣减次序同构）
+	// ② 有界消费：台账行先于永久余额；台账内**按六档次序**（注册赠送→任务→月包→年包→长期→legacy 兜底）
+	// ★ 2026-10-30 三事合一批（组3，W11）：旧写法自己排了一次序
+	//   （`CASE WHEN kind='trial' THEN 0 ELSE 1 END, expires_at ASC`），
+	//   那是与正常扣减**并存的第二把尺子**：同一份库在"消费"与"欠费结算"两个时刻可能给出两种答案，
+	//   而结算清零的是全部台账——一旦次序与消费不一致，客户看到的"先烧哪档"就和实际扣的不是一回事。
+	//   合一之后这里只许引用 `TierOrderPred()`，档位与 id 兜底同主链同一形状。
 	now := time.Now().UTC().Format(time.RFC3339)
 	consumed := int64(0)
 	rows, qerr := db.Query(tx, d,
-		`SELECT id, "left", kind FROM quota_grants WHERE tenant_id=? AND "left">0
-		 ORDER BY CASE WHEN kind='trial' THEN 0 ELSE 1 END ASC, expires_at ASC`, tid)
+		fmt.Sprintf(`SELECT id, "left", kind FROM quota_grants WHERE tenant_id=? AND "left">0
+		 ORDER BY %s`, TierOrderPred()), tid)
 	if qerr != nil {
 		return 0, qerr
 	}
@@ -384,12 +389,20 @@ func (s *Store) SettleExhausted(tid int64, owed int64) (int64, error) {
 // ledger INSERT 失败即产生「扣了钱无流水」的对账单向缺口。单价预读仍在事务外完成。
 func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model, lang string, quantity int64, bizKind, bizMode string) (int64, error) {
 	price, cost := s.pricingCost(taskType, provider, lang, quantity) // ★ C1：统一 cost=qty×price×mult
-	tx, err := s.db.Begin()                                          // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
+	// D-9：可用池判定**必须在 Begin 之前**——它在另一条连接上读部门子树用量，
+	// 而本库（SQLite）只有一个写连接，IMMEDIATE 事务开着时再读会撞锁、失败、被 fail-open 吞成
+	// "不限"，于是"部门预算满了还在烧共享包"这条缺陷会表现为**一切正常**（实测踩过一次）。
+	poolBlocked := s.UserSharedPlanBlocked(tid, userID)
+	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	if err := deductWithGrantsTx(tx, tid, cost); err != nil {
+	// ★ 2026-10-30 三事合一批（组3）：扣减走 `wallet_debit.go` 的唯一实现（六档顺序＋逐档明细）。
+	// 明细必须**先拿到、落账后再写**：ledger_id 是这两张表之间唯一的连接键，
+	// 反序或漏写＝退款时认不出这笔是从哪几档扣的＝按档回补退成整体退（W13 的靶子）。
+	lines, err := deductWalletTx(tx, tid, userID, cost, poolBlocked)
+	if err != nil {
 		return 0, err // 扣减失败（含余额不足）→ 整体回滚，不落半条
 	}
 	id, err := db.InsertID(tx, db.CurrentDialect(), "id",
@@ -398,6 +411,9 @@ func (s *Store) RecordUsage(tid, userID int64, taskType, provider, model, lang s
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
 	if err != nil {
 		return 0, err // 落账失败 → 扣减一并回滚（修复「扣钱无流水」）
+	}
+	if err := recordDebitLines(tx, tid, id, lines); err != nil {
+		return 0, err // 明细失败 → 整笔回滚：宁可这次没扣成，也不留"扣了钱但说不出从哪扣的"
 	}
 	if err := incrementDailyUsageTx(tx, tid, cost); err != nil { // ★ C5：事务内累加，失败整体回滚
 		return 0, err
@@ -448,14 +464,28 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 		sumCost += cost
 		pricedRows = append(pricedRows, priced{r, price, cost})
 	}
+	// D-9：可用池判定必须在 Begin **之前**（理由见 RecordUsage 同段注释：事务开着时读会撞锁、
+	// 失败被 fail-open 吞成"不限"，缺陷表现为一切正常）。同一批里同一个用户只问一次。
+	poolBlocked := map[int64]bool{}
+	for _, pr := range pricedRows {
+		if _, seen := poolBlocked[pr.UserID]; !seen {
+			poolBlocked[pr.UserID] = s.UserSharedPlanBlocked(tid, pr.UserID)
+		}
+	}
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ BEGIN IMMEDIATE
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback()
-	if err := deductWithGrantsTx(tx, tid, sumCost); err != nil {
-		return 0, err // 余额不足整体回滚
-	}
+	// ★ 2026-10-30 三事合一批（组3）：**逐行扣减并逐行落明细**，不再"整批一次扣、只记一行合计"。
+	// 为什么必须改成这样（两条，一条都不能让步）：
+	//	① 归属（W6）：一批 rows 里的 UserID 可以不同，而"个人档只该成员可核销"是分档之后才存在的约束——
+	//	   整批一次扣只能用某一个 uid 去核销，等于让 A 的注册赠送替 B 买单（数据事故级）。
+	//	② 可回溯（W3/W13）：refund 与对账要问"这条流水是从哪几档扣的"，
+	//	   一次扣整批只有一份明细，摊到哪条流水都是猜。
+	// 代价如实登记：同事务里 SELECT 台账的次数从 1 变成 len(rows)（都是同一批行锁，不新增事务、不新增提交）。
+	// 真正会退化的是"批内每行都要重扫一次台账"——台账行数是个位数（同租户同期最多几条包），
+	// 所以下游 UPDATE 才是主要成本；本函数仍在同一个 IMMEDIATE 事务里，B2 想消除的 SQLITE_BUSY 没有被带回来。
 	const insertSQL = "INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'charge',?)"
 	var firstID int64
 	for i, pr := range pricedRows {
@@ -463,9 +493,16 @@ func (s *Store) RecordUsageBatch(tid int64, rows []UsageBatchRow) (int64, error)
 		if ts == "" {
 			ts = time.Now().UTC().Format(time.RFC3339)
 		}
+		lines, e := deductWalletTx(tx, tid, pr.UserID, pr.cost, poolBlocked[pr.UserID])
+		if e != nil {
+			return 0, e // 余额不足整体回滚（W12：只有"这个人这一档合计不够"才报欠费）
+		}
 		id, e := db.InsertID(tx, db.CurrentDialect(), "id", insertSQL,
 			tid, pr.UserID, pr.TaskType, pr.Provider, pr.Model, pr.Quantity, pr.price, pr.cost, pr.BizKind, pr.BizMode, ts)
 		if e != nil {
+			return 0, e
+		}
+		if e := recordDebitLines(tx, tid, id, lines); e != nil {
 			return 0, e
 		}
 		if i == 0 {
@@ -508,7 +545,9 @@ func (s *Store) LogUsageBatch(tid int64, rows []UsageBatchRow) error {
 		}
 		// ★ 〇-AD 补丁二：日计数器只累**客户自发**的量（同 LogUsage 一个名单）。
 		//   KB 索引重建的分摊留痕就走这里，以前会把租户的 max_daily_chars 一路垫满。
-		if !isPlatformTaskType(r.TaskType) {
+		// ★ 2026-10-30 组3（D-3）：判据收成 countsTowardDailyUsage——平台标签与
+		//   `instant_free`（免费即时翻译）两类都不进日额，理由见 billing_wallet_pred.go 文件头。
+		if countsTowardDailyUsage(r.TaskType) {
 			sumCost += cost
 		}
 	}
@@ -531,11 +570,13 @@ func (s *Store) LogUsage(tid, userID int64, taskType, provider, model, lang stri
 		// charge_kind='log'：留痕行不参与退款消耗核算（P1-2）
 		"INSERT INTO usage_ledger (tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, biz_kind, biz_mode, charge_kind, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,'log',?)",
 		tid, userID, taskType, provider, model, quantity, price, cost, bizKind, bizMode, time.Now().UTC().Format(time.RFC3339))
-	if err == nil && !isPlatformTaskType(taskType) {
+	if err == nil && countsTowardDailyUsage(taskType) {
 		// ★ 性能优化 B6：同步累加日计数器。〇-AD 补丁二：平台承担的那几类用途标签
-		//   （知识库 Embedding／后台任务／行业包采集／Judge 抽样）**不累加**——
+		//   （知识库 Embedding／后台任务／行业包采集／Judge 抽样／判域）**不累加**——
 		//   billing.CheckDailyQuota 读的正是 usage_daily，累加了就等于客户的「今日额度」
 		//   被平台自己的后台任务吃掉，积分没扣但请求会被「已达到今日用量上限」拦死。
+		// ★ 2026-10-30 组3（D-3）：`instant_free` 同样不累加（写成 countsTowardDailyUsage
+		//   一处判据，别在这里再挂第二个 if——两处判据迟早只改一处）。
 		s.incrementDailyUsage(tid, cost)
 	}
 	return err
@@ -853,7 +894,9 @@ func (s *Store) DailyUsage(tid int64) (int64, error) {
 	// ★ 〇-AD 补丁二：兜底重算要排掉平台承担的用途标签（与写点同一个名单）——
 	//   否则 usage_daily 当日行缺失时，平台垫的 Embedding/后台任务会被读成客户的今日用量，
 	//   CheckDailyQuota 就拿这个数把客户的请求拦死。
-	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ? AND "+PlatformTaskTypeExclPred, tid, day+"%").Scan(&cost)
+	// ★ 2026-10-30 组3（D-3）：还要排掉 `instant_free`——写点不计入、读点却计入的话，
+	//   免费档在"当天还没有 usage_daily 行"的窗口里会被自己的用量拦死（W16 的读侧腿）。
+	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(SUM(cost),0) FROM usage_ledger WHERE tenant_id=? AND created_at LIKE ? AND "+DailyUsageLedgerPred(), tid, day+"%").Scan(&cost)
 	return cost, err
 }
 
@@ -1404,12 +1447,44 @@ func chargePermanentTx(tx *sql.Tx, tid int64, tokens int64) error {
 	return err
 }
 
+// txPackageTier 在同一事务里现读某个套餐的档位列（`packages.tier`）。
+// ★ 2026-10-30 三事合一批（组3）：发放 plan 台账时必须**当场**把档位钉进行里，
+// 不能让"这行属于月包还是年包"变成以后要猜的历史（回填只能对**存量**尽力而为，见 wallet_backfill.go 第 2 步的理由）。
+// 取不到（包不存在／档位列还没生成／值不在名单里）一律回空串 ⇒ 由 `TierOf` 归 legacy，
+// 也就是"排在最后扣但仍会扣"——宁可次序保守，也不给一行档位不明的台账发一个优先核销权。
+func txPackageTier(tx db.Querier, tid int64, code string) string {
+	if strings.TrimSpace(code) == "" {
+		return ""
+	}
+	var tier string
+	err := db.QueryRow(tx, db.CurrentDialect(),
+		"SELECT COALESCE(tier,'') FROM packages WHERE code=? AND (tenant_id=? OR tenant_id=0) ORDER BY tenant_id DESC LIMIT 1",
+		code, tid).Scan(&tier)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(tier)
+}
+
 // createQuotaGrantTx 台账发放（CreateQuotaGrant 的 tx/DB 双形态版，★ C23 供占用+发放同事务复用）。
 func createQuotaGrantTx(tx db.Execer, tid int64, kind string, total int64, expires time.Time, source string, refID int64) error {
+	// ★ 2026-10-30 三事合一批：不知道归属、也不知道包档位的调用方走这一条——
+	//   uid=0（租户共享池）、pkgTier 空 ⇒ `TierOf` 归 legacy（排在最后扣但仍会扣）。
+	//   这不是偷懒的默认值：给一行档位不明的台账发一个"第 ②/③ 档优先烧"的待遇，
+	//   等于让次序判据替它编造来源（W9 判红的正是这一族）。
+	return createQuotaGrantTxTiered(tx, tid, 0, kind, total, expires, source, refID, "")
+}
+
+// createQuotaGrantTxTiered 发放并**当场**把档位与归属写进行里（★ 2026-10-30 三事合一批 组3）。
+// 参数 uid: 这一行的归属（0＝租户共享池，任何成员可核销）；pkgTier: 套餐行所引包 packages.tier 现值（非套餐行传空串）。
+// 档位只由 `TierOf(kind, source, pkgTier)` 算——判据在 wallet_tier.go 一处，别处不许再判一次；
+// 回填（wallet_backfill.go）用的是同一个函数，所以"新行的归一"与"存量的归档"不可能分叉成两把尺子。
+func createQuotaGrantTxTiered(tx db.Execer, tid, uid int64, kind string, total int64, expires time.Time, source string, refID int64, pkgTier string) error {
+	tier := TierOf(kind, source, pkgTier)
 	_, err := db.Exec(tx, db.CurrentDialect(),
-		"INSERT INTO quota_grants (tenant_id, kind, total, \"left\", expires_at, source, ref_id, created_at) VALUES (?,?,?,?,?,?,?,?)",
+		"INSERT INTO quota_grants (tenant_id, kind, total, \"left\", expires_at, source, ref_id, created_at, user_id, tier) VALUES (?,?,?,?,?,?,?,?,?,?)",
 		// ★ C22：created_at 同样 UTC（与 CreateQuotaGrant 一致）
-		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().UTC().Format(time.RFC3339))
+		tid, kind, total, total, expires.UTC().Format(time.RFC3339), source, refID, time.Now().UTC().Format(time.RFC3339), uid, tier)
 	if err == nil {
 		// ★ P1 多实例闭环：台账发放（trial/plan/增量）通知影子失效
 		notifyTenantBalanceChanged(tid)
@@ -1575,7 +1650,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 			return serr
 		}
 		// 新台账：仅新包 token，到期按 DurationDays（★ C3）
-		if gerr2 := createQuotaGrantTx(tx, tid, "plan", pkgTokens, planGrantExpiry(pkgDays), "order", orderID); gerr2 != nil {
+		if gerr2 := createQuotaGrantTxTiered(tx, tid, 0, "plan", pkgTokens, planGrantExpiry(pkgDays), "order", orderID, txPackageTier(tx, tid, pkgCode)); gerr2 != nil {
 			return gerr2
 		}
 		for _, ci := range carries {
@@ -1583,7 +1658,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 			if t, err := time.Parse(time.RFC3339, ci.expires); err == nil {
 				cexp = t
 			}
-			if gerr2 := createQuotaGrantTx(tx, tid, "plan", ci.left, cexp, "order_carry", orderID); gerr2 != nil {
+			if gerr2 := createQuotaGrantTxTiered(tx, tid, 0, "plan", ci.left, cexp, "order_carry", orderID, txPackageTier(tx, tid, pkgCode)); gerr2 != nil {
 				return gerr2
 			}
 		}
@@ -1609,7 +1684,7 @@ func (s *Store) MarkOrderPaid(orderID, tid int64) error {
 			return serr
 		}
 		// ★ C3：到期跟随 DurationDays（0=永久哨兵），不再硬编码 t+30
-		if cerr := createQuotaGrantTx(tx, tid, "plan", pkgTokens, planGrantExpiry(pkgDays), "order", orderID); cerr != nil {
+		if cerr := createQuotaGrantTxTiered(tx, tid, 0, "plan", pkgTokens, planGrantExpiry(pkgDays), "order", orderID, txPackageTier(tx, tid, pkgCode)); cerr != nil {
 			return cerr
 		}
 	case pType == "increment":
@@ -1818,22 +1893,33 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	}
 	remain := granted
 	consumedApprox := false
-	if pkgID > 0 && ptype == "paid" {
-		isSub = true
-		// 订阅单：台账剩余精确可查。★ A3 升级单口径修正：台账行 total=新单入账+旧包转入（oldRemain），
-		//   旧包价值已在升级下单时抵扣（credit_money），退款只收回「本单剩余份额」，转入份额保留。
-		var rowTotal, rowLeft int64
+	// ★ 2026-10-30 三事合一批 组3（D-11 的同批修法）：本单是否**有台账行**，不再只按 `ptype=='paid'` 判。
+	//   D-6 之后长期包落 `plan_permanent` 台账行，而它的 ptype 未必是 'paid'；旧实现只看 ptype，
+	//   于是这类单走"非订阅"那一支、从 balance_accounts 守卫式收回——钱其实躺在台账行里，
+	//   一分也收不到，只留下一条"余额不足，缺口 X 请人工核对"的告警，而客户手里那把额度一点没少。
+	//   这就是"退款错桶"：收回的桶与发放的桶不是同一个。判据改成**数据层面**（本单有没有台账行）。
+	orderGrantTotal, orderGrantLeft := int64(0), int64(0)
+	hasOrderGrants := false
+	if pkgID > 0 {
 		if err := db.QueryRow(tx, d,
 			`SELECT COALESCE(SUM(total),0), COALESCE(SUM("left"),0) FROM quota_grants
 			 WHERE tenant_id=? AND source='order' AND ref_id=? AND kind='plan'`,
-			tid, orderID).Scan(&rowTotal, &rowLeft); err != nil {
+			tid, orderID).Scan(&orderGrantTotal, &orderGrantLeft); err != nil {
 			return err
 		}
-		oldCarry := rowTotal - granted // 升级转入的旧包剩余（非升级单恒 0）
+		hasOrderGrants = orderGrantTotal > 0
+	}
+	if pkgID > 0 && ptype == "paid" {
+		isSub = true
+	}
+	if isSub || hasOrderGrants {
+		// 台账剩余精确可查。★ A3 升级单口径修正：台账行 total=新单入账+旧包转入（oldRemain），
+		//   旧包价值已在升级下单时抵扣（credit_money），退款只收回「本单剩余份额」，转入份额保留。
+		oldCarry := orderGrantTotal - granted // 升级转入的旧包剩余（非升级单恒 0）
 		if oldCarry < 0 {
 			oldCarry = 0
 		}
-		remain = rowLeft - oldCarry
+		remain = orderGrantLeft - oldCarry
 		if remain < 0 {
 			remain = 0
 		}
@@ -1875,8 +1961,10 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	// 权益收回
 	clawed := int64(0)
 	clawDiff := int64(0)
-	if isSub {
-		// 订阅单：核销「本单剩余份额」（升级单保留旧包转入部分，见上）
+	if isSub || hasOrderGrants {
+		// 有台账行（订阅单，或任何把额度落成台账行的单）：核销「本单剩余份额」
+		//（升级单保留旧包转入部分，见上）。判据与上面 remain 的那一支**同一个** hasOrderGrants，
+		// 两处各判一次就会出现"算的时候按台账、扣的时候按余额"的分裂。
 		if remain > 0 {
 			if _, err := db.Exec(tx, d,
 				`UPDATE quota_grants SET "left" = (CASE WHEN "left">=? THEN "left"-? ELSE 0 END)
@@ -1887,7 +1975,7 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 			clawed = remain
 		}
 	} else if remain > 0 {
-		// 非订阅单：从永久余额守卫式扣回 min(剩余, 当前余额)——不足部分转人工，不阻塞退款
+		// 纯永久余额单（充值/increment）：从永久余额守卫式扣回 min(剩余, 当前余额)——不足部分转人工，不阻塞退款
 		var bal int64
 		if err := db.QueryRow(tx, d, "SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=?", tid).Scan(&bal); err != nil && err != sql.ErrNoRows {
 			return err
@@ -1945,8 +2033,8 @@ func (s *Store) RefundOrder(orderID, tid int64) error {
 	}
 	summary := fmt.Sprintf("订单 %d 退款完成（比例折算）：剩余率 %.1f%%，应退 %d 分，权益收回 %d token",
 		orderID, ratio*100, refundFen, clawed)
-	if isSub && remain > 0 {
-		summary += fmt.Sprintf("，作废订阅台账 %d token", remain)
+	if (isSub || hasOrderGrants) && remain > 0 {
+		summary += fmt.Sprintf("，作废本单台账 %d token", remain)
 		if upgradeFrom > 0 {
 			summary += "（升级单：旧包转入份额已保留，不在收回范围）"
 		}

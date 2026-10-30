@@ -108,10 +108,43 @@ type ocrResult struct {
 //	上游调用方（extract.go / engine）据此可降级或提示，但翻译资产（已识别文字）优先出。
 //
 // 识别失败（模型加载/图片损坏）由 friendlyOcrError 解析脚本 stderr 的 ERR:<Variant> 行 → 用户话术。
+//
+// ★ 2026-10-30（组 6 capsvc，方案 A）：**签名不变、内部薄替换**——先试常驻服务（warm_caps.go，
+// 不进 procGate），常驻腿不可用才回落子进程（extractImageOCRSubprocess，仍走 procGate）。
+// 两条腿的失败档位是同一套 `ERR:<Variant>`（识别逻辑只有 ocr_recognize.py 一份），
+// 所以 friendlyOcrError 对两侧共用，用户可见话术逐字一致（A10）。
 func ExtractImageOCR(ctx context.Context, path string, e *Extractor) error {
 	if !OcrAvailable() {
 		return fmt.Errorf("图片文字识别（OCR）不可用：服务器未安装 onnxruntime/numpy/Pillow 或未部署 OCR 模型资产（assets/ocr/*.onnx），取权重步骤见 assets/ocr/README.md")
 	}
+	// 常驻腿优先：服务端回了结果（成功或带 variant 的失败）就直接采用；
+	// 只有 (nil,false)＝"常驻腿不可用"才回落子进程一次（fallback 计数已在 warmCall 里记好）。
+	if res, ok := warmOcrImage(ctx, path, ocrTimeout()); ok {
+		if res.Variant != "" {
+			return ocrWarmError(res)
+		}
+		return parseOcrJSON(string(res.Stdout), e, path)
+	}
+	return extractImageOCRSubprocess(ctx, path, e)
+}
+
+// ocrWarmError 把常驻腿的失败档位渲染成与子进程路径**逐字相同**的用户话术。
+// 服务端保证 stderr 里带 `ERR:<Variant>:` 行（与脚本同源），所以直接走 friendlyOcrError；
+// 服务端自己产生的 Timeout（推理被预算掐断、无 stderr）按同一档位补一行再渲染——
+// 绝不在这里造第二套话术（那是两把尺子）。
+func ocrWarmError(res *warmResult) error {
+	if msg := friendlyOcrError(string(res.Stderr)); msg != "" {
+		return fmt.Errorf("%s", msg)
+	}
+	if msg := friendlyOcrError("ERR:" + res.Variant + ":"); msg != "" {
+		return fmt.Errorf("%s", msg)
+	}
+	return fmt.Errorf("OCR 识别失败（capsvc variant=%s）", res.Variant)
+}
+
+// extractImageOCRSubprocess 子进程回落腿（与改造前逐字节等价：脚本存在性检查 + 受控执行 + 解析）。
+// 它仍然走 procGate（runSubprocess），因为这是一次几百 MB 的 Python 进程——与常驻腿分闸。
+func extractImageOCRSubprocess(ctx context.Context, path string, e *Extractor) error {
 	if _, err := os.Stat(ocrScriptPath()); err != nil {
 		return fmt.Errorf("OCR 脚本缺失：ocr_recognize.py 未随二进制部署到 %s", filepath.Dir(os.Args[0]))
 	}

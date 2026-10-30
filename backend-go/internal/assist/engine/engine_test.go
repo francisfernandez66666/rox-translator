@@ -875,7 +875,11 @@ func TestSystemPromptCarriesPromiseBoundary(t *testing.T) {
 	for _, want := range []string{
 		"【承诺边界】",
 		// 第一档（确实做到）与第二档（须带前提）的实锚
-		"字幕和数据文件 srt、vtt、json、yaml", "交付形态是「原文+译文」两列的 xlsx 对照表",
+		// ★ 2026-10-30 格式收缩：旧文这两条锚的是「srt/vtt/json/yaml → xlsx 对照表」那档交付形态，
+		//   该形态连同 `fileproc.WriteComparisonXlsx` 一起退役（AGENTS §一·14），所以**期望翻转**——
+		//   锚点改为「停止受理＋给出粘贴文本这条路」。留着旧期望等于让挂件继续承诺一张不再存在的表，
+		//   而下面那条负向锁会先把旧句子判红（两条一起改，方向才是唯一的）。
+		"字幕和数据文件（srt、vtt、json、yaml、yml）2026-10-30 起", "不再走文件翻译", "直接粘贴到文本翻译",
 		"超链接包住的那截文字目前不进翻译", "先扣快过期的",
 		// ★ 2026-10-15 OCR/ASR/TTS 交付后新增的实锚（改造方案 §六 第 5 条）：
 		//   第一档要能说出「图片/扫描件/音频可以」，第二档必须同时把三句前提带住——
@@ -883,6 +887,10 @@ func TestSystemPromptCarriesPromiseBoundary(t *testing.T) {
 		"图片与扫描件（png、jpg、jpeg、bmp、tif、tiff、webp、heic）里的文字能识别出来再翻",
 		"录音和音频文件（mp3、m4a、wav、ogg、flac、aac、opus）能转成文字再翻",
 		"识别质量跟着图片清晰度走", "取决于那门语种配没配音色",
+		// ★ 同批补齐的两句"交付几件"：图片与音频各自的两件是现网真会被客户问的形态，
+		//   口径与 `engine/file.go` 的交付分支一一对得上（旧文写的是"三件＋字幕"，那条已随批作废）。
+		"交付两件：一张把译文按原位置回填的译后图",
+		"交付两件：同容器的译后配音",
 		// 第三档（明确不支持）——现网就是在这两条上翻过车
 		"PPT 里的动画、切换效果", "「40+」「上百种」「全球语言都能翻」这类说法一个都不许说",
 		// ★ 同批翻转的负向腿：旧文里那句「图片里的文字、扫描件：不做识别提取」是识别腿
@@ -896,6 +904,16 @@ func TestSystemPromptCarriesPromiseBoundary(t *testing.T) {
 	if strings.Contains(defaultPromiseRules, "不做识别提取") {
 		t.Fatal("承诺边界里还写着「不做识别提取」——图片/扫描件的识别腿已交付（fileproc/ocr.go），" +
 			"这一句会让挂件当着客户面否认已有功能")
+	}
+	// ★ 2026-10-30 格式收缩的负向腿：三句旧承诺一个字都不许留在正文里（正文会拼进 prompt 并被模型念给客户）。
+	//   与上面那条同形：**已退役的形态不许继续承诺**，已有的功能也不许继续否认。
+	for _, dead := range []string{
+		"以对照表（xlsx）交付", "交付三件", "带原时间轴的译文字幕",
+		"不是一张翻译后的图片", "文档/PPT/表格/PDF/字幕等",
+	} {
+		if strings.Contains(defaultPromiseRules, dead) {
+			t.Errorf("承诺边界正文还写着旧交付形态 %q（2026-10-30 已撤）", dead)
+		}
 	}
 	// ★ 正文不许带内部实现路径：这段是要拼进 prompt 的，9B 模型会照抄看见的字符串，
 	//   「（依据：internal/engine/file.go）」念到客户屏幕上＝实现细节对外泄漏。
@@ -1080,8 +1098,10 @@ func TestSystemValuesTTLRefreshAndUnknownModeLabel(t *testing.T) {
 	if !strings.Contains(e.buildSystemPrompt(context.Background(), nil, "zh"), "3.2") {
 		t.Fatalf("首轮未注入现值")
 	}
-	if hits() != 2 {
-		t.Fatalf("首轮应各打一次价口与语种口，实际 %d 次", hits())
+	// ★ 2026-10-30 组7：首轮共三个口——价格、语种、以及**即时翻译档位**（/api/instant/caps）。
+	// 档位段与现值段同一节奏缓存，所以每轮各打一次；只增这一个口，别顺手把别的口也加进来。
+	if hits() != 3 {
+		t.Fatalf("首轮应各打一次价口、语种口与档位口（3 次），实际 %d 次", hits())
 	}
 
 	// 换档：另起一个 stub 冒充"运营把系数调了档"（同一进程里改第一个 stub 的返回值不可靠）

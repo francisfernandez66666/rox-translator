@@ -32,10 +32,20 @@ export type ChatImageResult = {
 //   不把中文句子投给非中文界面。
 export class ImageError extends Error {
   readonly reason: string
-  constructor(message: string, reason: string) {
+  /** 后端的下一档建议（2026-10-30 免费档批：`use_ticket` 会在 200 体里带 `suggest:"ticket"`） */
+  readonly suggest: string
+  /** 被拒文件的基本信息（`{name,size}`；工单引导卡用它点名文件，不猜文件名） */
+  readonly file: { name: string; size: number } | null
+  constructor(message: string, reason: string, extra?: { suggest?: string; file?: { name?: string; size?: number } | null }) {
     super(message)
     this.name = 'ImageError'
     this.reason = reason || 'failed'
+    this.suggest = extra?.suggest || ''
+    if (extra?.file && typeof extra.file.name === 'string') {
+      this.file = { name: extra.file.name, size: Number(extra.file.size) || 0 }
+    } else {
+      this.file = null
+    }
   }
 }
 
@@ -56,11 +66,20 @@ export async function chatImageTranslate(
   // ★ Content-Type 不手设：multipart 的 boundary 由浏览器随 FormData 自动带上（同 chatVoice.asrTranscribe）。
   const r = await fetch(`${API_BASE}/api/chat/image`, { method: 'POST', headers: authHeaders(), body: fd })
   const text = await r.text()
-  let j: Partial<ChatImageResult> & { error?: string; reason?: string; message?: string; code?: string } = {}
+  let j: Partial<ChatImageResult> & {
+    error?: string; reason?: string; message?: string; code?: string
+    suggest?: string; file?: { name?: string; size?: number }
+  } = {}
   try { j = JSON.parse(text) } catch { /* 空体时保持空对象 */ }
-  if (!r.ok) throw new ImageError(j.message || j.error || 'image-http-' + r.status, j.reason || 'failed')
+  if (!r.ok) {
+    throw new ImageError(j.message || j.error || 'image-http-' + r.status, j.reason || 'failed', { suggest: j.suggest, file: j.file })
+  }
   // 后端把"这一次没有产出"做成 200 + {error, reason}（能力缺失 / 图里没字 / 翻译失败），统一转 throw。
-  if (j.error) throw new ImageError(j.error, j.reason || 'failed')
+  // ★ 2026-10-30：超限档还会带 `suggest:"ticket"` 与 `file:{name,size}`——引导卡据此出「上传到翻译工单」，
+  //   并把文件一起带过去（见 ChatWindow 的 onPickImage 与 lib/instantTicketHandoff.ts）。
+  if (j.error) {
+    throw new ImageError(j.error, j.reason || 'failed', { suggest: j.suggest, file: j.file })
+  }
   return {
     text: j.text || '',
     translations: j.translations || {},

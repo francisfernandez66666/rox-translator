@@ -100,7 +100,13 @@ func New(db *sql.DB) (*Store, error) {
 	s.RenewalGraceMigrate()       // ★ #74（2026-09-23）：自动续费建单重试台账 renewal_attempts（同日唯一键，幂等）
 	s.BillingRefundMigrate()      // ★ F-34（2026-09-25 UAT 修复批）：orders 补 reopen_from_order 列（补审单防重，幂等）
 	s.EnsureCurrencyMigration()   // ★ #75（2026-09-23）：orders 报价快照列 currency/fx_rate/money_cny + 存量回填（幂等）
-	s.RepairAutoincrementSeqs()   // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
+	// ★ 2026-10-30 三事合一批（组2b）：钱包数据面——quota_grants 补 user_id/tier、packages 补 tier、
+	// 新建 usage_debit_lines 扣档明细表，并跑一次存量归档回填（守卫判据＝"还有没有未归档的行"）。
+	// 位置纪律：必须排在 TasksMigrate/TaskRewardMigrate/UserTrialGrantMigrate **之后**——
+	// 回填的 task 归属要现读 user_task_rewards，注册归属要现读 user_trial_grants；
+	// 排在它们之前不是报错，而是"每条都判取不到、整批静默落 legacy"（那种坏法没有症状）。
+	s.WalletMigrate()
+	s.RepairAutoincrementSeqs() // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
 }
 
@@ -224,6 +230,29 @@ func (s *Store) migrate() error {
 			error TEXT NOT NULL DEFAULT '',          -- 单文件处理失败原因（不影响其他文件）
 			created_at TEXT
 		)`,
+		// ---------- ticket_artifacts 工单交付产物（★ 2026-10-30 组5 两段式交付） ----------
+		// 为什么单开一张表：两段式要求「md 先到、原格式后到」两个时刻对客户可见，而旧形态
+		// 把多语言产物打成一个 zip 存进 result_path，zip 只表达"最终态"、且产物进包后没有身份。
+		// kind 只有 md / original 两档（AGENTS §一·14）；同键 upsert 幂等，重发同一件不长第二行。
+		// ⚠️ 列顺序与 ticketartifacts.go 的 ticketArtifactCols 是两份契约，加列时两处一起改。
+		`CREATE TABLE IF NOT EXISTS ticket_artifacts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id INTEGER NOT NULL DEFAULT 0,
+			ticket_id INTEGER NOT NULL DEFAULT 0,     -- 关联工单 ID
+			file_id INTEGER NOT NULL DEFAULT 0,       -- 对应 ticket_files.id；单文件旧单为 0
+			lang TEXT NOT NULL DEFAULT '',            -- 目标语言
+			kind TEXT NOT NULL DEFAULT '',            -- md|original（只有两档）
+			path TEXT NOT NULL DEFAULT '',            -- 磁盘绝对路径（下载端点只从库里取，绝不接受用户传路径）
+			name TEXT NOT NULL DEFAULT '',            -- 下载展示名（= zip 条目名口径）
+			size INTEGER NOT NULL DEFAULT 0,
+			is_primary INTEGER NOT NULL DEFAULT 0,    -- 该语言「下载原格式」的目标件
+			degraded INTEGER NOT NULL DEFAULT 0,      -- 降级交付（原格式没生成出来，只剩 md）
+			created_at TEXT,
+			updated_at TEXT
+		)`,
+		// 唯一键含 kind 与 path：同语种 md 与 original 是两行；同键重发走 upsert（幂等）。
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ticket_artifacts_uniq ON ticket_artifacts(ticket_id, file_id, lang, kind, path)`,
+		`CREATE INDEX IF NOT EXISTS idx_ticket_artifacts_ticket ON ticket_artifacts(ticket_id, lang)`,
 		// ---------- kb_packages 知识库三级包 ----------
 		`CREATE TABLE IF NOT EXISTS kb_packages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -925,9 +954,10 @@ func (s *Store) backfillDailyUsage() {
 	// ★ 〇-AD 补丁二：兜底回填只认客户自发的量（平台承担的用途标签除外，名单见
 	//   PlatformTaskTypeExclPred）——usage_daily 是 CheckDailyQuota 的读数源，
 	//   把平台垫的 Embedding 回填进去就成了客户的「今日已用」。
+	// ★ 2026-10-30 组3（D-3）：同一口径还要排掉 `instant_free`（DailyUsageLedgerPred 是唯一拼法）。
 	_, _ = db.Exec(s.db, db.CurrentDialect(), `INSERT INTO usage_daily (tenant_id, day, total)
 		SELECT tenant_id, substr(created_at,1,10) AS day, COALESCE(SUM(cost),0)
-		FROM usage_ledger WHERE substr(created_at,1,10)=? AND `+PlatformTaskTypeExclPred+`
+		FROM usage_ledger WHERE substr(created_at,1,10)=? AND `+DailyUsageLedgerPred()+`
 		GROUP BY tenant_id
 		ON CONFLICT(tenant_id, day) DO UPDATE SET total=excluded.total`, today)
 }

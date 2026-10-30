@@ -1,0 +1,54 @@
+# ============================================================================
+# translator-capsvc.service —— 能力常驻服务（组 6 / 方案 A，2026-10-30 三事合一批）
+#
+# 它解决的是「每次 OCR/ASR/TTS 都新起进程 + 重新加载 ONNX 权重」的冷启动成本。
+# 上游 translator-server 的回落顺序是：capsvc → 子进程；本单元**任何时刻坏掉都不会
+# 打断业务**（socket 不在／连不上 ⇒ 回落子进程，用户无感），所以它晚起、重启、
+# OOM 都不需要配合发版动作。
+#
+# ★ 四条关键配置是机械锁的靶子（internal/fileproc/capsvc_unit_gate_test.go，A7）：
+#   ① Restart=always ＋ RestartSec=3：权限/临时故障不许把它永久留在 dead；
+#   ② MemoryMax=800M：进程内 LRU 预算是 700MB（CAPSVC_MAX_RSS_MB），这里留 100MB 余量做**硬兜底**
+#      ——进程内估算漏掉的大缓冲由内核收尸，绝不许拖垮 1.6G 整机（方案二 §2.3 的生产机读数）；
+#   ③ RuntimeDirectory=langcross：socket 目录由 systemd 创建、停止时清掉（手工 mkdir 会留下 stale socket）；
+#   ④ ExecStart 里 --socket 的路径必须与 fileproc.CapsvcDefaultSocket 同值
+#      （Go 侧默认值、本单元、RuntimeDirectory 三处同一把尺子）。
+#
+# ★ 解释器必须与 fileproc.pyBin() 的判定链**同口径**：
+#     FILEPROC_PYTHON_BIN > /opt/translator/.venv/bin/python3 > python3
+#   这正是本仓踩过的「探测用一个解释器、执行用另一个」形态（pdfwrite.go pyBin 的注释）——
+#   所以 `deploy/install_capsvc.sh --apply` 会**现读**这条链并把下面这行替换成实际值，
+#   不许手抄路径。仓里这一份写的是生产默认档。
+#
+# ★ 两站共用：主站与演示站共用**一个** capsvc（方案二 §4.3：避免两份模型常驻），
+#   socket 权限 0660（capsvc.py start() 里 chmod）；两个服务账号需在同一组，
+#   由部署时按现场补 `SupplementaryGroups=`（本仓不猜组名）。
+#
+# ★ 远端派发 fpdexec **不接** capsvc（那条腿在另一台机器上、协议不同，AGENTS §一·12）。
+# ============================================================================
+[Unit]
+Description=LangCross 能力常驻服务（capsvc：OCR/ASR/TTS 权重常驻）
+After=network.target
+# 不 Wants/Requires 任何业务单元：它是加速件，晚起或重启都不影响业务（上游自动回落子进程）。
+
+[Service]
+Type=simple
+User=translator
+Group=translator
+RuntimeDirectory=langcross
+RuntimeDirectoryMode=0750
+WorkingDirectory=/opt/translator/bin
+Environment=CAPSVC_SOCKET=/run/langcross/capsvc.sock
+Environment=CAPSVC_MAX_RSS_MB=700
+Environment=CAPSVC_IDLE_UNLOAD_SEC=600
+# 并发档：ocr 2（与 fileproc.capsvcWorkerCount 同 env 名/同默认值，两侧改一侧必红）。
+Environment=CAPSVC_OCR_WORKERS=2
+# 启动自检（依赖模块可导入 + 资产存在）不满足 ⇒ 本进程非 0 退出、**不拉起**；
+# 上游 socket 不存在 ⇒ 回落子进程（方案二 §4.3 的设计，不是缺陷）。
+ExecStart=/opt/translator/.venv/bin/python3 /opt/translator/bin/capsvc.py --socket /run/langcross/capsvc.sock
+Restart=always
+RestartSec=3
+MemoryMax=800M
+
+[Install]
+WantedBy=multi-user.target

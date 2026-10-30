@@ -131,6 +131,11 @@ func parseUpload(r *http.Request, maxBytes int64, whitelist map[string]bool) err
 	}
 	defer f.Close()
 	if !validateUploadExt(h.Filename, whitelist) {
+		// 撤出的五个纯文本容器走唯一出路句（★ 2026-10-30 C-10）；其余仍列本次请求实际生效的那份白名单
+		// ——那份白名单是调用方手上的闸门本身，不许在这里再拼第二份清单当文案。
+		if fileproc.IsRetiredTextContainer(strings.ToLower(filepath.Ext(h.Filename))) {
+			return &apiErr{"不支持的文件类型：" + fileproc.PlainTextContainerHint}
+		}
 		return &apiErr{"不支持的文件类型，仅支持 " + strings.Join(whitelistKeys(whitelist), " / ")}
 	}
 	return nil

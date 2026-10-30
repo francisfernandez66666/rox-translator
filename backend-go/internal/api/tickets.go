@@ -457,12 +457,11 @@ func (s *Server) handleTicketCreateFile(w http.ResponseWriter, r *http.Request) 
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !fileproc.IsTranslateFormat(ext, textMode) {
-			if delivery == "text" {
-				s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的格式: "+hdr.Filename+"（纯文案模式支持 "+fileproc.FormatHintBase()+
-					" 及 "+fileproc.FormatHintText()+"）"))
-				return
-			}
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "不支持的格式: "+hdr.Filename+"（仅支持 "+fileproc.FormatHintBase()+"）"))
+			// 拒绝文案只有一个出口（★ 2026-10-30 三事合一批 C-10）：撤除的那五个纯文本容器
+			// 必须给「请直接粘贴内容到文本翻译」这条出路——只回一句「不支持」等于把一个更省事的路藏起来。
+			// 清单句由 FormatHintBase 现算，改档位这句话自己跟着变，不留第二份对外文案。
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+				fileproc.RejectHint(ext, textMode, "不支持的格式: "+hdr.Filename)))
 			return
 		}
 		// 纯文案模式下 anydoc 独占格式需要依赖就绪（缺失时老 12 种仍可用，不受影响）
@@ -764,11 +763,18 @@ func (s *Server) handleTicketDetail(w http.ResponseWriter, r *http.Request) {
 	// ★ G13（2026-10-19）：交付件清单回读——此前详情面只有 files（输入件＋状态），
 	//   客户在页面上看不见自己已经拿到手的产物（四件都在 zip 里）。真值仍是磁盘上那一个 zip，
 	//   这里只列条目名与大小，不新造第二份清单。
+	// ★ 2026-10-30 组5（两段式）：新单的事实源换成 ticket_artifacts 表——`artifacts` 逐件出栈
+	//   （id/file_id/lang/kind/name/size/primary/degraded，路径不外发），前端据此画两组按钮与预览；
+	//   `deliverables` 保留但改为读表，**历史单（无 artifacts 行）仍回落旧 zip 清单**（方案 §5.6）。
+	artifacts := s.ticketArtifacts(id)
 	deliverables := ticketDeliverables(t, tfiles)
+	if len(artifacts) > 0 {
+		deliverables = ticketDeliverablesFromArtifacts(artifacts)
+	}
 	// ★ 改造 5（2026-09-17）用户侧 QA 报告透出：从 FinalResult payload 解析
 	//   质检报告/评估分/不达标语言，详情接口一并返回（此前仅 xlsx 下载有 QA 列，界面零透出）。
 	quality := parseTicketQuality(t.FinalResult)
-	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "states": states, "files": tfiles, "deliverables": deliverables, "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "ticket": s.ticketJSON(t), "states": states, "files": tfiles, "deliverables": deliverables, "artifacts": ticketArtifactItems(artifacts), "progress": ticketProgressPct(t, states, tfiles), "quality": quality})
 }
 
 // ticketDeliverableItem 交付件清单的一条（★ G13）。
@@ -909,9 +915,13 @@ func ticketDeliverable(t *store.Ticket, files []*store.TicketFile) bool {
 	return false
 }
 
-// ticketHasDeliverable 取数版包装：文件工单现读 ticket_files 行后交 ticketDeliverable 判定。
+// ticketHasDeliverable 取数版包装：文件工单现读 ticket_files 行（与 ticket_artifacts 行）后判定。
 // 读库失败按「无产物」处理（保守侧）——宁可少给一次下载，不可把空产物报成成功交付。
-// 参数：t=工单对象。返回：是否存在可交付产物。
+//
+// ★ 2026-10-30 组5（B17）判据补全：两段式之后**多文件新单不写 tickets.result_path**
+// （只写 ticket_files.result_path）且产物的事实源是 ticket_artifacts ⇒ 只看 result_path 会把
+// 「产物都在、artifacts 也齐」的完成单判成无产物，下载端回 409。新判据：
+// artifacts 有行 **或** 旧 result_path 非空（任一子文件、工单级、纯文案列都算）。
 func (s *Server) ticketHasDeliverable(t *store.Ticket) bool {
 	if t == nil {
 		return false
@@ -919,6 +929,13 @@ func (s *Server) ticketHasDeliverable(t *store.Ticket) bool {
 	var files []*store.TicketFile
 	if t.FilePath != "" && s.Store != nil {
 		files, _ = s.Store.TicketFiles(t.ID)
+		if arts, err := s.Store.ListTicketArtifacts(t.ID); err == nil {
+			for _, a := range arts {
+				if a != nil && a.Path != "" {
+					return true
+				}
+			}
+		}
 	}
 	return ticketDeliverable(t, files)
 }
@@ -971,82 +988,44 @@ func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {
 	if baseName == "" {
 		baseName = fmt.Sprintf("ticket_%d", t.ID)
 	}
-	// ★ 工单双模式（2026-09-13）：fmt=text → 仅返回译文纯文案（.md），不取还原产物
-	if strings.EqualFold(r.URL.Query().Get("fmt"), "text") {
-		s.serveTicketTextDeliverable(w, r, t, baseName)
+	// ★ 工单双模式（2026-09-13）：fmt=text → 仅返回译文纯文案（.md），不取还原产物。
+	// ★ 2026-10-30 组5：取件来源统一到 ticketArtifactFiles（用户面与开放 API 同一把尺子）——
+	//   新单按 ticket_artifacts 表取，历史单回落 ticket_files/result_path；
+	//   多件**按需流式打包**（不落盘），条目名用 artifact.name（与旧落盘 zip 逐字一致）。
+	textOnly := strings.EqualFold(r.URL.Query().Get("fmt"), "text")
+	fid, _ := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
+	tfiles, _ := s.Store.TicketFiles(t.ID)
+	picks, _ := s.ticketArtifactFiles(t, tfiles, textOnly, fid, baseName)
+	if len(picks) > 0 {
+		zipName := baseName + ".zip"
+		if textOnly {
+			zipName = baseName + "_texts.zip"
+		}
+		s.serveTicketPicks(w, r, picks, zipName)
 		return
 	}
-	// ⓪ 多文件工单：?file_id= 取单个文件产物；否则把全部产物打包 zip 返回
-	tfiles, _ := s.Store.TicketFiles(t.ID)
-	if len(tfiles) > 0 {
-		// 单文件下载（可选 file_id 指定）
-		if fidStr := r.URL.Query().Get("file_id"); fidStr != "" {
-			fid, _ := strconv.ParseInt(fidStr, 10, 64)
-			for _, f := range tfiles {
-				if f.ID == fid && f.ResultPath != "" {
-					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
-						defer fh.Close()
-						w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(f.ResultPath, f.FileName)))
-						http.ServeContent(w, r, f.FileName, time.Now(), fh)
-						return
-					}
-				}
-			}
+	if fid > 0 {
+		// ★ 字面量必须写在**实参位**（词条覆盖棘轮只认 `New(code, "中文")`，变量传参会静默逃扫）
+		if textOnly {
+			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "该文件暂无纯文案产物"))
+		} else {
 			s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "该文件的产物不存在"))
-			return
 		}
-		// 全部产物打包 zip（跳过未生成/失败的文件）
-		var paths []string
-		var names []string
-		for _, f := range tfiles {
-			if f.ResultPath != "" {
-				if _, serr := os.Stat(f.ResultPath); serr == nil {
-					paths = append(paths, f.ResultPath)
-					names = append(names, engine.DeliverableBaseName(f.ResultPath, resultFileName(f)))
-				}
-			}
-		}
-		if len(paths) == 1 {
-			fh, oerr := os.Open(paths[0])
-			if oerr == nil {
-				defer fh.Close()
-				w.Header().Set("Content-Disposition", contentDisposition(names[0]))
-				http.ServeContent(w, r, names[0], time.Now(), fh)
-				return
-			}
-		}
-		// 多产物：逐份读入写 zip 条目（单份读失败跳过，不阻断整包）
-		if len(paths) > 1 {
-			w.Header().Set("Content-Disposition", contentDisposition(baseName+".zip"))
-			w.Header().Set("Content-Type", "application/zip")
-			zw := zip.NewWriter(w)
-			for i, p := range paths {
-				data, rerr := os.ReadFile(p)
-				if rerr != nil {
-					continue
-				}
-				fe, _ := zw.Create(names[i])
-				_, _ = fe.Write(data)
-			}
-			_ = zw.Close()
-			return
-		}
-		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：多文件工单里**没有一个**子文件产出可取的
-		//   结果文件（上面已确认整单有产物，走到这里说明产物路径都指向已丢失/失败的行），
-		//   仍是资源状态不满足下载条件；此时尚未写出任何响应头，状态码可达。
+		return
+	}
+	if textOnly {
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：fmt=text 这条支路要的是纯文案产物，
+		//   单子存在、下载权限也有，缺的是那份 .md 还没被生成出来（历史工单建单时没有双模式）。
+		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取"))
+		return
+	}
+	// ① 旧单文件工单的产物（tickets.result_path）若在上面已被取件助手覆盖不会走到这里；
+	//   走到这里说明文件产物确实都不可取（过期/丢失/多文件全部失败）——回明确状态而不是空体。
+	if t.ResultPath != "" || len(tfiles) > 0 {
+		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：整单有产物行，但可取的产物一条都没有
+		//   （产物路径都指向已丢失/失败的行），仍是资源状态不满足下载条件。
 		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "暂无已生成的产物（部分文件可能处理失败）"))
 		return
-	}
-	// ① 原格式回写产物直接流式返回（旧单文件工单）
-	if t.ResultPath != "" {
-		f, ferr := os.Open(t.ResultPath)
-		if ferr == nil {
-			defer f.Close()
-			w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(t.ResultPath, baseName+filepath.Ext(t.ResultPath))))
-			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
-			return
-		}
-		// 结果文件丢失 → 落入 xlsx 对照表兜底
 	}
 	// ② 纯文本工单：从 FinalResult 解析译文生成 xlsx 对照表
 	var payload struct {
@@ -1329,85 +1308,10 @@ func resultFileName(f *store.TicketFile) string {
 	return strings.TrimSuffix(base, filepath.Ext(base)) + ext
 }
 
-// serveTicketTextDeliverable ★ 工单双模式（2026-09-13）：GET /api/tickets/download?id=&fmt=text
-// 仅返回译文纯文案。解析优先级：登记的旁路产物 text_result_path（还原模式兜底，
-// 多语言时为 zip）→ 纯文案模式主产物 result_path（本就是 .md）。
-// 多文件工单合并为 zip；无纯文案产物（历史工单）返回明确提示。
-func (s *Server) serveTicketTextDeliverable(w http.ResponseWriter, r *http.Request, t *store.Ticket, baseName string) {
-	isTextMode := strings.EqualFold(t.Delivery, "text")
-	var paths, names []string
-	tfiles, _ := s.Store.TicketFiles(t.ID)
-	// 单文件定位（file_id）优先
-	if fidStr := r.URL.Query().Get("file_id"); fidStr != "" {
-		fid, _ := strconv.ParseInt(fidStr, 10, 64)
-		for _, f := range tfiles {
-			if f.ID != fid {
-				continue
-			}
-			p := f.TextResultPath
-			if p == "" && isTextMode {
-				p = f.ResultPath
-			}
-			if p == "" {
-				s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "该文件暂无纯文案产物"))
-				return
-			}
-			s.serveOneFile(w, r, p, textDeliverableName(f))
-			return
-		}
-		s.writeError(w, r, apierrors.New(apierrors.ErrNotFound, "文件不存在"))
-		return
-	}
-	for _, f := range tfiles {
-		p := f.TextResultPath
-		if p == "" && isTextMode {
-			p = f.ResultPath // 纯文案模式：主产物即 .md
-		}
-		if p != "" {
-			if _, err := os.Stat(p); err == nil {
-				paths = append(paths, p)
-				names = append(names, textDeliverableName(f))
-			}
-		}
-	}
-	if len(paths) == 0 { // 旧单文件路径（无 ticket_files 行）
-		p := t.TextResultPath
-		if p == "" && isTextMode {
-			p = t.ResultPath
-		}
-		if p != "" {
-			if _, err := os.Stat(p); err == nil {
-				paths = append(paths, p)
-				names = append(names, baseName+"_译文"+filepath.Ext(p))
-			}
-		}
-	}
-	if len(paths) == 0 {
-		// ★ F-64②（批 I-10）：原 200 承载失败 → 409：fmt=text 这条支路要的是纯文案旁路产物，
-		//   单子存在、下载权限也有，缺的是那份 .md 还没被生成出来（历史工单建单时没有双模式）——
-		//   典型「资源当前状态与请求冲突」。此处仍在写响应头之前，状态码可达；
-		//   与还原模式那三处 409（未完成/无产物/无对照数据）保持同族口径。
-		s.writeError(w, r, apierrors.New(apierrors.ErrConflict, "该工单暂无纯文案产物（历史工单建单时未生成），可重新发起工单获取"))
-		return
-	}
-	if len(paths) == 1 {
-		s.serveOneFile(w, r, paths[0], names[0])
-		return
-	}
-	// 多份纯文案产物打 zip 下载（单份读失败跳过不阻断整包）
-	w.Header().Set("Content-Disposition", contentDisposition(baseName+"_texts.zip"))
-	w.Header().Set("Content-Type", "application/zip")
-	zw := zip.NewWriter(w)
-	for i, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		fe, _ := zw.Create(names[i])
-		_, _ = fe.Write(data)
-	}
-	_ = zw.Close()
-}
+// （原 serveTicketTextDeliverable 已于 2026-10-30 组5 退役：取件/打包合并进
+// ticketArtifactFiles + serveTicketPicks 一份助手，用户面与开放 API 共用同一把尺子。
+// 保留这段说明是为了让后来者知道"fmt=text 的行为去哪了"——它没有消失，
+// 只是取件来源换成了 ticket_artifacts 表、打包改成按需流式。）
 
 // serveOneFile 流式返回单个磁盘文件（不存在/不可读时回 JSON 错误）。
 func (s *Server) serveOneFile(w http.ResponseWriter, r *http.Request, path, dlName string) {
@@ -1524,7 +1428,7 @@ func (s *Server) handleTicketCancel(w http.ResponseWriter, r *http.Request) {
 		}
 		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：非锁冲突的取消失败就是存储写入故障
 		//   （工单状态没落住），底层原文照旧逐字透出，便于按 trace_id 排查。
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, msg))
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, err.Error()))
 		return
 	}
 	s.Store.LogAudit(s.effTenant(r, u), u.ID, "ticket_cancel", "tickets", t.TicketNo)

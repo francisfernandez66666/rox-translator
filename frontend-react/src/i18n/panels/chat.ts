@@ -228,6 +228,27 @@ export const zh: Record<string, string> = {
   'chat.minAgo': '分钟前',
   'chat.hrAgo': '小时前',
   'chat.dayAgo': '天前',
+  // ---- ★ 2026-10-30 即时翻译免费档（组 4 D 段）：徽标 / 多语种口径 / 四档墙与引导卡 ----
+  // 文案口径（方案 §4.8）：每一档都要点明**下一档在哪**；只说「太大了」＝死胡同。
+  // 「免费」徽标是 G22 的正向对照（负向锁「首屏零付费字样」没有它就恒真）。
+  'chat.freeBadge': '免费',
+  'chat.multiLangPaid': '多语种同出为付费权益，将按积分计费',
+  'chat.guideTicketTitle': '交给翻译工单',
+  'chat.guideTicketBtn': '上传到翻译工单',
+  'chat.instantTooLargePaid': '这张图超出免费档（1 MB），继续翻译将按积分计费',
+  'chat.instantTooLarge': '图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式',
+  'chat.instantTooLong': '录音超出即时翻译上限。交给翻译工单：更长上限，译完还原原格式',
+  'chat.instantUseTicket': '这个文件超出即时翻译上限。交给翻译工单：更大上限，译完还原原格式',
+  'chat.instantUnreadable': '无法识别这段内容。交给翻译工单：可上传原文件继续翻译',
+  'chat.instantFreeOff': '免费档当前已关闭，即时翻译将按积分计费',
+  'chat.instantLangLimit': '免费档每次仅支持 1 个目标语种',
+  'chat.instantQuotaUser': '今天的免费额度用完了，可以继续按积分使用',
+  'chat.instantUpgradeTitle': '继续使用即时翻译',
+  'chat.instantUpgradeLater': '稍后',
+  'chat.instantPayOriginal': '按原图翻译',
+  // D-3 录音两档：上限值走 {sec} 占位（档位真值在 lib/instantTier.ts，禁止写死进词条）
+  'chat.micLimit': '录音上限 {sec} 秒，到点自动停止',
+  'chat.micCountdown': '还剩 {sec} 秒，即将自动停止',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -441,4 +462,22 @@ export const en: Record<string, string> = {
   'chat.minAgo': 'min ago',
   'chat.hrAgo': 'hr ago',
   'chat.dayAgo': 'day ago',
+  // ---- ★ 2026-10-30 instant-translation free tier (group 4, D) ----
+  'chat.freeBadge': 'Free',
+  'chat.multiLangPaid': 'Multiple target languages are a paid feature and will be billed in credits',
+  'chat.guideTicketTitle': 'Send to a translation ticket',
+  'chat.guideTicketBtn': 'Upload to translation ticket',
+  'chat.instantTooLargePaid': 'This image exceeds the free tier (1 MB); continuing will be billed in credits',
+  'chat.instantTooLarge': 'The image exceeds the instant translation limit (3 MB). Use a translation ticket: up to 40 MB and the original layout is restored',
+  'chat.instantTooLong': 'The recording exceeds the instant translation limit. Use a translation ticket: a longer limit and the original layout is restored',
+  'chat.instantUseTicket': 'This file exceeds the instant translation limit. Use a translation ticket: a larger limit and the original layout is restored',
+  'chat.instantUnreadable': 'This content could not be recognized. Use a translation ticket and upload the original file to continue',
+  'chat.instantFreeOff': 'The free tier is currently off; instant translation is billed in credits',
+  'chat.instantLangLimit': 'The free tier supports one target language per request',
+  'chat.instantQuotaUser': "Today's free allowance is used up; you can continue with credits",
+  'chat.instantUpgradeTitle': 'Keep using instant translation',
+  'chat.instantUpgradeLater': 'Later',
+  'chat.instantPayOriginal': 'Translate the original',
+  'chat.micLimit': 'Recording limit {sec}s; it stops automatically',
+  'chat.micCountdown': '{sec}s left; stopping soon',
 }

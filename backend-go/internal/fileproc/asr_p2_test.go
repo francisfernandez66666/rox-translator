@@ -1,102 +1,30 @@
 // ============ asr_p2_test.go · 职责说明 ============
-// P2（音频/ASR）自转写产物链路的单元测试。四条必守口径：
+// P2（音频/ASR）转写链的单元测试。
 //
-//	① **时间轴必须原样进产物**——用户拿 .srt 是要挂到原音轨上播的，
-//	   把 00:01:02,500 写成 00:00:00,000 就整份废（这是音频翻译与文档翻译最本质的区别）；
-//	② **顺序必须稳定**——不能因为 Go map 迭代随机而让相邻两段互换位置；
-//	③ **译文第一**——某段没译出就保留源文落盘，绝不让一条缺失变成一份空文件；
-//	④ **降级不是失败**——拿不到时间戳（进程重启/缓存淘汰）也要出 .srt，只是退化为顺序编号。
+// ★ 2026-10-30 三事合一批改档（AGENTS §一·14）：音频交付从「.srt 字幕 ＋ .md ＋ 配音 ＋ 原音轨副本」
+// 收成**两件**（译文 .md ＋ 同容器配音），所以本文件里那四条服务字幕产物的测试
+// （时间轴格式化、字幕写盘、退化编号、跨阶段缓存）随实现一起删除——
+// **不是放松判据**：`.srt` 已经不存在，留着就是一条对着空气的断言。
 //
+// 现役四条必守口径：
+//
+//	① 段序必须稳定——配音的行序按提取顺序 texts 走（engine/file.go 音频分支），
+//	   同一份音频跑两次得到的段序列必须逐字相同（顺序错＝译文与音画错位）；
+//	② 空段/无语音必须**报错**而不是交空产物（「没识别出来」与「产出一个空文件」是两件事）；
+//	③ 每个 ERR: variant 都必须落到用户话术，未知 variant 才回空串给原始错误；
+//	④ `asr_engine` 出的是**有效路由档**，判据与 asr_transcribe.py 的 _build_recognizer 同序。
+//
+// 两件产物本身（md 内容、配音容器回落）的断言在 engine 包：
+// dubWithFallback／WriteTranslationMd 各自有锁，别在这里重复数一遍（两把尺子迟早打架）。
 // =============================================
 package fileproc
 
 import (
 	"os"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"testing"
 )
-
-// TestFormatSrtTime SRT 时间轴格式的等值锁（毫秒三位、不足补零、跨小时进位）。
-// ★ 负数那条是 `if sec < 0 { sec = 0 }` 的守卫：素材时长出现负值是浮点误差与脏元数据的常态，
-//
-//	不钳零会写出 "-00:00:05" 这种连 ffmp/播放器都拒绝解析的时间戳。
-func TestFormatSrtTime(t *testing.T) {
-	cases := []struct {
-		sec  float64
-		want string
-	}{
-		{0, "00:00:00,000"},
-		{1.5, "00:00:01,500"},
-		{61.25, "00:01:01,250"},
-		{3661.007, "01:01:01,007"},
-		{-5, "00:00:00,000"}, // 负数（素材时长为负/浮点误差）钳零，不能产出 "-00:00:05"
-	}
-	for _, c := range cases {
-		if got := formatSrtTime(c.sec); got != c.want {
-			t.Errorf("formatSrtTime(%v) = %q, want %q", c.sec, got, c.want)
-		}
-	}
-}
-
-// writeSrtToTemp 调用 WriteTranslationSrt 落临时文件并读回内容。
-func writeSrtToTemp(t *testing.T, cues []SubtitleCue, texts []string, tr map[string]string) string {
-	t.Helper()
-	p := filepath.Join(t.TempDir(), "out.srt")
-	if err := WriteTranslationSrt(p, cues, texts, tr); err != nil {
-		t.Fatalf("WriteTranslationSrt 失败: %v", err)
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		t.Fatalf("读产物失败: %v", err)
-	}
-	return string(b)
-}
-
-// TestWriteTranslationSrtKeepsTimeline ① 时间轴原样保留 + ③ 未译出保留源文。
-func TestWriteTranslationSrtKeepsTimeline(t *testing.T) {
-	cues := []SubtitleCue{
-		{Index: 1, Start: 0.0, End: 2.5, Text: "欢迎收听本期节目"},
-		{Index: 2, Start: 2.5, End: 5.75, Text: "今天我们来聊聊翻译"},
-	}
-	tr := map[string]string{"欢迎收听本期节目": "Welcome to today's episode"}
-	got := writeSrtToTemp(t, cues, []string{"欢迎收听本期节目", "今天我们来聊聊翻译"}, tr)
-	want := "1\n00:00:00,000 --> 00:00:02,500\nWelcome to today's episode\n\n" +
-		"2\n00:00:02,500 --> 00:00:05,750\n今天我们来聊聊翻译\n\n"
-	if got != want {
-		t.Fatalf("译文 srt 产物不符：\n got=%q\nwant=%q", got, want)
-	}
-}
-
-// TestWriteTranslationSrtDeterministicOrder ② 顺序稳定：同一份输入跑两次必须逐字节相同。
-// ★ 为什么必须这条：WriteTranslationSrt 的退化分支若写成遍历 map（历史上一度如此），
-//
-//	不同 Go 版本/不同机器会得到不同行序，而 t.Fatalf 里比对字符串只会「偶发红」，
-//	排查成本高到不合理 —— 用「跑两次」把它钉死在第一次。
-func TestWriteTranslationSrtDeterministicOrder(t *testing.T) {
-	texts := []string{"第一段", "第二段", "第三段", "第四段"}
-	tr := map[string]string{}
-	for _, s := range texts {
-		tr[s] = s + "-EN"
-	}
-	first := writeSrtToTemp(t, nil, texts, tr)
-	for i := 0; i < 5; i++ {
-		if got := writeSrtToTemp(t, nil, texts, tr); got != first {
-			t.Fatalf("无时间轴退化分支输出顺序不稳定（第 %d 次）:\n%q\n%q", i+2, got, first)
-		}
-	}
-}
-
-// TestWriteTranslationSrtFallbackOrdered ④ 无时间戳时按 texts 顺序编号（不是按 map 顺序）。
-func TestWriteTranslationSrtFallbackOrdered(t *testing.T) {
-	texts := []string{"甲句", "乙句"}
-	tr := map[string]string{"甲句": "A", "乙句": "B"}
-	got := writeSrtToTemp(t, nil, texts, tr)
-	want := "1\n00:00:00,000 --> 00:00:00,000\nA\n\n2\n00:00:00,000 --> 00:00:00,000\nB\n\n"
-	if got != want {
-		t.Fatalf("退化分支输出不符:\n got=%q\nwant=%q", got, want)
-	}
-}
 
 // TestFriendlyAsrError 错误 variant → 用户话术的映射锁（每种 ERR: 都必须有对应的人话，
 // 落到 default 返回空串就等于把 Python 的原始堆栈抛给用户）。
@@ -126,61 +54,10 @@ func TestFriendlyAsrError(t *testing.T) {
 	}
 }
 
-// TestAsrCueCacheRoundTrip 时间轴跨阶段传递：转写侧记住 → 写回侧取回；
-// 不同 key 互不干扰（★ 并发多工单场景下「A 的音频拿到 B 的时间轴」是灾难级串位）。
-func TestAsrCueCacheRoundTrip(t *testing.T) {
-	asrCueMu.Lock()
-	saved := asrCueCache
-	asrCueCache = nil
-	asrCueMu.Unlock()
-	t.Cleanup(func() {
-		asrCueMu.Lock()
-		asrCueCache = saved
-		asrCueMu.Unlock()
-	})
-
-	a := []SubtitleCue{{Index: 1, Start: 0, End: 1, Text: "甲"}}
-	b := []SubtitleCue{{Index: 1, Start: 0, End: 9, Text: "乙"}}
-	rememberAsrCues("/tmp/a.mp3", a)
-	rememberAsrCues("/tmp/b.mp3", b)
-
-	if got := AudioCues("/tmp/a.mp3"); len(got) != 1 || got[0].Text != "甲" {
-		t.Fatalf("AudioCues(/tmp/a.mp3) = %+v, want 甲的 cue", got)
-	}
-	if got := AudioCues("/tmp/b.mp3"); len(got) != 1 || got[0].Text != "乙" {
-		t.Fatalf("AudioCues(/tmp/b.mp3) = %+v, want 乙的 cue", got)
-	}
-	if got := AudioCues("/tmp/missing.mp3"); got != nil {
-		t.Fatalf("未缓存的键应返回 nil（写回侧据此退化为无时间轴 srt），实际 %+v", got)
-	}
-}
-
-// TestAsrCueCacheEviction 缓存必须有界：长跑进程不能无限增长（队列上限淘汰最早的）。
-func TestAsrCueCacheEviction(t *testing.T) {
-	asrCueMu.Lock()
-	saved := asrCueCache
-	asrCueCache = nil
-	asrCueMu.Unlock()
-	t.Cleanup(func() {
-		asrCueMu.Lock()
-		asrCueCache = saved
-		asrCueMu.Unlock()
-	})
-
-	for i := 0; i < asrCueCacheMax+8; i++ {
-		p := "/tmp/audio_" + strconv.Itoa(i) + ".mp3"
-		rememberAsrCues(p, []SubtitleCue{{Index: 1, Text: p}})
-	}
-	asrCueMu.Lock()
-	n := len(asrCueCache)
-	asrCueMu.Unlock()
-	if n > asrCueCacheMax {
-		t.Fatalf("缓存条数 %d 超过上限 %d ⇒ 内存无界", n, asrCueCacheMax)
-	}
-}
-
-// TestParseAsrJSON 解析锁定：带 segments 优先用 segments（时间戳为准），
+// TestParseAsrJSON 解析锁定（口径 ①②）：带 segments 优先用 segments（时间戳为准），
 // segments 缺失时按 \n 切成伪段；全空必须报错而不是交空产物。
+// ★ 「空段丢弃」那一腿同时钉住段序：丢弃后 Index 仍按**原 segment 顺序**递增，
+// 下游按序读到的就是音频里的说话顺序——配音缝合读的就是这个序。
 func TestParseAsrJSON(t *testing.T) {
 	cues, err := parseAsrJSON(`{"text":"全文","segments":[{"start":1,"end":2,"text":"第一句"},{"start":2,"end":3,"text":"  "},{"start":3,"end":4,"text":"第二句"}]}`)
 	if err != nil {
@@ -206,6 +83,66 @@ func TestParseAsrJSON(t *testing.T) {
 	}
 	if _, err := parseAsrJSON(`这不是 JSON`); err == nil {
 		t.Fatal("非 JSON 应报错")
+	}
+}
+
+// TestParseAsrJSONDeterministic ★ 口径 ①：同一份 stdout 解析五次，段序与内容必须逐字相同。
+// 为什么单独钉这一条：实现里的退化分支曾经写成「遍历 map 拼行」，
+// 那样只有偶发红（不同 Go 版本/机器行序不同），排查成本极高——用「跑多次」把它钉死在第一次。
+func TestParseAsrJSONDeterministic(t *testing.T) {
+	out := `{"text":"第一段\n第二段\n第三段\n第四段"}`
+	first, err := parseAsrJSON(out)
+	if err != nil {
+		t.Fatalf("解析失败: %v", err)
+	}
+	if len(first) != 4 {
+		t.Fatalf("应切成 4 段，实际 %d: %+v", len(first), first)
+	}
+	for i := 0; i < 5; i++ {
+		again, aerr := parseAsrJSON(out)
+		if aerr != nil {
+			t.Fatalf("第 %d 次解析失败: %v", i+2, aerr)
+		}
+		for j := range again {
+			if again[j].Text != first[j].Text || again[j].Index != first[j].Index {
+				t.Fatalf("第 %d 次解析段序漂移：[%d] got %q/%d, want %q/%d",
+					i+2, j, again[j].Text, again[j].Index, first[j].Text, first[j].Index)
+			}
+		}
+	}
+}
+
+// TestAsrCueTimelineNoCache ★ 2026-10-30 改档的接线判据：转写段的时间轴**只随返回值走**，
+// 进程里不再留任何缓存（字幕取消后没有第二个读者）。
+// 判据问的是「结构」：asr.go 的代码行里不许再出现缓存本体的三个名字——
+// 留着就是一条「重启会丢」的伪契约，而下一条实现会顺手把它当现成件复用回去。
+// ⚠️ 靶子必须先剥整行注释（`stripGoBareComments`）：本文件与 asr.go 的说明注释里
+// 就写着这三个名字（记录"为什么删"），拿裸串判会把注释当实现（本仓反复踩过的那一族）。
+func TestAsrCueTimelineNoCache(t *testing.T) {
+	b, err := os.ReadFile("asr.go")
+	if err != nil {
+		t.Fatalf("读 asr.go 失败（静态锁必须以包内源码为靶子）: %v", err)
+	}
+	code := stripGoBareComments(string(b))
+	for _, dead := range []string{"rememberAsrCues", "AudioCues(", "asrCueCache"} {
+		if strings.Contains(code, dead) {
+			t.Fatalf("asr.go 的代码行里仍有 %s：缓存本体已随字幕产物删除，不该再有读者", dead)
+		}
+	}
+	// 射程自证 A：探测器必须扫到现役入口（扫不到＝读到的是空文本，上面三条恒真空转）。
+	if !strings.Contains(code, "func TranscribeAudio") {
+		t.Fatal("射程自证失败：asr.go 里连 TranscribeAudio 都扫不到，说明靶子取错了")
+	}
+	// 射程自证 B：把缓存那一行喂回同一个判据，必须被判红（证明这条负向锁真能抓住回潮）。
+	mutated := code + "\nvar asrCueCache []asrCueEntry\n"
+	caught := false
+	for _, dead := range []string{"rememberAsrCues", "AudioCues(", "asrCueCache"} {
+		if strings.Contains(stripGoBareComments(mutated), dead) {
+			caught = true
+		}
+	}
+	if !caught {
+		t.Fatal("反证失败：喂回缓存本体却没抓到，这条锁射程为零")
 	}
 }
 
@@ -241,7 +178,7 @@ func TestAsrEngineFromAssets(t *testing.T) {
 	}
 }
 
-// TestFriendlyAsrErrorNoSpeechNoSpeech ★ G11 映射腿：脚本的 ERR:NoSpeech 必须落成人话，
+// TestFriendlyAsrErrorNoSpeech ★ G11 映射腿：脚本的 ERR:NoSpeech 必须落成人话，
 // 且这句话**逐字等于** AsrNoSpeechMessage（api/asrReason 靠同一常量前缀判档，两处各写一份就会漂移）。
 func TestFriendlyAsrErrorNoSpeech(t *testing.T) {
 	got := friendlyAsrError("ERR:NoSpeech:no_speech 未检测到有效语音（输入能量低于门限，可能是纯静音或极低音量）")

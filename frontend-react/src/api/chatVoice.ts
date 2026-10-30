@@ -28,7 +28,27 @@ export function micSupported(): boolean {
 // ★ mimeType 优先让浏览器选它支持的容器（audio/webm;codecs=opus 在 Chrome/Firefox 通用，
 //   Safari 要 mp4/aac）。后端不经由扩展名判断，一律交给 ffmpeg 归一到 16k 单声道 wav，
 //   所以这里**不需要**为了兼容去探测一堆格式——能录下来就行。
-export function startMicRecording(onError: (msg: string) => void): {
+//
+// ★ 2026-10-30 免费档批（D-3）三件：
+//   ① **码率固定 24 kbps**：语音识别对码率不敏感，而免费档把成本顶压在这一层——
+//      浏览器默认码率通常 64~128 kbps，同样的 30 秒要多传 3~5 倍字节（服务端还要再解码一遍）。
+//      Safari 对 `audioBitsPerSecond` 的取值偶有拒绝，故构造失败时回落默认档（录音本身优先）。
+//   ② **按档自动停**：`maxSec` 由调用方按档传入（免费 30 / 付费 60，见 lib/instantTier.ts），
+//      到点自动收尾并回调 `onAutoStop`——「30 秒」这条卖点必须在**前端**就成立，
+//      端侧 WASM 识别时服务端根本没被调用（N8 的读数就是这条）。
+//   ③ **计时器必须有退出腿**：stop/cancel/卸载三条路径都要清掉 interval，
+//      否则一次录音在后台继续跑，第二次点录音会叠出第二个计时器（秒数越跳越快）。
+export type MicRecordingOptions = {
+  /** 录音时长上限（秒）；≤0/缺省＝不限（老调用点行为不变） */
+  maxSec?: number
+  /** 每秒回调一次：(已录秒数, 剩余秒数)。剩余 ≤3 时调用方可给倒计时提示 */
+  onTick?: (elapsed: number, remaining: number) => void
+  /** 到点自动收尾后回调最终 blob（与用户点停止拿到的是同一份） */
+  onAutoStop?: (blob: Blob | null) => void
+}
+
+// startMicRecording 开始录像：码率/时长上限由 opts 决定（免费 30s、付费 60s），到点自动停并清理计时器。
+export function startMicRecording(onError: (msg: string) => void, opts: MicRecordingOptions = {}): {
   stop: () => Promise<Blob | null>
   cancel: () => void
 } | null {
@@ -37,6 +57,21 @@ export function startMicRecording(onError: (msg: string) => void): {
   let rec: MediaRecorder | null = null
   const chunks: BlobPart[] = []
   let stopped = false
+  // 停止承诺只建一次：用户点停、到点自动停、上层兜底停可能同时发生，
+  // 三条路径必须拿到**同一个** blob，且只触发一次 onstop。
+  let stopPromise: Promise<Blob | null> | null = null
+  let finishStop: ((b: Blob | null) => void) | null = null
+  let tickTimer: ReturnType<typeof setInterval> | null = null
+  let elapsed = 0
+
+  const clearTick = () => {
+    if (tickTimer !== null) {
+      clearInterval(tickTimer)
+      tickTimer = null
+    }
+  }
+  const release = () => stream?.getTracks().forEach((t) => t.stop())
+  const collect = (): Blob | null => (chunks.length ? new Blob(chunks, { type: rec?.mimeType || 'audio/webm' }) : null)
 
   const setup = async (): Promise<boolean> => {
     try {
@@ -45,31 +80,69 @@ export function startMicRecording(onError: (msg: string) => void): {
       onError('mic-denied')
       return false
     }
-    rec = new MediaRecorder(stream)
+    // ★ 2026-10-30：授权对话框还开着的时候用户已经取消（或组件卸载）⇒ 拿到流也必须立刻放掉，
+    //   否则「取消」之后麦克风指示灯仍亮着（旧形态没有这条，cancel 只能关掉还没建出来的 recorder）。
+    if (stopped) {
+      stream.getTracks().forEach((t) => t.stop())
+      return false
+    }
+    try {
+      // ★ 24 kbps：语音识别够用，免费档的成本顶靠它（见函数头①）。构造参数被拒时回落默认档。
+      rec = new MediaRecorder(stream, { audioBitsPerSecond: 24000 })
+    } catch {
+      try { rec = new MediaRecorder(stream) } catch { onError('mic-failed'); return false }
+    }
     rec.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data) }
     rec.onerror = () => onError('mic-failed')
     rec.start()
+    // 到点自动停：只在 maxSec 是正数时起表（不限档连 interval 都不建）
+    const maxSec = Math.floor(Number(opts.maxSec) || 0)
+    if (maxSec > 0) {
+      tickTimer = setInterval(() => {
+        if (stopped) { clearTick(); return }
+        elapsed += 1
+        const remaining = Math.max(0, maxSec - elapsed)
+        opts.onTick?.(elapsed, remaining)
+        if (remaining <= 0) {
+          clearTick()
+          void finish().then((b) => opts.onAutoStop?.(b))
+        }
+      }, 1000)
+    }
     return true
   }
-  void setup().then((ok) => { if (!ok) stopped = true })
+  // finish 收尾：清计时器 → stop 录音 → 等 onstop → 产出 blob（幂等，见 stopPromise 注释）
+  function finish(): Promise<Blob | null> {
+    if (stopPromise) return stopPromise
+    stopPromise = new Promise<Blob | null>((resolve) => { finishStop = resolve })
+    clearTick()
+    if (!rec || rec.state === 'inactive') {
+      stopped = true
+      release()
+      finishStop?.(collect())
+      return stopPromise
+    }
+    rec.onstop = () => {
+      stopped = true
+      release()
+      finishStop?.(collect())
+    }
+    try { rec.stop() } catch { stopped = true; release(); finishStop?.(collect()) }
+    return stopPromise
+  }
+  void setup().then((ok) => { if (!ok) { stopped = true; clearTick() } })
 
   return {
-    stop: () => new Promise<Blob | null>((resolve) => {
-      if (!rec || stopped) { resolve(null); return }
-      const done = () => {
-        stopped = true
-        stream?.getTracks().forEach((t) => t.stop())
-        resolve(chunks.length ? new Blob(chunks, { type: rec?.mimeType || 'audio/webm' }) : null)
-      }
-      rec.onstop = done
-      if (rec.state !== 'inactive') rec.stop()
-      else done()
-    }),
+    stop: () => finish(),
     cancel: () => {
       stopped = true
+      clearTick()
       try { if (rec && rec.state !== 'inactive') rec.stop() } catch { /* 忽略 */ }
       chunks.length = 0
-      stream?.getTracks().forEach((t) => t.stop())
+      release()
+      // 取消不是错误也不是产物：让等待 stop() 的调用方拿到 null（否则会悬着一个 promise）
+      finishStop?.(null)
+      stopPromise = stopPromise || Promise.resolve(null)
     },
   }
 }
@@ -85,10 +158,13 @@ export function startMicRecording(onError: (msg: string) => void): {
 export class VoiceError extends Error {
   // reason 分档名：unsupported_lang / capability_missing / empty / too_long / failed（取不到时归 failed）
   readonly reason: string
-  constructor(message: string, reason: string) {
+  /** 后端的下一档建议（2026-10-30：`suggest:"ticket"` 表示这次该走翻译工单） */
+  readonly suggest: string
+  constructor(message: string, reason: string, suggest = '') {
     super(message)
     this.name = 'VoiceError'
     this.reason = reason || 'failed'
+    this.suggest = suggest || ''
   }
 }
 
@@ -107,10 +183,10 @@ export async function asrTranscribe(blob: Blob, filename = 'mic.webm'): Promise<
   // 三种出参形态一起声明清楚，免得将来加字段又踩"按 any 取键"：
   //   text/reason ＝ 200 的正常出参与「这一次没有语音」那两档；
   //   message/code ＝ 协议/鉴权类失败走统一错误出口 s.writeError 后的字段（见 internal/errors/codes.go 的 APIError）。
-  let payload: { text?: string; error?: string; reason?: string; message?: string; code?: string } = {}
+  let payload: { text?: string; error?: string; reason?: string; suggest?: string; message?: string; code?: string } = {}
   try { payload = JSON.parse(text) } catch { /* 后端返回空体时保持空对象 */ }
-  if (!r.ok) throw new VoiceError(payload.message || payload.error || 'asr-http-' + r.status, payload.reason || 'failed')
-  if (payload.error) throw new VoiceError(payload.error, payload.reason || 'failed')
+  if (!r.ok) throw new VoiceError(payload.message || payload.error || 'asr-http-' + r.status, payload.reason || 'failed', payload.suggest || '')
+  if (payload.error) throw new VoiceError(payload.error, payload.reason || 'failed', payload.suggest || '')
   return payload.text || ''
 }
 

@@ -212,6 +212,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/plans", s.handlePlans)
 	// ★ 〇-X #55（2026-09-28）：官网「比价与算价」页的公示系数口（匿名只读、积分口径、零 token 裸值）。
 	s.mux.HandleFunc("/api/pricing/meta", s.handlePricingMeta)
+	// ★ 2026-10-30 组4：即时翻译对外档位宽度（匿名只读；**不含**暗额度数字，见 handler 注释）
+	s.mux.HandleFunc("/api/instant/caps", s.handleInstantCaps)
 	s.mux.HandleFunc("/api/register/industries", s.handleRegisterIndustries)
 	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
 	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
@@ -362,6 +364,11 @@ func (s *Server) routesTickets() {
 	s.mux.HandleFunc("/api/tickets/run", s.handleTicketRun)
 	s.mux.HandleFunc("/api/tickets/detail", s.handleTicketDetail)
 	s.mux.HandleFunc("/api/tickets/download", s.handleTicketDownload)
+	// ★ 2026-10-30 组5（两段式交付）：单件下载与 md 预览（aid 定位，路径只从库里取）。
+	//   两个 pattern 都不以 "/" 结尾，ServeMux 按**精确匹配**处理（不会互相吞路径）；
+	//   这里仍把更具体的 preview 写在前面，只为读起来顺。
+	s.mux.HandleFunc("/api/tickets/artifact/preview", s.handleTicketArtifactPreview)
+	s.mux.HandleFunc("/api/tickets/artifact", s.handleTicketArtifact)
 	s.mux.HandleFunc("/api/tickets/delete", s.handleTicketDelete)
 	s.mux.HandleFunc("/api/tickets/cancel", s.handleTicketCancel)
 	s.mux.HandleFunc("/api/notifications", s.handleNotifications)
@@ -1019,6 +1026,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"dispatch_expire":   disp.ExpireDate, // 远端配置的到期日（开闸时才非空）
 		"dispatch_mem_cap":  disp.MemCap,     // on / clamped / off / unknown / 关着时为空
 		"dispatch_selftest": disp.Selftest,   // pass / missing_asset / failed / unknown / 关着时为空
+		// ★ 2026-10-30 组 6（capsvc，方案 A）：能力常驻服务的三态词与计数。
+		//   off＝没部署（正常态，所有能力走子进程）；down＝部署了但连不上（要去看）；ok＝正常。
+		//   同 #42 口径：**只出状态词与计数**，绝不出 socket 路径、权重文件名或主机名；
+		//   探测自带 5s TTL 且永不报错（健康检查自己坏掉不该把本端点打成 5xx）。
+		"capsvc": fileproc.CapsvcHealthSnapshot(),
 		// ★ ⑮（2026-10-05 第 3 波）：USDT 链上到账监听存活态——disabled/unknown/ok/failing。
 		//   收银台那句「达到确认数后自动入账」跟着这个状态词走：非 ok 即不再对客户承诺自动。
 		//   同 #42 口径：本端点无鉴权，只出状态词，绝不出收款地址、上游域名或 Key。

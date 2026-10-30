@@ -16,7 +16,6 @@
 package service
 
 import (
-	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors" // ★ F-42-a：errors.Is 识别余额耗尽哨兵（store.ErrInsufficientBalance）
@@ -820,7 +819,6 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	if len(files) > 0 {
 		var mu sync.Mutex
 		var okCount, failCount, unTotal, degradedFiles int64
-		var zipFailCount int64 // ★ G18：多语言打包失败计数（静默回落单文件＝静默丢产物）
 		var firstErr string
 		// ★ 2026-10-21 UAT 收口 M2：工单级交付注记（降级语言 + 质量闸门告警），收尾统一落库。
 		//   过去这两份数据只进站内信与日志，工单详情面（客户屏幕上那张脸）读不到任何一件，
@@ -836,7 +834,12 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				res := s.Engine.HandleFile(ctx, tf.FilePath,
+				// ★ 2026-10-30 组5：两段式交付——把产物事件接收器注入 ctx（每个文件一份 ctx，
+				//   接收器绑定该文件的 ticket_files 行，多文件并发时不会串行）。
+				//   引擎每落一件产物（md 先、原格式后）就登记一行 ticket_artifacts：
+				//   md 一落地，详情页 3 秒轮询就能看见，不必等整单完成。
+				fctx := engine.WithArtifactSink(ctx, s.fileArtifactSink(ctx, t, tf, ownerUID))
+				res := s.Engine.HandleFile(fctx, tf.FilePath,
 					// ★B3：工单队列通道不接逐段事件（emit=nil，方案 A2 前端改动点 4：段落中间态
 					//   需落库+轮询暴露，放二期）；体验口径见 API 文档「SSE 通道有实时段落、任务通道完成后可得」。
 					// ★ #65：source_name 传 DB 里的原件展示名（tf.FileName），引擎据此取产物名——
@@ -852,36 +855,26 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 					}
 					return
 				}
-				// ★ 多语言产物打包 zip 存入 result_path
-				zipPath := ""
-				if len(res.Files) > 1 {
-					zp, zerr := zipOutputs(res.Files, zipDeliveryName(res.Files, langs, tf.FilePath))
-					if zerr == nil {
-						zipPath = zp
-					} else {
-						// ★ G18（2026-10-19）：打包失败不再静默回落首个文件——那等于把其余语言的
-						//   产物悄悄丢掉（用户以为只有一份产出）。出声 + 站内信 + 写回步骤置 warning。
-						observability.Warn(ctx, "多语言产物打包失败，已回落仅首个文件", "ticket", t.ID, "file", tf.FileName, "error", zerr.Error())
-						zipFailCount++
-						s.Store.CreateNotification(t.CreatedBy,
-							fmt.Sprintf("多语言产物打包失败：%s", tf.FileName),
-							fmt.Sprintf("%s 翻译已完成，但多语言产物打包失败（%s），已回落到仅首个文件交付；其余语言产物未打包，请联系管理员。", tf.FileName, zerr.Error()),
-							store.NotifyRefTicket, t.ID)
-					}
-				}
-				storePath := zipPath
+				// ★ 2026-10-30 组5：**不再把多语言产物打成一个 zip 落盘**。
+				//   zip 只表达"最终态"（两段式的 md 先行在包里完全看不见），且产物进包后没有身份
+				//   （哪一语种、哪一档、是不是降级件全靠文件名猜）。取件改由 ticket_artifacts 表承担；
+				//   旧下载端点在 API 层按需流式打包（不落盘），旧客户端零改动。
+				//   result_path 仍要写（保留期清理、归属登记与历史客户端都读它），写**首个主产物**。
+				storePath := s.firstArtifactPathFor(t.ID, tf.ID)
 				if storePath == "" && len(res.Files) > 0 {
-					storePath = res.Files[0]
+					storePath = res.Files[0] // 引擎没发事件（历史/异常路径）时的兜底，口径与改造前一致
 				}
 				// ★ G18：产物路径落库失败必须出声——0 行影响不会报错，否则工单看着成功、artifact 路径却是空的。
-				if serr := s.Store.SetTicketFileResult(tf.ID, storePath); serr != nil {
-					observability.Warn(ctx, "工单文件产物路径落库失败", "ticket", t.ID, "file", tf.FileName, "error", serr.Error())
-					s.Store.CreateNotification(t.CreatedBy,
-						fmt.Sprintf("产物路径登记失败：%s", tf.FileName),
-						fmt.Sprintf("%s 翻译已完成，但产物路径未能登记（%s）；请打开工单核对产物，必要时联系管理员。", tf.FileName, serr.Error()),
-						store.NotifyRefTicket, t.ID)
+				if storePath != "" {
+					if serr := s.Store.SetTicketFileResult(tf.ID, storePath); serr != nil {
+						observability.Warn(ctx, "工单文件产物路径落库失败", "ticket", t.ID, "file", tf.FileName, "error", serr.Error())
+						s.Store.CreateNotification(t.CreatedBy,
+							fmt.Sprintf("产物路径登记失败：%s", tf.FileName),
+							fmt.Sprintf("%s 翻译已完成，但产物路径未能登记（%s）；请打开工单核对产物，必要时联系管理员。", tf.FileName, serr.Error()),
+							store.NotifyRefTicket, t.ID)
+					}
+					s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 				}
-				s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 				// ★ 双模式（2026-09-13）：纯文案旁路产物登记（还原模式兜底附加物）
 				if p := s.persistTextOutputs(t, ownerUID, res.TextFiles); p != "" {
 					_ = s.Store.SetTicketFileTextResult(tf.ID, p)
@@ -937,9 +930,6 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			if degradedFiles > 0 {
 				wbNotes = append(wbNotes, fmt.Sprintf("degraded_files=%d（版式还原失败，已以纯文案 .md 交付，详见通知）", degradedFiles))
 			}
-			if zipFailCount > 0 {
-				wbNotes = append(wbNotes, fmt.Sprintf("zip_failed=%d（多语言打包失败，已回落首个文件，其余语言产物未打包，详见通知）", zipFailCount))
-			}
 			if len(wbNotes) > 0 {
 				s.Store.SetTicketState(t.ID, "file_writeback", "warning", strings.Join(wbNotes, "；"))
 			}
@@ -968,7 +958,10 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	// ★ #65：不传 source_name——tickets 表这一路径没有「原件展示名」列（Title 用户可改，
 	//   不能当文件名用），由引擎回落「落盘名剥内部时间戳标记」，同样不会把纳秒前缀交付出去。
 	s.Store.SetTicketState(t.ID, "file_translate", "running", "single")
-	res := s.Engine.HandleFile(ctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
+	// ★ 2026-10-30 组5：两段式交付——产物事件接收器（旧单文件工单没有 ticket_files 行，
+	//   所以 file_id 记 0；与「单文件旧单 file_id=0」的列口径一致）。
+	fctx := engine.WithArtifactSink(ctx, s.fileArtifactSink(ctx, t, nil, ownerUID))
+	res := s.Engine.HandleFile(fctx, t.FilePath, map[string]interface{}{"target_langs": langs, "mode": mode, "delivery": delivery}, progFn, nil)
 	if res.Error != "" {
 		return fmt.Errorf("%s", res.Error)
 	}
@@ -985,19 +978,15 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 			"部分段落模型未能译出已保留原文，请打开产物人工检查；必要时可重新发起工单。",
 			store.NotifyRefTicket, t.ID)
 	}
-	// ★ 多语言产物打包 zip
-	zipPath := ""
-	if len(res.Files) > 1 {
-		zp, zerr := zipOutputs(res.Files, t.TicketNo+"_translated.zip")
-		if zerr == nil {
-			zipPath = zp
-		}
+	// ★ 2026-10-30 组5：不再打 zip——产物逐件登记在 ticket_artifacts，旧下载端点按需流式打包。
+	//   result_path 写**首个主产物**（保留期清理 / 归属登记 / 历史客户端读它）。
+	storePath := s.firstArtifactPathFor(t.ID, 0)
+	if storePath == "" && len(res.Files) > 0 {
+		storePath = res.Files[0] // 引擎没发事件（历史/异常路径）的兜底
 	}
-	if zipPath != "" {
-		_ = s.Store.SetTicketResultPath(t.ID, zipPath)
-		s.Store.RegisterArtifact(zipPath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
-	} else if len(res.Files) > 0 {
-		_ = s.Store.SetTicketResultPath(t.ID, res.Files[0])
+	if storePath != "" {
+		_ = s.Store.SetTicketResultPath(t.ID, storePath)
+		s.Store.RegisterArtifact(storePath, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
 	}
 	for _, fp := range res.Files { // ★ 逐产物归属登记（C1）
 		s.Store.RegisterArtifact(fp, t.TenantID, ownerUID, t.ID)
@@ -1051,56 +1040,91 @@ func failedCount(s *store.Store, ticketID int64) int64 {
 	return n
 }
 
-// zipDeliveryName 给多语言产物压缩包起名（工单 T20260921…：英文交付包顶着中文原件名
-// `产品方案书_translated.zip` 是体验缺陷——RC-4 已把**产物文件**名翻成目标语，压缩包名漏改了）。
-// 口径：取第一个产物的 base（已是目标语名字）并剥掉其 `_<语言码>[_text]` 尾巴，
-// 因为包里含多种语言、不该只挂一种语言的标记；剥不到就用整个 base，
-// 无产物时回落原件名。**只做字符串整理，不碰文件系统**，落盘仍由 zipOutputs 负责。
-func zipDeliveryName(files []string, langs []string, srcPath string) string {
-	name := strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
-	if len(files) > 0 {
-		if base := strings.TrimSuffix(filepath.Base(files[0]), filepath.Ext(files[0])); base != "" {
-			name = base
-			for _, lc := range langs { // 先 `_lang_text`（纯文案旁路）再 `_lang`（主件）
-				for _, sfx := range []string{"_" + lc + "_text", "_" + lc} {
-					if strings.HasSuffix(name, sfx) {
-						name = strings.TrimSuffix(name, sfx)
-						break
-					}
+// fileArtifactSink 两段式交付的产物接收器（引擎每落一件产物调一次）。
+//
+// 为什么落在这里而不是引擎里：产物行是**工单事实**（tenant/ticket/file_id/落库时序），
+// 引擎只负责"我落了一件文件、它是哪个语种哪一档"，归属与幂等由服务层决定。
+// 三条口径（方案 §5.3）：
+//  1. 逐件 Upsert（唯一键幂等）——同一件重发（如写回失败后把 md 标 degraded）只更新不加行；
+//  2. **同路径收敛**：收到 original 而该 (file_id, lang, path) 已有 md 行（`.md` 输入件那一档）
+//     ⇒ 把那一行置 is_primary=1，不插第二行（UI 只画一个按钮，B10）；
+//  3. 每条一行 observability.Info（不刷屏：一件产物一条，便于现网核对"md 到底先到没"）。
+//
+// 失败只出声不判死：文件已经在盘上、res.Files 仍会带出，登记失败不该把已完成的翻译打成失败。
+func (s *TicketService) fileArtifactSink(ctx context.Context, t *store.Ticket, tf *store.TicketFile, ownerUID int64) func(engine.Artifact) {
+	return func(a engine.Artifact) {
+		if t == nil || s.Store == nil || strings.TrimSpace(a.Path) == "" {
+			return
+		}
+		var fileID int64
+		if tf != nil {
+			fileID = tf.ID
+		}
+		rec := &store.TicketArtifact{
+			TenantID: t.TenantID,
+			TicketID: t.ID,
+			FileID:   fileID,
+			Lang:     a.Lang,
+			Kind:     a.Kind,
+			Path:     a.Path,
+			// name 与磁盘文件名解耦只是"展示名可以另起"的许可，本批取 basename：
+			// 旧下载/打包的条目名就是 basename，取它才能让「按需 zip 的条目名与旧口径逐字一致」（B9/T76-2）。
+			Name:     filepath.Base(a.Path),
+			Primary:  a.Primary,
+			Degraded: a.Degraded,
+		}
+		if info, serr := os.Stat(a.Path); serr == nil {
+			rec.Size = info.Size()
+		}
+		if a.Kind == engine.ArtifactKindOriginal {
+			// 同路径收敛：md 与 original 指向同一文件（.md 输入件）⇒ 只留 md 那一行并置主产物。
+			if md, ferr := s.Store.FindTicketArtifact(t.ID, fileID, a.Lang, engine.ArtifactKindMD, a.Path); ferr == nil && md != nil {
+				if perr := s.Store.SetTicketArtifactPrimary(md.ID); perr != nil {
+					observability.Warn(ctx, "工单产物同路径收敛失败（主产物标记未落库）", "ticket", t.ID, "lang", a.Lang, "error", perr.Error())
 				}
-			}
-			if name == "" {
-				name = base // 整名就是一个语言标记（极端命名），用回原 base 不出空文件名
+				s.Store.RegisterArtifact(a.Path, t.TenantID, ownerUID, t.ID)
+				observability.Info(ctx, "工单产物就绪（md 即主产物，同路径收敛）",
+					"ticket", t.ID, "file_id", fileID, "lang", a.Lang, "name", rec.Name)
+				return
 			}
 		}
+		if _, uerr := s.Store.UpsertTicketArtifact(rec); uerr != nil {
+			observability.Warn(ctx, "工单产物登记失败（详情页将看不到这一件）",
+				"ticket", t.ID, "lang", a.Lang, "kind", a.Kind, "error", uerr.Error())
+			return
+		}
+		s.Store.RegisterArtifact(a.Path, t.TenantID, ownerUID, t.ID) // ★ 归属登记（C1）
+		observability.Info(ctx, "工单产物已登记",
+			"ticket", t.ID, "file_id", fileID, "lang", a.Lang, "kind", a.Kind,
+			"primary", a.Primary, "degraded", a.Degraded, "size", rec.Size)
 	}
-	return name + "_translated.zip"
 }
 
-// zipOutputs 将多个产物文件打包为一个 zip（供下载一次获取全部语言版本）。
-// zip 与产物同目录（即 translated/<落盘名>/），下载侧的目录白名单因此天然覆盖。
-// 单个文件读不到时跳过而非整体失败——已生成的语言不该被一个坏文件连累。
-func zipOutputs(paths []string, zipName string) (string, error) {
-	outDir := filepath.Dir(paths[0])
-	zipPath := filepath.Join(outDir, zipName)
-	f, err := os.Create(zipPath)
-	if err != nil {
-		return "", err
+// firstArtifactPathFor 取该（工单, 文件）下第一个主产物路径（result_path 的兼容写法）。
+// 两段式之后 result_path 只承载「首个主产物」这一件事：下载走 artifacts/按需打包，
+// 但保留期清理、归属登记与历史客户端仍读它，所以必须写、且**不能**再写一个 zip。
+// 判据顺序：优先 is_primary 行（original，或 .md 输入件收敛后的 md），否则按登记顺序取第一行。
+func (s *TicketService) firstArtifactPathFor(ticketID, fileID int64) string {
+	if s.Store == nil || ticketID <= 0 {
+		return ""
 	}
-	defer f.Close()
-	w := zip.NewWriter(f)
-	defer w.Close()
-	for _, p := range paths {
-		data, rerr := os.ReadFile(p)
-		if rerr != nil {
+	list, err := s.Store.ListTicketArtifacts(ticketID)
+	if err != nil {
+		return ""
+	}
+	fallback := ""
+	for _, a := range list {
+		if a == nil || a.FileID != fileID || a.Path == "" {
 			continue
 		}
-		// 只存 basename：包内不带任何目录成分，解压方不会因绝对/相对路径写到目录外
-		fe, _ := w.Create(filepath.Base(p))
-		_, _ = fe.Write(data)
+		if fallback == "" {
+			fallback = a.Path
+		}
+		if a.Primary {
+			return a.Path
+		}
 	}
-	// Close 才真正落中央目录，其错误才是打包是否可用的结论；deferred Close 仅兜底（重复调用返回值被丢）
-	return zipPath, w.Close()
+	return fallback
 }
 
 // persistTicketSegments 把「源文段 → 译文段」的**精确配对**落进 ticket_segments 真值表。
@@ -1147,28 +1171,21 @@ func (s *TicketService) persistTicketSegments(t *store.Ticket, filePath string, 
 }
 
 // persistTextOutputs 登记纯文案旁路产物（还原模式）。
-// 逐个 Stat 过滤，只登记磁盘上确实存在的文件；多份打成一个 zip 返回（zip 自身也要登记归属），
-// 打包失败则退回第一份路径——至少保证有一个可下载产物，而不是整体留空。
+// ★ 2026-10-30 组5（两段式）：**不再打 zip**——每一份 md 都已由 fileArtifactSink 逐件登记，
+// 产物行是"这张单交付过什么"的唯一事实源；这里只做归属登记并返回首件路径
+// （tickets.text_result_path 仍要写：保留期清理与历史读点会读它）。
 func (s *TicketService) persistTextOutputs(t *store.Ticket, ownerUID int64, paths []string) string {
-	var exist []string
+	first := ""
 	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			exist = append(exist, p)
-			s.Store.RegisterArtifact(p, t.TenantID, ownerUID, t.ID)
+		if _, err := os.Stat(p); err != nil {
+			continue
 		}
+		if first == "" {
+			first = p
+		}
+		s.Store.RegisterArtifact(p, t.TenantID, ownerUID, t.ID)
 	}
-	if len(exist) == 0 {
-		return ""
-	}
-	if len(exist) == 1 {
-		return exist[0]
-	}
-	zp, err := zipOutputs(exist, t.TicketNo+"_texts.zip")
-	if err != nil {
-		return exist[0]
-	}
-	s.Store.RegisterArtifact(zp, t.TenantID, ownerUID, t.ID)
-	return zp
+	return first
 }
 
 // normalizeMode 模式归一化（轨迹展示用）。

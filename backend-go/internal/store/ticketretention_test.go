@@ -54,20 +54,36 @@ func TestRetentionScanAndMarks(t *testing.T) {
 	}
 }
 
-// TestCleanupTicketResults 清理收集主产物与多文件产物路径并清空字段（保留 expire_notify 历史）。
+// TestCleanupTicketResults 清理收集主产物、多文件产物、text_result_path 与 artifacts 路径
+// 并清空字段（保留 expire_notify 历史）。
+//
+// ★ 2026-10-30 组5（B11/W25）：两段式之后「交付过什么」的事实源是 ticket_artifacts，
+// 只清 result_path 会把 md/原格式产物留在磁盘上、行却被删掉＝永久孤儿。
+// 本用例同时钉两件事：**行与文件路径两边都进收集集**，且清理后 artifacts 行真的不在。
 func TestCleanupTicketResults(t *testing.T) {
 	s := newTestStoreWithTenants(t)
 	id := seedCompletedTicket(t, s, "清理工单")
 	tf, _ := s.AddTicketFile(&TicketFile{TenantID: 1, TicketID: id, FileName: "b.pdf", FilePath: "/tmp/x/b.pdf"})
 	_ = s.SetTicketFileResult(tf.ID, "/tmp/out/b_en.pdf")                      // 产物由执行器回填
+	_ = s.SetTicketFileTextResult(tf.ID, "/tmp/out/b_en-text.md")              // ★ 纯文案旁路（R-3 老缺口）
 	_ = s.SetTicketExpiry(id, time.Now().Add(-time.Hour).Format(time.RFC3339)) // 已过期
+	// ★ 两段式的产物行：media 路径只存在于 artifacts 表（result_path 只记首件）。
+	if _, err := s.UpsertTicketArtifact(&TicketArtifact{TenantID: 1, TicketID: id, FileID: tf.ID,
+		Lang: "en", Kind: TicketArtifactKindMD, Path: "/tmp/out/b_en-text.md", Name: "b_en-text.md"}); err != nil {
+		t.Fatalf("登记产物行失败: %v", err)
+	}
+	if _, err := s.UpsertTicketArtifact(&TicketArtifact{TenantID: 1, TicketID: id, FileID: tf.ID,
+		Lang: "en", Kind: TicketArtifactKindOriginal, Path: "/tmp/out/b_en.pdf", Name: "b_en.pdf", Primary: true}); err != nil {
+		t.Fatalf("登记产物行失败: %v", err)
+	}
 
 	paths, err := s.CleanupTicketResults(id)
 	if err != nil {
 		t.Fatalf("CleanupTicketResults: %v", err)
 	}
-	if len(paths) != 2 {
-		t.Fatalf("应收集 2 个产物路径（主+多文件），实际 %d: %v", len(paths), paths)
+	// 主产物 + 多文件产物 + 多文件纯文案 = 3 条（artifacts 的两条与上面同路径，去重后不新增）。
+	if len(paths) != 3 {
+		t.Fatalf("应收集 3 个产物路径（主+多文件+纯文案旁路），实际 %d: %v", len(paths), paths)
 	}
 	var rp string
 	_ = s.db.QueryRow("SELECT COALESCE(result_path,'') FROM tickets WHERE id=?", id).Scan(&rp)
@@ -76,8 +92,12 @@ func TestCleanupTicketResults(t *testing.T) {
 	}
 	tfs, _ := s.TicketFiles(id)
 	for _, f := range tfs {
-		if f.ResultPath != "" {
-			t.Fatalf("多文件产物路径应已清空: %+v", f)
+		if f.ResultPath != "" || f.TextResultPath != "" {
+			t.Fatalf("多文件产物/纯文案路径应已清空: %+v", f)
 		}
+	}
+	// ★ 行与文件是两件事，判据要问两件：路径进了返回集（上一段已断）＋行真的被删了。
+	if list, _ := s.ListTicketArtifacts(id); len(list) != 0 {
+		t.Fatalf("清理后 artifacts 行应全部删除，实得 %d 行（只删文件不删行/或反之都是缺陷）", len(list))
 	}
 }

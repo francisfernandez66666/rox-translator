@@ -63,9 +63,10 @@ export interface Ticket {
 }
 
 /**
- * ★ 2026-10-19 G13：工单**交付件**（实际可拿到的产物：译后图/配音/字幕/译文 .md…）。
+ * ★ 2026-10-19 G13：工单**交付件**（实际可拿到的产物：译后图／同容器配音／译文 .md…；
+ *   ★ 2026-10-30 格式收缩后字幕与原音频副本不再随包）。
  * 与 `files`（用户上传的**输入件**＋处理状态，见 store/ticketfiles.go）是两回事——
- * 详情面过去只渲染 files，于是"下载包里四件齐全、页面上只看得见自己上传那件"。
+ * 详情面过去只渲染 files，于是"下载包里配音和译文 .md 都在、页面上却只看得见自己上传那件"。
  * ⚠️ 字段名假设：Go 侧另一 agent 尚未定稿（后端需按单号回读产物清单）。
  * 前端按 `deliverables` 读取，并兼容 `outputs` 别名；两处都要既有 name 又有可下载标识才算一件。
  */
@@ -139,6 +140,24 @@ export interface TicketQuality {
 }
 
 /** 工单接口统一响应结构：tickets 列表/ticket 单对象/states 流程状态/ files 结果文件 */
+/**
+ * TicketArtifactItem 两段式交付的一件产物（★ 2026-10-30 组5）。
+ * 字段名与后端 `api/ticket_artifacts.go` 的 JSON tag 逐字对应（三面等值锁见 ticketsArtifacts.lock.test.ts）。
+ * kind 只有两档：md（纯文案，可预览）／original（该语言主产物，按钮「下载原格式」）。
+ */
+export interface TicketArtifactItem {
+  id: number
+  file_id: number
+  lang: string
+  kind: 'md' | 'original'
+  name: string
+  size: number
+  primary: boolean
+  degraded: boolean
+  created_at?: string
+}
+
+// TicketResp 工单接口的统一响应信封（详情/列表/动作共用；可选字段按接口面出现）。
 export interface TicketResp {
   success: boolean
   message?: string
@@ -154,6 +173,8 @@ export interface TicketResp {
    */
   deliverables?: TicketDeliverable[]
   outputs?: TicketDeliverable[]
+  /** ★ 2026-10-30 组5：按（文件×语种）分组的产物清单；历史单为空 ⇒ 前端回落旧 deliverables 清单。 */
+  artifacts?: TicketArtifactItem[]
 }
 
 /** 获取工单列表（mine=true 仅查看自己创建的） */
@@ -307,6 +328,59 @@ export async function ticketDownload(
   a.click()
   // 延迟释放 blob：立即 revoke 会在部分浏览器取消尚未开始的下载（口径同 ChatWindow 导出）
   setTimeout(() => URL.revokeObjectURL(url2), 5000)
+}
+
+/**
+ * 下载单件产物（★ 2026-10-30 组5）：`aid` 是 artifacts 行的 id，路径只从后端库里取，
+ * 前端绝不传路径（防目录穿越）。401/403 与 ticketDownload 同一出口（不把越权当普通 Error）。
+ */
+export async function ticketArtifactDownload(id: number, aid: number): Promise<void> {
+  const url = `${API_BASE}/api/tickets/artifact?id=${id}&aid=${aid}`
+  let r: Response
+  try {
+    r = await fetch(url, { headers: authHeaders() })
+  } catch (e: any) {
+    throw new DownloadError('network', e?.message || apiMsg('tk.downloadInterrupted', '下载中断（网络未走完，请重试）'))
+  }
+  if (r.status === 401) handleUnauthorized(url)
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).message || msg } catch { /* 非 JSON 错误体保持状态码文案 */ }
+    if (r.status === 403) throw new ApiError(handleForbidden(msg), 403, 'FORBIDDEN')
+    throw new DownloadError('broken', msg, { status: r.status })
+  }
+  if ((r.headers.get('Content-Type') || '').toLowerCase().includes('text/html')) {
+    throw new DownloadError('broken', apiMsg('tk.artifactExpired', '产物不存在或已过保留期，请重新发起工单获取'), { status: r.status })
+  }
+  const blob = await r.blob()
+  const objURL = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = objURL
+  a.download = filenameFromDisposition(r.headers.get('Content-Disposition') || '', `ticket_${id}_artifact`)
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(objURL), 5000)
+}
+
+/**
+ * 预览纯文案 .md 产物（★ 2026-10-30 组5）：后台上限 512KB，超出会带 `X-Truncated: 1`。
+ * 返回 `{ text, truncated }`；调用方用 `<pre>` 纯文本渲染（**不**引 markdown 库、不 dangerouslySetInnerHTML）。
+ */
+export async function ticketArtifactPreview(id: number, aid: number): Promise<{ text: string; truncated: boolean }> {
+  const url = `${API_BASE}/api/tickets/artifact/preview?id=${id}&aid=${aid}`
+  let r: Response
+  try {
+    r = await fetch(url, { headers: authHeaders() })
+  } catch (e: any) {
+    throw new DownloadError('network', e?.message || apiMsg('tk.previewLoading', '预览加载中…'))
+  }
+  if (r.status === 401) handleUnauthorized(url)
+  if (!r.ok) {
+    let msg = `HTTP ${r.status}`
+    try { msg = (await r.json()).message || msg } catch { /* 保持状态码文案 */ }
+    if (r.status === 403) throw new ApiError(handleForbidden(msg), 403, 'FORBIDDEN')
+    throw new DownloadError('broken', msg, { status: r.status })
+  }
+  return { text: await r.text(), truncated: r.headers.get('X-Truncated') === '1' }
 }
 
 /**

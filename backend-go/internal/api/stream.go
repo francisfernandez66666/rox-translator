@@ -230,8 +230,28 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ★ 2026-10-30 组4（P-1 主路径）：免费档判定必须在**流式**这个入口上判——
+	//   前端文本翻译走的是本端点（translate.ts 打 /api/chat/stream），只挂非流式那个
+	//   `/api/chat` 会让主路径照旧扣积分（免费档结构性空转）。
+	//   文本没有尺寸档，判据＝语种数（多语种＝付费权益）＋账号/租户/IP 三个暗额度。
+	streamUID := int64(0)
+	if u := s.authUser(r); u != nil {
+		streamUID = u.ID
+	}
+	streamLangCount := int(targetLangCount(req.Options))
+	streamRoute := s.instantDecide(r, s.currentTenant(r), streamUID, instantInput{
+		Kind: "text", LangCount: streamLangCount,
+		EstPoints: s.instantEstimatePoints(req.Message, streamLangCount, engine.ModeFromOptions(req.Options), "", tenant.LangFromOptions(req.Options)),
+	})
 	// 配额闸门：QPS/并发/每日上限/余额校验（不通过则拒绝本次翻译）
-	tid, release, gateErr := s.gateUsage(r)
+	var tid int64
+	var release func()
+	var gateErr error
+	if streamRoute.Free {
+		tid, release, gateErr = s.gateUsageInstant(r) // 免费不涉及钱：跳过余额与预算墙
+	} else {
+		tid, release, gateErr = s.gateUsage(r)
+	}
 	// 无条件 defer：并发名额只在真正过闸时才被占用，未过闸时 release 是 no-op，
 	// 因此即使随后立即 return 也不会误归还别人的名额。
 	defer release()
@@ -276,6 +296,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6：可抢占 LLM 保留槽）
 	//   + 模式（2026-09-05 计费策略引擎：计量侧按 fast/pro 区分免费/扣费）
 	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), engine.ModeFromOptions(req.Options)), tenant.LangFromOptions(req.Options)))
+	if streamRoute.Free {
+		ctx = instantMarkCtx(ctx)
+	}
 	// ★ D20：token 级流式 sink——上游增量以 delta 事件透传（lang=目标语言；
 	//   多目标并发交替输出，前端仅在单目标场景消费逐字渲染）
 	ctx = engine.WithStreamSink(ctx, func(lang, delta string) {
@@ -656,8 +679,25 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "请求格式错误"})
 		return
 	}
+	// ★ 组4：非流式入口同样按免费档判定（与 stream 那条同一函数，不各判一套）
+	chatUID := int64(0)
+	if u := s.authUser(r); u != nil {
+		chatUID = u.ID
+	}
+	chatLangCount := int(targetLangCount(req.Options))
+	chatRoute := s.instantDecide(r, s.currentTenant(r), chatUID, instantInput{
+		Kind: "text", LangCount: chatLangCount,
+		EstPoints: s.instantEstimatePoints(req.Message, chatLangCount, engine.ModeFromOptions(req.Options), "", tenant.LangFromOptions(req.Options)),
+	})
 	// 配额闸门：QPS/并发/每日上限/余额校验
-	tid, release, gateErr := s.gateUsage(r)
+	var tid int64
+	var release func()
+	var gateErr error
+	if chatRoute.Free {
+		tid, release, gateErr = s.gateUsageInstant(r)
+	} else {
+		tid, release, gateErr = s.gateUsage(r)
+	}
 	defer release()
 	if gateErr != nil {
 		// ★ F-64②（批 I-10）：闸门拒绝（余额/日限额/QPS/并发）是**请求本身当前不可执行**，旧写法回 200 让
@@ -686,7 +726,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	// 调用引擎处理文本翻译（非流式，无进度回调）
 	// ★ 注入用户组织（2026-08-26 KB继承链）+ 交互标记（评审整改 R6）+ 模式（计费策略引擎）
-	res := s.Engine.HandleText(llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(req.Options))), req.Message, req.Options, nil)
+	chatCtx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), tenant.LangFromOptions(req.Options)))
+	if chatRoute.Free {
+		chatCtx = instantMarkCtx(chatCtx)
+	}
+	res := s.Engine.HandleText(chatCtx, req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标
 		res.Skill = "translation"
@@ -918,9 +962,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 		".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 		".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 		".pdf":  "application/pdf",
-		// ★ P2 音频工单产物三件套的下载面（v2 方案 §4.4）。这三个不补的后果不是"难看"：
+		// ★ P2 音频工单产物的下载面（v2 方案 §4.4）。这些不补的后果不是"难看"：
 		//   .mp3/.wav 回落 octet-stream 时浏览器不当音频播，.srt 更会被当成二进制直接下载，
 		//   而字幕的全部价值就是"点开就能看/挂载"。
+		// ★★ 2026-10-30 格式收缩**不动这张表**（C10）：撤的是"能不能建这一单"（准入在建单侧），
+		//   不是"已经做好的那一件还能不能拿走"——历史工单包里的 .srt/.vtt/.json/.yaml 产物
+		//   必须仍按文本打开。把这几行当成"死码"清掉，等于销毁客户已付费的交付物
+		//   （判据＝upload_formats_gate_test.go 的 L9：三个下载出口函数体内不许出现准入动词）。
 		".mp3": "audio/mpeg", ".wav": "audio/wav",
 		".m4a": "audio/mp4", ".aac": "audio/aac", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".flac": "audio/flac",
 		".srt": "text/plain; charset=utf-8", ".vtt": "text/vtt; charset=utf-8",

@@ -64,8 +64,11 @@ func TestContentDispositionSingleExit(t *testing.T) {
 		total += countContentDispositionHeader(string(b))
 	}
 	// 射程自证：锚点一旦漂移（有人把 Header().Set 换写法）计数会掉下来，闸门会"失明地变绿"。
-	if total < 20 {
-		t.Fatalf("射程自证失败：全包 Content-Disposition 头计数 %d < 20（锚点漂了，闸门已失明）", total)
+	// ★ 2026-10-30 组5：下载面收敛成"取件助手 + 单一出口"（zip 改按需流式），
+	//   直拼头的位置从 20+ 降到 13 处——**这是合法的收缩**，所以下限跟着现读值下调到 10（留余量）。
+	// ⚠️ 下限只是"有人把写法换了、扫描器失明"的探测器，别把它抬到贴近现值（下次合法收缩会假红）。
+	if total < 10 {
+		t.Fatalf("射程自证失败：全包 Content-Disposition 头计数 %d < 10（锚点漂了，闸门已失明）", total)
 	}
 }
 

@@ -187,6 +187,23 @@ func (s *Server) handleMyPackage(w http.ResponseWriter, r *http.Request) {
 		"quote_currency":    quoteCode,
 		"fx_rates_snapshot": fxRates,
 	}
+	// ★ 2026-10-30 三事合一批 组3 #10（D-12／W20／W21）：逐档钱包出栈。
+	// 口径三条：① 免费档永不出现（它是 UTC 日计数器，出数字＝把"今天还能白嫖多少"写在界面上）；
+	// ② 合计优先——前端把 points_balance 当总数，逐档只是展开明细，**不许**由前端求和得到总数；
+	// ③ 逐档之和＝points_grants_left（同一时刻同一谓词，锁在 store 侧 W21）。
+	// 取不到时出空数组（不是 null、不是省略）：前端据此渲染"暂无分档明细"，而不是报错。
+	wallet := []map[string]interface{}{}
+	if tiers, terr := s.Store.WalletTiers(tid); terr == nil {
+		for _, tr := range tiers {
+			wallet = append(wallet, map[string]interface{}{
+				"tier":        tr.Tier,
+				"points_left": s.Store.PointsFromTokens(tr.Tokens),
+				"expires_at":  tr.ExpiresAt, // 长期档为 9999 哨兵，前端按年份判"永久"
+				"grants":      tr.Grants,
+			})
+		}
+	}
+	resp["wallet"] = wallet
 	// ★ 部门预算进度（四期增强；前台「🏢 部门预算 used/limit」徽标数据源）：
 	// 仅当用户归属的部门启用了预算（token_limit>0）时返回 org_budget 与租户总预算（积分口径）
 	if tid > 0 && u.OrgID > 0 {

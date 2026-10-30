@@ -1,159 +1,91 @@
 // ============ ticket_test.go · 职责说明 ============
-// G18（2026-10-19）「多语言产物打包失败不许静默丢产物」的装配闸。
-// 缺陷形态：zipOutputs 报错时旧代码把 zipPath 留空、回落 res.Files[0]，其余语言的产物
-// 就这样悄悄丢了——用户以为工单只产出了一份文件，轨迹里既没有 warning 也没有通知。
-// 本文件用 AST 钉住那一个 else 分支必须同时具备三件事：出声（observability.Warn）、
-// 站内信（CreateNotification）、计数（zipFailCount 自增，收尾写回步骤据此置 warning）。
-// 反向自证：合成一段缺通知的源码必须判红（免得扫描器只会恒绿）。
+// 「工单交付不许再落盘 zip」的装配闸（★ 2026-10-30 三事合一批 · 组5 两段式交付）。
+//
+// 本文件的前身是 G18（2026-10-19）「多语言产物打包失败不许静默丢产物」的 AST 闸：
+// 它钉的是 zipOutputs 的失败分支必须出声/发站内信/计数。两段式交付之后**落盘 zip 这一档整个退役**
+// （产物逐件登记在 ticket_artifacts，取件由 API 按需流式打包，见 api/ticket_artifacts.go），
+// G18 守的那个分支不复存在——但它的关切仍在：**产物不许因为"打包"这件事静默变少**，
+// 只是答案从"打包失败要出声"变成"根本不该打包"（按需打包没有中间产物可丢）。
+//
+// 因此本文件改钉三件事（B8）：
+//  1. service/ticket.go 里零 `zipOutputs(` 调用、零 `zip.NewWriter`、不 import archive/zip；
+//  2. result_path 写入必须来自 firstArtifactPathFor（产物表的首件），并保留 res.Files[0] 兜底；
+//  3. 反向自证：合成一段"把 zipOutputs 调回来"的源码必须被扫描器判红（免得扫描器恒绿）。
+//
+// 判据为什么用源码扫描而不是运行时计数：这两个函数已被删除，任何调用都是**编译期**错误，
+// 源码扫描在这里只是把"有人把它加回来"这件事提前到测试红，避免靠"记得别加"。
 // 本文件只读源码、不连库。
 // =============================================
 package service
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-// zipFailSurfacing 扫描 zipOutputs 失败分支（zerr 的 else 块）里的三件事。
-type zipFailSurfacing struct {
-	elseFound bool
-	warn      bool
-	notify    bool
-	counter   bool
-}
+// persistedZipCallRe 命中「落盘 zip」的三类写法（函数调用 / 直接构造 writer / 打路径）。
+var persistedZipCallRe = regexp.MustCompile(`zipOutputs\s*\(|zip\.NewWriter\s*\(|zipDeliveryName\s*\(`)
 
-// scanZipFailSurfacing 在源码里定位「zipOutputs 的 zerr != nil / == nil 分支」的 else 块并检查三件事。
-func scanZipFailSurfacing(t *testing.T, name string, src []byte) zipFailSurfacing {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, name, src, 0)
-	if err != nil {
-		t.Fatalf("解析 %s 失败: %v", name, err)
+// scanPersistedZipCalls 返回源码里命中的行（去掉纯注释行：本仓允许注释记录"这里曾经打包"）。
+func scanPersistedZipCalls(src string) []string {
+	var hits []string
+	for _, line := range strings.Split(src, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "//") {
+			continue
+		}
+		if persistedZipCallRe.MatchString(line) {
+			hits = append(hits, strings.TrimSpace(line))
+		}
 	}
-	var got zipFailSurfacing
-	ast.Inspect(f, func(n ast.Node) bool {
-		ifs, ok := n.(*ast.IfStmt)
-		if !ok || ifs.Else == nil {
-			return true
-		}
-		if !condMentionsIdent(ifs.Cond, "zerr") {
-			return true
-		}
-		blk, ok := ifs.Else.(*ast.BlockStmt)
-		if !ok {
-			return true
-		}
-		got.elseFound = true
-		ast.Inspect(blk, func(n ast.Node) bool {
-			switch nd := n.(type) {
-			case *ast.CallExpr:
-				switch callName(nd) {
-				case "observability.Warn":
-					got.warn = true
-				case "CreateNotification":
-					got.notify = true
-				}
-			case *ast.IncDecStmt:
-				if id, ok := nd.X.(*ast.Ident); ok && id.Name == "zipFailCount" {
-					got.counter = true
-				}
-			}
-			return true
-		})
-		return false
-	})
-	return got
+	return hits
 }
 
-// condMentionsIdent 条件子树里是否出现指定标识符（用于识别 zerr 判断）。
-func condMentionsIdent(cond ast.Expr, name string) bool {
-	found := false
-	ast.Inspect(cond, func(n ast.Node) bool {
-		if id, ok := n.(*ast.Ident); ok && id.Name == name {
-			found = true
-		}
-		return !found
-	})
-	return found
-}
-
-// callName 取调用名（支持 sel 形态）：CreateNotification / observability.Warn。
-func callName(call *ast.CallExpr) string {
-	switch fn := call.Fun.(type) {
-	case *ast.Ident:
-		return fn.Name
-	case *ast.SelectorExpr:
-		if x, ok := fn.X.(*ast.Ident); ok {
-			return x.Name + "." + fn.Sel.Name
-		}
-		// s.Store.CreateNotification 这类链式选择器：只取方法名。
-		return fn.Sel.Name
-	}
-	return ""
-}
-
-// TestZipFailureIsSurfaced 主判据：zipOutputs 失败分支必须同时出声、发站内信、计数；
-// 且收尾的写回 warning 文案必须引用 zipFailCount（计数存在但没人读＝白计）。
-func TestZipFailureIsSurfaced(t *testing.T) {
+// TestNoPersistedZipAfterTwoStage B8：两段式之后 service 包**不许**再落盘 zip。
+func TestNoPersistedZipAfterTwoStage(t *testing.T) {
 	src, err := os.ReadFile("ticket.go")
 	if err != nil {
 		t.Fatalf("读 ticket.go 失败: %v", err)
 	}
-	got := scanZipFailSurfacing(t, "ticket.go", src)
-	if !got.elseFound {
-		t.Fatal("未找到 zipOutputs 的失败分支（else 块）——本闸门失明，需同步调整扫描器")
+	if hits := scanPersistedZipCalls(string(src)); len(hits) > 0 {
+		t.Fatalf("service/ticket.go 仍有落盘 zip 的写法（两段式交付已改按需流式打包，产物逐件登记）：%v", hits)
 	}
-	if !got.warn {
-		t.Error("zipOutputs 失败分支缺 observability.Warn：打包失败没有任何日志")
+	if strings.Contains(string(src), `"archive/zip"`) {
+		t.Error("service/ticket.go 仍 import archive/zip：本包不该再产生 zip 文件")
 	}
-	if !got.notify {
-		t.Error("zipOutputs 失败分支缺 CreateNotification：用户/审批台看不到其余语言产物被丢")
+	// 正向对照：result_path 必须来自产物表首件（否则「不再打包」可能只是"没写 result_path"）。
+	if !strings.Contains(string(src), "firstArtifactPathFor(") {
+		t.Error("ticket.go 未使用 firstArtifactPathFor：result_path 的兼容写法丢了（保留期清理/历史客户端都读它）")
 	}
-	if !got.counter {
-		t.Error("zipOutputs 失败分支未自增 zipFailCount：收尾的写回 warning 无从置位")
-	}
-	// 计数必须被收尾读取（写回步骤 warning 文案里点名 zip_failed）。
-	if !strings.Contains(string(src), "zip_failed=%d") {
-		t.Error("收尾写回 warning 未引用 zipFailCount（应出现 zip_failed 计数）：计数形同虚设")
+	// 兜底腿仍在：引擎没发事件（历史/异常路径）时要回落 res.Files[0]，否则新单可能 result_path 为空。
+	if !strings.Contains(string(src), "res.Files[0]") {
+		t.Error("ticket.go 缺 res.Files[0] 兜底：引擎未发产物事件时 result_path 会留空")
 	}
 }
 
-// TestZipFailureScannerDetectsMissingNotify 反向自证：缺通知的合成源码必须判红（notify=false）。
-func TestZipFailureScannerDetectsMissingNotify(t *testing.T) {
-	const good = `package service
-
-func handle(ctx context.Context, zerr error) {
-	if zerr == nil {
-		zipPath = zp
-	} else {
-		observability.Warn(ctx, "打包失败", "error", zerr.Error())
-		zipFailCount++
-		s.Store.CreateNotification(uid, "标题", "正文", 1, tid)
-	}
-}
-`
-	got := scanZipFailSurfacing(t, "good.go", []byte(good))
-	if !got.elseFound || !got.warn || !got.notify || !got.counter {
-		t.Fatalf("合规样本应三件事齐全，实得 %+v", got)
-	}
-
+// TestPersistedZipScannerHasTeeth 反向自证：把打包调用写回去必须被扫描器抓到。
+func TestPersistedZipScannerHasTeeth(t *testing.T) {
 	const bad = `package service
-
-func handle(ctx context.Context, zerr error) {
-	if zerr == nil {
-		zipPath = zp
-	} else {
-		observability.Warn(ctx, "打包失败", "error", zerr.Error())
-		zipFailCount++
-	}
+func f() {
+	zp, zerr := zipOutputs(paths, name)
+	_ = zp
+	_ = zerr
+	zw := zip.NewWriter(w)
+	_ = zw
 }
 `
-	gotBad := scanZipFailSurfacing(t, "bad.go", []byte(bad))
-	if !gotBad.elseFound || gotBad.notify {
-		t.Fatalf("缺通知的样本应判 notify=false，实得 %+v ⇒ 反证失败，扫描器可能恒绿", gotBad)
+	if hits := scanPersistedZipCalls(bad); len(hits) != 2 {
+		t.Fatalf("扫描器应命中 2 行落盘 zip 写法，实得 %d: %v ⇒ 反证失败（扫描器可能恒绿）", len(hits), hits)
+	}
+	const ok = `package service
+func f() {
+	// 这里曾经 zipOutputs(...) 打过包，两段式之后退役
+	p := s.firstArtifactPathFor(t.ID, 0)
+	_ = p
+}
+`
+	if hits := scanPersistedZipCalls(ok); len(hits) != 0 {
+		t.Fatalf("注释行不该被判红（本仓允许注释记录历史）：%v", hits)
 	}
 }

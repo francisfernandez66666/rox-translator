@@ -162,14 +162,17 @@ class TranslatorClient:
         """创建文件批量翻译任务（≤20 个，总量 ≤40MB）。
 
         支持三类文件，产物形态不同（详见开放 API 文档「图片与音频」一节）：
-          - 文档（docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml 等）：原格式回写；
+          - 文档（docx/xlsx/pptx/pdf/txt/csv/md）：原格式回写；
           - 图片（png/jpg/jpeg/bmp/tif/tiff/webp/heic）：**OCR** 识别后翻译，
             产物＝同容器译后图（文字原位回填）＋译文 .md；
           - 音频（mp3/m4a/wav/ogg/flac/aac/opus）：**ASR** 转写后翻译，
-            产物＝同容器译后配音＋字幕 .srt（带原时间轴）＋译文 .md＋原音频副本。
+            产物＝同容器译后配音＋译文 .md（**两件**）。
+
+        2026-10-30 起不再接受 .srt／.vtt／.json／.yaml／.yml 五类纯文本容器（请直接粘贴内容到文本翻译），
+        音频也不再产字幕、不附原音频副本。
 
         两条边界（服务端不会静默降级）：服务器缺 OCR/ASR 模型资产时该文件明确失败；
-        译后配音的语种覆盖取决于服务端 TTS 模型（当前 zh/en），覆盖外只交付字幕与译文。
+        译后配音的语种覆盖取决于服务端 TTS 模型（当前 zh/en），覆盖外只交付译文 .md。
 
         :param files: 文件路径列表，如 ["手册.docx", "清单.xlsx", "示意图.png", "会议录音.m4a"]
         :param target_langs: 目标语言代码列表，缺省 ["en"]

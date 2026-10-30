@@ -157,13 +157,42 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cleanup()
 
-	// 配额闸门：图片翻译是一次真实算力调用（OCR + LLM），与 /api/chat 同口径先过闸再干活。
-	tid, release, gateErr := s.gateUsage(r)
+	// ★ 2026-10-30 组4（C-1／P-2／G10）：免费档判定——**尺寸先定档**（第 0 步），再判身份。
+	//   · 免费档 ≤ free_image_max_mb（默认 1 MiB）：不扣积分；
+	//   · 付费即时档 ≤ image_max_mb（默认 3 MiB）：按量计费（客户自己压不到 1 MiB 时给的选择）；
+	//   · 超硬顶：不在这里硬扛，出 use_ticket 引导去翻译工单（上限 40 MB，还得还原原格式）。
+	//   体积判据吃 multipart 头里的真实字节数（hdr.Size），不靠 Content-Length 自报。
+	imgTid := s.currentTenant(r)
+	imgUID := int64(0)
+	if u := s.authUser(r); u != nil {
+		imgUID = u.ID
+	}
+	imgRoute := s.instantDecide(r, imgTid, imgUID, instantInput{Kind: "image", SizeBytes: hdr.Size, LangCount: len(targets)})
+	if imgRoute.SuggestTicket {
+		writeJSON(w, 200, map[string]interface{}{
+			"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式",
+			"reason":  imgRoute.Reason,
+			"suggest": "ticket",
+			"file":    map[string]interface{}{"name": hdr.Filename, "size": hdr.Size},
+		})
+		return
+	}
+	// 配额闸门：图片翻译是一次真实算力调用（OCR + LLM）。免费档走免费闸（跳过余额与预算墙），
+	// 其余仍走原闸门（余额/预算墙照旧）。
+	var tid int64
+	var release func()
+	var gateErr error
+	if imgRoute.Free {
+		tid, release, gateErr = s.gateUsageInstant(r)
+	} else {
+		tid, release, gateErr = s.gateUsage(r)
+	}
 	defer release()
 	if gateErr != nil {
 		s.writeGateError(w, r, gateErr)
 		return
 	}
+	_ = imgRoute
 
 	// ★ 2026-10-26 修「即时翻译图片上传像失败」的真因：本链路 OCR＋整段翻译＋分腿对齐
 	//   在现网实测 125 s（生产日志 trace 87c3727a…：duration_ms=125157），而跨境边缘
@@ -191,6 +220,10 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	//   而它必须带用量收集器（否则这条腿的 token 不计费，预估与实扣又变成两把尺子）。
 	//   WithUsageRecorder 是幂等的：随后 HandleText 内部再注入会复用这一只（F-49②）。
 	ctx := llm.WithInteractive(tenant.WithLang(tenant.WithMode(s.userOrgCtx(r), mode), uiLang))
+	// ★ 组4：免费档标记必须装在**真正传进引擎的那一份 ctx** 上（ChargeUsageRealtime 从这里读）。
+	if imgRoute.Free {
+		ctx = instantMarkCtx(ctx)
+	}
 	ctx = s.Engine.WithUsageRecorder(ctx)
 
 	// OCR：识别行文本（同时把「行↔坐标」写进 P4 回填缓存，供 RenderTranslatedImage 取用）。

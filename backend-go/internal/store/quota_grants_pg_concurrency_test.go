@@ -60,7 +60,7 @@ func TestDeductWithGrantsConcurrencyOnPG(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			err := s.DeductWithGrants(tid, 1000)
+			err := s.DeductWithGrants(tid, 0, 1000)
 			switch err {
 			case nil:
 				atomic.AddInt64(&ok, 1)

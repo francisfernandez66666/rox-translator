@@ -184,89 +184,29 @@ func (s *Store) EarliestActiveTrialExpiry(tid int64) (string, bool) {
 //   - 守卫 UPDATE 冲突不再武断报「余额不足」：重读该行真实余额重试（≤2 次），真实耗尽才返回
 //     ErrInsufficientBalance——误报经 billing/sink 会被解释为欠费结算并清零双桶，属事故级。
 //   - 每条核销 UPDATE 仍携带 AND left>=? 守卫 + RowsAffected 校验（双保险，不扣负）。
-func (s *Store) DeductWithGrants(tid int64, tokens int64) error {
+func (s *Store) DeductWithGrants(tid, uid, tokens int64) error {
+	// D-9：可用池判定必须在 Begin **之前**（事务开着时另一条连接读会撞锁、失败被 fail-open 吞成"不限"，
+	// 于是"部门预算满了还在烧共享包"表现为一切正常——实测踩过一次，见 RecordUsage 同段注释）。
+	poolBlocked := s.UserSharedPlanBlocked(tid, uid)
 	tx, err := s.db.Begin() // DSN _txlock=immediate ⇒ 实际为 BEGIN IMMEDIATE
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := deductWithGrantsTx(tx, tid, tokens); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-// deductWithGrantsTx 双部分顺序扣减核心（供外部事务复用，★ 整改 B4）：
-// RecordUsage 需把「扣减」与「台账落账」放进同一 IMMEDIATE 事务——此前扣减独立提交、
-// ledger INSERT 失败即产生「扣了钱无流水」的对账缺口。
-// 约束：tx 必须已由调用方 Begin（IMMEDIATE）；函数内禁止触碰 s.db。
-func deductWithGrantsTx(tx *sql.Tx, tid int64, tokens int64) error {
-	d := db.CurrentDialect()
-	// 确保账户行存在（等价 EnsureBalance 的 tx 内联版）
-	if _, err := db.Exec(tx, d,
-		"INSERT OR IGNORE INTO balance_accounts (tenant_id, balance, currency, updated_at) VALUES (?,0,'tokens',?)",
-		tid, time.Now().Format(time.RFC3339)); err != nil {
-		return err
-	}
-	lock := ""
-	if d.IsPostgres() {
-		lock = " FOR UPDATE" // 行锁串行化：后到事务在首行等待前者提交，再读到最新余额
-	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	rows, err := db.Query(tx, d,
-		"SELECT id, \"left\" FROM quota_grants WHERE tenant_id=? AND \"left\">0 AND expires_at>? ORDER BY expires_at ASC"+lock,
-		tid, now)
+	// ★ 2026-10-30 三事合一批（组3）：次序与拆扣的唯一实现搬到 `wallet_debit.go` 的 `deductWalletTx`
+	// （旧 `deductWithGrantsTx` 已删除——它按裸 expires_at 排，把六档压成一维）。
+	// 这一条入口没有对应的 usage_ledger 行，所以明细以 ledger_id=0 落：
+	// 「有明细无流水」在这里是**诚实形态**（调用方就是不走流水的独立核销），
+	// 而 ledger_id=0 也正是退款侧认出"这一笔不走按档回补"的标记。
+	// ★ 签名带 uid（2026-10-30 三事合一批）：这条入口以前**没有**消费人维度，
+	//   分档之后没有消费人就只能看见共享池（个人档会被整批跳过），表现是"明明有赠送却扣了永久余额"。
+	//   所以宁可让调用方显式给一个 uid（0＝确实不知道是谁），也不留一条"按租户瞎扣"的第二把尺子（W6）。
+	lines, err := deductWalletTx(tx, tid, uid, tokens, poolBlocked)
 	if err != nil {
 		return err
 	}
-	type row struct {
-		id   int64
-		left int64
+	if err := recordDebitLines(tx, tid, 0, lines); err != nil {
+		return err
 	}
-	var grants []row
-	for rows.Next() {
-		var r row
-		if err := rows.Scan(&r.id, &r.left); err == nil {
-			grants = append(grants, r)
-		}
-	}
-	rows.Close()
-
-	need := tokens
-	for _, g := range grants {
-		if need <= 0 {
-			break
-		}
-		// ★ A1 守卫冲突→重读→重试：SQLite IMMEDIATE 下守卫恒真（行为不变）；
-		//   PG 多实例并发下冲突属瞬态，重取该行真实余额继续核销而非误报欠费。
-		left := g.left
-		for attempt := 0; attempt < 3 && need > 0 && left > 0; attempt++ {
-			use := left
-			if use > need {
-				use = need
-			}
-			res, err := db.Exec(tx, d, "UPDATE quota_grants SET \"left\"=\"left\"-? WHERE id=? AND \"left\">=?", use, g.id, use)
-			if err != nil {
-				return err
-			}
-			if n, _ := res.RowsAffected(); n > 0 {
-				need -= use
-				break
-			}
-			if err := db.QueryRow(tx, d, "SELECT \"left\" FROM quota_grants WHERE id=?", g.id).Scan(&left); err != nil {
-				return err
-			}
-		}
-	}
-	if need > 0 {
-		res, err := db.Exec(tx, d, "UPDATE balance_accounts SET balance=balance-?, updated_at=? WHERE tenant_id=? AND balance>=?",
-			need, time.Now().Format(time.RFC3339), tid, need)
-		if err != nil {
-			return err
-		}
-		if n, _ := res.RowsAffected(); n == 0 {
-			return ErrInsufficientBalance
-		}
-	}
-	return nil
+	return tx.Commit()
 }

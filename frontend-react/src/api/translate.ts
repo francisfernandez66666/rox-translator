@@ -208,12 +208,20 @@ export async function healthCheck(): Promise<HealthResponse> {
 //   后端 P1a 加了 8 个图片格式走 OCR，前端 accept 还停在 12 项）。
 //   改这里必须同时确认后端那一行；只改一侧当场红。
 export const TRANSLATE_FILE_EXTS = [
-  '.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.csv', '.srt', '.vtt', '.md', '.json', '.yaml', '.yml',
+  '.docx', '.xlsx', '.pptx', '.pdf', '.txt', '.csv', '.md',
   // 图片格式：后端经 OCR 投喂翻译引擎（fileproc/formats.go 里标 P1a 那一行）
   '.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp', '.heic',
-  // 音频格式：后端经 ASR 转写投喂翻译引擎，产物为译文字幕 .srt + 译文 .md（fileproc/formats.go 里标 P2 那一行）
+  // 音频格式：后端经 ASR 转写投喂翻译引擎，产物＝译文 .md ＋ 同容器译后配音（fileproc/formats.go 里标 P2 那一行）
   '.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.opus',
 ] as const
+
+// ★ 2026-10-30 三事合一批：这五种**纯文本容器**已撤出准入（两种交付模式都撤，AGENTS §一·14）。
+// 单独留一份名单不是为了复用，而是为了让"拒绝时必须给出路"这条判据有唯一靶子：
+// 客户手上那些 .srt/.json 本来就是文字，走文件通道只多付一遍落盘/识别/写回，
+// 直接粘贴到文本翻译更快也更准 ⇒ 只回一句「不支持」等于把省事的路藏起来。
+// 与后端 `fileproc/formats.go` 的 retiredTextContainers 同一批，等值由
+// translateFormats.lock.test.ts 的 P7 现读比对（改一侧不改另一侧当场红）。
+export const RETIRED_TEXT_EXTS = ['.srt', '.vtt', '.json', '.yaml', '.yml'] as const
 
 // ★ 工单双模式（2026-09-13）：仅「纯文案模式」准入的格式（anydoc 本地提取转 Markdown，不还原版式）
 export const TEXT_DELIVERY_ONLY_EXTS = [
@@ -224,12 +232,14 @@ export const TEXT_DELIVERY_ONLY_EXTS = [
 // ============ 素材类（需识别/转写才进翻译）============
 // 这两类的共同点：**交付形态不是原格式**（图片不回填合成图、音频不改音轨），
 // 客户必须被提前告知，否则下载产物时会把它当成「文件坏了/只翻了一半」。
-// ★ 拆两个常量是为了让 UI 能按类显示不同话术（话术本身差异很大：图片出 .md、音频出 .srt+.md）；
-//   它在 translateFormats.lock.test.ts 里有一条「三类并起来恰好等于 TRANSLATE_FILE_EXTS」的划分锁，
+// ★ 拆两个常量是为了让 UI 能按类显示不同话术（话术本身差异很大：图片出「译后图＋.md」、
+//   音频出「同容器配音＋.md」）；它在 translateFormats.lock.test.ts 里有一条
+//   「三类并起来恰好等于 TRANSLATE_FILE_EXTS」的划分锁，
 //   一边多一项而另一边没跟，那条会红——不要照着抄成第三份独立清单。
 export const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff', '.webp', '.heic'] as const
 
-// 音频类：交付形态是**译文字幕 .srt ＋译文 .md**（不改音轨，后端走 ASR 转写，fileproc/asr.go）。
+// 音频类：交付形态是**同容器译后配音 ＋ 译文 .md 两件**（★ 2026-10-30 改档：字幕 .srt 与
+// 原音频副本一并取消，见 AGENTS §一·14；后端走 ASR 转写，fileproc/asr.go）。
 // 与图片类同属「需识别/转写才进翻译」这一族，划分锁见 translateFormats.lock.test.ts 的 P6 那条。
 export const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.opus'] as const
 
@@ -255,6 +265,15 @@ export function validateTranslateFile(file: File, deliveryText = false): string 
   const ext = '.' + (file.name.split('.').pop() || '').toLowerCase()
   const allowed: readonly string[] = deliveryText ? [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS] : TRANSLATE_FILE_EXTS
   if (!allowed.includes(ext)) {
+    // ★ 2026-10-30 C-10/C11：撤出的五种纯文本容器必须**先判**——它与 .exe 那类"真不支持"不同因，
+    // 给的是出路（粘贴到文本翻译）而不是清单。放在最前面是因为：
+    // 若先走 deliveryText 那一支，客户会看到"纯文案模式支持 …（里面没有 .srt）"，
+    // 读起来像"这平台连字幕都不收"，而不是"这件事有个更快的做法"。
+    if ((RETIRED_TEXT_EXTS as readonly string[]).includes(ext)) {
+      // 兜底句必须与后端 fileproc.PlainTextContainerHint **逐字相同**（跨语言等值由
+      // translateFormats.lock.test.ts 的 P7 现读比对；母语读者走 tr.fileFmtPlainText 那一档）。
+      return apiMsg('tr.fileFmtPlainText', `${file.name}：这一类是纯文本容器，请直接粘贴内容到文本翻译`, { name: file.name })
+    }
     if (deliveryText) {
       return apiMsg('tr.fileFmtText', `不支持的文件格式：${file.name}（纯文案模式支持 ${[...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(' / ')}）`, { name: file.name, fmts: [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS].join(' / ') })
     }

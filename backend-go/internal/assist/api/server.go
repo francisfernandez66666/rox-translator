@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +22,7 @@ import (
 	"translator/internal/assist/engine"
 	"translator/internal/assist/store"
 	"translator/internal/assist/web"
+	"translator/internal/httpx"
 	"translator/internal/observability"
 )
 
@@ -56,6 +56,10 @@ type Server struct {
 	anonymLastSessions int
 	anonymLastStatus   string
 	anonymLastAt       string
+	// ★ 2026-10-30 组7 §8.2（P-5）：画像验签失败的去重 WARN 槽位。
+	// 键是失败档位（mismatch/expired/payload/peer/key），**不存 uid、不存头值**——
+	// 画像本身不进日志是 P-3 的硬口径，这里只记「哪一档坏了几次」。
+	profileWarn sync.Map
 }
 
 // adminTokenTTL 管理 Token 的缓存时长。取 60s 与 engine 的 LLM 配置、store 的词表缓存同量级：
@@ -398,23 +402,15 @@ func (s *Server) resolveTokenUser(token string) (int64, int64) {
 	return 0, 0
 }
 
-// clientIP 提取客户端真实 IP（考虑 X-Forwarded-For / X-Real-IP / Proxy-Client-IP）。
-func clientIP(r *http.Request) string {
-	for _, h := range []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Client-IP"} {
-		if ip := r.Header.Get(h); ip != "" {
-			// X-Forwarded-For 可能逗号分隔多个 IP，取第一个
-			if idx := strings.Index(ip, ","); idx > 0 {
-				ip = ip[:idx]
-			}
-			return strings.TrimSpace(ip)
-		}
-	}
-	// fallback: RemoteAddr 格式为 "host:port"
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
+// clientIP 提取客户端真实 IP。
+//
+// ★ 2026-10-30 三事合一批（组2a）：实现收拢到 `internal/httpx.ClientIP`（全仓唯一一把尺子）。
+// 旧形态**无条件**信任四个头（X-Forwarded-For／X-Real-IP／Proxy-Client-IP／WL-Client-IP），
+// 而挂件这侧的匿名会话归属与限流就建在这句话上——任何人带一个自便的 XFF 就能把自己伪装成新访客。
+// 本批要给「即时翻译免费档」按 IP 记一格，先收实现再上档位。
+// 新口径按**来路**判：只有直连对端是本机回环（现网＝Caddy 在同一台机器上反代）才看代理链给的头，
+// 且优先 `CF-Connecting-IP`（Cloudflare 覆写过、客户端伪造不了）。
+func clientIP(r *http.Request) string { return httpx.ClientIP(r) }
 
 // sessMu session upsert 竞态保护（低并发足够；mutex 护 CreateSession 读-建窗口）
 var sessMu sync.Mutex // session upsert 竞态保护（低并发足够）
@@ -573,7 +569,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.AddMessageWithAuth(sid, "user", req.Message, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
 	history, _ := s.db.History(sid, 12)
 
-	rep := s.eng.Respond(r.Context(), sid, req.Message, req.Page, uiLang, history)
+	// ★ 2026-10-30 组7 §8.2：画像只随**本轮请求的 ctx** 进引擎（P-4 每轮现组装、不跨界缓存）。
+	// 验签失败/未带头 ⇒ 不往 ctx 放任何东西，visitorProfileBlock 整段不出现（P-5 回落匿名）。
+	// 它只服务系统提示词：不参与会话归属（那是 authInfo 的事），也不进 canned 缓存与消息落库（P-3）。
+	replyCtx := r.Context()
+	if vp := s.visitorProfileFromRequest(r); vp != nil {
+		replyCtx = engine.WithVisitorProfile(replyCtx, vp)
+	}
+	rep := s.eng.Respond(replyCtx, sid, req.Message, req.Page, uiLang, history)
 	_ = s.db.AddMessageWithAuth(sid, "assistant", rep.Content, actionMaps(rep.Actions), authInfo.tenantID, authInfo.userID, anonymHash, "")
 	_ = s.db.TouchSession(sid)
 

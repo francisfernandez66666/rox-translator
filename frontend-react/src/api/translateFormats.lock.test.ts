@@ -28,7 +28,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AUDIO_EXTS, IMAGE_EXTS, TEXT_DELIVERY_ONLY_EXTS, TRANSLATE_FILE_EXTS, TRANSLATE_FILE_MAX_BYTES } from './translate'
+import { AUDIO_EXTS, IMAGE_EXTS, RETIRED_TEXT_EXTS, TEXT_DELIVERY_ONLY_EXTS, TRANSLATE_FILE_EXTS, TRANSLATE_FILE_MAX_BYTES, validateTranslateFile } from './translate'
 
 // 跨出包根读后端源码：必须 resolve()，裸拼 `../backend-go/...` 不折叠 `..` 会直接 ENOENT
 // （与 BrandTagline.lock.test.ts、readability.test.ts 同一口径）
@@ -247,14 +247,15 @@ describe('建单准入一把尺子：前端清单必须与后端 formats.go 等�
     const fewNow = hintedFormats('点击选择文件：docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml / yml（≤40MB）')
     expect(want.filter((x) => !fewNow.includes(x)).length, '反证①：文案少列图片档时必须能数出缺了几档').toBeGreaterThan(0)
     // ② 多列一档（文案承诺一个后端收不进来的格式）
-    const moreNow = hintedFormats('点击选择文件：docx / xlsx / pptx / pdf / txt / csv / srt / vtt / md / json / yaml / yml / png / jpg / jpeg / bmp / tif / tiff / webp / heic / dwg（≤40MB）')
+    const moreNow = hintedFormats('点击选择文件：docx / xlsx / pptx / pdf / txt / csv / md / png / jpg / jpeg / bmp / tif / tiff / webp / heic / mp3 / dwg（≤40MB）')
     expect(moreNow.filter((x) => !want.includes(x)), '反证②：多列的 dwg 必须被抓').toEqual(['dwg'])
     // ③ 解析落空（文案整个改了写法）＝返回空数组，上面那条射程正锁会红，不许静默合规
     expect(hintedFormats('点击选择文件'), '反证③：文案里没有格式段时必须解析为空').toEqual([])
   })
 
   it('P6 素材类划分（IMAGE_EXTS + AUDIO_EXTS + 文档类）必须恰好等于准入清单', () => {
-    // 为什么单列：UI 靠这两份来选话术（图片给译文 .md、音频给字幕 .srt+.md）。
+    // 为什么单列：UI 靠这两份来选话术（图片给「译后图＋译文 .md」，
+    // 音频给「同容器配音＋译文 .md」——★ 2026-10-30 改档后字幕 .srt 已不在产物清单里）。
     // 它们是**准入口径的派生**，不是第三份独立清单——一旦有人给某一类加了一项却没进
     // TRANSLATE_FILE_EXTS（或反过来），表现是「客户端提示与实际产物不符」，而 accept 那一侧
     // 完全发现不了（它只认并集）。用「并起来恰好相等」判，双向都堵。
@@ -291,8 +292,8 @@ describe('建单准入一把尺子：前端清单必须与后端 formats.go 等�
 
   it('P4 Go 侧四份副本已收成一份：不许再有内联的准入清单字面量', () => {
     // 判据锚的是"同一行里并列出现 ≥3 个 Office/PDF 准入扩展名"这一**清单形状**。
-    // 为什么不按"这个文件里出现过 .docx"判：engine/file.go 的写回格式 switch（893~899 行）
-    // 与 writebackDelivery 的交付形态分档（`.srt", ".vtt", ".json", ".yaml", ".yml"`）都是合法逐格式代码，
+    // 为什么不按"这个文件里出现过 .docx"判：engine/file.go 里那些逐格式 switch 分支
+    //（`case ".docx":` 这种一个 case 一个格式的写法）与交付形态分档都是**合法的逐格式代码**，
     // 按"出现过"判会把它们误伤成副本——判红一次，下一位就把这条锁摘掉了（闸门钝化比红灯更坏）。
     const files = [
       '../backend-go/internal/api/upload.go',
@@ -349,5 +350,48 @@ describe('建单准入一把尺子：前端清单必须与后端 formats.go 等�
     const drifted = formatsViolation({ ...clean, goRestore: [] })
     expect(drifted, 'R4 射程失效必须红').not.toBe('')
     expect(drifted).toContain('射程已失效')
+  })
+
+  it('P7 撤出的五种纯文本容器：清单、出路句与前端校验三件必须同源（★ 2026-10-30 C-10/C11）', () => {
+    // 这条锁管的是"撤格式之后，拒绝还得给得出路"这一整族：
+    // 客户手上 .srt/.json 本来就该走文本翻译，只回一句「不支持」等于把快路藏起来。
+    // 三件（Go 名单 / 前端名单 / 那句文案）任何一件单独改，都会在这里红。
+    const retiredFromGo = goQuotedInBlock(formatsSrc, 'var retiredTextContainers = map[string]bool')
+    expect(retiredFromGo.length, 'Go 侧 retiredTextContainers 解析为空 ⇒ 锚点漂了，本腿失明').toBeGreaterThanOrEqual(5)
+    expect([...RETIRED_TEXT_EXTS].sort(), '前端撤除清单必须与 Go 那份逐字等值')
+      .toEqual([...retiredFromGo].sort())
+
+    // 撤除清单必须是准入清单的**补集**（两边都留着＝accept 选得中、后端拒）
+    const overlap = RETIRED_TEXT_EXTS.filter((e) => TRANSLATE_FILE_EXTS.includes(e as (typeof TRANSLATE_FILE_EXTS)[number]))
+    expect(overlap, `撤除格式仍在准入清单里：${overlap.join(' ')}`).toEqual([])
+
+    // 出路句跨语言逐字等值：前端常量 == Go 常量 == 中文词典里那句的后半
+    const goHint = (formatsSrc.match(/const PlainTextContainerHint = "([^"]*)"/) || [])[1] || ''
+    expect(goHint, 'Go 侧 PlainTextContainerHint 锚点取不到 ⇒ 文案已漂').not.toBe('')
+    // 前端兜底句（apiMsg 的回落值）必须含 Go 那一句——按**代码行**扫，不导符号：
+    // 导成一个导出的中文常量会被 i18n 的「api 层不许写死中文」闸门判红（〇-R），
+    // 而它的豁免恰恰是「同一物理行里有 apiMsg(」，所以这一族文案**只能**以兜底句形态存在。
+    const tsCode = stripGoComments(read('src/api/translate.ts'))
+    const fallbackLine = tsCode.split('\n').find((l) => l.includes("tr.fileFmtPlainText") && l.includes('apiMsg(')) || ''
+    expect(fallbackLine, 'translate.ts 里找不到 tr.fileFmtPlainText 的 apiMsg 兜底行 ⇒ 接线漂了').not.toBe('')
+    expect(fallbackLine.includes(goHint), `前端兜底句与 Go 常量不等值：${fallbackLine}`).toBe(true)
+    const zhDict = read('src/i18n/dicts.zh.ts')
+    const zhLine = (zhDict.match(/'tr\.fileFmtPlainText': '([^']*)'/) || [])[1] || ''
+    expect(zhLine, '中文词典缺 tr.fileFmtPlainText（12 语种全量口径）').not.toBe('')
+    expect(zhLine.endsWith(goHint), `中文词典那句必须以 Go 常量收尾，实得 ${JSON.stringify(zhLine)}`).toBe(true)
+
+    // 行为腿：前端校验对撤除格式给的必须是出路句，对 .exe 给的必须**不是**出路句
+    const asFile = (name: string): File => ({ name, size: 1024 } as unknown as File)
+    const retiredMsg = validateTranslateFile(asFile('sub.srt')) || ''
+    expect(retiredMsg, '.srt 的校验消息没给出路').toContain(goHint)
+    const exeMsg = validateTranslateFile(asFile('tool.exe')) || ''
+    expect(exeMsg, '.exe 不该拿到「粘贴到文本翻译」那句（成因不同，属误答）').not.toContain(goHint)
+    expect(exeMsg).toContain('仅支持')
+    expect(validateTranslateFile(asFile('ok.docx')), '在役格式必须仍通过校验').toBeNull()
+    // 反证：把 .docx 也塞进撤除清单 ⇒ 补集判据必须红（证明这两条不是只测"少了"）
+    expect(
+      [...RETIRED_TEXT_EXTS, '.docx'].filter((e) => TRANSLATE_FILE_EXTS.includes(e as (typeof TRANSLATE_FILE_EXTS)[number])).length,
+      '反证落空：文档类被当成撤除档时补集判据应当非零',
+    ).toBeGreaterThan(0)
   })
 })

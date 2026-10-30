@@ -255,7 +255,7 @@ func TestTaskAdminResetConsumption(t *testing.T) {
 	if err := st.CreateQuotaGrant(1, store.TaskGrantKind, st.TokensFromPoints(100), taskExp, "task:login_daily", 0); err != nil {
 		t.Fatalf("种入任务台账失败: %v", err)
 	}
-	if err := st.DeductWithGrants(1, st.TokensFromPoints(100)); err != nil {
+	if err := st.DeductWithGrants(1, 0, st.TokensFromPoints(100)); err != nil {
 		t.Fatalf("消耗任务台账失败: %v", err)
 	}
 	if got := st.SumActiveGrants(1); got != 500000 {

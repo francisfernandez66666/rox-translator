@@ -477,7 +477,7 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -F 'files=@/path/产品说明.png' -F 'target_langs=en' -F 'mode=pro'
 
-# 音频：ASR 转写 → 翻译 → 产出**同容器译后配音**＋译文 .srt（带原时间轴）＋译文 .md＋原音频副本
+# 音频：ASR 转写 → 翻译 → 产出**两件**：同容器译后配音 ＋ 译文 .md（不产字幕、不随包原音频副本）
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer <API_KEY>' \
   -F 'files=@/path/会议录音.m4a' -F 'target_langs=en' -F 'mode=pro'
@@ -488,14 +488,16 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
 | 输入 | 产物 | 说明 |
 |------|------|------|
 | 图片 .png/.jpg 等 | 同容器译后图（_en.png）＋译文 .md（_en.md） | 译文按 **OCR 原坐标原位回填**；渲染不出来（缺中文字体等）时退回「仅译文 .md」，任务仍 completed |
-| 音频（mp3、m4a、wav、ogg、flac、aac、opus 七种容器） | 同容器译后配音（_en.m4a）＋字幕 _en.srt＋译文 _en.md＋原音频副本 | 配音容器**照搬输入容器**（m4a 进 m4a 出）；目标语种暂无语音或该容器转码不可用时**回落 mp3 / 不出配音**（在任务告警里明示），字幕与译文不受影响 |
+| 音频（mp3、m4a、wav、ogg、flac、aac、opus 七种容器） | **两件**：同容器译后配音（_en.m4a）＋译文 .md（_en.md） | 配音容器**照搬输入容器**（m4a 进 m4a 出）；目标语种暂无语音或该容器转码不可用时**回落 mp3 / 不出配音**（在任务告警里明示）。★ 2026-10-30 起字幕 .srt 与原音频副本不再随包——可听的配音就是交付物，两条并排是噪音 |
 
-两条能力边界（**如实报错，不静默降级**）：
+三条能力边界（**如实报错，不静默降级**）：
 
 - 图片依赖服务器 OCR 模型资产、音频依赖 ASR 模型资产；资产缺失时该文件**明确失败**并提示原因，
   不会"跑完给一个没处理的原文件"。
-- 译后配音的语种覆盖取决于服务器 TTS 模型（当前为中文/英文档）；目标语种不在覆盖内时
-  该语种只交付字幕与译文，任务状态仍 completed。
+- 译后配音的语种覆盖取决于服务器 TTS 的**有效档**（现读 /api/health 的 tts_langs，别在客户端写死）；
+  目标语种不在覆盖内时该语种**只交付译文 .md**，任务状态仍 completed，并在告警里点名原因。
+- 字幕与数据类文本容器（srt、vtt、json、yaml、yml）**自 2026-10-30 起不再受理**：它们本身就是文字，
+  走文件通道只多付一遍落盘与写回的成本；请直接使用文本翻译（文件通道用于文档／图片／音频三类）。
 
 ## 错误与 HTTP 状态码（★ 2026-09-26 起：失败按真实状态码发出）
 
@@ -697,8 +699,8 @@ curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -F 'files=@/path/spec-sheet.png' -F 'target_langs=en' -F 'mode=pro'
 
-# Audio: ASR → translate → **same-container dubbed audio** + .srt subtitles (original timeline)
-# + translated .md + a copy of the source audio
+# Audio: ASR → translate → **two artifacts only**: same-container dubbed audio + translated .md (no subtitles, no source-audio copy)
+# + translated .md  (two artifacts only - no subtitles, no source-audio file)
 curl -X POST https://{{OPENAPI_HOST}}/openapi/v1/tasks \
   -H 'Authorization: Bearer YOUR_API_KEY' \
   -F 'files=@/path/meeting.m4a' -F 'target_langs=en' -F 'mode=pro'
@@ -709,14 +711,18 @@ Artifact naming and shape ({translated-name}_{lang}{ext}, one set per target lan
 | Input | Artifacts | Notes |
 |-------|-----------|-------|
 | Images .png/.jpg etc. | Same-container translated image (_en.png) + translated .md (_en.md) | Text is redrawn **over the original OCR boxes**; if rendering is impossible (missing CJK font etc.) it falls back to "translated .md only" and the task still completes |
-| Audio (mp3, m4a, wav, ogg, flac, aac, opus — seven containers) | Same-container dubbed audio (_en.m4a) + subtitles _en.srt + translated _en.md + a copy of the source audio | The dub **keeps the input container** (m4a in, m4a out); if the target language has no voice model or the container cannot be transcoded it **falls back to mp3 / no dub** (stated in the task warnings) — subtitles and translation are unaffected |
+| Audio (mp3, m4a, wav, ogg, flac, aac, opus — seven containers) | **Two artifacts**: same-container dubbed audio (_en.m4a) + translated .md (_en.md) | The dub **keeps the input container** (m4a in, m4a out); if the target language has no voice model or the container cannot be transcoded it **falls back to mp3 / no dub** (stated in the task warnings). Since 2026-10-30 .srt subtitles and the source-audio copy are no longer packaged — the dub is the deliverable |
 
-Two capability boundaries (**fail loudly, never degrade silently**):
+Three capability boundaries (**fail loudly, never degrade silently**):
 
 - Images need the server's OCR model assets and audio needs the ASR assets; if they are missing the
   file **fails with a reason** — the API never returns an unprocessed original and calls it success.
-- Dub language coverage depends on the server TTS model (currently Chinese/English). A target language
-  outside that coverage still gets subtitles and translation, and the task still completes.
+- Dub language coverage depends on the server TTS **effective tier** (read /api/health tts_langs at
+  runtime; never hardcode the list in a client). A language outside that coverage still gets the
+  translated .md, and the task still completes.
+- Subtitle and plain-text data containers (srt, vtt, json, yaml, yml) are **no longer accepted since
+  2026-10-30**: that content is already text, so use the text-translation path (the file channel covers
+  documents, images and audio).
 
 ## Errors & HTTP status codes (★ since 2026-09-26: failures carry real status codes)
 

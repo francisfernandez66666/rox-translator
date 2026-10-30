@@ -259,6 +259,13 @@ func (s *Server) handleOpsPolicySave(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "策略校验失败: "+err.Error()))
 		return
 	}
+	// ★ 2026-10-30 组4（H-3）：免费档九键的写入侧校验——`< -1` 一律 400 且**库里一字不动**；
+	//   跨键一致性也在这里拦（免费档比付费档还宽 ⇒ 客户升了级反而被拒，是最坏的定价形态）。
+	//   读侧仍留钳位兜住旁路 SQL 写进来的脏值（两侧边界同一个数，见 instantFreeValidate）。
+	if err := instantFreeValidate(req.Policy.Instant); err != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "免费档配置校验失败: "+err.Error()))
+		return
+	}
 	if err := s.Store.SetConfig("ops_policy", marshalOps(req.Policy)); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "保存失败: "+err.Error()))
 		return

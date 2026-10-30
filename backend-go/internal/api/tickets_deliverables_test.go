@@ -1,126 +1,85 @@
 // ============ tickets_deliverables_test.go · 职责说明 ============
-// G13（2026-10-19）：工单详情面的交付件清单 `ticketDeliverables`。
+// B17：「有产物」判据必须并入 ticket_artifacts（★ 2026-10-30 三事合一批 · 组5）。
 //
-// 缺陷形态（D17）：多产物单（音频四件）在 service 层被打成一个 zip 存进 result_path，
-// 而详情面只回 files（输入件），客户在页面上看不见自己已拿到手的产物。
+// 缺陷形态（如果不补这条判据）：两段式之后**多文件新单不写 tickets.result_path**
+// （只写 ticket_files.result_path），产物事实源是 ticket_artifacts。旧判据只看 result_path ⇒
+// 「产物都在、artifacts 也齐」的 completed 单被判成"无产物"，下载端直接 409——
+// 客户看着一张完成了的单，点下载回"该工单没有可用译文产物"，而磁盘上文件一个都不少。
 //
-// 判据：按单号回读 zip 条目即得四件；单产物单列一行；工单级与文件级同值时去重；
-// 纯文案旁路另计为 text 档。真值只有磁盘上那个 zip（不新造第二份清单）。
+// 两腿：
+//  1. 多文件新单（tickets.result_path 空、子文件 result_path 也空，只有 artifacts 行）⇒
+//     ticketHasDeliverable=true 且下载 200；
+//  2. 反向：completed 但既无 artifacts 也无 result_path ⇒ 409（判据不是恒真）。
 //
-// 运行：env DB_DRIVER=sqlite go test -count=1 ./internal/api/ -run TestTicketDeliverables
+// 判据用真 handler + 真 Store（不 mock 判据函数本身，避免"测的是替身"）。
 // =============================================
 package api
 
 import (
-	"archive/zip"
-	"os"
-	"path/filepath"
-	"sort"
+	"net/http"
 	"testing"
 
 	"translator/internal/store"
 )
 
-// makeZip 造一个含指定条目的临时 zip，返回路径。
-func makeZip(t *testing.T, dir string, name string, entries map[string]string) string {
-	t.Helper()
-	p := filepath.Join(dir, name)
-	f, err := os.Create(p)
+// TestTicketDeliverableCountsArtifacts B17：多文件新单靠 artifacts 判「有产物」。
+func TestTicketDeliverableCountsArtifacts(t *testing.T) {
+	p := newArtProbe(t)
+	tk := p.mkTicket(t, store.TicketCompleted, p.writeFile(t, "a.docx", "src"))
+	tf1 := p.addFile(t, tk, "a.docx")
+	tf2 := p.addFile(t, tk, "b.docx")
+	// 只登记 artifacts（模拟两段式服务层：result_path 只写首件、这里连首件都不写，
+	// 直接把判据逼到"只能靠 artifacts"的那一档）。
+	o1 := p.writeFile(t, "a-en.docx", "a")
+	o2 := p.writeFile(t, "b-en.docx", "b")
+	p.addArtifact(t, tk, tf1.ID, "en", store.TicketArtifactKindOriginal, o1, true, false)
+	p.addArtifact(t, tk, tf2.ID, "en", store.TicketArtifactKindOriginal, o2, true, false)
+
+	fresh, err := p.st.GetTicket(tk.ID, 1)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("回读工单失败: %v", err)
 	}
-	zw := zip.NewWriter(f)
-	for en, body := range entries {
-		w, werr := zw.Create(en)
-		if werr != nil {
-			t.Fatal(werr)
+	// 反向对照的**前提**：这一单的旧判据输入全是空的（否则本用例测不到新判据）。
+	if fresh.ResultPath != "" {
+		t.Fatalf("夹具应保持 tickets.result_path 为空（多文件新单形态），实得 %q", fresh.ResultPath)
+	}
+	for _, f := range mustFiles(t, p.st, tk.ID) {
+		if f.ResultPath != "" {
+			t.Fatalf("夹具应保持子文件 result_path 为空，实得 %q", f.ResultPath)
 		}
-		if _, werr = w.Write([]byte(body)); werr != nil {
-			t.Fatal(werr)
-		}
 	}
-	if err := zw.Close(); err != nil {
-		t.Fatal(err)
+	if !p.s.ticketHasDeliverable(fresh) {
+		t.Fatal("只有 artifacts 行的完成单必须判「有产物」（旧口径只看 result_path 会把它判成 409）")
 	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
+	if rec := p.call(p.s.handleTicketDownload, p.tok, "id="+artID(tk.ID)); rec.Code != http.StatusOK {
+		t.Fatalf("下载应 200（按需打包），实得 %d: %s", rec.Code, rec.Body.String())
 	}
-	return p
 }
 
-// namesOf 取交付件名列表并排序（顺序无关比较）。
-func namesOf(ds []ticketDeliverableItem) []string {
-	out := make([]string, 0, len(ds))
-	for _, d := range ds {
-		out = append(out, d.Name)
+// TestTicketDeliverableStillBlocksGhostCompleted B17 反向：真无产物仍 409。
+func TestTicketDeliverableStillBlocksGhostCompleted(t *testing.T) {
+	p := newArtProbe(t)
+	tk := p.mkTicket(t, store.TicketCompleted, p.writeFile(t, "a.docx", "src"))
+	p.addFile(t, tk, "a.docx")
+	fresh, err := p.st.GetTicket(tk.ID, 1)
+	if err != nil {
+		t.Fatalf("回读工单失败: %v", err)
 	}
-	sort.Strings(out)
-	return out
+	if p.s.ticketHasDeliverable(fresh) {
+		t.Fatal("无 artifacts、无 result_path 的鬼 completed 单必须判「无产物」")
+	}
+	rec := p.call(p.s.handleTicketDownload, p.tok, "id="+artID(tk.ID))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("无产物单下载应 409，实得 %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
-// hasKind 判断某名字是否以指定 kind 出现。
-func hasKind(ds []ticketDeliverableItem, name, kind string) bool {
-	for _, d := range ds {
-		if d.Name == name && d.Kind == kind {
-			return true
-		}
+// mustFiles 回读子文件行（夹具断言用）。
+func mustFiles(t *testing.T, st *store.Store, ticketID int64) []*store.TicketFile {
+	t.Helper()
+	files, err := st.TicketFiles(ticketID)
+	if err != nil {
+		t.Fatalf("回读子文件失败: %v", err)
 	}
-	return false
-}
-
-// TestTicketDeliverables G13 主判据＋去重＋纯文案旁路。
-func TestTicketDeliverables(t *testing.T) {
-	dir := t.TempDir()
-	zipPath := makeZip(t, dir, "audio.zip", map[string]string{
-		"original.mp3": "AAAA",
-		"Voice_en.m4a": "BBBBBB",
-		"text_en.srt":  "CC",
-		"text_en.md":   "DD",
-	})
-	textZip := makeZip(t, dir, "texts.zip", map[string]string{"text_en.md": "DD"})
-	single := filepath.Join(dir, "out.docx")
-	if err := os.WriteFile(single, []byte("hello"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	// ① 多产物 zip：四条全出，且工单级与文件级同值不重复
-	ds := ticketDeliverables(
-		&store.Ticket{ResultPath: zipPath},
-		[]*store.TicketFile{{ResultPath: zipPath}},
-	)
-	if len(ds) != 4 {
-		t.Fatalf("音频四件应回 4 条，实际 %d：%v", len(ds), namesOf(ds))
-	}
-	for _, n := range []string{"original.mp3", "Voice_en.m4a", "text_en.srt", "text_en.md"} {
-		if !hasKind(ds, n, "restore") {
-			t.Errorf("缺交付件 %q: %v", n, namesOf(ds))
-		}
-	}
-	// 大小取自 zip 头
-	for _, d := range ds {
-		if d.Name == "Voice_en.m4a" && d.Size != 6 {
-			t.Errorf("Voice_en.m4a 大小应为 6，实际 %d", d.Size)
-		}
-	}
-
-	// ② 单产物：列一行（文件名取 basename）
-	ds = ticketDeliverables(&store.Ticket{ResultPath: single}, nil)
-	if len(ds) != 1 || ds[0].Name != "out.docx" || ds[0].Size != 5 || ds[0].Kind != "restore" {
-		t.Fatalf("单产物应回 1 行 out.docx(5)，实际 %+v", ds)
-	}
-
-	// ③ 纯文案旁路：zip 条目按 text 档
-	ds = ticketDeliverables(&store.Ticket{ResultPath: zipPath, TextResultPath: textZip}, nil)
-	if !hasKind(ds, "text_en.md", "text") {
-		t.Fatalf("纯文案旁路未被列为 text 档：%+v", ds)
-	}
-
-	// ④ 无产物：空清单（不是 nil 崩溃）
-	if ds := ticketDeliverables(&store.Ticket{}, nil); len(ds) != 0 {
-		t.Fatalf("无产物应回空清单，实际 %+v", ds)
-	}
-	// ⑤ 路径不存在：跳过而不报错
-	if ds := ticketDeliverables(&store.Ticket{ResultPath: filepath.Join(dir, "nope.zip")}, nil); len(ds) != 0 {
-		t.Fatalf("缺件路径应跳过，实际 %+v", ds)
-	}
+	return files
 }

@@ -11,7 +11,7 @@
 //     所以「助手管理台」从来没有真正的端到端断言。
 //
 // 现方案：面板改为原生 React，所有读写经本文件的 /api/admin/assist/* 走主后台鉴权
-// （仅超管，requireAdminUser），由**服务端**注入 X-Assist-Admin 头再转发 assist 服务；
+// （仅平台超管，requireAssistAdmin＝IsSuperAdmin；Q9 收严），由**服务端**注入 X-Assist-Admin 头再转发 assist 服务；
 // 管理 Token 全程不出后端进程，浏览器只见一次「来源」标记（env/db/none，不含明文）。
 //
 // 口径边界：
@@ -49,7 +49,9 @@ import (
 
 	"translator/internal/observability"
 
+	"translator/internal/auth"
 	apierrors "translator/internal/errors"
+	"translator/internal/store"
 )
 
 // assistBaseURLKey system_config 中存放 assist 服务基址的键（环境变量优先，便于部署侧保底）。
@@ -116,8 +118,31 @@ var assistClient = &http.Client{
 //     「HTTP 200 + success:false」，面板靠读 body 才看得出来，监控与 SDK 按状态码分支一律判成成功
 //     ——assist 全挂时全站 5xx 率仍是 0%，比界面更难发现。文案一字未改
 //     （AssistP 的 bizFail 取 e.message，仍显示同一句处置指引）。
+//
+// requireAssistAdmin 挂件管理面的鉴权（★ 2026-10-30 三事合一批 Q9／D-13：用户明令「直接收」）。
+//
+// 旧判据是 `requireAdminUser`（只判 role_level>=4、**不查 tenant_id**）——比新面松一档：
+// 任何租户的管理员只要等级到 4，就能改**全网共用**的挂件话术与知识库（`configs.promise_rules`、
+// kb_entries、feature_links 都是全网一份，不分租户）。收严到 `auth.IsSuperAdmin`
+// （等级≥4 **且** tenant_id=0）之后，旧面与新面才是同一把尺子。
+//
+// 两种失败仍按 401/403 分流（errNotLogin → 401，其余 → 403），前端据此决定弹重登还是报无权限。
+// ⚠️ 这是一次**有意的功能收窄**（不是修 bug）：受影响的是"level≥4 且 tenant_id≠0"的账号，
+// 上线前用 `deploy/audit_admin_assist_scope.sh` 只读盘点一次并把命中清单写进交付记录。
+func (s *Server) requireAssistAdmin(r *http.Request) (*store.User, error) {
+	u := s.authUser(r)
+	if u == nil {
+		return nil, errNotLogin
+	}
+	if !auth.IsSuperAdmin(u) {
+		return nil, &apiErr{"挂件管理面仅平台超级管理员可用"}
+	}
+	return u, nil
+}
+
+// handleAdminAssistProxy 旧管理面的唯一转发入口（鉴权走 requireAssistAdmin，见上方 Q9 注释）。
 func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) {
-	u, err := s.requireAdminUser(r)
+	u, err := s.requireAssistAdmin(r)
 	if err != nil {
 		// 鉴权失败按「未登录 401 / 等级不足 403」分流（★ F-64③ 批 I-10：同 writeAuthzError 口径，
 		// 旧写法两种情况都压成 403，token 过期的超管会被留在页面上反复撞「无权限」而看不见「请重登」）
@@ -199,7 +224,7 @@ func (s *Server) handleAdminAssistProxy(w http.ResponseWriter, r *http.Request) 
 // handleAdminAssistStatus 面板状态条数据源：上游是否可达 + 管理 Token 来源 + 生效基址。
 // 只回「来源」不回 Token 明文（连掩码都不需要，面板无展示价值）。
 func (s *Server) handleAdminAssistStatus(w http.ResponseWriter, r *http.Request) {
-	if _, err := s.requireAdminUser(r); err != nil {
+	if _, err := s.requireAssistAdmin(r); err != nil {
 		// 与代理入口同一分流（★ F-64③ 批 I-10）：未登录 401、等级不足 403，面板据此决定是弹重登还是报无权限
 		s.writeAuthzError(w, r, err)
 		return

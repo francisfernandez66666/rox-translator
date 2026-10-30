@@ -47,10 +47,13 @@ func endsSentence(s string) bool {
 }
 
 // ExtractTexts 提取文本，按扩展名分发。
-// 参数：filepath=文件路径；支持 .docx/.pptx/.xlsx/.pdf/.txt/.csv/.srt/.vtt/.md/.json/.yaml/.yml、
+// 参数：filepath=文件路径；支持 .docx/.pptx/.xlsx/.pdf/.txt/.csv/.md、
 // 图片格式（.png/.jpg/.jpeg/.bmp/.tif/.tiff/.webp/.heic，P1a 经 OCR 投喂翻译引擎）
 // 与音频格式（.mp3/.m4a/.wav/.ogg/.flac/.aac/.opus，P2 经 ASR 转写投喂翻译引擎）；
 // 返回提取的文本片段列表。
+// ⚠️ 2026-10-30 三事合一批：`.srt/.vtt/.json/.yaml/.yml` 的提取分支已随**准入撤除**一并删除
+// （AGENTS §一·14；判据唯一事实源＝formats.go 的 TranslateFormatOrder，本 switch 不许再留一份）。
+// 音频只把转写文本按顺序拼进来，**时间轴不再缓存**（字幕产物已取消）。
 func ExtractTexts(filepath string) ([]string, error) {
 	ext := strings.ToLower(filepathExt(filepath))
 	e := &Extractor{}
@@ -66,14 +69,8 @@ func ExtractTexts(filepath string) ([]string, error) {
 		err = extractPdfText(filepath, e) // pdf（降级路径见 pdf.go，含空层 OCR 降级）
 	case ".txt", ".csv":
 		err = extractLines(filepath, e, func(l string) string { return strings.TrimSpace(l) }) // 整行入库
-	case ".srt", ".vtt":
-		err = extractSubtitle(filepath, e) // 字幕块
 	case ".md":
 		err = extractMarkdown(filepath, e) // Markdown 正文
-	case ".json":
-		err = extractJSON(filepath, e) // JSON 字符串值
-	case ".yaml", ".yml":
-		err = extractYAML(filepath, e) // YAML 标量值
 	case ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic":
 		// ★ P1a：图片经 OCR 识别文字后投喂翻译引擎（上游适配器定位）。
 		// OcrAvailable()==false 时 ExtractImageOCR 返回友好错误，不把整单判死。
@@ -81,10 +78,12 @@ func ExtractTexts(filepath string) ([]string, error) {
 	case ".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus":
 		// ★ P2：音频经 ASR 转写成文本后投喂翻译引擎（上游适配器定位，与 OCR 同质地兄弟）。
 		// AsrAvailable()==false 时 ExtractAudioASR 返回友好错误，不把整单判死。
-		// 时间轴由 TranscribeAudio 缓存下来，写回阶段经 AudioCues 取回生成 .srt。
 		err = ExtractAudioASR(context.Background(), filepath, e)
 	default:
-		return nil, fmt.Errorf("不支持的格式: %s", ext)
+		// 执行口的第二道判定（正常到不了这里——建单口已拦）。走到这一支说明库里躺着一个
+		// 已撤出格式的旧单被重跑，或有人绕过建单口直接投引擎。错误串必须给得出路，
+		// 而判据与文案都取自同一处出口（★ 2026-10-30 C-10，禁在这里再拼一份清单句）。
+		return nil, fmt.Errorf("%s", RejectHint(ext, false, "不支持的格式: "+filepath))
 	}
 	if err != nil {
 		return nil, err

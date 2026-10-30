@@ -202,3 +202,32 @@ func (s *TicketService) runTicket(ctx context.Context, id int64) error {
 		t.Fatal("重发分支里没有 return nil 必须判红（会继续走完成态收尾），实得绿灯 ⇒ 反向自证失败")
 	}
 }
+
+// condMentionsIdent 条件子树里是否出现指定标识符（用于识别 errors.Is(runErr, errTicketRequeued)）。
+// 2026-10-30 组5 起从 ticket_test.go 迁来：那份文件已改成「不落盘 zip」的源码锁，
+// 不再是 AST 闸的宿主；这两个助手只有本文件在用。
+func condMentionsIdent(cond ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(cond, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// callName 取调用名（支持 sel 形态）：s.chargeTokens / s.Store.CreateNotification。
+func callName(call *ast.CallExpr) string {
+	switch fn := call.Fun.(type) {
+	case *ast.Ident:
+		return fn.Name
+	case *ast.SelectorExpr:
+		if x, ok := fn.X.(*ast.Ident); ok {
+			return x.Name + "." + fn.Sel.Name
+		}
+		// s.Store.CreateNotification 这类链式选择器：只取方法名。
+		return fn.Sel.Name
+	}
+	return ""
+}

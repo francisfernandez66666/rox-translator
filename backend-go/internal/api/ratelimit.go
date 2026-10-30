@@ -12,13 +12,11 @@
 package api
 
 import (
-	"net"
 	"net/http"
-	"os"
-	"strings"
 	"sync"
 	"time"
 
+	"translator/internal/httpx"
 	"translator/internal/store"
 )
 
@@ -184,30 +182,14 @@ func (l *loginLimiter) clearIn(scope, key string) {
 	delete(l.data, mk)
 }
 
-// trustProxyXFF 是否信任反向代理注入的 X-Forwarded-For（env TRUST_PROXY_XFF=1）。
-// 惰性读取一次；仅在 Caddy/Nginx 反代部署时开启——直连暴露场景下开启会被
-// 伪造头绕过限流，故默认关闭保持旧行为（评审 C4）。
-var trustProxyXFF = os.Getenv("TRUST_PROXY_XFF") == "1"
-
 // clientIP 提取客户端 IP（去掉端口；无则返回空串）。
 //
-// ★ 反代适配（2026-08-26 全仓评审 C4）：TRUST_PROXY_XFF=1 时取 X-Forwarded-For
+// ★ 2026-10-30 三事合一批（组2a）：实现收拢到 `internal/httpx.ClientIP`（全仓唯一一把尺子，K7 按
 //
-//	第一跳（最左侧客户端地址，由可信反代追加）。此前恒用 RemoteAddr，Caddy 反代后
-//	全体用户共享 127.0.0.1——一人爆破登录/注册，全站连坐进入冷却。
-func clientIP(r *http.Request) string {
-	if trustProxyXFF {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			// XFF 格式："client, proxy1, proxy2"——第一跳即真实客户端
-			first := strings.TrimSpace(strings.SplitN(xff, ",", 2)[0])
-			if first != "" {
-				return first
-			}
-		}
-	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
-}
+//	「谁读 X-Forwarded-For」的**全集**机械守住）。这里保留同名薄委托，是为了让本包 50 多个调用点零改动。
+//	旧形态的两条缺陷一并被那一个口治掉：① `TRUST_PROXY_XFF=1` 时**只看开关、不看这一枪从哪儿来**
+//	（直连暴露或本地跑套件时，一个 `X-Forwarded-For: 1.2.3.4` 就能把自己伪装成新访客）；
+//	② 那个 env 现在**不再被读**（信任改按"直连对端是不是本机回环"判，见 httpx 文件头）——
+//	现网 Caddy 已把 XFF 重写成 Cloudflare 覆写过的 `CF-Connecting-IP`，所以结论与旧行为一致，
+//	`deploy/systemd/prod.conf` 里那一行随之成为空配置，同批注掉而不是留着让人以为它还在管。
+func clientIP(r *http.Request) string { return httpx.ClientIP(r) }

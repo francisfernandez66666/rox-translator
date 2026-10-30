@@ -58,6 +58,14 @@ import { getAsrEngine, ServerAsrEngine, type AsrSession } from '@/api/asrEngines
 import { chatImageTranslate, ImageError, type ChatImageResult } from '@/api/chatImage'
 // ★ 决策⑪①（2026-10-10）：发起前三档预检（字符数 × 模式 × 排队深度 → 直接译/明示较慢/直接拒）
 import { slowVerdict } from '../lib/slowEstimate'
+// ★ 2026-10-30 即时翻译免费档（组 4 D 段）：档位真值、图片压缩、工单交接、升级卡节流。
+//   两套断点（1 MiB/1600 与 3 MiB/2000、30 s/60 s）**只在 lib/instantTier.ts 一份**，
+//   本文件只按档取用——否则运营改一档、界面还按旧档说话，且没有闸门看得见。
+import { instantLimits, instantHardLimits, resolveInstantTier, isKnownFreeAccount, isInstantFreeOff, type InstantTier } from '@/lib/instantTier'
+import { compressImage, toJpegFile } from '@/lib/imageCompress'
+import { shouldShowInstantUpgrade, markInstantUpgradeShown } from '@/lib/instantUpsell'
+import { writeInstantTicketHandoff } from '@/lib/instantTicketHandoff'
+import { useNav } from '@/lib/nav'
 
 // 数字千分位格式化，并处理 undefined/负数，用于余额与用量展示
 // floor + Math.max(0,…) 是必要的：本函数喂的是「≈句数」这类折算值（balance_sentences_approx、
@@ -146,8 +154,20 @@ export default function ChatWindow() {
   // 组件内提示直接取 ToastProvider 的 hook；非组件环境（lib 层、深层回调）走 lib/toastBus
   const { toast } = useToast()
   const chat = useChat()
+  const nav = useNav()
   const [input, setInput] = useState('')
   const [feedbackMsg, setFeedbackMsg] = useState<ChatMessage | null>(null)
+
+  // ★ 2026-10-30 免费档批：两档判定的两个来源各自到达、合并取「任一确认付费即付费」。
+  //   来源① `/api/me/context`（后端若下发显式档位就走它）；来源② `/api/me/package` 的包编码。
+  //   拿不到一律按免费档（保守方向：误判成免费只会把图压小一点；误判成付费是静默收费）。
+  const [tierCtx, setTierCtx] = useState<InstantTier>('free')
+  const [tierPkg, setTierPkg] = useState<InstantTier>('free')
+  // 是否**明确**知道这是免费档账号（见 lib/instantTier.isKnownFreeAccount）：
+  // 只对它执行「首屏隐藏余额条」；读不到档位时保留既有余额展示（O-9 / F-48 两条既有锁的契约）。
+  const [knownFree, setKnownFree] = useState(false)
+  // 免费档被运营关掉（`instant_free=off`）时必须收起「免费」徽标——否则是假承诺。
+  const [freeOff, setFreeOff] = useState(false)
 
   // ★ 双模式（fast/pro）持久化
   const [mode, setMode] = useState<'fast' | 'pro'>(
@@ -203,6 +223,10 @@ export default function ChatWindow() {
     try {
       const r: any = await myPackage()
       if (r && r.success) {
+        // ★ 2026-10-30：档位从这一份现有读数现算（见文件头 import 处那段口径）。
+        setTierPkg(resolveInstantTier(r))
+        if (isKnownFreeAccount(r)) setKnownFree(true)
+        if (isInstantFreeOff(r)) setFreeOff(true)
         // ★ O-9（批 I-10）：平台上下文（超管未切入任何租户）不参与计费，后端对 tid<=0 固定回 0。
         //   余额条与部门预算徽标照此渲染会长期显示「余额 0 积分」——一个不会扣点的身份
         //   天天被告知没钱。守卫只压这两处**展示**，不做提前 return：
@@ -232,7 +256,15 @@ export default function ChatWindow() {
   // 组件挂载时初次加载余额与用户上下文
   useEffect(() => {
     void loadBalance()
-    void meContext().catch(() => { /* 会话有效性由请求层兜底 */ })
+    // ★ 2026-10-30：/api/me/context 是档位的另一来源（显式 `instant_tier`/`paid` 优先），
+    //   失败不影响任何既有链路——拿不到就按免费档（保守方向见 lib/instantTier.ts 文件头）。
+    void meContext()
+      .then((ctx) => {
+        setTierCtx(resolveInstantTier(ctx))
+        if (isKnownFreeAccount(ctx)) setKnownFree(true)
+        if (isInstantFreeOff(ctx)) setFreeOff(true)
+      })
+      .catch(() => { /* 会话有效性由请求层兜底 */ })
   }, [loadBalance])
 
   // ★ F-48（批 I-5）：余额条刷新触发点从「消息数变化」改成「流终态广播之后」。
@@ -426,6 +458,56 @@ export default function ChatWindow() {
   //   cap.asr===null（探不到）走 fail-open 照常渲染，真点了仍有识别失败的本地化提示兜底。
   const cap = useVoiceCapability()
   const canMic = micSupported() && cap.asr !== false
+  // ---- ★ 2026-10-30 免费档：档位、两档宽度、墙与引导卡 ----
+  // tier 取两个来源的「或」：任一确认付费即付费；都拿不到＝免费（见 lib/instantTier.ts 文件头）。
+  const tier: InstantTier = tierCtx === 'paid' || tierPkg === 'paid' ? 'paid' : 'free'
+  const limits = instantLimits(tier)
+  // 硬顶＝付费档宽度：超过它就不再压缩、不发请求，直接引导翻译工单（40 MiB 那一档）。
+  const hardLimits = instantHardLimits()
+  // 多语种同出是付费权益（免费档只认 1 个目标语种）。这里只做展示口径，
+  // 「到底算不算免费」由后端那一把尺子判定——前端不许自己把请求改窄（E-2：保留多选）。
+  const langCount = chat.selectedLangs.length || 1
+  const isMultiLang = langCount >= 2
+  const isFreePlan = tier === 'free' && !freeOff
+  // 撞墙（超尺寸/超时长/超硬顶）之后才允许出现付费字样与预估（G22 / W-2）。
+  const [wallTouched, setWallTouched] = useState(false)
+  // G22 正向对照：未撞墙、单语种、免费档 ⇒「免费」徽标必须在位；
+  // 多语种是付费路径，此时徽标会骗人（同一屏又说免费又说按积分计），故换付费口径。
+  const showFreeBadge = isFreePlan && !isMultiLang && !wallTouched
+  // 余额条/预估的显示门：明确免费的账号在单语种首屏一律不显示（W-2「撞墙前一个字都不提钱」）。
+  // 读不到档位的形态保留既有余额展示（既有产品契约，见 knownFree 的注释）。
+  const showPaidUi = !(knownFree && !freeOff && !isMultiLang && !wallTouched)
+  // 墙的引导卡：每一档至少一枚按钮指向下一档（W-1）。payOriginal 只在「免费档宽度不够、
+  // 原图仍在付费档内」那一档出现（图 >1 MiB 且 ≤3 MiB）。
+  type InstantGuideState = {
+    reason: string
+    bodyKey: string
+    /** 点击「按原图翻译」时重发的那一份（仅图片档） */
+    originalFile?: File | null
+    /** 交给翻译工单的那一份（图片原图 / 录音 blob；端侧 WASM 录音没有 blob） */
+    handoff?: Blob | null
+    handoffName?: string
+    payOriginal?: boolean
+  }
+  const [guide, setGuide] = useState<InstantGuideState | null>(null)
+  // 升级卡（W-5）：同一会话三分钟内只出一次；dismissed 不落库、刷新即重置（lib/instantUpsell.ts）。
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  // noteWall 撞墙的统一收尾：揭开付费口径，并按节流决定要不要出升级卡。
+  // ⚠️ 引导卡本身**不受节流**——那是每一档墙的唯一出路，藏起来就是死胡同（W-1）。
+  function noteWall(withUpgrade: boolean) {
+    setWallTouched(true)
+    if (withUpgrade && shouldShowInstantUpgrade()) {
+      markInstantUpgradeShown()
+      setUpgradeOpen(true)
+    }
+  }
+  // openGuideTicket 把文件写进一次性交接槽再跳工单页（工单页读一次就删，见 lib/instantTicketHandoff.ts）
+  async function openGuideTicket(g: InstantGuideState) {
+    if (g.handoff) {
+      await writeInstantTicketHandoff(g.handoff, g.handoffName || 'file', g.reason)
+    }
+    nav.navigate('/tickets')
+  }
   const micRef = useRef<AsrSession | null>(null)
   const [micOn, setMicOn] = useState(false)
   const [micBusy, setMicBusy] = useState(false)
@@ -439,6 +521,17 @@ export default function ChatWindow() {
     const id = window.setInterval(() => setMicSec((s) => s + 1), 1000)
     return () => window.clearInterval(id)
   }, [micOn])
+  // ★ 2026-10-30（D-3）到点自动停：引擎侧（chatVoice / WASM worker）各有一份计时器，
+  //   这里再加一道**组件级兜底**——引擎计时器失败或换代不影响「免费档 30 秒」这条卖点。
+  //   stopMic 本身幂等（引擎 stop 已设闩），两条路径同时到点也只收尾一次。
+  useEffect(() => {
+    if (!micOn) return
+    if (micSec < limits.audioMaxSec) return
+    void stopMic()
+  }, [micOn, micSec, limits.audioMaxSec])
+  // 卸载即取消录音（★ 2026-10-30 D-3 的「计时器在取消/卸载时清理」）：
+  // 旧形态卸载只清 UI 的秒数 interval，录音会话与引擎侧计时器还活着（麦克风指示灯常亮）。
+  useEffect(() => () => { micRef.current?.cancel(); micRef.current = null }, [])
 
   async function startMic() {
     if (!canMic || micBusy) return
@@ -453,6 +546,9 @@ export default function ChatWindow() {
     // ★ M7：alive 与 onState 同一判据——引擎当场报失败后这个会话已不可用，不入 ref。
     let alive = true
     const session = engine.start({
+      // ★ 2026-10-30（D-3）：时长上限按档传入（免费 30s / 付费 60s）；引擎负责到点自动停，
+      //   组件级还有一道兜底（见上方 micSec 那段 effect）。
+      maxSec: limits.audioMaxSec,
       // ★ 2026-10-21 UAT 收口 M7：录音态以**引擎回报**为准，不再乐观置真。
       //   旧写法在 start() 之后无条件 setMicOn(true)：真开麦失败（权限被拒/设备被占用）时，
       //   屏幕上的按钮已经先变成"停止录音"，用户对着一个根本没在录的按钮说话（UAT 07M3 M3-2
@@ -471,6 +567,8 @@ export default function ChatWindow() {
           toast({ title: s === 'denied' ? t2('chat.micDenied') : t2('chat.micFailed'), tone: 'warn' })
         }
       },
+      // 引擎侧到点自动停之后，走与"用户点停止"同一条收尾链（transcribe → 回填输入框）。
+      onAutoStop: () => { void stopMic() },
     })
     // 会话只在"引擎没有当场报失败"时入 ref；死后不留引用（与上面 alive 同一判断）。
     if (alive) micRef.current = session
@@ -507,7 +605,16 @@ export default function ChatWindow() {
       // ★ 2026-10-19 G11：静音/极低能量（后端 reason='no_speech'）与"识别失败"分开说——
       //   前者要用户「再说一遍」，后者是能力/链路问题，行动不同。档位由后端 asrReason 给；
       //   键已进 12 语种词典（本批收尾补译），走 t() 取词。
-      if ((e as { reason?: string } | null)?.reason === 'no_speech') {
+      const reason = (e as { reason?: string } | null)?.reason || ''
+      // ★ 2026-10-30（W-1）：语音的四档墙（超长/超体积/引导工单/读不出）不出 toast 死胡同，
+      //   一律出带按钮的引导卡——工单上限远大于即时翻译（方案 §3）。
+      if (reason === 'too_long' || reason === 'too_large' || reason === 'use_ticket' || reason === 'unreadable') {
+        const bodyKey = reason === 'too_long' ? 'chat.instantTooLong'
+          : reason === 'unreadable' ? 'chat.instantUnreadable'
+            : 'chat.instantUseTicket'
+        setGuide({ reason, bodyKey, handoff: session.lastBlob || null, handoffName: 'recording.webm' })
+        noteWall(true)
+      } else if (reason === 'no_speech') {
         toast({ title: t('chat.micNoSpeech'), tone: 'warn' })
       } else {
         toast({ title: t2('chat.micFailed'), tone: 'warn' })
@@ -527,25 +634,69 @@ export default function ChatWindow() {
   const [imgBusy, setImgBusy] = useState(false)
   const [imgResult, setImgResult] = useState<ChatImageResult | null>(null)
 
-  // onPickImage 选中图片后的整条链路：校验 → 上传翻译 → 出卡片；失败按 reason 档位取词典文案。
+  // onPickImage 选中图片后的整条链路：校验 → 按档压缩 → 上传翻译 → 出卡片。
+  // ★ 2026-10-30（D-2）：三档尺寸是一个漏斗而不是三堵墙（方案 §1.1）——
+  //   免费档内（≤1 MiB）直接发；超过就压到免费档（长边地板 1200 不破）；
+  //   压不下去但仍在付费档（≤3 MiB）⇒ 提示「按原图付费翻译」并照发原图；
+  //   连付费档都超（>3 MiB）⇒ 不发请求，直接出「上传到翻译工单」引导卡。
   async function onPickImage(f: File | null | undefined) {
     if (!f || imgBusy) return
     // 只收图片：accept 在系统选择框里生效，拖拽/旧缓存包能绕过来，故这里再按类型与扩展名各判一次。
     const okType = /^image\//i.test(f.type) || /\.(png|jpe?g|bmp|tiff?|webp|gif|heic)$/i.test(f.name)
     if (!okType) { toast({ title: t2('chat.imageFailed'), tone: 'warn' }); return }
+    // 硬顶之外：连付费档都不收，压缩没有意义（压到 3 MiB 以下就要破 1200 地板，等于交糊图）。
+    if (f.size > hardLimits.imageMaxBytes) {
+      setGuide({
+        reason: 'too_large', bodyKey: 'chat.instantTooLarge',
+        handoff: f, handoffName: f.name,
+      })
+      noteWall(true)
+      if (imgInputRef.current) imgInputRef.current.value = ''
+      return
+    }
     setImgBusy(true)
     setImgResult(null)
     try {
+      let candidate = f
+      if (f.size > limits.imageMaxBytes) {
+        // 只有超免费档目标才重编码：已在目标内的图不碰（无损优先，也省一次等待）。
+        const out = await compressImage(f, { maxBytes: limits.imageMaxBytes, maxSide: limits.imageMaxSide })
+        if (out.compressed) {
+          // 压缩后必须同步改扩展名与 MIME（后端按两者分流，见 imageCompress.toJpegFile）
+          candidate = toJpegFile(out.blob, f.name)
+        } else {
+          // 压不到目标但仍在付费档内：按原图走付费档（不停在「太大了」），并立刻把预估/余额露出来。
+          toast({ title: t2('chat.instantTooLargePaid'), tone: 'warn' })
+          noteWall(false)
+        }
+      }
       const langs = chat.selectedLangs.length ? chat.selectedLangs : ['en']
-      const res = await chatImageTranslate(f, langs, mode, lang)
+      const res = await chatImageTranslate(candidate, langs, mode, lang)
       setImgResult(res)
     } catch (e) {
-      // ★ 12 语种词典说话：后端 reason 档位 → 词典键（capability_missing/no_text/其余）。
       const reason = e instanceof ImageError ? e.reason : 'failed'
-      const title = reason === 'capability_missing' ? t2('chat.imageCapability')
-        : reason === 'no_text' ? t2('chat.imageNoText')
-          : t2('chat.imageFailed')
-      toast({ title, tone: 'warn' })
+      // ★ W-1：四档墙各出引导卡（每张卡都至少一枚按钮指向下一档），不再用一句 toast 当出路。
+      if (reason === 'too_large' || reason === 'too_long' || reason === 'use_ticket' || reason === 'unreadable') {
+        const bodyKey = reason === 'too_large' ? 'chat.instantTooLarge'
+          : reason === 'too_long' ? 'chat.instantTooLong'
+            : reason === 'unreadable' ? 'chat.instantUnreadable'
+              : 'chat.instantUseTicket'
+        setGuide({ reason, bodyKey, originalFile: f, handoff: f, handoffName: f.name })
+        noteWall(true)
+      } else if (reason === 'too_large_paid') {
+        // 后端把「超出免费档但仍在付费档」单独回一档时，给「按原图翻译」一枚按钮（点了真重发）。
+        setGuide({
+          reason, bodyKey: 'chat.instantTooLargePaid',
+          originalFile: f, handoff: f, handoffName: f.name, payOriginal: true,
+        })
+        noteWall(true)
+      } else {
+        // ★ 12 语种词典说话：后端 reason 档位 → 词典键（capability_missing/no_text/其余）。
+        const title = reason === 'capability_missing' ? t2('chat.imageCapability')
+          : reason === 'no_text' ? t2('chat.imageNoText')
+            : t2('chat.imageFailed')
+        toast({ title, tone: 'warn' })
+      }
     } finally {
       setImgBusy(false)
       // 清空 value：同一张图连选两次也要能再次触发 change。
@@ -553,7 +704,34 @@ export default function ChatWindow() {
     }
   }
 
+  // retryOriginalPaid 「按原图翻译」：不再压缩，按付费档重发原图（G19 的"真的重发"那条腿）。
+  // 只在 guide.payOriginal 为真时渲染；重发期间沿用 imgBusy 的加载态。
+  async function retryOriginalPaid() {
+    const f = guide?.originalFile
+    setGuide(null)
+    if (!f || imgBusy) return
+    setImgBusy(true)
+    setImgResult(null)
+    try {
+      const langs = chat.selectedLangs.length ? chat.selectedLangs : ['en']
+      const res = await chatImageTranslate(f, langs, mode, lang)
+      setImgResult(res)
+    } catch (e) {
+      const reason = e instanceof ImageError ? e.reason : 'failed'
+      const bodyKey = reason === 'too_large' ? 'chat.instantTooLarge'
+        : reason === 'too_long' ? 'chat.instantTooLong'
+          : reason === 'unreadable' ? 'chat.instantUnreadable'
+            : 'chat.instantUseTicket'
+      setGuide({ reason, bodyKey, originalFile: f, handoff: f, handoffName: f.name })
+      noteWall(false)
+    } finally {
+      setImgBusy(false)
+    }
+  }
+
   const canSend = input.trim().length > 0
+  // 录音剩余秒数：到点前 3 秒换倒计时文案（D-3 / G11）。上限按档现取，不在组件里写死 30/60。
+  const micRemaining = Math.max(0, limits.audioMaxSec - micSec)
   // ★ 决策⑪①：发起前三档预检（宁误拦：排队深度未知走保守兜底，见 lib/slowEstimate 文件头）。
   //   ok=放行；slow=琥珀横幅提示可转工单（不拦发送）；reject=拦发送＋工单入口。
   const slowV = canSend ? slowVerdict(input.trim().length, mode, estimate?.qd) : 'ok'
@@ -591,8 +769,10 @@ export default function ChatWindow() {
       )}
 
       {/* 余额 / 用量条：§2.2「余额条 高20 · 11px #9AA0AA · 左缩进 60」——11 号字按 1.45 行高约 16，
-          上下各 2 内边距即凑足 20 高；多段并排放不下时仍靠 flexWrap 换行，故用 minHeight 不钉死。 */}
-      {(balance || orgBudget) && (
+          上下各 2 内边距即凑足 20 高；多段并排放不下时仍靠 flexWrap 换行，故用 minHeight 不钉死。
+          ★ 2026-10-30（W-2 / G22）：免费档单语种首屏**整条不渲染**——它里面每一段都带「积分」，
+             而「撞墙前一个字都不提钱」是这一批的硬约束；撞墙（wallTouched）或多语种时才揭开。 */}
+      {showPaidUi && (balance || orgBudget) && (
         <div style={{ background: 'rgba(231,233,234,0.06)', color: 'var(--lc-text-2)', fontSize: 13, minHeight: 20, padding: '2px 6%', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', borderBottom: '1px solid var(--lc-border-faint)' }}>
           {/* data-testid 只给 e2e 用（★ 任务 #43 翻译主流程端到端）：余额是扣费可见性的界面口径，
               锚点必须与 i18n 文案解耦——文案随 12 语种变，锚点不能跟着变。
@@ -722,6 +902,49 @@ export default function ChatWindow() {
               </div>
             </div>
           )}
+          {/* ★ 2026-10-30（W-1）超出即时翻译的墙：引导卡（带按钮）而不是一句「太大了」。
+              四档原因码各一句、每句都点名下一档在哪；工单按钮会把这个文件一起带过去
+              （lib/instantTicketHandoff.ts 的一次性交接槽，工单页读一次就删）。 */}
+          {guide && (
+            <div className="cw-guide-card" data-testid="chat-instant-guide" data-reason={guide.reason}>
+              <div className="cw-img-result-head">
+                <span>{t2('chat.guideTicketTitle')}</span>
+                <button type="button" className="cw-icon-btn" aria-label={t2('chat.instantUpgradeLater')}
+                        title={t2('chat.instantUpgradeLater')} onClick={() => setGuide(null)}>
+                  <CloseIcon size={14} />
+                </button>
+              </div>
+              <div className="cw-guide-body" dir="auto">{t2(guide.bodyKey)}</div>
+              <div className="cw-guide-actions">
+                {guide.payOriginal && guide.originalFile && (
+                  <Button variant="secondary" size="sm" disabled={imgBusy} onClick={() => void retryOriginalPaid()}>
+                    {t2('chat.instantPayOriginal')}
+                  </Button>
+                )}
+                <Button variant="primary" size="sm" onClick={() => void openGuideTicket(guide)}>
+                  {t2('chat.guideTicketBtn')}
+                </Button>
+              </div>
+            </div>
+          )}
+          {/* ★ 2026-10-30（W-5 / G24）升级卡：同一会话三分钟内只出一次（内存状态，刷新即重置）。
+              文案只报状态与下一步，不含「限时」类运营话术（I-4）。 */}
+          {upgradeOpen && (
+            <div className="cw-upgrade-card" data-testid="chat-instant-upgrade">
+              <div className="cw-upgrade-title">{t2('chat.instantUpgradeTitle')}</div>
+              <div className="cw-guide-body" dir="auto">
+                {freeOff ? t2('chat.instantFreeOff') : t2('chat.instantQuotaUser')}
+              </div>
+              <div className="cw-guide-actions">
+                <Button variant="primary" size="sm" onClick={() => nav.navigate('/billing')}>
+                  {t2('chat.gotoTopUp')}
+                </Button>
+                <button type="button" className="cw-guide-later" onClick={() => setUpgradeOpen(false)}>
+                  {t2('chat.instantUpgradeLater')}
+                </button>
+              </div>
+            </div>
+          )}
           {/* 空状态：欢迎语（首轮翻译前的引导，文案不再提文件） */}
           {!chat.messages.length && !chat.isLoading && (
             <div className="cw-welcome">
@@ -783,6 +1006,25 @@ export default function ChatWindow() {
               <span className="cw-src-pill" title={t('chat.srcLabel') + ' · ' + t('chat.sourceAuto')}>
                 {t('chat.srcLabel')} · {t('chat.sourceAuto')}
               </span>
+              {/* ★ 2026-10-30（G18/G22）：免费档的**唯一**额度读数就是这个徽标——
+                  不显示剩余数字（暗额度不出栈），只在免费且单语种时显示。
+                  它是 G22 负向锁的正向对照：删掉它，「首屏零付费字样」那条就变成永真的空转锁。 */}
+              {showFreeBadge && (
+                <span className="cw-free-badge" data-testid="chat-free-badge" title={t('chat.freeBadge')}>
+                  {t('chat.freeBadge')}
+                </span>
+              )}
+              {/* 免费档被运营关掉：不许再摆「免费」徽标（假承诺），改说这一句（H-2 的状态词口径）。 */}
+              {freeOff && (
+                <span className="cw-free-off" data-testid="chat-free-off">{t('chat.instantFreeOff')}</span>
+              )}
+              {/* ★ 2026-10-30（E-2 / G12）：多语种同出是付费权益，选 2 个以上时就地给钱的口径
+                  （不能等扣完才知道）；title 里点明免费档的语种上限。预估由余额条那一份承担。 */}
+              {isMultiLang && (
+                <span className="cw-paid-hint" data-testid="chat-multi-paid" title={t('chat.instantLangLimit')}>
+                  {t('chat.multiLangPaid')}
+                </span>
+              )}
               <LangMultiSelect compact value={chat.selectedLangs} onChange={chat.setSelectedLangs} />
               {/* 已选语种内联在同一行；超过 3 颗折成「+n」，点开就地展开全部（折走的仍可 ×） */}
               <LangChips langs={chat.selectedLangs} onRemove={chat.setSelectedLangs} max={3} dense />
@@ -821,11 +1063,15 @@ export default function ChatWindow() {
                   秒数读数走 title 模板与旁边的可见文字，不拿 aria-label 当时钟。 */}
               {canMic && (
                 <>
-                  {micOn && <span className="cw-mic-sec" data-testid="mic-elapsed">{micSec}s</span>}
+                  {micOn && (
+                    <span className={`cw-mic-sec${micRemaining <= 3 ? ' cw-mic-warn' : ''}`} data-testid="mic-elapsed">
+                      {micRemaining <= 3 ? tpl('chat.micCountdown', { sec: micRemaining }) : `${micSec}s`}
+                    </span>
+                  )}
                   <button type="button"
                     className={`cw-icon-btn${micOn ? ' cw-mic-rec' : ''}`}
                     data-testid="mic-btn"
-                    title={micBusy ? t('chat.micWorking') : micOn ? tpl('chat.micRecording', { sec: micSec }) : t('chat.mic')}
+                    title={micBusy ? t('chat.micWorking') : micOn ? tpl('chat.micRecording', { sec: micSec }) : tpl('chat.micLimit', { sec: limits.audioMaxSec })}
                     aria-label={micBusy ? t('chat.micWorking') : micOn ? t('chat.micStop') : t('chat.mic')}
                     disabled={micBusy}
                     onClick={() => { if (micOn) void stopMic(); else void startMic() }}>
@@ -928,6 +1174,19 @@ const CW_CSS = `
 .cw-condense-num{width:64px;box-sizing:border-box;height:28px;font-size:14px;background:transparent;
   border:1.2px solid var(--lc-border-pill);border-radius:var(--lc-r-ctl);padding:0 8px;color:var(--lc-text)}
 .cw-welcome{text-align:center;padding:32px 12px;color:var(--lc-text-3)}
+/* ★ 2026-10-30 免费档：徽标与多语种口径。徽标走中性白描边（不是金额/高亮档），
+   多语种提示走琥珀（与全站"付费/较慢"提示同一语义档），二者都不新增色值。 */
+.cw-free-badge{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1.2px solid var(--lc-border-pill);
+  border-radius:999px;font-size:14px;font-weight:600;color:var(--lc-text-1);white-space:nowrap}
+.cw-free-off{font-size:13px;color:var(--lc-text-3);white-space:nowrap}
+.cw-paid-hint{font-size:13px;color:#D29922;line-height:1.4}
+/* 墙的引导卡 / 升级卡：与图片结果卡同档（L2 panel + 1.2px 灰阶描边），与消息流同列。 */
+.cw-guide-card,.cw-upgrade-card{background:var(--lc-panel);border:1.2px solid var(--lc-border-card);border-radius:var(--lc-r-ctl);padding:10px 12px;display:flex;flex-direction:column;gap:8px}
+.cw-guide-body{font-size:15px;color:var(--lc-text-1);line-height:1.7}
+.cw-guide-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.cw-guide-later{border:none;background:none;color:var(--lc-text-3);font-size:14px;cursor:pointer;padding:0}
+.cw-guide-later:hover{color:var(--lc-text-1)}
+.cw-upgrade-title{font-size:15px;font-weight:600;color:var(--lc-text-1)}
 .cw-icon-btn{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
   border:1.2px solid var(--lc-border-pill);background:transparent;color:var(--lc-text-2);border-radius:var(--lc-r-ctl);cursor:pointer;padding:0;line-height:0}
 .cw-icon-btn:hover{color:var(--lc-text);border-color:var(--lc-border-done)}
@@ -941,6 +1200,8 @@ const CW_CSS = `
 @keyframes cw-mic-pulse{0%,100%{box-shadow:0 0 0 0 rgba(229,72,77,.42)}50%{box-shadow:0 0 0 4px rgba(229,72,77,0)}}
 /* 录音计时读数：等宽数字（tabular-nums）防止每秒跳动时整行左右抖，字色与录音钮同档语义红。 */
 .cw-mic-sec{font-size:13px;color:var(--lc-danger);font-variant-numeric:tabular-nums;line-height:1}
+/* 到点前 3 秒的倒计时：加粗并保持语义红（颜色不新造，只提高字重） */
+.cw-mic-sec.cw-mic-warn{font-weight:700}
 .cw-search-clear{display:inline-flex;align-items:center;justify-content:center;border:0;background:none;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0}
 .cw-search-clear:hover{color:var(--lc-text)}
 .cw-spin{display:inline-block;width:14px;height:14px;border:1.2px solid rgba(255,255,255,.25);border-top-color:var(--lc-text);border-radius:50%;animation:cw-spin .7s linear infinite}

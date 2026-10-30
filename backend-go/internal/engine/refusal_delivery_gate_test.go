@@ -59,8 +59,11 @@ func TestDeliveryRefusalStripCoversEveryPickup(t *testing.T) {
 		t.Errorf("交付取值口有 %d 处仍在裸读 langTranslations ⇒ 回绝话术可能从那里漏进首页/正文", raw)
 	}
 	if wrapped < 3 {
-		t.Fatalf("只找到 %d 处包裹点（应 ≥3：纯文案 .md / 原位回写各语言 / 多 Sheet 对照表）⇒ 锚漂了，本条锁失明", wrapped)
+		t.Fatalf("只找到 %d 处包裹点（应 ≥3：纯文案 .md ／逐语言产物循环（图片·音频·原位写回共用）／xlsx 多 Sheet 写回）⇒ 锚漂了，本条锁失明", wrapped)
 	}
+	// ⚠️ 第三处是 `writeMultiSheetXlsx`——它写的是**输入件本身是 .xlsx** 的多语言多 Sheet 回写，
+	// 与 2026-10-30 退役的那张「srt/json → xlsx 双语对照表」（WriteComparisonXlsx）**不是同一件东西**，
+	// 撤对照表时把它一起删掉就是把表格翻译做没了（本仓那条「实现优先禁删除」的正面用例）。
 }
 
 // S2 结构腿：咽喉函数体内必须真的复用 `refusalResidue`（另立词表＝两条迟早打架的尺子）。
@@ -105,20 +108,39 @@ func TestArtifactMdFirstLineHasNoRefusal(t *testing.T) {
 	}
 }
 
-// N2 对照表那一格（xlsx 交付形态的"首页"）：同一份清洗过的 map 喂进去，格子里不许有话术。
+// N2 交付咽喉的**取值**对每一个下游面都是同一份：对照表那一档已随 2026-10-30 的格式撤除退役，
+// 所以这一腿的靶子从「xlsx 格子里不许有话术」**翻转**为「执行口对这五种格式根本不再准入」。
+// ⚠️ 翻转理由写在原地（本仓纪律：改判据方向不许只删断言——留着旧期望，下一个人会照旧口径把它装回来）：
+// 旧形态防的是「回绝话术进了交付物」；现在这五种格式进不了单，
+// 而**同一份 tr 取值**仍是配音行、图上文字、.md 正文三处的唯一来源，所以取值那一判据原样保留。
 func TestComparisonCellHasNoRefusal(t *testing.T) {
 	tr := deliveryTranslations("en", map[string]string{refusalTarget.src: refusalTarget.bad})
 	v := tr[refusalTarget.src]
 	if strings.Contains(strings.ToLower(v), "unable to provide") {
-		t.Errorf("对照表单元格取值仍带话术，实得 %q", v)
+		t.Errorf("交付咽喉的取值仍带话术（配音行/图上文字/.md 三处都读这一份），实得 %q", v)
 	}
-	dir := t.TempDir()
-	p := filepath.Join(dir, "c-en.xlsx")
-	if err := fileproc.WriteComparisonXlsx(p, []string{refusalTarget.src}, tr); err != nil {
-		t.Fatalf("写对照表: %v", err)
+	// 对照表这一档必须整体消失：源码里不许再有 WriteComparisonXlsx 调用（剥注释，防注释冒充实现）。
+	b, err := os.ReadFile("file.go")
+	if err != nil {
+		t.Fatalf("读 file.go: %v", err)
 	}
-	if fi, err := os.Stat(p); err != nil || fi.Size() == 0 {
-		t.Fatalf("对照表产物没落盘（本条腿就无从谈起）: %v", err)
+	if strings.Contains(stripGoCommentsForGate(string(b)), "WriteComparisonXlsx(") {
+		t.Error("engine/file.go 仍在生成 xlsx 对照表：这一档已于 2026-10-30 随准入撤除退役")
+	}
+	// 五种已撤格式在执行口必须判「不准入」，且拒绝句给得出路（不是干一句「不支持」）。
+	for _, ext := range []string{".srt", ".vtt", ".json", ".yaml", ".yml"} {
+		if fileproc.IsTranslateFormat(ext, false) || fileproc.IsTranslateFormat(ext, true) {
+			t.Errorf("%s 仍被准入（两种模式都不该收）⇒ 会走回那条已删除的对照表分支", ext)
+		}
+		if msg := fileproc.RejectHint(ext, false, "不支持的格式"); !strings.Contains(msg, fileproc.PlainTextContainerHint) {
+			t.Errorf("%s 的拒绝句没给可行动出路，实得 %q", ext, msg)
+		}
+	}
+	// 射程自证：别的格式仍必须准入（否则上面那条"不准入"是恒真的空转）。
+	for _, ext := range []string{".docx", ".pdf", ".txt", ".md", ".mp3"} {
+		if !fileproc.IsTranslateFormat(ext, false) {
+			t.Fatalf("射程自证失败：%s 应仍准入，判据本身漂了", ext)
+		}
 	}
 }
 

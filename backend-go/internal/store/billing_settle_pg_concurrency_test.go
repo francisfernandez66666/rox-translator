@@ -134,7 +134,7 @@ func runSettleDeductRace(t *testing.T, s *store.Store, tid int64, grantInit, bal
 		go func() {
 			defer wg.Done()
 			<-start
-			switch e := s.DeductWithGrants(tid, deductAmt); {
+			switch e := s.DeductWithGrants(tid, 0, deductAmt); {
 			case e == nil:
 				atomic.AddInt64(&out.okDeduct, 1)
 			case errors.Is(e, store.ErrInsufficientBalance):

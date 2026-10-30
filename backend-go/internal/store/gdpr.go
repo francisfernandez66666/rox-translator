@@ -263,6 +263,11 @@ func (s *Store) EraseTenantData(tid int64) error {
 		"referral_rewards", "tm_review", "tm_hit_count", "feedbacks",
 		"notifications", "eval_records", "ticket_files", "ticket_state",
 		"output_artifacts", "quota_grants", "balance_accounts", "jobs",
+		// ↓ 2026-10-30 组5（W25/R-3）：两段式交付的产物表与逐段真值表
+		//   ticket_artifacts：客户产物的路径清单（不擦＝租户注销后磁盘上的译文仍在，且路径无法回收）；
+		//   ticket_segments：逐段「源文→译文」真值（含客户原文，属个人数据，按 AGENTS §19 的射程必须擦）。
+		//   两张表都带 tenant_id 列，走下面同一条 DELETE 路径。
+		"ticket_artifacts", "ticket_segments",
 	}
 	for _, t := range tables {
 		// 只删除明确带 tenant_id 列的表；忽略不存在的表
@@ -277,37 +282,56 @@ func (s *Store) EraseTenantData(tid int64) error {
 }
 
 // collectTenantArtifactPaths 收集租户全部工单相关磁盘文件路径（擦除前调用）。
+//
+// ★ 2026-10-30 组5（W25/R-3）两处补全，都与「只删行不删文件＝永久孤儿」同一族：
+//   - **text_result_path**（tickets 与 ticket_files 两处）：纯文案 .md 旁路产物此前不在收集集里，
+//     租户擦除后那份文件永远留在磁盘上；
+//   - **ticket_artifacts.path**：两段式交付的每一件产物（md 与原格式）都以该表为唯一事实源。
+//
+// 收集必须发生在删表**之前**（EraseTenantDataFull 的调用顺序即为此设计），删完表就拿不到路径了。
 func (s *Store) collectTenantArtifactPaths(tid int64) []string {
 	paths := []string{}
-	rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM tickets WHERE tenant_id=?`, tid)
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,''), COALESCE(text_result_path,'') FROM tickets WHERE tenant_id=?`, tid)
 	if err == nil {
 		for rows.Next() {
-			var fp, rp string
-			if rows.Scan(&fp, &rp) == nil {
-				if fp != "" {
-					paths = append(paths, fp)
-				}
-				if rp != "" {
-					paths = append(paths, rp)
-				}
+			var fp, rp, tp string
+			if rows.Scan(&fp, &rp, &tp) == nil {
+				add(fp)
+				add(rp)
+				add(tp)
 			}
 		}
 		rows.Close()
 	}
-	rows2, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,'') FROM ticket_files WHERE tenant_id=?`, tid)
+	rows2, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(file_path,''), COALESCE(result_path,''), COALESCE(text_result_path,'') FROM ticket_files WHERE tenant_id=?`, tid)
 	if err == nil {
 		for rows2.Next() {
-			var fp, rp string
-			if rows2.Scan(&fp, &rp) == nil {
-				if fp != "" {
-					paths = append(paths, fp)
-				}
-				if rp != "" {
-					paths = append(paths, rp)
-				}
+			var fp, rp, tp string
+			if rows2.Scan(&fp, &rp, &tp) == nil {
+				add(fp)
+				add(rp)
+				add(tp)
 			}
 		}
 		rows2.Close()
+	}
+	rows3, err := db.Query(s.db, db.CurrentDialect(), `SELECT COALESCE(path,'') FROM ticket_artifacts WHERE tenant_id=?`, tid)
+	if err == nil {
+		for rows3.Next() {
+			var p string
+			if rows3.Scan(&p) == nil {
+				add(p)
+			}
+		}
+		rows3.Close()
 	}
 	return paths
 }

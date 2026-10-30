@@ -547,7 +547,7 @@ func TestTaskGrantsDeductedFirst(t *testing.T) {
 	if res := st.GrantTaskReward(u.ID, TaskKeyLoginDaily, ""); !res.Granted {
 		t.Fatalf("登录奖励发放失败: %+v", res)
 	}
-	if err := st.DeductWithGrants(u.TenantID, st.TokensFromPoints(100)); err != nil {
+	if err := st.DeductWithGrants(u.TenantID, u.ID, st.TokensFromPoints(100)); err != nil {
 		t.Fatalf("扣减失败: %v", err)
 	}
 	if total, _ := sumTaskGrants(t, st, u.TenantID); total != 0 {

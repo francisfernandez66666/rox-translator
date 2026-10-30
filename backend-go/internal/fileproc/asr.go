@@ -8,9 +8,12 @@
 // 删掉这三组新文件与接线行 ⇒ 逐字节回退到 2026-10-14 前。
 //
 // 入口分工（用户令）：即时翻译只收**麦克风录音**（文字/录音切换，永不上传文件，试用态不开放）；
-// 工单收**音频文件**（产物 md+srt+mp3）。两端共用本适配器一份实现（D8）。
+// 工单收**音频文件**（★ 2026-10-30 三事合一批改档：产物＝译文 .md ＋ 同容器译后配音**两件**，
+// 字幕 .srt 与原音频副本一并取消，见 AGENTS §一·14）。两端共用本适配器一份实现（D8）。
 // 边界（刻意不做）：不建任务类型/队列/状态机；不联网下载模型（权重随 sync_fileproc_assets.sh 落盘）；
 // P0 只交付探测与脚本壳，转写入口（TranscribeAudio）在 P2 落地，届时只追加本文件。
+// ⚠️ 本包**不缓存** ASR 的时间轴：字幕产物取消后它在进程里没有任何读者，
+// 留一份没人读的缓存＝一处内存占用＋一条「重启会丢」的伪契约（原 asrCueCache 随之下线）。
 // =============================================
 package fileproc
 
@@ -23,9 +26,24 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
+
+// AsrSegment 一条转写段（时间轴 + 源语言文本）。Start/End 单位为秒（浮点）。
+// 由 TranscribeAudio 产出、ExtractAudioASR 按序喂进翻译管线，即时语音链也读它。
+// ⚠️ 类型名沿用历史名 **SubtitleCue**（`type SubtitleCue = AsrSegment`）：它原是字幕产物的载体，
+// 产物取消后语义已变，但仓内 8 个单测文件仍按旧名引用——改名属于另一件事（把 30 个调用点
+// 与音频链的判据一起过一遍），本批只做「新增正名 + 别名不新增使用」。
+// **新代码一律写 AsrSegment**，别把别名当现役名继续扩散。
+type AsrSegment struct {
+	Index int
+	Start float64
+	End   float64
+	Text  string
+}
+
+// SubtitleCue 是 AsrSegment 的历史别名（见上面的说明）。禁止在新代码里使用。
+type SubtitleCue = AsrSegment
 
 // asrPythonModules ASR 真实依赖的**导入名**清单（与 asr_transcribe.py 的 MODULES 同源维护，
 // 两侧改一侧必红在 capabilities_p0_test.go 的协议断言上）。
@@ -177,18 +195,18 @@ type asrSegment struct {
 // asrResult ASR 转写结果 JSON 形状（与 asr_transcribe.py transcribe 子命令 stdout 一致）。
 type asrResult struct {
 	Text     string       `json:"text"`     // 全文拼接（\n 分隔；退化形态，无 segments 时用）
-	Segments []asrSegment `json:"segments"` // 带时间戳的段（优先用，产出 srt 需它）
+	Segments []asrSegment `json:"segments"` // 带时间戳的段（优先用；缺失时退化为按 \n 切 Text）
 	Language string       `json:"language"` // 识别出的语种（可选）
 }
 
-// TranscribeAudio 音频 → 带时间轴的字幕 cue（P2 转写本体）。
-// 转写结果由 rememberAsrCues 记一份，供写回阶段 AudioCues 取回
-// （★ 不为同一份音频重复跑一次几十秒的 ASR，见 asrCueCache 的说明）。
+// TranscribeAudio 音频 → 带时间轴的转写段（P2 转写本体）。
+// ★ 2026-10-30 三事合一批：结果**不再进程内缓存**——原来缓存它是为了让工单写回阶段第二趟
+// 拿时间轴生成 .srt，而字幕产物已取消、这条时间轴再没有读者（一次调用即全部用完）。
 //
 // ★ 译文第一：ASR 不可用（AsrAvailable()==false）或脚本缺失时返回**友好错误**，
 //
 //	由调用方决定降级或提示；识别出来为空也如实报出，不静默交空产物。
-func TranscribeAudio(ctx context.Context, path string) ([]SubtitleCue, error) {
+func TranscribeAudio(ctx context.Context, path string) ([]AsrSegment, error) {
 	if !AsrAvailable() {
 		return nil, fmt.Errorf("音频语音识别（ASR）不可用：服务器未安装 sherpa-onnx 或未部署 ASR 模型资产（assets/asr/*.onnx），取权重步骤见 assets/asr/README.md")
 	}
@@ -207,13 +225,13 @@ func TranscribeAudio(ctx context.Context, path string) ([]SubtitleCue, error) {
 	if perr != nil {
 		return nil, perr
 	}
-	rememberAsrCues(path, cues)
 	return cues, nil
 }
 
 // ExtractAudioASR 音频 → 文本提取入口（extract.go 唯一需要的一行委托）：
 // 转写出的每段文本按序喂给提取器 e（去重/trim 由 Extractor.add 负责），进入既有翻译管线。
-// 时间轴不在这里返回——它由 TranscribeAudio 缓存，写回阶段经 AudioCues 取回。
+// ★ 2026-10-30：时间轴到此为止——它不再被缓存给写回阶段用（字幕产物已取消，
+// 交付面是「译文 .md ＋ 同容器配音」，配音的行序按提取顺序 texts 走，见 engine/file.go）。
 func ExtractAudioASR(ctx context.Context, path string, e *Extractor) error {
 	cues, err := TranscribeAudio(ctx, path)
 	if err != nil {
@@ -228,9 +246,9 @@ func ExtractAudioASR(ctx context.Context, path string, e *Extractor) error {
 	return nil
 }
 
-// parseAsrJSON 把 asr_transcribe.py 的 stdout JSON 解析为字幕 cue 序列。
+// parseAsrJSON 把 asr_transcribe.py 的 stdout JSON 解析为转写段序列。
 // 脚本可能在前缀打印非 JSON 日志（进度/告警），故取第一个 { 起的整段做反序列化。
-func parseAsrJSON(out string) ([]SubtitleCue, error) {
+func parseAsrJSON(out string) ([]AsrSegment, error) {
 	out = strings.TrimSpace(out)
 	start := strings.Index(out, "{")
 	if start < 0 {
@@ -240,13 +258,13 @@ func parseAsrJSON(out string) ([]SubtitleCue, error) {
 	if err := json.Unmarshal([]byte(out[start:]), &res); err != nil {
 		return nil, fmt.Errorf("ASR 输出 JSON 解析失败: %w", err)
 	}
-	cues := make([]SubtitleCue, 0, len(res.Segments))
+	cues := make([]AsrSegment, 0, len(res.Segments))
 	for i, s := range res.Segments {
 		t := strings.TrimSpace(s.Text)
 		if t == "" {
-			continue // 空段丢弃；丢弃后 Index 仍按 cue 序号重排，不影响 srt 编号连续
+			continue // 空段丢弃；Index 按段序号重排，保证下游按序读到的编号连续
 		}
-		cues = append(cues, SubtitleCue{Index: i + 1, Start: s.Start, End: s.End, Text: t})
+		cues = append(cues, AsrSegment{Index: i + 1, Start: s.Start, End: s.End, Text: t})
 	}
 	if len(cues) == 0 {
 		// 退化形态：脚本没给 segments（如仅支持整段文本的模型），按 \n 切成伪段。
@@ -254,7 +272,7 @@ func parseAsrJSON(out string) ([]SubtitleCue, error) {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			cues = append(cues, SubtitleCue{Index: i + 1, Text: strings.TrimSpace(line)})
+			cues = append(cues, AsrSegment{Index: i + 1, Text: strings.TrimSpace(line)})
 		}
 	}
 	if len(cues) == 0 {
@@ -297,60 +315,4 @@ func friendlyAsrError(stderr string) string {
 	default:
 		return ""
 	}
-}
-
-// ===== 时间轴传递：为什么要有这份缓存 =====
-// 工单管线是两段式的：第 1 步 `ExtractTexts(音频)` 拿 ASR 文本去做翻译；
-// 第 3 步写回产物时才需要那条**时间轴**生成 .srt。两者隔着一整轮 LLM 调用，
-// 中间没有天然的载体能把它带过去（Extractor.Texts 是 []string，改它的形状要动
-// 全格式的公共签名，代价远大于这里的收益）。
-// 重跑一次 ASR 只为拿时间戳是不可接受的——同一份音频几十秒到十几分钟的 CPU 开销，
-// 而且两次推理结果可能不完全一致（VAD 切分有抖动），反而会让 .srt 与已翻译的文本错位。
-// 故缓存一条 ASR 的结果：**键＝源音频绝对路径**，命中即复用，进程内共享。
-//
-// 边界：① 只做一个 FIFO 队列按上限淘汰（不做 LRU），长跑进程内存有界；
-//
-//	② 缓存未命中（进程重启/并发另一实例）时 AudioCues 返回 nil，写回自动退化为
-//	   「无时间轴」顺序编号 srt（WriteTranslationSrt 的既有兜底），不会失败。
-const asrCueCacheMax = 32
-
-// asrCueCache 就是上面那段说明所指的「最近 asrCueCacheMax 条 FIFO 队列」本体，
-// asrCueMu 只保护这片 slice（读写都在进程内，不落库、不跨实例共享）。
-var (
-	asrCueMu    sync.Mutex
-	asrCueCache []asrCueEntry
-)
-
-// asrCueEntry 一条缓存：音频在本机的绝对路径（键）→ 那一次 ASR 的时间轴。
-type asrCueEntry struct {
-	path string
-	cues []SubtitleCue
-}
-
-// rememberAsrCues 记一份某音频的转写时间轴（覆盖同 key 旧值，超上限淘汰最早的一条）。
-func rememberAsrCues(path string, cues []SubtitleCue) {
-	asrCueMu.Lock()
-	defer asrCueMu.Unlock()
-	for i := range asrCueCache {
-		if asrCueCache[i].path == path {
-			asrCueCache[i].cues = cues
-			return
-		}
-	}
-	asrCueCache = append(asrCueCache, asrCueEntry{path: path, cues: cues})
-	if len(asrCueCache) > asrCueCacheMax {
-		asrCueCache = asrCueCache[1:]
-	}
-}
-
-// AudioCues 取回某音频已转写的时间轴（写回阶段用）；未命中返回 nil。
-func AudioCues(path string) []SubtitleCue {
-	asrCueMu.Lock()
-	defer asrCueMu.Unlock()
-	for i := len(asrCueCache) - 1; i >= 0; i-- {
-		if asrCueCache[i].path == path {
-			return asrCueCache[i].cues
-		}
-	}
-	return nil
 }

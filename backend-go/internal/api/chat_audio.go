@@ -47,8 +47,9 @@ const chatAudioMaxBytes = 25 << 20
 //   - Error＝给人看的那一句（运维日志、排障时一眼知道是"依赖没装"还是"语种越界"）；
 //   - Reason＝给机器的档位（前端按它取 12 语种词典，**禁止**把上面那句中文投给非中文界面）。
 type chatVoiceFailure struct {
-	Error  string `json:"error"`  // 面向运维/日志的人话句子
-	Reason string `json:"reason"` // 分档名：见 fileproc.TtsReason* 与下面 asrReason 的档位
+	Error   string `json:"error"`   // 面向运维/日志的人话句子
+	Reason  string `json:"reason"`  // 分档名：见 fileproc.TtsReason* 与下面 asrReason 的档位
+	Suggest string `json:"suggest"` // "ticket"＝引导去翻译工单（带这个文件跳转，§4.3 C-5）
 }
 
 // asrReason ASR 侧的档位（与 TTS 同族但形态不同：ASR 只有"这台机器没这项能力"与"这次没听出来"两档，
@@ -129,6 +130,46 @@ func (s *Server) handleChatASR(w http.ResponseWriter, r *http.Request) {
 	}
 	tmp.Close()
 
+	// ★ 2026-10-30 组4（C-3／G11）：免费档判定——时长先定档，再判身份。
+	//   ASR 是本地模型、没有 LLM 成本，所以「30 秒内」这一档不扣积分（只占免费额度/IP 次数）；
+	//   30–60 秒走原 gateUsage（只判付费身份与余额墙，**不扣分**——听自己的翻译还要按秒付钱是灾难）。
+	//   超过硬顶 / 探测失败 ⇒ 引导工单或明确说"这段录音我听不了"，绝不静默放行。
+	asrTid := s.currentTenant(r)
+	asrUID := int64(0)
+	if u := s.authUser(r); u != nil {
+		asrUID = u.ID
+	}
+	asrFree := false
+	if dur, derr := fileproc.AudioDuration(tmpPath); derr != nil {
+		writeJSON(w, 200, chatVoiceFailure{Error: "无法读取这段录音的时长，请换一段录音或交给翻译工单", Reason: instantReasonUnreadable, Suggest: "ticket"})
+		return
+	} else {
+		route := s.instantDecide(r, asrTid, asrUID, instantInput{Kind: "audio", SizeBytes: hdr.Size, DurationSec: dur, LangCount: 1})
+		if route.SuggestTicket {
+			writeJSON(w, 200, chatVoiceFailure{Error: "录音超出即时翻译上限，请交给翻译工单（上限 40 MB）", Reason: route.Reason, Suggest: "ticket"})
+			return
+		}
+		asrFree = route.Free
+		if !asrFree {
+			// 付费档（含 30–60 秒）：走原闸门只判身份/余额，不产生积分扣减
+			if _, release, gateErr := s.gateUsage(r); gateErr != nil {
+				release()
+				s.writeGateError(w, r, gateErr)
+				return
+			} else {
+				release()
+			}
+		} else {
+			if _, release, gateErr := s.gateUsageInstant(r); gateErr != nil {
+				release()
+				s.writeGateError(w, r, gateErr)
+				return
+			} else {
+				release()
+			}
+		}
+	}
+
 	cues, aerr := fileproc.TranscribeAudio(r.Context(), tmpPath)
 	if aerr != nil {
 		// ★ ASR 的错误文案由 fileproc 单源产出（含"依赖未安装"这类排障指向），这里原样透出，
@@ -178,13 +219,26 @@ func (s *Server) handleChatTTS(w http.ResponseWriter, r *http.Request) {
 	}
 	// 配额闸门与 /api/chat 同口径：合成也是一次真实算力调用（CPU 是成本，
 	//   且在"未开启计费"的部署形态下这道墙就是唯一的护栏，不能因为"只是朗读"就绕开）。
+	// ★ 2026-10-30 组4：朗读同样没有 LLM 成本 ⇒ 免费档内走免费闸（不扣分、不够余额也能听）；
+	//   超出免费档才回落原 gateUsage（只判付费身份）。判据与文本同一条 instantDecide，
+	//   LangCount=1（朗读是单语种）。
+	ttsTid := s.currentTenant(r)
+	ttsUID := int64(0)
+	if u := s.authUser(r); u != nil {
+		ttsUID = u.ID
+	}
+	ttsRoute := s.instantDecide(r, ttsTid, ttsUID, instantInput{Kind: "text", LangCount: 1})
 	tid, release, gateErr := s.gateUsage(r)
+	if ttsRoute.Free {
+		tid, release, gateErr = s.gateUsageInstant(r)
+	}
 	defer release()
 	if gateErr != nil {
 		s.writeGateError(w, r, gateErr)
 		return
 	}
 	_ = tid
+	_ = ttsRoute
 
 	outPath := filepath.Join(os.TempDir(), "")
 	tmp, oerr := os.CreateTemp(outPath, "chat-tts-*.wav")

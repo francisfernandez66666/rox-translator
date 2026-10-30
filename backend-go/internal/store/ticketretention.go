@@ -90,27 +90,57 @@ func (s *Store) MarkTicketExpireNotify(id int64, tier string) error {
 }
 
 // CleanupTicketResults 清理工单全部产物：返回应删除的磁盘文件路径列表，
-// 并清空 tickets.result_path / result_expires_at / ticket_files.result_path（核心译文不动）。
+// 并删除 ticket_artifacts 行、清空 tickets.result_path / text_result_path /
+// result_expires_at 与 ticket_files.result_path / text_result_path（核心译文不动）。
+//
+// ★ 2026-10-30 组5（W25/R-3）两条补全：
+//  1. **返回集必须并入 ticket_artifacts.path**——两段式之后「工单交付过什么」的唯一事实源是那张表，
+//     只清 result_path 会把 md/原格式产物留在磁盘上、行却被删掉＝永久孤儿（谁的清理都扫不到）。
+//     行的删除紧随路径收集之后（顺序不能反：先删行就再也拿不到路径了）。
+//  2. **text_result_path 一并清**（tickets 与 ticket_files 两处）——两段式之前这两列就有，
+//     但清理一直没管：保留期到了以后「纯文案旁路」的路径还挂在详情面上，点开是 404，
+//     而磁盘上那份文件永远没人删。这是一个老缺口，与本批新表同一族（有路径列就必须进清理射程）。
 func (s *Store) CleanupTicketResults(id int64) ([]string, error) {
 	var paths []string
-	var mainPath string
-	_ = db.QueryRow(s.db, db.CurrentDialect(), "SELECT COALESCE(result_path,'') FROM tickets WHERE id=?", id).Scan(&mainPath)
-	if mainPath != "" {
-		paths = append(paths, mainPath)
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
 	}
+	var mainPath, mainTextPath string
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
+		"SELECT COALESCE(result_path,''), COALESCE(text_result_path,'') FROM tickets WHERE id=?", id).
+		Scan(&mainPath, &mainTextPath)
+	add(mainPath)
+	add(mainTextPath)
 	tfs, err := s.TicketFiles(id)
 	if err == nil {
 		for _, f := range tfs {
-			if f.ResultPath != "" {
-				paths = append(paths, f.ResultPath)
-			}
+			add(f.ResultPath)
+			add(f.TextResultPath)
 		}
-		if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET result_path='', error=CASE WHEN error='' THEN '产物已过保留期清理' ELSE error END WHERE ticket_id=?", id); err != nil {
+		if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE ticket_files SET result_path='', text_result_path='', error=CASE WHEN error='' THEN '产物已过保留期清理' ELSE error END WHERE ticket_id=?", id); err != nil {
 			return paths, err
 		}
 	}
+	// 产物行：先收集路径（上方已并入），再删行。删行失败就返回错误并保留行——
+	// 「行还在、文件没了」下次扫描还能重试；反过来「行没了、文件还在」是永久孤儿。
+	artifactPaths, aerr := s.TicketArtifactPaths(id)
+	if aerr != nil {
+		return paths, aerr
+	}
+	for _, p := range artifactPaths {
+		add(p)
+	}
+	if derr := s.DeleteTicketArtifactsForTicket(id); derr != nil {
+		return paths, derr
+	}
 	now := time.Now().Format(time.RFC3339)
-	if _, err := db.Exec(s.db, db.CurrentDialect(), "UPDATE tickets SET result_path='', result_expires_at='', updated_at=? WHERE id=?", now, id); err != nil {
+	if _, err := db.Exec(s.db, db.CurrentDialect(),
+		"UPDATE tickets SET result_path='', text_result_path='', result_expires_at='', updated_at=? WHERE id=?", now, id); err != nil {
 		return paths, err
 	}
 	return paths, nil

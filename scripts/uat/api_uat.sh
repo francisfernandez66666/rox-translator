@@ -34,6 +34,18 @@ PASS=0; FAIL=0; START=$(date +%s)
 #   恒判通过），闸门失效却不报错，是全仓最难发现的一类 bug（见 AGENTS.md 第七节）。
 # 第三参截断到 220 字符再打印：整页 HTML / zip 字节进报告会刷屏，够定位即可。
 ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
+# ckn <名称> <禁止正则> <实际文本> — 反向断言入口，**三态**（与 api_uat_txn.sh 的同一口径，2026-10-30 补齐）：
+#   rc=0 命中＝判红；rc=2＝正则本身非法＝**判据自身失效**，同样判红并点名（旧写法把它和 rc=1 混成一档，
+#   屏幕上只剩"这一条本来就没有"，这正是 AGENTS §一·7 记的那类永不报错的闸门失效）；rc=1 才 PASS。
+ckn(){ echo "$3" | grep -qE "$2"; local rc=$?
+  if [ "$rc" = "0" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|$1|forbidden[$2]|got[${3:0:220}]"
+  elif [ "$rc" = "2" ]; then
+    FAIL=$((FAIL+1)); echo "FAIL|$1|判据自身失效（grep rc=2：正则 [$2] 非法）——这不是「没命中」，是这条锁没法判"
+  else
+    PASS=$((PASS+1)); echo "PASS|$1"
+  fi
+}
 # reg — 走公开注册接口建号（带 agreed:true，协议是硬闸；extra 供追加 ref/job_role 等字段）
 # tok — 登录取 token；整条套件只认这一个取 token 的口径
 # pv  — 从 stdin 的 JSON 里按 python 表达式取值（后端返回形态多包一层，比 grep 提字段可靠）
@@ -681,7 +693,7 @@ echo "INFO|A15-notif-probe-cleaned|before=$NOTIF_TOTAL after=$AFTER mark_left=$D
 ck A15-feedback '"success":true' "$(curl -s $B/api/feedback -H "$H1" -H "$J" -d '{"content":"UAT反馈：界面很赞","contact":"uat@a.com"}')"
 ck A15-feedback-list-admin '"success":true' "$(curl -s "$B/api/feedback/list" -H "$AH")"
 
-# ---------- A16 文件翻译（docx 对照表交付） ----------
+# ---------- A16 文件翻译（docx 原格式回写交付） ----------
 # docx 用 python 现场拼最小包（三份必需部件：Content_Types / _rels / word/document.xml）：
 # 不在仓库里塞二进制夹具，套件自解释、跨机器可复跑，也不会被 git-lfs/换行符改动破坏。
 TMPD=$(mktemp -d)
@@ -732,6 +744,19 @@ ck A16c-artifact-per-upload-dir 'subdir=ok' "$(printf '%s' "$FT" | python3 -c '
 import sys,json,os
 ps=[p for p in (json.load(sys.stdin).get("files") or []) if p]
 print("subdir=ok" if ps and all(os.path.basename(os.path.dirname(p))!="translated" for p in ps) else "subdir=bad")' 2>/dev/null)"
+# ---------- A16d ★ 2026-10-30 三事合一批 C4/C11：撤出的五类纯文本容器「拒收＋给出路」 ----------
+# 三条各管一件事，缺一条就是把一类真实缺陷放过去：
+#   ① 出路句必须出现——只回「不支持」会把更快的路（直接粘贴到文本翻译）藏起来；
+#   ② 状态码必须是 4xx——判据自伤（空指针/未走分支）会把它打成 500，客户看到"服务坏了"；
+#   ③ 响应体必须是 `{"error":...}` 那一族而不是产物信封——建了单还回 files 就是**假成功**
+#      （§三 那条「假成功不会让闸门红，只会让闸门钝」：撤了准入却仍出货＝钱扣了、格式没换）。
+# 判据靶子用 `.srt`（这一族最常被拿来问的）；其余四档由单测 L2/L8 全量逐条判，不在这里重复打网络。
+printf '1\n00:00:01,000 --> 00:00:02,000\nHello world\n' > "$TMPD/sub.srt"
+SRT_RESP=$(curl -s -w '\nHTTP=%{http_code}' $B/api/translate -H "$H1" -F "file=@$TMPD/sub.srt" -F "target_langs=en" --max-time 60)
+ck A16d-srt-gives-exit '请直接粘贴内容到文本翻译' "$SRT_RESP"
+ck A16d-srt-4xx-not-500 'HTTP=4[0-9][0-9]' "$SRT_RESP"
+ck A16d-srt-error-shape '"error":' "$SRT_RESP"
+ckn A16d-srt-not-shipped '"files":' "$SRT_RESP"
 rm -rf "$TMPD"
 
 echo "==A-PASS=$PASS FAIL=$FAIL=="

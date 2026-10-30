@@ -1,7 +1,9 @@
 // 漏译率判定与写回交付形态的纯函数测试：
 //   - leakedLang：某语言未译出段数占比 >5%（2026-10-24 用户令：50%→5%）返回语言代码，
 //     作为「触发缺失段补译」的信号；补不回也不判失败（见 HandleFile 收尾）。
-//   - writebackDelivery：srt/vtt/json/yaml/yml 走 xlsx 对照表，其余走原格式写回
+//   - writebackDelivery：三档（inplace/image/audio）。★ 2026-10-30 三事合一批起
+//     「srt/vtt/json/yaml/yml → xlsx 双语对照表」这一档**已退役**（那五种格式同时撤出准入），
+//     本文件的期望按新口径翻转，翻转理由写在 TestWritebackDelivery 的注释里。
 package engine
 
 import (
@@ -65,12 +67,28 @@ func TestLeakedLang(t *testing.T) {
 	}
 }
 
-// TestWritebackDelivery 写回交付形态：无回写能力的格式走 xlsx，其余走原格式
+// TestWritebackDelivery 写回交付形态三档（inplace / image / audio）＋ 已撤格式的行为口径。
+//
+// ⚠️ 这里原先有一整段「srt/vtt/json/yaml/yml → "xlsx"」的期望，★ 2026-10-30 三事合一批
+// 随该档交付退役而**翻转**（翻转理由必须写在原地——只删断言的话，下一个人会照旧口径装回来）：
+// 这五种格式在建单口与执行口都已被拒（那两口由 fileproc/text_formats_test.go 判），
+// 但**存量在飞单**（升级前建、升级后才轮到 worker 跑）仍会走到本函数。
+// 对那种单，按 txt 行对齐写回是**故意留的行为**：钱已扣、译文已在库里，
+// 这时候回一句「不支持」比交出一个纯文本件更坏（AGENTS §19「回落原文＋点名」同一取向）。
 func TestWritebackDelivery(t *testing.T) {
-	xlsxFormats := []string{".srt", ".vtt", ".json", ".yaml", ".yml"}
-	for _, ext := range xlsxFormats {
-		if got := writebackDelivery(ext); got != "xlsx" {
-			t.Errorf("writebackDelivery(%q) = %q, want \"xlsx\"", ext, got)
+	retired := []string{".srt", ".vtt", ".json", ".yaml", ".yml"}
+	for _, ext := range retired {
+		if fileproc.IsTranslateFormat(ext, false) || fileproc.IsTranslateFormat(ext, true) {
+			t.Errorf("%s 仍准入 ⇒ 会走回那条已删除的对照表分支", ext)
+		}
+		if got := writebackDelivery(ext); got != "inplace" {
+			t.Errorf("writebackDelivery(%q) = %q, want \"inplace\"（存量在飞单按行对齐写回，不报错）", ext, got)
+		}
+	}
+	// 全量负向：准入名单里**任何一个**格式都不该再判成 "xlsx"（对照表档整个不存在）。
+	for _, ext := range fileproc.TranslateFormatOrder {
+		if got := writebackDelivery(ext); got == "xlsx" {
+			t.Errorf("writebackDelivery(%q) = xlsx：这一档已于 2026-10-30 退役", ext)
 		}
 	}
 	inplaceFormats := []string{".pdf", ".docx", ".pptx", ".txt", ".csv", ".md", ".xlsx", ""}
@@ -79,14 +97,15 @@ func TestWritebackDelivery(t *testing.T) {
 			t.Errorf("writebackDelivery(%q) = %q, want \"inplace\"", ext, got)
 		}
 	}
-	// ★ P1a：图片格式经 OCR 投喂翻译，无原格式可原位回写，交付形态为 "image"（产出译文 .md）。
+	// ★ P1a：图片格式经 OCR 投喂翻译，无原格式可原位回写，交付形态为 "image"（译后图＋译文 .md）。
 	imageFormats := []string{".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic"}
 	for _, ext := range imageFormats {
 		if got := writebackDelivery(ext); got != "image" {
 			t.Errorf("writebackDelivery(%q) = %q, want \"image\"", ext, got)
 		}
 	}
-	// ★ P2：音频格式经 ASR 转写投喂翻译，译文是文本塞不回音轨，交付 "audio"（.srt + .md + 原音频）。
+	// ★ P2：音频经 ASR 转写投喂翻译，译文是文本塞不回音轨，交付 "audio"。
+	// ★ 2026-10-30：产物＝**译文 .md ＋ 同容器译后配音两件**（字幕 .srt 与原音频副本一并取消）。
 	audioFormats := []string{".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus"}
 	for _, ext := range audioFormats {
 		if got := writebackDelivery(ext); got != "audio" {

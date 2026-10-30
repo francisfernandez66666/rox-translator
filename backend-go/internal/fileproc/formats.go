@@ -15,12 +15,15 @@
 // §一·11 三把尺子、§一·3④ 预估与实扣——形态都是"同一件事多处各算一遍"。
 //
 // 三条设计取向（改动前必读）：
-// ① **只收形状，不翻对外结论**：本文件给出的判据与四份旧副本逐字等值（等值锁
+// ① **清单只在这里长牙**：本文件是「哪些文件能建单」的唯一判据。
 //
-//	＝internal/api/upload_formats_gate_test.go L2 全表比对），
-//	所以"哪些文件能建单"这件事一个字没变。对外承诺的体积数字（OpenAPI 文档写 30MB、
-//	实际闸门 40MiB）本批**不许改成互相靠拢**——那是对外口径决策，只把它的
-//	**方向**收成一条机械判据：对外承诺 ≤ 实际闸门（承诺不得高于守得住的那条线）。
+//	＝internal/api/upload_formats_gate_test.go L2 全表比对）。★ 2026-10-30 三事合一批是**第一次真的
+//	改对外结论**（撤出 .srt/.vtt/.json/.yaml/.yml 五档，27 → 22），所以那句"一个字没变"已成历史——
+//	改这一处＝改对外承诺：必须同批改 upload_formats_gate_test 的冻结句子、前端 translate.ts 与
+//	12 语种 `tk.fileHint`、开放 API 三面文档，并在发版说明里点名；**只改一处就是
+//	「上传口放行、执行口判不支持」的下一次**（本头注开头那一族）。
+//	对外承诺的体积数字（OpenAPI 文档写 30MB、实际闸门 40MiB）不许改成互相靠拢——那是对外口径决策，
+//	只把它的**方向**收成一条机械判据：对外承诺 ≤ 实际闸门（承诺不得高于守得住的那条线）。
 //
 // ② **交付方式（delivery）的字符串不进本包**：调用方自己判 `delivery == "text"`，
 //
@@ -36,6 +39,8 @@
 //
 // =============================================
 package fileproc
+
+import "strings"
 
 // MaxUploadBytes 单个上传请求的体积闸门（40 MiB）。
 //
@@ -64,18 +69,54 @@ const OpenAPIDocLimitMB = 30
 // ★ 2026-10-15 P1a/P2 扩展：追加图片格式（.png/.jpg/.jpeg/.bmp/.tif/.tiff/.webp/.heic）
 // 与音频格式（.mp3/.m4a/.wav/.ogg/.flac/.aac/.opus）。
 // 图片经 OCR 提取文字、音频经 ASR 转写文字后投喂翻译引擎（上游适配器定位，见《改造方案_OCR与ASR接入》），
-// 交付形态：图片→译文文档（writebackDelivery "image" 产出 .md）、音频→译文文档+字幕
-// （writebackDelivery "audio" 产出 .md + .srt）。两者均无原格式可原位回写。
+// 交付形态：图片→同容器译后图＋译文 .md、音频→同容器译后配音＋译文 .md（**两件**，AGENTS §一·14 本批改档）。
 // 准入即代表「本系统接收该格式建单」；OCR/ASR 不可用（OcrAvailable()/AsrAvailable()==false）时
 // 提取层返回友好错误，不把整单判死（译文第一：识别/转写为空才失败）。
-// ⚠️ 这一族扩展是**对外准入决策**，upload_formats_gate_test.go 的 restore12Frozen 已同步为 27 项，
+// ★ 2026-10-30 三事合一批：`.srt/.vtt/.json/.yaml/.yml` **撤出准入**（两种交付模式都撤，27 → 22 项）。
+// 这五个都是纯文本容器，客户要翻的从来是里面的文字，走文件导入只多付一遍落盘/识别/写回的成本；
+// 正确路径是直接粘贴到文本翻译，所以拒绝时**必须给这条出路**（见下面 RejectHint），不许只回一句「不支持」。
+// ⚠️ 这一族是**对外准入决策**：upload_formats_gate_test.go 的 restore12Frozen 已同步为 22 项，
 // 四处冻结句子与 FormatHintBase 断言一并更新——改这份清单必须先动那条锁（逼出显式决策）。
+// ⚠️ translateFormats.lock.test.ts 的 P0 下限（还原 <12）**不用跟着改**：它是"比清单短一大截"的射程探测器，
+// 不是项数的镜像；把下限抬到贴近项数，下一次合法撤除就会把闸门自己判成"锚点漂了"（AGENTS §一·14）。
 var TranslateFormatOrder = []string{
 	".docx", ".xlsx", ".pptx", ".pdf", // .pdf 有原位回写（原版式覆盖→版式重建→纯文案三级链），交付形态判据见 engine.writebackDelivery
-	".txt", ".csv", ".srt", ".vtt",
-	".md", ".json", ".yaml", ".yml",
+	".txt", ".csv",
+	".md",
 	".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic", // P1a：图片格式，经 OCR 投喂翻译引擎
 	".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus", // P2：音频格式，经 ASR 转写投喂翻译引擎
+}
+
+// retiredTextContainers 是 2026-10-30 撤出准入的那五个纯文本容器。
+// ⚠️ 它们**不在** TranslateFormatOrder 里——这份名单只为把「为什么被拒」说清楚而存在：
+// 判据与出路必须同处，否则将来有人把 .srt 加回准入时，拒绝分支会剩下一句永远不该再出现的文案。
+var retiredTextContainers = map[string]bool{
+	".srt": true, ".vtt": true, ".json": true, ".yaml": true, ".yml": true,
+}
+
+// PlainTextContainerHint 撤除格式的出路句（**对外文案唯一事实源**，前端校验与后端三口逐字一致）。
+const PlainTextContainerHint = "这一类是纯文本容器，请直接粘贴内容到文本翻译"
+
+// IsRetiredTextContainer 判一个扩展名是否属于「本批撤出的纯文本容器」（用于给可行动出路，不是判准入）。
+// 参数 ext: 已小写归一的扩展名（含点）。
+func IsRetiredTextContainer(ext string) bool {
+	return retiredTextContainers[strings.ToLower(strings.TrimSpace(ext))]
+}
+
+// RejectHint 组装一句完整的「不支持」提示（建单三口的唯一出口）。
+// 参数 ext: 已小写归一的扩展名（含点）；textMode: 是否纯文案模式；
+// lead: 各调用点自己的前导措辞（形如 `不支持的格式: a.doc` 或 `不支持的格式`）。
+// 三个分支：撤除的五个容器 ⇒ 出路句；纯文案模式 ⇒ 清单＋anydoc 样本；其余 ⇒ 清单句。
+// 清单两段都**现算**（FormatHintBase/FormatHintText），所以改档位这句话自己跟着变，
+// 不会再长出「代码改了、提示还在承诺旧格式」的第二形态（AGENTS §一·14）。
+func RejectHint(ext string, textMode bool, lead string) string {
+	if IsRetiredTextContainer(ext) {
+		return lead + "（" + PlainTextContainerHint + "）"
+	}
+	if textMode {
+		return lead + "（纯文案模式支持 " + FormatHintBase() + " 及 " + FormatHintText() + "）"
+	}
+	return lead + "（仅支持 " + FormatHintBase() + "）"
 }
 
 // AnydocHintSample 纯文案模式（delivery=text）额外准入的那一族的**展示样本**。
@@ -152,17 +193,14 @@ func TranslateRestoreFormatsCopy() map[string]bool {
 }
 
 // FormatHintBase 出栈文案里的「支持的格式」清单（还原模式那一句的全部实质内容）。
-// 返回形如 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml。
+// 返回形如 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/…。
 //
-// 两处归一（都是沿用旧措辞，不是本批新决策）：
-//   - 剥掉前导点（客户看的是文件后缀，不是代码里的键）；
-//   - .yml 不单列——它是 .yaml 的别名，旧文案里也只出现 yaml 一次。
+// 一处归一（沿用旧措辞，不是本批新决策）：剥掉前导点（客户看的是文件后缀，不是代码里的键）。
+// ⚠️ 旧写法里那条「.yml 不单列」的跳过已随 2026-10-30 的准入撤除一起退役——
+// 清单里不再有 .yml，留着它就是把一段死逻辑当判据供着（AGENTS §一·14「注释/代码点名的锚点必须存在」）。
 func FormatHintBase() string {
 	out := make([]string, 0, len(TranslateFormatOrder))
 	for _, e := range TranslateFormatOrder {
-		if e == ".yml" {
-			continue // 别名不在对外清单里重复出现
-		}
 		out = append(out, e[1:])
 	}
 	joined := ""

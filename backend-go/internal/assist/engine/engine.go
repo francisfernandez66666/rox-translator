@@ -80,6 +80,17 @@ type Engine struct {
 	sysValDoc   *pricingMetaDoc
 	sysValAt    time.Time
 
+	// 即时翻译档位（★ 2026-10-30 组7 I-2）：与现值段同一节奏缓存、同一失败口径
+	//（取不到就整段不出现；失败也占缓存位，见 capability_facts.go）。
+	capsMu    sync.Mutex
+	capsBlock string
+	capsAt    time.Time
+
+	// ★ 2026-10-30 组7 §8.3（R-3 第 4 档）：同一会话 3 分钟内不重复推充值入口。
+	// 进程内记录、不落库：重启清零最坏只是多推一次；落库反而会让"运营想再触达"被旧记录挡住。
+	rechargeMu     sync.Mutex
+	rechargePushed map[string]time.Time
+
 	// ★ 0AF（2026-10-01 现网 greet 502 实证）：canned 首屏翻译「同步有界 + 后台补翻」的在途簿记。
 	// cannedFlights 记「哪个 (kind,语种,指纹) 此刻已有一条腿在打上游」，同键后来者直接出中文原文，
 	// 绝不让 N 个并发访客各拨一枪（机制、TTL 兜底与取舍见 localize_async.go）。
@@ -648,6 +659,11 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	rep = e.guardReplyFabrication(ctx, answer, rep)
 	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
 	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 2026-10-30 组7 §8.3（R-1…R-5）：充值入口的唯一判据。
+	// 位置刻意排在所有"删句子"的守卫之后、按钮本地化之前：
+	//  · 之前那些腿可能把 tickets 按钮或正文改掉，判断「本轮已在推工单」要看**最终**按钮集；
+	//  · 之后紧接 localizeActionNames，新增的按钮才会跟着本轮作答语言翻（不吃裸 uiLang）。
+	rep = e.applyRechargeIntent(ctx, sessionID, input, rep)
 	// ★ 0AR 第 4 波 ⑱：动作按钮名跟着**本轮作答语言**出（缺陷本体是「正文已是外文＋一排中文按钮」，
 	// 因为这一路压根不在翻译层清单里）。吃 `answer` 不吃 `uiLang`——就是上面 〇-AC 那条尺子：
 	// 按钮跟的是"这一轮用什么语言说话"，不是"前台此刻挂在哪个语种"。机制见 canned_actions.go。
@@ -998,7 +1014,7 @@ const defaultToneRules = `【定界·最重要】下面【怎么说话】【反�
 - 术语库锁定专业词，支持PPT/Excel原格式输出。长文档自动校验一致性，企业权限和审计追踪。需要体验→（❌ 复读上一条，客户问第二次了还这样回）
 
 【正面示例 A】（客户问竞品对比）
-考虑对比是很正常的，DeepL 确实强。不过咱们跟通用翻译工具真正不一样的地方有两点：一是原版式保留，PPT、Excel 传进去加粗变色公式原样出来，DeepL 出来只能贴两列对照文本；二是术语库，你规定品牌名怎么译、专业词库怎么建，我们直接拦在翻译前头改，翻错词会标黄让你改，省了人工校对时间。你手头有需要试试格式的文件吗？
+考虑对比是很正常的，DeepL 确实强。不过咱们跟通用翻译工具真正不一样的地方有两点：一是原版式保留——PPT、Excel 传进去，排版、加粗、配色这些格式照原样回来（表格按文字长度比例还原，数学公式按普通文字处理，不保证还能当公式编辑），DeepL 出来只能贴两列对照文本；二是术语库，你规定品牌名怎么译、专业词库怎么建，我们直接拦在翻译前头改，翻错词会标黄让你改，省了人工校对时间。你手头有需要试试格式的文件吗？
 
 【正面示例 B】（客户重复问同一个问题：换角度 + 补细节 + 软化衔接）
 刚才可能没讲明白，我再换个说法。简单说就是：你传什么格式的文件，我们翻完还是那个格式——Word 还是 Word、PPT 还是 PPT，不用自己贴来贴去排版。而且你公司有哪些词必须翻译成什么，提前建好术语库，我们翻译的时候自动按你的要求来，不用每次人工挑错词。你手头有带格式的文件要试试吗？
@@ -1034,6 +1050,19 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 	if sv := e.systemValuesBlock(ctx); sv != "" {
 		sb.WriteString(sv)
 		sb.WriteString("\n\n")
+	}
+	// ★ 2026-10-30 组7（I-2）：能力与档位同样**现读**，代码里不抄数字——
+	// 这一段的数字来自主服务 /api/instant/caps（运营改配置后最迟一个 TTL 跟随），
+	// 与官网文案、引导卡同一份现值（S2）。取不到整段不出现（不许念旧数字）。
+	if cf := e.capabilityFactsBlock(ctx); cf != "" {
+		sb.WriteString(cf)
+		sb.WriteString("\n\n")
+	}
+	// ★ 2026-10-30 组7 §8.2（P-6）：登录用户画像只在这一个函数里拼，位置在【即时翻译档位】之后、
+	// 【相关知识】之前——它是"这个人此刻的处境"，应当先于通用知识被模型读到；匿名时整段不出现。
+	if pb := visitorProfileBlock(ctx); pb != "" {
+		sb.WriteString(pb)
+		sb.WriteString("\n")
 	}
 	if len(hits) > 0 {
 		sb.WriteString("【相关知识】\n")

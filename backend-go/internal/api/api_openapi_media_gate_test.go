@@ -205,3 +205,143 @@ func specTextAt(t *testing.T, keys ...string) string {
 	}
 	return str
 }
+
+// ---------- L5（★ 2026-10-30 三事合一批 C9 新增：撤格式与音频简化的对外口径） ----------
+
+// retiredDeliveryPromises 是「旧交付形态」在对外文档里的**承诺写法**。
+// ⚠️ 刻意不按 ".srt" 这种名字判：新文档里合法地写着「.srt/.vtt/.json/.yaml/.yml 不再受理」，
+// 按名字判会把那条公告本身判成违规——反向锁写成"提到就红"的下场就是被人摘掉（AGENTS §一·14）。
+var retiredDeliveryPromises = []string{
+	"_en.srt",
+	"字幕 _en.srt",
+	"译文 .srt（带原时间轴）",
+	"subtitles _en.srt",
+	"+ subtitles",
+	"以 xlsx 对照表交付",
+	"原音频副本",
+	"原音轨副本",
+	"a copy of the source audio",
+}
+
+// stillPromisedDelivery 判据本体（正例与反证共用同一个函数，两侧不可能各判各的）。
+//
+// ⚠️ 必须**识别否定**：本批对外公告写的是「不产字幕、不随包原音频副本」，
+// 与退役前的承诺句共用同一批名词。纯子串命中会把公告判成违规——
+// 那种红第二天就被人为摘掉，比没有锁更坏（本仓反复记录的闸门钝化形态）。
+// 命中处往前看 24 个 rune，见到「不／no／not」即视为公告而不是承诺。
+func stillPromisedDelivery(text string) string {
+	r := []rune(text)
+	for _, phrase := range retiredDeliveryPromises {
+		p := []rune(phrase)
+		for at := 0; at+len(p) <= len(r); {
+			idx := indexOfRunes(r[at:], p)
+			if idx < 0 {
+				break
+			}
+			abs := at + idx
+			lo := abs - 20
+			if lo < 0 {
+				lo = 0
+			}
+			hi := abs + len(p) + 20
+			if hi > len(r) {
+				hi = len(r)
+			}
+			win := string(r[lo:hi])
+			// 双向看：中文公告常写成「与原音频副本**不再**随包」（否词在后），
+			// 英文常写成 "**no** source-audio file"（否词在前）。只往前看就会把其中一种判成承诺。
+			neg := strings.Contains(win, "不") || strings.Contains(win, "no ") ||
+				strings.Contains(win, "not ") || strings.Contains(win, "No ")
+			if !neg {
+				return "文档仍在承诺已退役的交付形态：" + phrase
+			}
+			at = abs + len(p)
+		}
+	}
+	return ""
+}
+
+// indexOfRunes 在 rune 切片里找子序列，返回起始下标（找不到回 -1）。
+// 为什么不用 strings.Index：上面那段要在**同一个 rune 坐标系**里做窗口扩取，
+// 字节下标混进来就会算出 lo>hi 直接 panic（首跑就是这么炸的，不是产品问题）。
+func indexOfRunes(hay, needle []rune) int {
+	if len(needle) == 0 || len(needle) > len(hay) {
+		return -1
+	}
+	for i := 0; i+len(needle) <= len(hay); i++ {
+		same := true
+		for j := range needle {
+			if hay[i+j] != needle[j] {
+				same = false
+				break
+			}
+		}
+		if same {
+			return i
+		}
+	}
+	return -1
+}
+
+// mustAnnounceRetirement 新口径必须真写出来：只判"旧的删干净了"会退化成"整段被删空也算过"。
+// 三个条件各钉一件：① 点名不再受理（对外承诺变更不许静默收口）；
+// ② 音频交付＝两件（配音＋译文 .md）；③ 撤除的五种名字要一起列出来，客户才知道自己那份文件该走哪条路。
+func mustAnnounceRetirement(name, text string) string {
+	announced := strings.Contains(text, "不再受理") || strings.Contains(text, "停止受理") ||
+		strings.Contains(text, "no longer accepted") || strings.Contains(text, "no longer packaged")
+	if !announced {
+		return name + "：没点名「.srt/.vtt/.json/.yaml/.yml 不再受理」⇒ 撤格式属对外承诺变更，不许静默收口"
+	}
+	twoArtifacts := strings.Contains(text, "两件") || strings.Contains(text, "Two artifacts") ||
+		strings.Contains(text, "two artifacts")
+	if !twoArtifacts {
+		return name + "：没写明音频交付＝**两件**（同容器配音＋译文 .md）⇒ 客户不知道拿回的是什么形态"
+	}
+	if !strings.Contains(text, "srt") {
+		return name + "：公告里没点名被撤的格式（客户手上正是这些文件，只说「不支持」等于没公告）"
+	}
+	return ""
+}
+
+// TestOpenAPIMediaRetirementDocumented L5：五处对外文本必须"旧承诺消失、新口径写明"。
+func TestOpenAPIMediaRetirementDocumented(t *testing.T) {
+	faces := []struct {
+		name         string
+		text         string
+		mustAnnounce bool
+	}{
+		{"openapi.v1.json(info.description)", specInfoDescription(t), true},
+		{"openapi.v1.json(CreateFileTask.files)", specFileFieldDescription(t), false},
+		{"openapi.v1.json(TaskStatus.files)", specStatusFilesDescription(t), true},
+		{"defaultDocsMDZh", defaultDocsMDZh, true},
+		{"defaultDocsMDEn", defaultDocsMDEn, true},
+	}
+	for _, f := range faces {
+		if v := stillPromisedDelivery(f.text); v != "" {
+			t.Errorf("%s：%s", f.name, v)
+		}
+		if f.mustAnnounce {
+			if v := mustAnnounceRetirement(f.name, f.text); v != "" {
+				t.Errorf("%s", v)
+			}
+		}
+	}
+	// 反证：把旧句子写回去必须被抓（证明上面两条负向锁有射程，而不是恒真）
+	mutated := "音频产出同容器译后配音＋字幕 _en.srt＋原音频副本"
+	if stillPromisedDelivery(mutated) == "" {
+		t.Error("反证失败：旧承诺句子写回来却没被抓，L5 的负向腿射程为零")
+	}
+	// 反证：只删公告、留新形态描述，必须被"没点名不再受理"抓到（防"整段删空"式过关）
+	if mustAnnounceRetirement("假文档", "音频交付两件：同容器配音＋译文 .md") == "" {
+		t.Error("反证失败：没点名不再受理却没判红 ⇒ 公告这一腿可以被静默删掉")
+	}
+	// 反证②（判据的另一半）：否定式写法必须放行——公告句与承诺句共用名词，
+	// 如果连「不产字幕」都判红，这条锁的归宿就是被人整个删掉。
+	if v := stillPromisedDelivery("音频交付两件：同容器配音＋译文 .md，不产字幕、不随包原音频副本"); v != "" {
+		t.Errorf("否定式公告被判成承诺（判据过严，第二天就会被摘）：%s", v)
+	}
+	// 正例对照：本次真改过的文本喂进同一个判据必须回空（证明上面几条红是判据有效，不是判据坏了）
+	if v := mustAnnounceRetirement("对照", defaultDocsMDZh); v != "" {
+		t.Errorf("正向对照失败（真文档被判违规）：%s", v)
+	}
+}

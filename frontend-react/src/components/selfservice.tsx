@@ -77,9 +77,51 @@ export function BalancePanel() {
         {/* ★ 2026-10-26 P2-02：三个字段各自四舍五入，明细相加可能与“可用总额”差 1；
             页面不做手动求和，合计一律以 API 的 points_balance 为准。 */}
         <div className="ss-note">{t('ss.roundingNote')}</div>
+        {/* ★ 2026-10-30 三事合一批 组3 #10（D-12）：逐档折叠明细。
+            D-12 口径＝「合计优先 ＋ 折叠逐档」：总数仍以上面三行为准，这里只展开"钱在哪几档"。
+            · 免费档不进这个数组（服务端已排除，前端也不许自己造一行）——暗额度不报数字；
+            · 默认收起（<details> 原生形态，不引状态）；
+            · 每档写清"到期"：客户要知道哪笔快过期（否则钱悄悄作废，见 wallet_tier.go 文件头）。 */}
+        {Array.isArray(p.wallet) && p.wallet.some((w: any) => w?.tier && w.tier !== 'free') && (
+          <details className="ss-wallet">
+            <summary>{t('ss.walletTiers')}</summary>
+            {/* 免费档在服务端已被排除；这里再过滤一次是防线（暗额度不许出数字，出一次就够客户算出来） */}
+            {p.wallet.filter((w: any) => w?.tier && w.tier !== 'free').map((w: any) => (
+              <div className="ss-row ss-wallet-row" key={String(w.tier)}>
+                <span>{tierLabel(t, String(w.tier))}</span>
+                <b>{fmtPoints(w.points_left ?? 0)}</b>
+                <span className="ss-wallet-exp">{expiryLabel(t, String(w.expires_at ?? ''))}</span>
+              </div>
+            ))}
+            <div className="ss-note">{t('ss.walletOrderHint')}</div>
+          </details>
+        )}
       </div>
     </div>
   )
+}
+
+// tierLabel 把服务端档位字面映射成界面词（★ 2026-10-30 组3：档位字面是对外契约，
+// 与 store/wallet_tier.go 的 TierXxx 常量逐字对应；名单外的档位原样显示，
+// **不许**折成"其他"——那会让客户账上一笔找不到来源的余额变成无名行）。
+function tierLabel(t: (k: string) => string, tier: string): string {
+  switch (tier) {
+    case 'register': return t('ss.tierRegister')
+    case 'task': return t('ss.tierTask')
+    case 'plan_month': return t('ss.tierPlanMonth')
+    case 'plan_year': return t('ss.tierPlanYear')
+    case 'plan_permanent': return t('ss.tierPlanPermanent')
+    case 'legacy': return t('ss.tierLegacy')
+    default: return tier
+  }
+}
+
+// expiryLabel 到期展示：长期档的到期是 9999 哨兵（不是 NULL），按年份判"长期有效"。
+function expiryLabel(t: (k: string) => string, expiresAt: string): string {
+  if (!expiresAt) return ''
+  const y = Number(expiresAt.slice(0, 4))
+  if (Number.isFinite(y) && y >= 9000) return t('ss.tierForever')
+  return `${t('ss.tierExpires')} ${expiresAt.slice(0, 10)}`
 }
 
 // 我的邀请面板：展示个人邀请码、邀请链接、奖励统计与邀请记录
@@ -276,4 +318,9 @@ const CSS_SSC = `
 .ssc-card + style{display:none}
 /* ★ 2026-10-26 P2-02：余额明细取整说明（不新增几何/颜色档，沿用辅助文字档） */
 .ss-note{margin-top:8px;font-size:14px;line-height:20px;color:var(--lc-text-4)}
+/* ★ 2026-10-30 组3 #10：逐档折叠明细（默认收起；只加一档内垫与行对齐，不新增字阶） */
+.ss-wallet{margin-top:12px;border-top:1px solid var(--lc-border-card);padding-top:10px}
+.ss-wallet summary{cursor:pointer;font-size:15px;color:var(--lc-text-2)}
+.ss-wallet-row{align-items:baseline;gap:10px}
+.ss-wallet-exp{font-size:13px;color:var(--lc-text-3)}
 `

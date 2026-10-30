@@ -67,7 +67,7 @@ func TestDeductWithGrantsConcurrency(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			err := st.DeductWithGrants(tid, perCall)
+			err := st.DeductWithGrants(tid, 0, perCall)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -111,7 +111,7 @@ func TestDeductWithGrantsOverflow(t *testing.T) {
 		t.Fatalf("Charge 失败: %v", err)
 	}
 	// 请求 9000 > 台账 5000 + 永久 3000 → 整体回滚，什么都不该被扣
-	if err := st.DeductWithGrants(tid, 9000); err != ErrInsufficientBalance {
+	if err := st.DeductWithGrants(tid, 0, 9000); err != ErrInsufficientBalance {
 		t.Fatalf("期望 ErrInsufficientBalance，实得: %v", err)
 	}
 	sum := st.SumActiveGrants(tid)
@@ -123,7 +123,7 @@ func TestDeductWithGrantsOverflow(t *testing.T) {
 		t.Fatalf("失败后永久余额应原封不动: %d（期望 3000）", bal.Balance)
 	}
 	// 可承受的混合扣减：7000 = 台账 5000 全核销 + 永久 2000
-	if err := st.DeductWithGrants(tid, 7000); err != nil {
+	if err := st.DeductWithGrants(tid, 0, 7000); err != nil {
 		t.Fatalf("混合扣减失败: %v", err)
 	}
 	if st.SumActiveGrants(tid) != 0 {

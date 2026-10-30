@@ -74,8 +74,6 @@ DEMO_URL="https://rox-test.lexicorn.cn"      # 演示块 translator-demo.conf �
 #   通配块要验的是**通配那一条规则**，任何未登记子域都等价（brandingPayload 回落平台默认）；
 #   `*.lexicorn.cn` 的泛解析实测覆盖这个新名字（dig 回同一对 CF 地址）。
 TENANT_URL="https://tenant-probe.lexicorn.cn"  # 租户通配块 translator-tenant.conf → 8787，/assets/* 与主站**同一份磁盘**
-# 退役锁：rox 必须继续是 410（有人把那个块删了、或把域名重新绑上租户，这条立刻红）
-RETIRED_URL="https://rox.lexicorn.cn"
 # ★ 三个域都要过公网那一段，一个都不能省：本批**动了三份 conf**（主站／演示／租户通配），
 #   而这三段的 `file_server { precompressed br gzip }` 是三处各写一遍的独立站点块——
 #   主站测通了不代表通配块也接上了（Caddy 的站点块按 Host 精确优先，通配块那条腿只有打租户域名才走到）。
@@ -254,6 +252,20 @@ for h in langcross.lexicorn.cn rox-test.lexicorn.cn tenant-probe.lexicorn.cn; do
 done
 
 echo
+echo "----- G2 退役域负向锁（rox.lexicorn.cn 已于 2026-10-30 按用户令下线）-----"
+# 抓的只有一件事：**退役的站又活过来了**（有人删了 translator-tenant.conf 顶端那个 respond 410 块，
+# 或把该域名重新绑给了某个租户）。
+# ⚠️ 必须放在**远端段**：本机段那条 `--resolve <域>:443:127.0.0.1` 指向的是**跑脚本这台笔记本**，
+#    恒回 000，而且 `bad()` 只有远端段才写 RC —— 写在本机段会变成一枚永不判红的空转锁（本批真踩）。
+RETIRED_CODE=$(curl -sk --resolve rox.lexicorn.cn:443:127.0.0.1 -o /dev/null -w '%{http_code}' --max-time 20 https://rox.lexicorn.cn/ 2>/dev/null)
+[ -n "${RETIRED_CODE}" ] || RETIRED_CODE=000
+if [ "$RETIRED_CODE" = "410" ]; then
+  ok "rox.lexicorn.cn（源站）已退役：410"
+else
+  bad "rox.lexicorn.cn（源站）退役域没回 410，实得 code=${RETIRED_CODE} ⇒ 查 /etc/caddy/translator-tenant.conf 顶端的 respond 块"
+fi
+
+echo
 if [ "$RC" = "0" ]; then echo "REMOTE_ALL_OK=1"; else echo "REMOTE_FAIL=1（上面有 BAD 行）"; fi
 echo POSTDEPLOY_REMOTE_EXIT=$RC
 exit "$RC"
@@ -424,20 +436,6 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
   fi
 done
 
-
-# ----- G2 退役域负向锁（★ 2026-10-30 用户令：rox.lexicorn.cn 已下线）-----
-# 抓的只有一件事：**退役的站又活过来了**（有人删了 translator-tenant.conf 顶端那个 respond 410 块，
-# 或把该域名重新绑给某个租户）。两条腿：源站直读（绕 CDN、不受边缘缓存影响）与公网。
-# ⚠️ 公网允许在边缘 TTL（2h）内仍回旧 HTML 缓存——那一档记读数不判红；
-#    只要**不是 410 也不是缓存命中**（例如又回 200 且 cf=MISS/HIT 新鲜）就判红。
-for u in "$RETIRED_URL"; do
-  # ⚠️ 不许写 `|| echo 000`：curl 失败时 `-w` 自己就会打 000，再补一个就成了 "000000"
-  #    （AGENTS §23 点名的那个坑，本批首跑真踩——判据比对的字面永远对不上，于是一条"该红的腿"变成"永远红"）。
-  CODE=$(curl -sk --resolve "${u#https://}:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 20 "$u/" 2>/dev/null)
-  [ -n "${CODE}" ] || CODE=000
-  if [ "$CODE" = "410" ]; then echo "  OK   ${u}（源站）已退役：410"
-  else echo "  BAD  ${u}（源站）退役域没回 410，实得 code=${CODE} ⇒ 查 /etc/caddy/translator-tenant.conf 顶端的 respond 块"; RC=1; fi
-done
 
 rm -f "$TMPB" "$TMPH"
 

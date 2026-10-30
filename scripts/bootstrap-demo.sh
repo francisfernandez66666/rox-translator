@@ -301,7 +301,9 @@ Group=translator
 WorkingDirectory=${DEMO_DIR}
 EnvironmentFile=${DEMO_SECRETS}
 Environment=REQUIRE_PROD_SECRETS=1
-Environment=TRUST_PROXY_XFF=1
+# ★ 2026-10-30 三事合一批（组2a）：TRUST_PROXY_XFF 的读点已从代码删除——客户端 IP 的唯一实现
+#   是 internal/httpx/clientip.go，按「直连对端是不是本机回环」判信任（回环才看 CF-Connecting-IP／XFF 最左）。
+#   这里不再写这一行：留着会让人以为还能靠它开关信任，而实际没有任何代码读它（与 deploy/systemd/prod.conf 同批处理）。
 Environment=DB_DRIVER=postgres
 Environment=DB_DSN=${DEMO_DSN}
 Environment=USER_DATA_DIR=${DEMO_USER_DATA}

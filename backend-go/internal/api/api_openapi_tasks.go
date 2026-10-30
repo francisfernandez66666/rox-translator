@@ -23,7 +23,6 @@ package api
 // ========================================
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -356,8 +355,12 @@ func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, 
 	for _, hdr := range headers {
 		ext := strings.ToLower(filepath.Ext(hdr.Filename))
 		if !fileproc.IsTranslateFormat(ext, textMode) {
+			// ★ 2026-10-30 C-10 接线：这里**刻意传 textMode=false**，沿用上面那段「对外只承诺清单句」的决定
+			// （改成 true 就会在没动文档的那一刻先造出第二个对外口径）。
+			// 但撤出的那五个纯文本容器必须走这一个出口拿到「请直接粘贴内容到文本翻译」那条出路——
+			// 只回「不支持」等于把一个更省事的路藏起来（AGENTS §一·14）。
 			writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest),
-				"不支持的格式: "+hdr.Filename+"（仅支持 "+fileproc.FormatHintBase()+"）")
+				fileproc.RejectHint(ext, false, "不支持的格式: "+hdr.Filename))
 			return
 		}
 		if textMode && fileproc.AnydocFormats[ext] && !fileproc.AnydocAvailable() {
@@ -623,76 +626,31 @@ func (s *Server) handleOpenAPITaskDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	baseName := t.TicketNo
-	// ★ 工单双模式（2026-09-13）：fmt=text → 仅下载译文纯文案（.md）
-	if strings.EqualFold(r.URL.Query().Get("fmt"), "text") {
-		s.serveTicketTextDeliverable(w, r, t, baseName)
-		return
+	if baseName == "" {
+		baseName = fmt.Sprintf("ticket_%d", t.ID)
 	}
-	// 多文件工单：?file_id= 取单个产物；否则打包 zip（跳过失败文件）
+	// ★ 2026-10-30 组5（两段式）：取件/打包与用户面共用 ticketArtifactFiles + serveTicketPicks。
+	//   从外面看行为不变（单件直发 / 多件 zip、fmt=text 只给 md），变的是取件来源：
+	//   新单按 ticket_artifacts 表取（否则多语种只打第一件），历史单回落旧 result_path 口径。
+	textOnly := strings.EqualFold(r.URL.Query().Get("fmt"), "text")
+	fid, _ := strconv.ParseInt(r.URL.Query().Get("file_id"), 10, 64)
 	tfiles, _ := s.Store.TicketFiles(t.ID)
-	if len(tfiles) > 0 {
-		if fidStr := r.URL.Query().Get("file_id"); fidStr != "" {
-			fid, _ := strconv.ParseInt(fidStr, 10, 64)
-			for _, f := range tfiles {
-				if f.ID == fid && f.ResultPath != "" {
-					if fh, oerr := os.Open(f.ResultPath); oerr == nil {
-						defer fh.Close()
-						w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(f.ResultPath, f.FileName)))
-						http.ServeContent(w, r, f.FileName, time.Now(), fh)
-						return
-					}
-				}
-			}
-			writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "该文件的产物不存在")
-			return
+	picks, _ := s.ticketArtifactFiles(t, tfiles, textOnly, fid, baseName)
+	if len(picks) > 0 {
+		zipName := baseName + ".zip"
+		if textOnly {
+			zipName = baseName + "_texts.zip"
 		}
-		// 无 file_id：收集存在产物文件的（路径,下载名），单文件直发、多文件打 zip
-		var paths, names []string
-		for _, f := range tfiles {
-			if f.ResultPath != "" {
-				if _, serr := os.Stat(f.ResultPath); serr == nil {
-					paths = append(paths, f.ResultPath)
-					names = append(names, engine.DeliverableBaseName(f.ResultPath, resultFileName(f)))
-				}
-			}
-		}
-		// 单产物直接流式返回（打开失败则继续走后续兜底分支）
-		if len(paths) == 1 {
-			fh, oerr := os.Open(paths[0])
-			if oerr == nil {
-				defer fh.Close()
-				w.Header().Set("Content-Disposition", contentDisposition(names[0]))
-				http.ServeContent(w, r, names[0], time.Now(), fh)
-				return
-			}
-		}
-		// 多产物打 zip：逐份读入写 zip 条目（单份读失败跳过不阻断整包）
-		if len(paths) > 1 {
-			w.Header().Set("Content-Disposition", contentDisposition(baseName+".zip"))
-			w.Header().Set("Content-Type", "application/zip")
-			zw := zip.NewWriter(w)
-			for i, p := range paths {
-				data, rerr := os.ReadFile(p)
-				if rerr != nil {
-					continue
-				}
-				fe, _ := zw.Create(names[i])
-				_, _ = fe.Write(data)
-			}
-			_ = zw.Close()
-			return
-		}
-		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINoResult), "暂无已生成的产物（部分或全部文件处理失败）")
+		s.serveTicketPicks(w, r, picks, zipName)
 		return
 	}
-	// 旧单文件工单：原格式产物直返
-	if t.ResultPath != "" {
-		if f, ferr := os.Open(t.ResultPath); ferr == nil {
-			defer f.Close()
-			w.Header().Set("Content-Disposition", contentDisposition(engine.DeliverableBaseName(t.ResultPath, baseName+filepath.Ext(t.ResultPath))))
-			http.ServeContent(w, r, filepath.Base(t.ResultPath), time.Now(), f)
-			return
-		}
+	if fid > 0 {
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINotFound), "该文件的产物不存在")
+		return
+	}
+	if textOnly {
+		writeOpenAPIError(w, r.Context(), string(errors.OpenAPINoResult), "该任务暂无纯文案产物")
+		return
 	}
 	writeOpenAPIError(w, r.Context(), string(errors.OpenAPINoResult), "该任务无可下载的文件产物")
 }

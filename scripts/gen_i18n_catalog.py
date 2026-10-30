@@ -15,6 +15,15 @@
 import json
 
 T = {
+"仅支持 GET": "GET only",
+"产物不存在": "Artifact not found",
+"产物不存在或已过保留期，请重新发起工单获取": "Artifact not found or past its retention period; start a new ticket to generate it again",
+"只有纯文案 .md 产物支持预览": "Only plain-text .md artifacts can be previewed",
+"无权访问他人工单产物": "No access to another user's ticket artifacts",
+"读取产物失败": "Failed to read the artifact",
+"图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式": "Image exceeds the instant-translation limit (3 MB). Send it to a translation ticket: up to 40 MB, with the original format restored",
+"录音超出即时翻译上限，请交给翻译工单（上限 40 MB）": "Audio exceeds the instant-translation limit. Send it to a translation ticket (up to 40 MB).",
+"无法读取这段录音的时长，请换一段录音或交给翻译工单": "Cannot read this recording's duration. Use another recording or send it to a translation ticket.",
 "target_text 与目标语言书写系统不符，请检查目标语言或译文": "target_text does not match the target language's writing system; check the target language or translation",
 "账号或密码错误": "Incorrect account or password",
 "账号查询失败": "Failed to look up account",

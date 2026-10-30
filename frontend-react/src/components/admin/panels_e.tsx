@@ -58,7 +58,7 @@ export function OpsP() {
   const [, t, tpl] = useT()
   const { isSuper, activeTenantId } = useAdmin()
   // 策略草稿（本地编辑；2026-09 起仅超管平台级可写）
-  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {}, front: {} })
+  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {}, front: {}, instant: {} })
   const [windows, setWindows] = useState<any[]>([])
   const [, setNow] = useState('') // ★ E14
   // 推广窗口编辑弹窗
@@ -91,6 +91,9 @@ export function OpsP() {
           // ★ 〇-Z 门面：eff.front 由后端把 env LANDING_DISABLED 一并算进去（读写同源），
           // 这里直接取用即可，前端绝不再按域名猜"这是不是演示站"。
           front: eff.front || {},
+          // ★ 2026-10-30 即时翻译免费档（九键全 `*int` 三态：-1 关 / 0 不限 / N 上限）：
+          //   界面只做读写同源，档位真值与跨键校验都在后端（倒挂配置 400 由服务端拦）。
+          instant: eff.instant || {},
         })
         setWindows(r.windows || [])
         try {
@@ -121,6 +124,8 @@ export function OpsP() {
   const setTask = (patch: Record<string, any>) => setPol((p) => ({ ...p, task: { ...p.task, ...patch } }))
   // ★ 〇-Z 站点门面（官网首页对访客是否开放）：与其余因子同款不可变补丁
   const setFront = (patch: Record<string, any>) => setPol((p) => ({ ...p, front: { ...p.front, ...patch } }))
+  // ★ 2026-10-30 即时翻译免费档九键（同款不可变补丁；保存仍走整包 opsPolicySave）
+  const setInstant = (patch: Record<string, any>) => setPol((p) => ({ ...p, instant: { ...p.instant, ...patch } }))
 
   // 保存当前草稿（平台级，仅超管）；成功即重新加载生效策略
   const save = async () => {
@@ -372,6 +377,33 @@ export function OpsP() {
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', opacity: isSuper ? 1 : 0.55 }}>
           <Field label={t('ops.frontLanding')}><Switch disabled={!isSuper} checked={pol.front?.landing_enabled !== false} onChange={(e) => setFront({ landing_enabled: e.target.checked })} /></Field>
           <span style={{ fontSize: 14, color: 'var(--adm-faint)', maxWidth: 420, lineHeight: 1.7 }}>{t('ops.frontHint')}</span>
+        </div>
+      </Panel>
+
+      {/* ★ 2026-10-30 即时翻译（免费档）九键：暗额度 + 两档尺寸/时长 + 语种上限。
+          语义三态统一（-1 关闭 / 0 不限 / N 上限），每项下方一行帮助；保存沿用整包 policy，
+          不新造接口（方案 §4.7 H-4）。跨键一致性（免费档不得宽于付费档）由后端 400 拦。 */}
+      <Panel title={t('ops.instantTitle')} extra={<span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('ops.instantHint')}</span>}>
+        <div data-testid="ops-instant" style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: isSuper ? 1 : 0.55 }}>
+          {([
+            ['free_daily_points', 'ops.instantFreeDailyPoints'],
+            ['free_tenant_daily_points', 'ops.instantFreeTenantDailyPoints'],
+            ['free_ip_daily', 'ops.instantFreeIpDaily'],
+            ['free_image_max_mb', 'ops.instantFreeImageMaxMb'],
+            ['free_audio_max_sec', 'ops.instantFreeAudioMaxSec'],
+            ['image_max_mb', 'ops.instantImageMaxMb'],
+            ['audio_max_mb', 'ops.instantAudioMaxMb'],
+            ['audio_max_sec', 'ops.instantAudioMaxSec'],
+            ['free_lang_limit', 'ops.instantLangLimit'],
+          ] as const).map(([key, labelKey]) => (
+            <div key={key} style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', padding: '4px 0' }}>
+              <b style={{ width: 220 }}>{t(labelKey)}</b>
+              <NumInput disabled={!isSuper} value={pol.instant?.[key] ?? 0}
+                onChange={(n) => setInstant({ [key]: n })} />
+              <span style={{ fontSize: 13, color: 'var(--adm-faint)' }}>{t('ops.instantItemHint')}</span>
+            </div>
+          ))}
+          <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '6px 0 0', lineHeight: 1.7 }}>{t('ops.instantCrossHint')}</p>
         </div>
       </Panel>
 

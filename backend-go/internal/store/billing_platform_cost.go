@@ -91,10 +91,14 @@ func CustomerUsagePredWith(prefix string) string {
 }
 
 // isPlatformTaskType Go 侧同款判定（写点用它决定是否累加日计数器，与上面谓词一个名单）。
+// ★ 2026-10-30：改成从 `platformTaskTypes` 切片派生（名单唯一写点见 billing_wallet_pred.go）。
+// 旧实现是另一份 switch 字面量，加 `domain_detect` 时只改了 SQL 一侧，Go 侧漏掉 ⇒
+// 判域成本照旧被累进客户的 usage_daily。等值锁＝TestWalletPreds_GoAndSQLLabelListsAgree。
 func isPlatformTaskType(taskType string) bool {
-	switch taskType {
-	case "kb_embed", "system_task", "pack_scrape", "evals":
-		return true
+	for _, t := range platformTaskTypes {
+		if t == taskType {
+			return true
+		}
 	}
 	return false
 }

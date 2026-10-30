@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 静态＋行为双闸门：钉住 #43「工单建单预检的判据形状收成一把尺子」这件事**真的落地了**，
-// 并且**没有顺手改掉任何对外结论**。七条判据腿：
+// 并且**没有顺手改掉任何对外结论**。九条判据腿：
 //
 //	L1 单源在位：四份旧副本（upload.go / tickets.go / api_openapi_tasks.go / engine/file.go）
 //	   里不许再留内联准入清单字面量，且必须各自委托到 fileproc 的那一个口；体积上限同理。
@@ -12,6 +12,10 @@
 //	L5 方向锁：对外承诺的 30MB 不得高于实际闸门（承诺不得高过守得住的那条线）。
 //	L6 出声对齐：「页数读数取不到」这一档在两腿（上传前置拦截／派发资格判定）都必须是 WARN 且同短语。
 //	L7 共享闸门不可被调用方抬起：拿到的 map 必须是副本，往里塞键不许影响全站判定。
+//	L8 撤除格式要给出路（★ 2026-10-30）：五档撤出后三口必须回同一句「粘贴到文本翻译」，
+//	   且 .exe 这类真不支持的二进制**不该**拿到那句（成因不同，误答等于误导）。
+//	L9 准入只在建单侧（★ 2026-10-30 C10）：三个下载出口函数里不许出现准入判据——
+//	   历史工单已经付过钱、产物已经在磁盘上，收口只关"能不能新建"，不关"能不能拿走"。
 //
 // 每一条负向腿都配了正对照（本仓纪律：恒零命中的负向锁等于没测）：
 // 探测器必须能把**唯一事实源自己**认出来，认不出就是探测器坏了。
@@ -39,15 +43,27 @@ import (
 //
 // ★ 2026-10-15 P1a/P2 扩展：尾部追加 8 个图片格式（.png/.jpg/.jpeg/.bmp/.tif/.tiff/.webp/.heic）
 // 与 7 个音频格式（.mp3/.m4a/.wav/.ogg/.flac/.aac/.opus），与 fileproc/formats.go 的
-// TranslateFormatOrder 现态逐字一致（共 27 项）。这一改动本身是一次**显式对外准入决策**
+// TranslateFormatOrder 现态逐字一致（当时 27 项）。这一改动本身是一次**显式对外准入决策**
 // （图片经 OCR、音频经 ASR 投喂翻译引擎），由本锁逼出并记录，非静默漂移。
+//
+// ★★ 2026-10-30 三事合一批：本快照**主动改档**（27 → 22）——`.srt/.vtt/.json/.yaml/.yml`
+// 撤出准入，两种交付模式都撤（用户拍板，AGENTS §一·14）。这正是这条锁存在的意义：
+// 它红了必须有人来改锁并交代理由，而不是让 formats.go 悄悄漂。
+// 撤的理由：这五个都是纯文本容器，客户要翻的从来是里面的文字，走文件导入只多付一遍
+// 落盘/识别/写回的成本与"结构被改写"的风险；正确路径是直接粘贴到文本翻译，
+// 所以**拒绝句必须给出这条出路**（见 L8）。
 var restore12Frozen = []string{
 	".docx", ".xlsx", ".pptx", ".pdf",
-	".txt", ".csv", ".srt", ".vtt",
-	".md", ".json", ".yaml", ".yml",
+	".txt", ".csv",
+	".md",
 	".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".heic",
 	".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac", ".opus",
 }
+
+// retired20261030 是本批撤出的那五种（与 fileproc 的 retiredTextContainers 同一批）。
+// 它们**同时**出现在 L2 的"明确不准入"清单里 ⇒ 只把 formats.go 改回去、不改这里，L2 就红；
+// 只把这里改回去、不改 formats.go，L2 也红（两侧必须一起动，逼出第二次显式决策）。
+var retired20261030 = []string{".srt", ".vtt", ".json", ".yaml", ".yml"}
 
 // formatCopyViolation 跑 L1 那两条：内联清单为 0 ＋ 必须留委托锚点。返回第一条问题描述（干净回空串）。
 //
@@ -167,6 +183,9 @@ func TestFormatsGate02BehaviorEqualsFrozenCopies(t *testing.T) {
 	//   若此处仍列它们，下方 L2 断言会因「IsTranslateFormat(.png)=true 但 base[.png]=false」而红——
 	//   那正是这条锁要暴露的「准入面与冻结快照不一致」。
 	notAdmitted := []string{".exe", ".zip", ".rar", ".pdfx", ".docxx", ".pages", ".key", ".wps", ".xls_", "", ".docx.", "."}
+	// ★ 2026-10-30 撤出的五种并入这里：它们从"准入"移到"明确不准入"，
+	//   于是本函数上半段的等值对账自动把它们判成 false——改一份不改另一份，这一腿就红。
+	notAdmitted = append(notAdmitted, retired20261030...)
 
 	for _, ext := range append(append([]string{}, restore12Frozen...), notAdmitted...) {
 		if got := fileproc.IsTranslateFormat(ext, false); got != base[ext] {
@@ -274,19 +293,25 @@ func isAudioTail(ext string) bool {
 
 // ---------- L3 ----------
 
-// 改造前四处拒绝文案的**字面量**（从改造前的源码逐字抄，不是从新代码反推）。
-// 这一份的存在就是为了让"文案没变"这件事可判：只把注释改成"与原措辞一致"不算落地。
+// 四处拒绝文案的**字面量**。★ 2026-10-30 三事合一批：这一份从"改造前逐字抄"更新为
+// 「本批改档后的现值」，并同步两件事——
+// ① 清单里去掉撤除的五种（`FormatHintBase` 派生，自动跟随）；
+// ② engine 那两口的措辞与 tickets/openapi **合并成同一句**（旧形态四处三种写法：
+//
+//	「支持」「仅支持」「… 等」），合并的落点就是 `fileproc.RejectHint` 这一个出口。
+//
+// 保留字面量而不是"自己拼自己"：那样恒真，改坏拼接骨架也不会红。
 var frozenSentences = []struct{ label, want string }{
-	{"tickets 纯文案", "不支持的格式: a.doc（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus 及 doc/xls/ppt/odt/ods/odp/rtf/epub）"},
-	{"tickets 还原", "不支持的格式: a.doc（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
-	{"openapi 还原", "不支持的格式: a.doc（仅支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
-	{"engine 纯文案", "不支持的格式（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus/doc/xls/ppt/odt/ods/odp/rtf/epub 等）"},
-	{"engine 还原", "不支持的格式（支持 docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
+	{"tickets 纯文案", "不支持的格式: a.doc（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus 及 doc/xls/ppt/odt/ods/odp/rtf/epub）"},
+	{"tickets 还原", "不支持的格式: a.doc（仅支持 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
+	{"openapi 还原", "不支持的格式: a.doc（仅支持 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
+	{"engine 纯文案", "不支持的格式（纯文案模式支持 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus 及 doc/xls/ppt/odt/ods/odp/rtf/epub）"},
+	{"engine 还原", "不支持的格式（仅支持 docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus）"},
 }
 
 func TestFormatsGate04CopyIsDerivedAndUnchanged(t *testing.T) {
-	// ① 两个 hint 函数各自逐字钉住当前措辞（★ P1a 已含图片格式，与 TranslateFormatOrder 同源派生）
-	if got := fileproc.FormatHintBase(); got != "docx/xlsx/pptx/pdf/txt/csv/srt/vtt/md/json/yaml/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus" {
+	// ① 两个 hint 函数各自逐字钉住当前措辞（★ 2026-10-30 已按撤除后的 22 项清单同步）
+	if got := fileproc.FormatHintBase(); got != "docx/xlsx/pptx/pdf/txt/csv/md/png/jpg/jpeg/bmp/tif/tiff/webp/heic/mp3/m4a/wav/ogg/flac/aac/opus" {
 		t.Errorf("FormatHintBase() 变了：现读 %q ⇒ 对外文案与准入清单不等值（要改就按对外口径决策走，并同步四处冻结句子＋前端 accept＋文档面）", got)
 	}
 	if got := fileproc.FormatHintText(); got != "doc/xls/ppt/odt/ods/odp/rtf/epub" {
@@ -296,27 +321,40 @@ func TestFormatsGate04CopyIsDerivedAndUnchanged(t *testing.T) {
 	// ② 文案必须由清单派生（改清单即改文案），而不是第五份字面量
 	base := fileproc.FormatHintBase()
 	for _, e := range fileproc.TranslateFormatOrder {
-		if e == ".yml" {
-			continue // 别名不在对外清单里重复出现（旧措辞里也只出现 yaml 一次）
-		}
 		if !strings.Contains("/"+base+"/", "/"+e[1:]+"/") {
 			t.Errorf("清单项 %s 没出现在出栈文案里 ⇒ 文案又变成手抄的第二份了", e)
 		}
 	}
 
-	// ③ 拼接后的整句必须与改造前逐字相同（用同一批 hint 函数拼，判的是"拼接骨架没变"）
+	// ③ 四口的整句必须**由同一个出口产出**且与冻结字面量逐字相同。
+	// ★ 这一档在 2026-10-30 之前是"测试自己拼一遍字符串再和字面量比"——那只证明拼法没变，
+	// 证明不了产品代码真的用了这个拼法（生产改回内联一份，本条照样绿）。现在喂 RejectHint 本体。
 	got := []string{
-		"不支持的格式: " + "a.doc" + "（纯文案模式支持 " + fileproc.FormatHintBase() + " 及 " + fileproc.FormatHintText() + "）",
-		"不支持的格式: " + "a.doc" + "（仅支持 " + fileproc.FormatHintBase() + "）",
-		"不支持的格式: " + "a.doc" + "（仅支持 " + fileproc.FormatHintBase() + "）",
-		"不支持的格式（纯文案模式支持 " + fileproc.FormatHintBase() + "/" + fileproc.FormatHintText() + " 等）",
-		"不支持的格式（支持 " + fileproc.FormatHintBase() + "）",
+		fileproc.RejectHint(".doc", true, "不支持的格式: a.doc"),
+		fileproc.RejectHint(".doc", false, "不支持的格式: a.doc"),
+		fileproc.RejectHint(".doc", false, "不支持的格式: a.doc"),
+		fileproc.RejectHint(".doc", true, "不支持的格式"),
+		fileproc.RejectHint(".doc", false, "不支持的格式"),
 	}
 	for i, c := range frozenSentences {
 		if got[i] != c.want {
 			t.Errorf("%s 文案不等值：\n got=%s\nwant=%s", c.label, got[i], c.want)
 		}
 	}
+	// ③b 生产四口必须真调用这一个出口（按**调用点**数，不是按文件里出现过这个名字）
+	for _, f := range []string{"tickets.go", "api_openapi_tasks.go"} {
+		src := stripGoCommentsForFormatGate(readGateFile(t, f))
+		if !strings.Contains(src, "fileproc.RejectHint(") {
+			t.Errorf("%s 的拒绝文案没走 fileproc.RejectHint ⇒ 第二份对外文案的温床", f)
+		}
+	}
+	eng := stripGoCommentsForFormatGate(readGateEngineFile(t, "file.go"))
+	if !strings.Contains(eng, "RejectHint(") {
+		t.Error("engine/file.go 执行口的拒绝文案没走 fileproc.RejectHint")
+	}
+	// 上传口刻意**不**判 RejectHint：它的句子由调用方那份实际生效的白名单派生
+	// （whitelistKeys），拿 RejectHint 覆盖会把"纯文案模式放行 anydoc"那一档的文案说窄。
+	// 但它必须共用同一个"撤除格式给出路"判据——见下面 L6。
 
 	// ④ 样本清单里的每一个名字都必须真在准入名单里（文案不许承诺收不进来的格式）
 	if v := sampleViolation(fileproc.AnydocHintSample, ".zzz"); v == "" {
@@ -502,4 +540,116 @@ func readGateFile(t *testing.T, rel string) string {
 		t.Fatalf("读 %s 失败（判据按相对本包目录的字面路径走，读不到＝射程失效，不算绿）：%v", rel, err)
 	}
 	return string(b)
+}
+
+// readGateEngineFile 读执行口那份源码（本包目录的上一级 engine/）。
+// 与 readGateFile 同一口径：读不到即判红，不许退成"扫不到所以干净"。
+func readGateEngineFile(t *testing.T, name string) string {
+	t.Helper()
+	return readGateFile(t, "../engine/"+name)
+}
+
+// stripGoCommentsForFormatGate 丢掉整行 `//` 注释，只留真会被编译的代码行。
+// 为什么必须剥：本文件与生产源码的**说明注释里就写着被搜的那个名字**
+// （记录"为什么这么判"），拿裸文本判会把注释当实现——本仓反复踩过的那一族假绿。
+func stripGoCommentsForFormatGate(src string) string {
+	lines := strings.Split(src, "\n")
+	out := make([]string, 0, len(lines))
+	for _, ln := range lines {
+		if strings.HasPrefix(strings.TrimSpace(ln), "//") {
+			continue
+		}
+		out = append(out, ln)
+	}
+	return strings.Join(out, "\n")
+}
+
+// ---------- L8（★ 2026-10-30 三事合一批 C11 新增） ----------
+
+// TestFormatsGate06RetiredFormatsGetAnExit 撤出的五种纯文本容器：三口必须给同一条出路。
+//
+// 这条锁防的不是"文案不好看"，是**把一个更省事的路藏起来**：
+// 客户手上那些 .srt/.json 本来就是文本，直接粘贴到文本翻译比走文件通道更快、更准、更便宜；
+// 只回一句「不支持」等于让他以为平台做不了这件事，然后去开一张工单、等几分钟、拿到一个 xlsx。
+// 判据按**调用点全集**数：三个后端入口（建单／OpenAPI 建单／执行口）共用同一个出口函数，
+// 加一句"上传口也走同一判据"（它自己的句子由本次生效的白名单派生，但撤除档那条分支必须同判据）。
+func TestFormatsGate06RetiredFormatsGetAnExit(t *testing.T) {
+	for _, ext := range retired20261030 {
+		// 行为：两种模式下都不准入，且句子必须含出路（textMode 两个值各判一次，
+		// 因为 openapi 口刻意只走 false 那一支，见 api_openapi_tasks.go 的注释）。
+		if fileproc.IsTranslateFormat(ext, false) || fileproc.IsTranslateFormat(ext, true) {
+			t.Errorf("%s 仍准入，却指望拒绝句给出路 ⇒ 判据自相矛盾", ext)
+		}
+		for _, tm := range []bool{false, true} {
+			// lead 刻意**不带扩展名**：带上就等于把被拒的那个名字合法地写进句子里，
+			// 下面那条"不许再出现在支持清单里"的判据会被自己的入参喂饱（本仓老坑）。
+			msg := fileproc.RejectHint(ext, tm, "不支持的格式")
+			if !strings.Contains(msg, fileproc.PlainTextContainerHint) {
+				t.Errorf("%s（textMode=%v）的拒绝句缺可行动出路：%q", ext, tm, msg)
+			}
+			if strings.Contains(msg, ext[1:]) {
+				t.Errorf("%s 的拒绝句里还把它列进「支持清单」（textMode=%v）：%q", ext, tm, msg)
+			}
+		}
+	}
+	// 反向对照：一个真不支持的二进制格式**不该**拿到那条出路
+	//（否则这句就变成对所有拒收的通用话，"粘贴文本"对 .exe 是误导）。
+	if msg := fileproc.RejectHint(".exe", false, "不支持的格式: a.exe"); strings.Contains(msg, fileproc.PlainTextContainerHint) {
+		t.Errorf(".exe 拿到了「粘贴到文本翻译」的出路（成因不同，属误答）：%q", msg)
+	}
+	// 接线：三口源码必须真走这个出口，而不是各自内联一句（判调用点、剥注释）。
+	for _, f := range []string{"tickets.go", "api_openapi_tasks.go"} {
+		if !strings.Contains(stripGoCommentsForFormatGate(readGateFile(t, f)), "fileproc.RejectHint(") {
+			t.Errorf("%s 未走 fileproc.RejectHint ⇒ 出路文案迟早在一处漂掉", f)
+		}
+	}
+	if !strings.Contains(stripGoCommentsForFormatGate(readGateEngineFile(t, "file.go")), "RejectHint(") {
+		t.Error("engine/file.go 执行口未走 RejectHint")
+	}
+	if !strings.Contains(stripGoCommentsForFormatGate(readGateFile(t, "upload.go")), "IsRetiredTextContainer") {
+		t.Error("api/upload.go 的拒绝路径没接 IsRetiredTextContainer ⇒ 上传口只会说「不支持」")
+	}
+}
+
+// ---------- L9（★ 2026-10-30 三事合一批 C10 新增） ----------
+
+// admissionVerbsOnDownload 是"准入判据"的三个动词。下载侧出现任何一个都不是笔误，
+// 而是把建单侧的收口套到了出货侧——历史工单的钱已经付了、产物已经在磁盘上，
+// 撤格式只该回答"还能不能新建这一单"，不该回答"已经做好的那一件还能不能拿走"。
+// （现网形态：客户工单列表里那一份 xlsx 对照表点一下就 400，等于把交付物销毁。）
+var admissionVerbsOnDownload = []string{"IsTranslateFormat", "IsRetiredTextContainer", "RejectHint"}
+
+// downloadLegs 是三个产物出口（前端下载／工单下载／开放 API 下载）。
+var downloadLegs = []struct{ file, fn string }{
+	{"stream.go", "handleDownload"},
+	{"tickets.go", "handleTicketDownload"},
+	{"api_openapi_tasks.go", "handleOpenAPITaskDownload"},
+}
+
+func TestFormatsGate07AdmissionNeverAppliedToDownloads(t *testing.T) {
+	// 负向：三个下载函数体内一个准入动词都不许出现。
+	for _, l := range downloadLegs {
+		// 复用同包既有的切法（auth_password_gate_test.go）：找不到签名直接 t.Fatalf，
+		// 所以"读不到"不可能被当成"没命中"——这正是本条负向腿最怕的那一档。
+		body := goFuncBody(t, stripGoCommentsForFormatGate(readGateFile(t, l.file)), "func (s *Server) "+l.fn+"(")
+		if len(body) < 80 {
+			t.Fatalf("%s 的 %s 函数体只有 %d 字节，切法可疑 ⇒ 判据失明", l.file, l.fn, len(body))
+		}
+		for _, verb := range admissionVerbsOnDownload {
+			if strings.Contains(body, verb) {
+				t.Errorf("%s.%s 里出现了 %s ⇒ 准入判据被套到了下载侧（撤格式不许销毁已交付的产物）", l.file, l.fn, verb)
+			}
+		}
+	}
+	// 正向对照：同一个抽取函数必须能在建单口里读到那个动词——否则上面三条负向是"切不到东西"的恒真空转。
+	buildBody := goFuncBody(t, stripGoCommentsForFormatGate(readGateFile(t, "tickets.go")), "func (s *Server) handleTicketCreateFile(")
+	if !strings.Contains(buildBody, "IsTranslateFormat") {
+		t.Errorf("建单口 handleTicketCreateFile 里居然没有 IsTranslateFormat ⇒ 抽取函数射程可疑（已把 %d 字节喂给它）", len(buildBody))
+	}
+	// 反证：把动词真塞进下载函数体，判据必须抓住（证明抓的是"动词在下载侧"这件事，不是文件名）。
+	synthetic := "func (s *Server) handleTicketDownload(w http.ResponseWriter, r *http.Request) {\n\tif !fileproc.IsTranslateFormat(ext, false) {\n\t\ts.writeError(w, r, apierrors.New(400, \"x\"))\n\t}\n}\n"
+	body := goFuncBody(t, synthetic, "func (s *Server) handleTicketDownload(")
+	if !strings.Contains(body, "IsTranslateFormat") {
+		t.Error("反证落空：把准入动词写进下载函数体，抽取后的函数体却没读到 ⇒ 这一族负向抓不住任何退化")
+	}
 }

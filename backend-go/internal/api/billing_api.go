@@ -43,6 +43,14 @@ import (
 // 返回 (租户ID, 释放函数, 错误)。释放函数必须 defer 调用归还并发名额。
 // 参数 r: HTTP 请求（用于解析当前租户）。返回 tid: 生效租户 ID；release: 归还并发名额的函数；错误: 闸门校验失败原因。
 func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
+	return s.gateUsageDepth(r, true)
+}
+
+// gateUsageDepth 计费闸门的**唯一实现**：withMoney=false 时跳过「余额 + 预算墙」两段，
+// 保留 QPS/并发/日限额（免费档专用，见 instant_free.go 的 gateUsageInstant）。
+// ★ 2026-10-30 组4：为什么用开关而不是再写一份——两组判据复制之后必然分叉：
+// 一处加了并发名额归还、另一处忘了，症状是"免费档用着用着就并发超限"且没有任何读数指向它。
+func (s *Server) gateUsageDepth(r *http.Request, withMoney bool) (int64, func(), error) {
 	tid := s.currentTenant(r)
 	// ★ 计费豁免（2026-09-02 需求6）：超管（平台级）永不收费——
 	//   超级管理员（role≥4）与其平台上下文（tenant_id=0）跳过 QPS/并发/日额/余额/预算墙全部闸门，
@@ -91,7 +99,8 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	}
 	// 强制计费模式（billing_enforced=1 或已完成 token 迁移）下校验 token 余额：
 	// 组织墙文案（四期增强）：余额即组织总预算的可用部分
-	if s.Bill.Enabled() {
+	// ★ 免费档（withMoney=false）跳过这一段：免费不涉及钱（§5.4）
+	if withMoney && s.Bill.Enabled() {
 		if err := s.Bill.CheckBalance(tid); err != nil {
 			// ★ F-40：原样顶成裸 apiErr 会丢 insufficient_balance 码（出帧端
 			// stream.go 按 billing.QuotaErrCode 取码恒空，前端充值引导分支永久失效），
@@ -101,9 +110,12 @@ func (s *Server) gateUsage(r *http.Request) (int64, func(), error) {
 	}
 	// ★ 双预算墙之部门墙/组织月度总预算墙（四期增强；独立于强制计费开关——
 	//   仅计量不扣减时预算约束照常生效，让体验包用户感知用量边界）
-	if u := s.authUser(r); u != nil && s.Store != nil {
-		if hit := s.Store.CheckBudgetWalls(tid, u.ID); hit != nil {
-			return tid, release, &apiErr{hit.Msg}
+	// ★ 免费档跳过预算墙（W18）：免费额度不占部门预算，否则"免费"会被客户的月度预算吃掉
+	if withMoney {
+		if u := s.authUser(r); u != nil && s.Store != nil {
+			if hit := s.Store.CheckBudgetWalls(tid, u.ID); hit != nil {
+				return tid, release, &apiErr{hit.Msg}
+			}
 		}
 	}
 	// ★ 任务2.2：注册一律自动发放体验额度，registration_review「审核不发」机制已下线，
@@ -197,6 +209,30 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	//   task_type 落标签（kb_embed / pack_scrape…）供超管侧单列核算；
 	//   rate_card 未为该标签配行时 unitPrice 回退 (1, 1.0)，与 'translate' 同价，
 	//   所以留痕行的 cost 仍等于「本该收客户多少」，平台承担账才是可比金额。
+	// ★ 2026-10-30 组4（A-2／§5.5）：即时翻译免费档——**只留痕、不扣钱、不进收集器**。
+	// 出口只有这一个：四个 handler 不许各自判"要不要扣"（N2）。
+	// · 不 AddBilled ⇒ 响应里的 points_used=0，与台账一致（客户看不到"免费还扣了分"）；
+	// · 不撞预算墙、不累加 usage_daily（W16，由 LogUsage 的 countsTowardDailyUsage 保证）；
+	// · **积分暗额度在这里累加**：这是全仓唯一拿得到真实 billed 的地方（handler 里只有预估）。
+	if llm.FreeInstantFromCtx(ctx) {
+		pts := int64(0)
+		if s.Store != nil {
+			pts = s.Store.PointsFromTokens(billed)
+		}
+		_ = s.Store.LogUsage(tid, uid, store.TaskTypeInstantFree, model, model, tenant.LangFromContext(ctx), billed, "text", mode)
+		if uid > 0 {
+			if _, err := s.Store.RateDayAdd(store.RateScopeFreePointUser, strconv.FormatInt(uid, 10), pts); err != nil {
+				observability.Warn(ctx, "免费档账号额度累加失败（本次仍按免费放行）", "uid", uid, "error", err.Error())
+			}
+		}
+		if tid > 0 {
+			if _, err := s.Store.RateDayAdd(store.RateScopeFreePointTenant, strconv.FormatInt(tid, 10), pts); err != nil {
+				observability.Warn(ctx, "免费档租户池累加失败（本次仍按免费放行）", "tid", tid, "error", err.Error())
+			}
+		}
+		s.metrics.addUsage(0)
+		return nil
+	}
 	if reason, ok := llm.PlatformCostFromCtx(ctx); ok {
 		// ★ 〇-AD 补丁二：reason 落进 task_type 后，额度侧那条腿就自动安全了——
 		//   usage_daily 的写点（LogUsage/LogUsageBatch）与读点（DailyUsage 兜底、当日回填）

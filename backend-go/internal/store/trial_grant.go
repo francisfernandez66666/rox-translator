@@ -63,7 +63,9 @@ func (s *Store) GrantUserTrialOnce(tid, uid, tokens int64, expires time.Time, so
 		return false, err
 	}
 	if tokens > 0 {
-		if err := createQuotaGrantTx(tx, tid, "trial", tokens, expires, source, uid); err != nil {
+		// ★ 2026-10-30 三事合一批：这里**知道是谁**，所以把 uid 一并落到行的 user_id 上
+		// （W6：个人档只该成员核销；旧写法只有 ref_id=uid 这个"线索"，扣减侧读不到归属）。
+		if err := createQuotaGrantTxTiered(tx, tid, uid, "trial", tokens, expires, source, uid, ""); err != nil {
 			return false, err
 		}
 	}

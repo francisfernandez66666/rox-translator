@@ -285,7 +285,9 @@ func (s *Store) GrantTaskReward(uid int64, taskKey, dedup string) TaskRewardResu
 			}
 		}
 		expT := base.Add(time.Duration(t.ValidDays) * 24 * time.Hour)
-		if e := createQuotaGrantTx(tx, tid, TaskGrantKind, t.RewardTokens, expT, TaskGrantSource+t.TaskKey, t.ID); e != nil {
+		// ★ 2026-10-30 三事合一批：任务奖励是**个人资产**（用户口径第 ③ 档），发放那一刻就把 uid 落进行里；
+		// 旧写法只在 user_task_rewards 里留一份"谁领的"侧账，扣减侧要靠 (任务号,到期时刻) 反猜（W9 不许的那个猜）。
+		if e := createQuotaGrantTxTiered(tx, tid, uid, TaskGrantKind, t.RewardTokens, expT, TaskGrantSource+t.TaskKey, t.ID, ""); e != nil {
 			res.Reason = "no_reward"
 			return res
 		}

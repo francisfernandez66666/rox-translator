@@ -41,6 +41,14 @@ export interface AsrHandlers {
   onState?: (s: 'recording' | 'denied' | 'failed' | 'ready') => void
   // 实时部分识别（WASM 流式；服务端不触发）
   onPartial?: (text: string) => void
+  // ★ 2026-10-30 免费档批（D-3）：录音时长上限由调用方按档传入（免费 30s / 付费 60s），
+  //   两个引擎必须同构地执行它——端侧 WASM 不经过 chatVoice，服务端那条腿的自动停
+  //   也就管不到它（N8：这是「服务端没拦到」与「前端没管」的分界读数）。
+  maxSec?: number
+  /** 每秒回调：(已录秒, 剩余秒)；剩余 ≤3 时界面给倒计时 */
+  onTick?: (elapsed: number, remaining: number) => void
+  /** 到点自动收尾（两个引擎都必须给出，调用方据此走与"用户点停止"同一条收尾链） */
+  onAutoStop?: () => void
 }
 
 // 一次识别会话：final 是**唯一**的成稿出口（stop() 后 resolve，出错 reject），
@@ -49,6 +57,9 @@ export interface AsrSession {
   readonly final: Promise<string>
   stop(): void
   cancel(): void
+  /** 本次录到的原始音频（服务端引擎有；端侧 WASM 没有文件概念，恒为 null）。
+   *  工单引导卡用它把那一段录音带进翻译工单（D-5）。 */
+  readonly lastBlob?: Blob | null
 }
 
 // 引擎接口（可插拔接缝的本体）：kind 用于日志与埋点区分，isAvailable 决定能否被选中，
@@ -72,10 +83,17 @@ export class ServerAsrEngine implements AsrEngine {
   start(h: AsrHandlers): AsrSession {
     const ctrl = startMicRecording((why) =>
       h.onState?.(why === 'mic-denied' ? 'denied' : 'failed'),
+      {
+        maxSec: h.maxSec,
+        onTick: h.onTick,
+        // 到点自动停与"用户点停止"走同一条收尾链：录音已经在 chatVoice 内部停好了，
+        // 这里只需要通知上层跑 stop()（transcribe → 回填输入框）。
+        onAutoStop: () => h.onAutoStop?.(),
+      },
     )
     if (!ctrl) {
       h.onState?.('failed')
-      return { final: Promise.resolve(''), stop() {}, cancel() {} }
+      return { final: Promise.resolve(''), stop() {}, cancel() {}, lastBlob: null }
     }
     h.onState?.('recording')
     let resolveFinal: (v: string) => void = () => {}
@@ -84,11 +102,19 @@ export class ServerAsrEngine implements AsrEngine {
       resolveFinal = res
       rejectFinal = rej
     })
+    // ★ 2026-10-30：stop() 必须幂等。现在有三条路径会喊停（用户点停、到点自动停、
+    //   上层卸载兜底），不设闩就会对同一份 blob 拨两次转写、把同一段文本回填两遍。
+    let stopStarted = false
+    let lastBlob: Blob | null = null
     return {
       final,
+      get lastBlob() { return lastBlob },
       stop() {
+        if (stopStarted) return
+        stopStarted = true
         void (async () => {
           const blob = await ctrl.stop()
+          lastBlob = blob
           if (!blob || blob.size === 0) {
             resolveFinal('') // 没录到声音：安静放回，不报错
             return
@@ -102,6 +128,7 @@ export class ServerAsrEngine implements AsrEngine {
         })()
       },
       cancel() {
+        stopStarted = true
         ctrl.cancel()
       },
     }
@@ -209,7 +236,7 @@ export class WasmAsrEngine implements AsrEngine {
       worker = new Worker(`${WASM_BASE}/asr-worker.js`)
     } catch {
       h.onState?.('failed')
-      return { final: Promise.resolve(''), stop() {}, cancel() {} }
+      return { final: Promise.resolve(''), stop() {}, cancel() {}, lastBlob: null }
     }
     let resolveFinal: (v: string) => void = () => {}
     const final = new Promise<string>((res) => {
@@ -227,20 +254,45 @@ export class WasmAsrEngine implements AsrEngine {
     worker.postMessage({ cmd: 'start' })
     h.onState?.('recording')
     let stopped = false
-    return {
+    let tickTimer: ReturnType<typeof setInterval> | null = null
+    let elapsed = 0
+    const clearTick = () => {
+      if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null }
+    }
+    const session: AsrSession = {
       final,
+      lastBlob: null,
       stop() {
         if (stopped) return
         stopped = true
+        clearTick()
         worker.postMessage({ cmd: 'stop' })
         // 兜底：worker 异常无回包时 4s 后放空，绝不吊死 UI
         setTimeout(() => resolveFinal(''), 4000)
       },
       cancel() {
         stopped = true
+        clearTick()
         worker.terminate()
       },
     }
+    // ★ 2026-10-30（D-3）：端侧 WASM 不经过 chatVoice，自动停必须在这里单独起表，
+    //   否则「免费档 30 秒」在端侧引擎下完全不成立（服务端压根没被调用）。
+    const maxSec = Math.floor(Number(h.maxSec) || 0)
+    if (maxSec > 0) {
+      tickTimer = setInterval(() => {
+        if (stopped) { clearTick(); return }
+        elapsed += 1
+        const remaining = Math.max(0, maxSec - elapsed)
+        h.onTick?.(elapsed, remaining)
+        if (remaining <= 0) {
+          clearTick()
+          session.stop()
+          h.onAutoStop?.()
+        }
+      }, 1000)
+    }
+    return session
   }
 }
 

@@ -237,7 +237,7 @@ func TestPackageUpgrade(t *testing.T) {
 
 	// ② 消耗部分旧包 token（模拟用量）
 	consumed := oldTokens / 4
-	if err := s.DeductWithGrants(1, consumed); err != nil {
+	if err := s.DeductWithGrants(1, 0, consumed); err != nil {
 		t.Fatalf("DeductWithGrants 失败: %v", err)
 	}
 	remain := s.SumActiveGrants(1)
@@ -322,7 +322,7 @@ func TestPackageUpgradeExhausted(t *testing.T) {
 		t.Fatalf("MarkOrderPaid 旧包失败: %v", err)
 	}
 	oldTokens := s.PackageTokenAmount(oldPkg)
-	if err := s.DeductWithGrants(1, oldTokens); err != nil {
+	if err := s.DeductWithGrants(1, 0, oldTokens); err != nil {
 		t.Fatalf("耗尽旧包额度失败: %v", err)
 	}
 	if g := s.SumActiveGrants(1); g != 0 {

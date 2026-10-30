@@ -103,6 +103,28 @@ type TaskPatch struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
+// InstantPatch 即时翻译免费档（★ 2026-10-30 三事合一批 组4，D-1／D-16）。
+//
+// 九项**全部指针**：这里的 `0` 是**真值（不限）**，不是"未设置"——非指针的 0 会被 Merge
+// 当成没填，运营永远改不回去（C32 那条踩过）。三态：`-1` 关这一档 / `0` 不限 / `N` 上限。
+//
+// 为什么走 ops_policy 而不是 system_config 散键：这九项是**语义相关的一组**（额度 ＋ 两档尺寸
+// ＋ 语种限制），拆成散键就会出现"改了额度没改 IP 限制"的半套状态；而且 ops_policy 已有
+// 平台/租户两级合并与 promo 窗口，将来要给某个租户开大免费额度不用改代码。
+// ⚠️ 同时必须登记进 ValidateWindowOverrides 的禁项：窗口是自动生效/失效的，
+// 让它夹带免费额度＝一次促销就能把成本顶改掉，而且现场只有一条窗口记录指不到这件事。
+type InstantPatch struct {
+	FreeDailyPoints       *int64 `json:"free_daily_points,omitempty"`        // 账号每日免费积分（隐形）
+	FreeTenantDailyPoints *int64 `json:"free_tenant_daily_points,omitempty"` // 租户共享每日免费积分
+	FreeIPDaily           *int64 `json:"free_ip_daily,omitempty"`            // 每 IP 每日免费次数
+	FreeImageMaxMB        *int64 `json:"free_image_max_mb,omitempty"`        // 免费档图片上限（MiB）
+	FreeAudioMaxSec       *int64 `json:"free_audio_max_sec,omitempty"`       // 免费档音频时长（秒）
+	ImageMaxMB            *int64 `json:"image_max_mb,omitempty"`             // 即时翻译图片硬顶
+	AudioMaxMB            *int64 `json:"audio_max_mb,omitempty"`             // 即时翻译音频硬顶（体积）
+	AudioMaxSec           *int64 `json:"audio_max_sec,omitempty"`            // 即时翻译音频硬顶（时长）
+	FreeLangLimit         *int64 `json:"free_lang_limit,omitempty"`          // 免费档最多目标语种数
+}
+
 // FrontPatch 站点门面因子（★ 〇-Z：官网首页对未登录访客是否开放）。
 //
 // LandingEnabled 语义：true／缺省＝访客打开 `/` 看官网落地页（**平台默认档，主站就是这一档**）；
@@ -131,6 +153,7 @@ type OperationsPolicy struct {
 	Content      ContentPatch      `json:"content,omitempty"`
 	Task         TaskPatch         `json:"task,omitempty"`
 	Front        FrontPatch        `json:"front,omitempty"`
+	Instant      InstantPatch      `json:"instant,omitempty"`
 }
 
 // ============================== 保存校验（★ B6，2026-09-12） ==============================
@@ -154,6 +177,15 @@ func ValidateWindowOverrides(w PromoWindow) error {
 	// 客户发的链接都吃这一档），让它随一个日历窗口自动翻转，等于给运营留了一个没人复核的开关。
 	if w.Overrides.Front.LandingEnabled != nil {
 		return fmt.Errorf("时间窗覆盖禁止设置 front.landing_enabled（请使用运营策略的门面开关显式操作）")
+	}
+	// ★ 2026-10-30 组4（D-16）：免费档九项不许经时间窗夹带。它们改的是**成本顶**
+	//   （每日免费积分、图片/音频两档尺寸、免费语种数），而窗口是自动生效/失效的——
+	//   一次促销窗口就能把成本顶改掉，且现场只有一条窗口记录指不到这件事。
+	ip := w.Overrides.Instant
+	if ip.FreeDailyPoints != nil || ip.FreeTenantDailyPoints != nil || ip.FreeIPDaily != nil ||
+		ip.FreeImageMaxMB != nil || ip.FreeAudioMaxSec != nil || ip.ImageMaxMB != nil ||
+		ip.AudioMaxMB != nil || ip.AudioMaxSec != nil || ip.FreeLangLimit != nil {
+		return fmt.Errorf("时间窗覆盖禁止设置 instant.*（免费档是成本顶，请用运营策略显式保存）")
 	}
 	if len(w.Overrides.PromoWindows) > 0 {
 		return fmt.Errorf("时间窗覆盖不允许嵌套子窗口")
@@ -202,6 +234,20 @@ type EffectivePolicy struct {
 	Content      ContentEffective      `json:"content"`
 	Task         TaskEffective         `json:"task"`
 	Front        FrontEffective        `json:"front"`
+	Instant      InstantEffective      `json:"instant"`
+}
+
+// InstantEffective 解析后的即时翻译免费档（九项，全部是最终值：未配置时为出厂默认，不是 0）。
+type InstantEffective struct {
+	FreeDailyPoints       int64 `json:"free_daily_points"`
+	FreeTenantDailyPoints int64 `json:"free_tenant_daily_points"`
+	FreeIPDaily           int64 `json:"free_ip_daily"`
+	FreeImageMaxMB        int64 `json:"free_image_max_mb"`
+	FreeAudioMaxSec       int64 `json:"free_audio_max_sec"`
+	ImageMaxMB            int64 `json:"image_max_mb"`
+	AudioMaxMB            int64 `json:"audio_max_mb"`
+	AudioMaxSec           int64 `json:"audio_max_sec"`
+	FreeLangLimit         int64 `json:"free_lang_limit"`
 }
 
 // PackageEffective 解析后的套餐因子：体验 token/天数、月度用量重置开关与次数上限。
@@ -300,6 +346,16 @@ func DefaultEffective() EffectivePolicy {
 		// 首屏字节一个字都不变，所以默认值必须是 true；把它改成 false 会让主站首页凭空少一块内容，
 		// 由 site_flags 那条「开＝不注入」的等值锁拦住（见 internal/api/site_flags_test.go）。
 		Front: FrontEffective{LandingEnabled: true},
+		// ★ 2026-10-30 组4（D-1／D-16）：免费档出厂档。数值口径＝用户 10-30 拍板：
+		//   个人 300 积分/天、租户池 2000 积分/天、IP 300 次/天；免费图片 1 MiB、免费音频 30 秒；
+		//   付费即时硬顶 3 MiB / 60 秒；免费档单语种。
+		//   ⚠️ 这些数是**成本顶**，不是对外报价：面板可改、改完当刻生效（不发版）。
+		Instant: InstantEffective{
+			FreeDailyPoints: 300, FreeTenantDailyPoints: 2000, FreeIPDaily: 300,
+			FreeImageMaxMB: 1, FreeAudioMaxSec: 30,
+			ImageMaxMB: 3, AudioMaxMB: 3, AudioMaxSec: 60,
+			FreeLangLimit: 1,
+		},
 	}
 }
 
@@ -443,6 +499,34 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	}
 	if patch.Content.FileMaxMB != nil {
 		out.Content.FileMaxMB = *patch.Content.FileMaxMB
+	}
+	// ★ 2026-10-30 组4：免费档九项同样"指针非 nil 即覆盖"——0 与 -1 都是真值。
+	if v := patch.Instant.FreeDailyPoints; v != nil {
+		out.Instant.FreeDailyPoints = *v
+	}
+	if v := patch.Instant.FreeTenantDailyPoints; v != nil {
+		out.Instant.FreeTenantDailyPoints = *v
+	}
+	if v := patch.Instant.FreeIPDaily; v != nil {
+		out.Instant.FreeIPDaily = *v
+	}
+	if v := patch.Instant.FreeImageMaxMB; v != nil {
+		out.Instant.FreeImageMaxMB = *v
+	}
+	if v := patch.Instant.FreeAudioMaxSec; v != nil {
+		out.Instant.FreeAudioMaxSec = *v
+	}
+	if v := patch.Instant.ImageMaxMB; v != nil {
+		out.Instant.ImageMaxMB = *v
+	}
+	if v := patch.Instant.AudioMaxMB; v != nil {
+		out.Instant.AudioMaxMB = *v
+	}
+	if v := patch.Instant.AudioMaxSec; v != nil {
+		out.Instant.AudioMaxSec = *v
+	}
+	if v := patch.Instant.FreeLangLimit; v != nil {
+		out.Instant.FreeLangLimit = *v
 	}
 	if patch.Task.Enabled != nil {
 		out.Task.Enabled = *patch.Task.Enabled

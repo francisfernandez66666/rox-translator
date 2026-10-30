@@ -94,9 +94,13 @@ var publicRouteAllowlist = map[string]string{
 	"/":                     "SPA 前端外壳：静态资源直出 + index.html 按域名注入品牌（只读该域名归属的品牌，不碰兜底租户数据）",
 	"/office/manifest.xml":  "Office 加载项清单：静态 XML，Office 客户端匿名拉取",
 	"/office/taskpane.html": "Office 任务窗格页面：静态 HTML 外壳，数据由已鉴权 API 提供",
-	"/docs/terms":           "服务条款公开页",
-	"/docs/sla":             "SLA 公开页",
-	"/docs/privacy":         "隐私政策公开页",
+	// ★ 2026-10-30 组4：即时翻译**对外档位宽度**。匿名只读、且**只出宽度不出暗额度**
+	//   （free_daily_points/free_ip_daily/free_tenant_daily_points 三个成本顶一个字都不出，见 handler 注释）。
+	//   官网文案、引导卡、挂件提示词三面都读它，必须允许未登录访问。
+	"/api/instant/caps": "即时翻译档位宽度（免费/付费两档尺寸与语种数；不含任何剩余额度数值）",
+	"/docs/terms":       "服务条款公开页",
+	"/docs/sla":         "SLA 公开页",
+	"/docs/privacy":     "隐私政策公开页",
 	// ★ F-69（2026-09-26 批 I-8）：手册 PDF 公网下载面。语种码先过 normalizeMailLang 的
 	//   12 码白名单（白名单外一律 400，同时也是路径穿越闸门），内容只有对外产品说明、
 	//   零租户数据；与 /docs/terms|sla|privacy 同级公开，故不加登录门槛。

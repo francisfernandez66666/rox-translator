@@ -72,8 +72,15 @@ func MonthStartBound() string { return monthStart() }
 // 而 Go 的内部时间轴含闰秒累计（1972 年以来 37 秒），24h 的整数倍会偏离真 UTC 零点；
 // 显式走历法构造（年月日 + 零时分秒 + UTC）没有这一层缝，也和 monthStart 同形好读。
 func DayStartBound() string {
-	n := time.Now().UTC()
-	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC).Format(time.RFC3339)
+	return time.Unix(dayStartUnix(time.Now()), 0).UTC().Format(time.RFC3339)
+}
+
+// dayStartUnix 日界算法的**唯一实现**（数值形态）。字符串形态见 DayStartBound，
+// 计数器（store/ratelimit_day.go 的 utcDayStart）只许委托本函数——
+// 两处各算一次日历，跨日那一秒就会出现「写柜台的数」与「拦请求的数」差一天。
+func dayStartUnix(n time.Time) int64 {
+	n = n.UTC()
+	return time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC).Unix()
 }
 
 // OrgTokensUsedThisMonth 统计某组织（含全部子树）本月 token 消耗。

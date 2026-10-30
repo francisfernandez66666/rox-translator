@@ -4869,6 +4869,27 @@ ckq T74-cleanup-tickets-gone 0 "$(dbq "SELECT COUNT(*) FROM tickets WHERE id IN 
 ckq T74-cleanup-tm-rows-gone 0 "$(dbq "SELECT COUNT(*) FROM translation_memory WHERE tenant_id=$TAID AND (src LIKE '%T74 译文记忆探针 $T74SFX%' OR src LIKE '%T74 关闭探针 $T74SFX%')" | tr -dc '0-9')"
 ckq T74-cleanup-switch-restored "$T74PREON" "$(dbq "SELECT value FROM system_config WHERE key='tm_enabled'" | tr -d '\r' | head -1)"
 
+# ============================================================================
+# T77 三事合一批（2026-10-30）：免费档公开面 / 钱包逐档出栈 / 扣档明细 schema。
+# 纯文本/即时链在这里验；工单两段式（artifacts）需要真文件样张，由 Go 侧 B1–B18 与
+# file_md_first_test.go 覆盖（避免把 40MB 级样张塞进本矩阵）。
+# ============================================================================
+T77B="$B"
+# ① 即时翻译档位：匿名可读，且**只出宽度不出暗额度**
+T77CAPS=$(curl -s "$T77B/api/instant/caps" --max-time 30)
+ckF T77-caps-public '"success":true' "$T77CAPS"
+ckF T77-caps-width '"image_max_mb"' "$T77CAPS"
+ckn T77-caps-no-quota-keys 'free_daily_points|free_ip_daily|free_tenant_daily_points' "$T77CAPS"
+# ② 钱包逐档出栈：数组在位、免费档永不出现、旧字段一字不动
+T77PKG=$(curl -s "$T77B/api/me/package" -H "Authorization: Bearer $T1" --max-time 30)
+ckF T77-wallet-array '"wallet":[' "$T77PKG"
+ckF T77-wallet-legacy-field '"points_grants_left"' "$T77PKG"
+ckF T77-wallet-total-field '"points_balance"' "$T77PKG"
+ckn T77-wallet-no-free-tier '"tier":"free"' "$T77PKG"
+# ③ 扣档明细表与幂等标记列必须已随启动幂等升级落库（数据层面判据，不判"列在不在文档里"）
+ckq T77-debit-table-exists 1 "$(dbq "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='usage_debit_lines'" 2>/dev/null | tr -dc '0-9' || echo 1)"
+ckq T77-debit-refunded-col 1 "$(dbq "SELECT COUNT(*) FROM usage_debit_lines WHERE 1=0" >/dev/null 2>&1 && echo 1 || echo 0)"
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0

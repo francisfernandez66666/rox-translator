@@ -42,8 +42,12 @@ var fdhAllow = map[string]string{
 	"[file-repair] lang=%s round=%d 定向补译 %d 段（阈值 %.0f%%）":              "5% 触发后的补译进度，非交付退化",
 	"[file-gate] %s 漏译 %d/%d 段（超 %.0f%%），已按补译/标记口径交付":                  "缺失段已进 untranslated/gate_warnings（同块嵌套 if），非静默",
 	"[brandterm] 文件路径品牌术语归一化 %d 个语言译文":                                 "信息：归一化生效，非退化",
-	"译文配音跳过（不影响字幕与译文交付）":                                               "配音跳过：返回值把 warning 交给调用方 append（见 dubTranslatedAudio 调用点），本函数内无 degraded/gateWarnings",
+	"译文配音跳过（不影响译文 .md 交付）":                                             "配音跳过：返回值把 warning 交给调用方 append（见 dubTranslatedAudio 调用点），本函数内无 degraded/gateWarnings（★ 2026-10-30 措辞随字幕取消同步改名，豁免键必须与实现字面量同批改）",
 	"译文配音回落 mp3（原容器转码不可用）":                                             "配音容器回落：同上，warning 经返回值上抛",
+	// ★ 2026-10-30 组5（md 先行）新增：.md 输入件的"先行纯文案写回"失败后，会落到写回段重试；
+	//   写回段那次失败是**整语言硬错**（返回 FileTranslateResult.Error，整单带 error 出去），
+	//   所以这条日志描述的是一次会被重试的中间失败，路径上不存在静默退化。
+	"md 输入件纯文案先行写回失败，转由写回段重试": "先行 md 写失败 → 写回段重试；写回段失败是整语言硬错（结果携带 Error），非静默",
 	// ★ 2026-10-27（工单 T20261027152356CMY 复盘 C 项）新增两条。**记账在本函数内，只是不叫
 	//   degraded/gateWarnings**：retryImageSegments 的账本是返回值 `out []fileproc.UntranslatedItem`，
 	//   调用方把它逐行写进交付 .md 的「未译出内容」一节（图片原位回填的行则按原文保留）。

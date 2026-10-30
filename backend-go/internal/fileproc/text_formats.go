@@ -1,24 +1,22 @@
 // ============ text_formats.go · 职责说明 ============
-// fileproc 包纯文本类格式提取器。
-// 包含 srt/vtt 字幕、md Markdown、json、yaml、txt/csv 文本的提取。
+// fileproc 包纯文本类格式的提取与纯文案交付。
+// 现役提取器：txt/csv 逐行、md Markdown（结构判定统一在 md_structure.go，提取与写回共用）。
 // 全部复用 Extractor 的去重与规整逻辑；输出为待翻译文本片段列表。
-// ★ md 的「哪一段可译、哪一段是骨架」判定不在本文件，统一在 md_structure.go（提取与写回共用）。
-// 另提供 WriteComparisonXlsx：**只有** srt/vtt/json/yaml/yml（无原格式回写能力的那一族）
-// 以「源文+译文」xlsx 对照表作为唯一交付形态（设计如此，非降级）。
-// ⚠️ pdf/txt/csv/md **有**原位写回，不走这张对照表；它们写回失败后的兜底是纯文案 .md
+// ⚠️ 2026-10-30 三事合一批：`srt/vtt` 字幕块、`json` 字符串值、`yaml` 标量三条提取器
+// **连同 `WriteComparisonXlsx`（xlsx 双语对照表）一起删除**——这五种格式已从准入清单撤出
+// （唯一事实源＝formats.go 的 TranslateFormatOrder，AGENTS §一·14），
+// 留一条没人调用的提取器就是给下一位「这里是不是漏了分支」的猜谜。
+// 历史工单已产出的对照表产物照常可下载：准入判据只作用于建单侧，不套到下载侧。
+// ⚠️ pdf/txt/csv/md **有**原位写回，不走对照表；它们写回失败后的兜底是纯文案 .md
 // （判据只有一处：engine/file.go 的 writebackDelivery，锁＝engine/file_gate_test.go）。
 // =============================================
 package fileproc
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-
-	"github.com/xuri/excelize/v2"
 )
 
 // ★ 结构层重做（2026-09-22）后删除的四条正则：imgRe / linkRe / emphasisRe / sepRe。
@@ -28,7 +26,7 @@ import (
 // 照原样送模型并就地替换」，剥标记这一步本身不再存在，故不留兼容壳（留着只会被后来人当入口误用）。
 // 结构判定统一在 md_structure.go。
 
-// extractLines 逐行清洗后加入提取器（txt/csv/md/yaml 共用的行模式基座）。
+// extractLines 逐行清洗后加入提取器（txt/csv 共用的行模式基座；md 走 md_structure 那条判定层）。
 // 参数：path=文件路径，e=提取器，clean=行级清洗函数（返回 "" 表示丢弃该行）。
 func extractLines(path string, e *Extractor, clean func(string) string) error {
 	b, err := os.ReadFile(path)
@@ -42,54 +40,6 @@ func extractLines(path string, e *Extractor, clean func(string) string) error {
 		}
 	}
 	return nil
-}
-
-// extractSubtitle 提取 srt/vtt 字幕文本：
-// 按空行分块，跳过序号行（纯数字）、时间轴行（含 "-->"）与 vtt 头（WEBVTT/NOTE/STYLE），
-// 块内剩余行合并为一条字幕文本。
-// 参数：path=文件路径，e=提取器。
-func extractSubtitle(path string, e *Extractor) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	for _, block := range strings.Split(string(b), "\n\n") {
-		var lines []string
-		for _, line := range strings.Split(block, "\n") {
-			line = strings.TrimSpace(strings.TrimRight(line, "\r"))
-			if line == "" || isCueNoise(line) {
-				continue
-			}
-			lines = append(lines, line)
-		}
-		if len(lines) > 0 {
-			e.add(strings.Join(lines, " "))
-		}
-	}
-	return nil
-}
-
-// isCueNoise 判断字幕块中的非正文行：纯数字序号 / 时间轴 / vtt 控制关键字。
-func isCueNoise(line string) bool {
-	if strings.Contains(line, "-->") {
-		return true
-	}
-	pureNum := true
-	for _, r := range line {
-		if r < '0' || r > '9' {
-			pureNum = false
-			break
-		}
-	}
-	if pureNum {
-		return true
-	}
-	for _, kw := range []string{"WEBVTT", "NOTE", "STYLE", "REGION"} {
-		if strings.HasPrefix(line, kw) {
-			return true
-		}
-	}
-	return false
 }
 
 // extractMarkdown 提取 Markdown 正文：逐行走 md_structure 的统一判定层。
@@ -212,63 +162,12 @@ func mdEnsurePrefixSpace(line string, pfxLen int) string {
 	return line[:pfxLen] + " " + line[pfxLen:]
 }
 
-// extractJSON 递归收集 JSON 中全部字符串值（键名不入库）。
-func extractJSON(path string, e *Extractor) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	var v interface{}
-	if err := json.Unmarshal(b, &v); err != nil {
-		return err
-	}
-	walkJSON(v, e)
-	return nil
-}
-
-// walkJSON 递归遍历 JSON 值：字符串入提取器，数组/对象继续下钻。
-func walkJSON(v interface{}, e *Extractor) {
-	switch tv := v.(type) {
-	case string:
-		e.add(tv)
-	case []interface{}:
-		for _, item := range tv {
-			walkJSON(item, e)
-		}
-	case map[string]interface{}:
-		for _, val := range tv {
-			walkJSON(val, e)
-		}
-	}
-}
-
-// extractYAML 提取 YAML 标量值：跳过注释/文档分隔行，剥离列表符与键前缀。
-func extractYAML(path string, e *Extractor) error {
-	return extractLines(path, e, func(line string) string {
-		t := strings.TrimSpace(strings.TrimRight(line, "\r"))
-		if t == "" || strings.HasPrefix(t, "#") || t == "---" || t == "..." {
-			return ""
-		}
-		t = strings.TrimPrefix(t, "- ")
-		t = strings.TrimSpace(t)
-		// key: value → 取 value（无引号包裹的裸值）；纯键行（如嵌套节点）丢弃
-		if i := strings.Index(t, ": "); i >= 0 {
-			t = strings.TrimSpace(t[i+2:])
-		} else if strings.HasSuffix(t, ":") {
-			return ""
-		}
-		// 剥成对引号
-		if len(t) >= 2 && (t[0] == '"' && t[len(t)-1] == '"' || t[0] == '\'' && t[len(t)-1] == '\'') {
-			t = t[1 : len(t)-1]
-		}
-		return t
-	})
-}
-
 // WriteTranslationMd ★ 工单双模式（2026-09-13）：按提取顺序生成「纯文案」.md 产物。
 // 用途：① 还原文件模式的兜底附加交付（版式还原失败/用户只要文案时下载）；
 //
-//	② 纯文案模式（anydoc→MD 管线的 json/yaml/srt/vtt 类）主交付。
+//	② 纯文案模式（anydoc 老格式）主交付；
+//	③ ★ 2026-10-30 起还是**图片链与音频链的译文主面**（图片＝译后图＋本文件产物，
+//	   音频＝同容器配音＋本文件产物；旧的 .srt 字幕档已取消）。
 //
 // 规则：命中段输出译文、未命中段保留原文；段间空一行（段落语义），
 // 表格单元格等短段以独立段落呈现——定位为"内容忠实"的纯文本稿，不承诺版式。
@@ -325,27 +224,3 @@ func AppendUntranslatedNotes(outPath string, items []UntranslatedItem) error {
 	}
 	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
 }
-
-// WriteComparisonXlsx 生成「源文→译文」xlsx 对照表（无原格式回写能力格式的统一产物）。
-// 参数：outPath=输出文件路径；sourceTexts=源文片段列表；translations=原文 → 该语言译文映射。
-func WriteComparisonXlsx(outPath string, sourceTexts []string, translations map[string]string) error {
-	f := excelize.NewFile()
-	sheet := "Sheet1"
-	_ = f.SetCellValue(sheet, "A1", "source_text")
-	_ = f.SetCellValue(sheet, "B1", "translated_text")
-	for i, src := range sourceTexts {
-		row := i + 2
-		_ = f.SetCellValue(sheet, cellNameA(row), src)
-		_ = f.SetCellValue(sheet, cellNameB(row), translations[src])
-	}
-	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-		return err
-	}
-	return f.SaveAs(outPath)
-}
-
-// cellNameA/cellNameB 第 A/B 列指定行的单元格名（对照表固定两列）。
-func cellNameA(row int) string { return "A" + strconv.Itoa(row) }
-
-// cellNameB 生成第 row 行 B 列的单元格坐标名（xlsx 对照表输出用）。
-func cellNameB(row int) string { return "B" + strconv.Itoa(row) }

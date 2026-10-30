@@ -11,11 +11,11 @@ import { Button, DataTable, Link, Switch } from '@/ui/langcross/src'
 import { toast, toastSuccess, toastError } from '@/lib/toastBus'
 import {
   myTickets, ticketCreate, ticketCreateFile, ticketRun, ticketDetail,
-  ticketDownload, ticketDelete, ticketCancel, createFeedback,
+  ticketDownload, ticketArtifactDownload, ticketArtifactPreview, ticketDelete, ticketCancel, createFeedback,
 } from '@/api'
 import { runGuarded } from '@/lib/runGuarded'
 import { confirmDialog } from '@/components/uiDialogs'
-import type { Ticket, TicketResp, TicketQuality, QAReportIssue, TicketDeliverable } from '@/api/tickets'
+import type { Ticket, TicketResp, TicketQuality, QAReportIssue, TicketDeliverable, TicketArtifactItem } from '@/api/tickets'
 import { DownloadError } from '@/api/tickets'
 import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TRANSLATE_FILE_EXTS, TEXT_DELIVERY_ACCEPT, TEXT_DELIVERY_ONLY_EXTS, validateTranslateFile } from '@/api/translate'
 // ★ 2026-10-16 能力门批：图片/音频这两类素材**不是**纯文本链路，要先经服务端的识别能力
@@ -25,6 +25,8 @@ import { AUDIO_EXTS, IMAGE_EXTS, TRANSLATE_FILE_ACCEPT, TRANSLATE_FILE_EXTS, TEX
 import { useVoiceCapability } from '@/api/voiceCapability'
 // ★ 2026-10-27 P2-01：档位与分钟数只认 lib/ticketEta 那一份事实源（禁止在本文件再写扩展名清单）
 import { ticketWaitMinutes, ticketWaitTier } from '@/lib/ticketEta'
+// ★ 2026-10-30（D-5）：即时翻译超限文件的「一次性交接」（工作台写入、本页读一次即删）
+import { readInstantTicketHandoffOnce, fileFromHandoff } from '@/lib/instantTicketHandoff'
 import LangMultiSelect, { LangChips } from './LangMultiSelect'
 import ModeToggle from '@/components/ModeToggle'
 import { t, tpl, useLang } from '@/i18n'
@@ -351,7 +353,8 @@ export default function TicketsPage() {
   const [creating, setCreating] = useState(false)
   // 「媒介产物说明」横幅：图片/音频进翻译管线时，告诉客户系统要做什么、产物是什么格式。
   // ★ 2026-10-14 P1c 接线：后端已经分别为两类素材跑了 OCR（P1a）与 ASR 转写（P2），
-  //   但**交付形态不是原格式**（图片不回填合成图、音频不改音轨，分别给译文 .md / .srt+.md）。
+  //   但**交付形态不是原格式**（★ 2026-10-30 口径：图片＝原位译后图＋译文 .md；
+  //   音频＝同容器译后配音＋译文 .md 两件，字幕与原音频副本不再随包）。
   //   不说清楚，客户下载完会以为"翻错了/少了一页"。这类"交付即误会"比功能缺陷更难发现。
   const mediaHint = (() => {
     const exts = files.map((f) => '.' + (f.name.split('.').pop() || '').toLowerCase())
@@ -366,6 +369,33 @@ export default function TicketsPage() {
   const [condenseMax, setCondenseMax] = useState(200)
   // ★ 工单双模式（2026-09-13）：交付方式 restore 还原文件模式（默认）/ text 纯文案模式
   const [delivery, setDelivery] = useState<string>(localStorage.getItem('ticket_delivery') || 'restore')
+
+  // ★ 2026-10-30（D-5）即时翻译「带文件跳工单」：工作台把超限文件写进一次性交接槽，
+  //   这里挂载时**读一次就删**（lib/instantTicketHandoff.ts 的口径，读侧负责清键）。
+  //   · 有内联数据 ⇒ 重建 File 直接进待上传清单，客户不用再选一遍；
+  //   · 只有元数据（文件太大/存储不可用）⇒ 点名文件请客户重选，绝不拼一个 0 字节的假 File；
+  //   · 任何情况下都以**建单页自己的校验**为准（不绕过 validateTranslateFile）。
+  useEffect(() => {
+    const h = readInstantTicketHandoffOnce()
+    if (!h) return
+    setMode('file')
+    // 交接来的都是即时翻译收不下的媒体件（图片/录音）⇒ 必须是还原模式；
+    // 若客户上次把交付方式存成了「纯文案」，沿用会把它判成不支持（纯文案只收文本格式）。
+    setDelivery('restore')
+    try { localStorage.setItem('ticket_delivery', 'restore') } catch { /* 存储满静默 */ }
+    setTitle((cur) => cur || h.name.replace(/\.[^./\\]+$/, ''))
+    const f = fileFromHandoff(h)
+    if (!f) {
+      toastError(tpl('tk.instantReselect', { name: h.name }))
+      return
+    }
+    // 以建单页自己的校验为准（不绕过 validateTranslateFile）；走还原模式的格式集
+    const reason = validateTranslateFile(f, false)
+    if (reason) { toastError(reason); return }
+    setFiles((prev) => [...prev, f])
+    // 只跑一次：交接槽已经删掉，重跑也读不到东西；用空依赖避免交付方式切换时重复加文件。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ★ 2026-10-16 能力门：服务端识别能力快照（探针全站一份，见 api/voiceCapability.ts）。
   //   null（探不到）⇒ 放行，与另两个消费点同档（fail-open：探针坏了不该摘产品入口）。
@@ -679,6 +709,23 @@ export default function TicketsPage() {
   const states = (detail?.states as any[]) || []
   // ★ 2026-10-19 G13：交付件清单（实际产物）——区别于 files（输入件）。字段名假设见 api/tickets.ts。
   const deliverables: TicketDeliverable[] = ((detail?.deliverables || detail?.outputs) as TicketDeliverable[] | undefined) || []
+  // ★ 2026-10-30 组5（两段式交付）：按（文件 × 语种）分组的产物清单。
+  //   新单（有 artifacts 行）走分组双按钮；历史单（无行）回落旧 deliverables 清单——**不猜、不回填**。
+  const artifacts: TicketArtifactItem[] = ((detail?.artifacts as TicketArtifactItem[] | undefined) || [])
+  const artifactGroups = (() => {
+    const m = new Map<string, TicketArtifactItem[]>()
+    for (const a of artifacts) {
+      const k = `${a.file_id || 0}|${a.lang || ''}`
+      const arr = m.get(k) || []
+      arr.push(a)
+      m.set(k, arr)
+    }
+    return Array.from(m.entries()).map(([k, items]) => {
+      const [fidStr, lg] = k.split('|')
+      return { key: k, fileId: Number(fidStr) || 0, lang: lg, items }
+    })
+  })()
+
   // ★ 2026-10-19 G2：退化交付语言（版式还原失败、以纯文案 .md 交付）——过去客户面只有站内信，详情面零露出。
   const degradedLangs: string[] = ((detail?.ticket?.degraded_langs) as string[] | undefined) || []
   // ★ M1：引擎闸门告警（未译段回落原文、结构保真等）过去只进站内信/库列；客户面按条数出声，
@@ -938,7 +985,17 @@ export default function TicketsPage() {
         )}
         {/* ★ 2026-10-19 G13：交付件清单（实际产物）——过去详情面只显示 files（自己上传的输入件），
             于是"下载包里四件齐全、页面上只看得见一件"。可见性判据一律 isVisible()，禁用 count()（§一·5）。 */}
-        {deliverables.length > 0 && (
+        {artifactGroups.length > 0 && detail?.ticket && (
+          <TicketArtifacts
+            ticketId={detail.ticket.id}
+            status={String(detail.ticket.status || '')}
+            groups={artifactGroups}
+            files={(detail.files as { id: number; file_name: string }[] | undefined) || []}
+            lang={lang}
+            t={t}
+          />
+        )}
+        {artifactGroups.length === 0 && deliverables.length > 0 && (
           <div data-testid="tk-deliverables" style={{ marginTop: 10 }}>
             <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.deliverablesTitle')}</div>
             <div style={{ maxHeight: 160, overflowY: 'auto' }}>
@@ -1127,3 +1184,93 @@ const CSS_TK = `
   .tk-table td:nth-child(7) > div{flex-wrap:wrap;gap:6px 12px}
 }
 `
+
+// ============ 两段式交付产物区（★ 2026-10-30 组5，B12） ============
+// 用户口径：一次工单 = N 个按（文件 × 语种）分开的产物，**md 先到、原格式后到**；不再打 zip。
+// 三条渲染口径（与后端 artifacts 语义一一对应）：
+//   ① md 有行 ⇒ 可预览、可下载 md；original 没行且工单仍在跑 ⇒ 按钮禁用并写「生成中」——
+//      不写"失败"（那是把进行中等价成坏了，用户会反复重提）；
+//   ② 工单已终态仍无 original ⇒ 按钮禁用并给**具体原因**（该组 md 被标 degraded 时用"不可用"文案），
+//      绝不是笼统一个"失败"；
+//   ③ 历史单没有 artifacts 行 ⇒ 整块不渲染，由调用方回落旧 deliverables 清单（不猜、不回填）。
+export function TicketArtifacts({
+  ticketId, status, groups, files, lang, t,
+}: {
+  ticketId: number
+  status: string
+  groups: { key: string; fileId: number; lang: string; items: TicketArtifactItem[] }[]
+  files: { id: number; file_name: string }[]
+  lang: string
+  t: (k: string, ...args: any[]) => string
+}) {
+  const running = status === 'queued' || status === 'in_progress'
+  const nameOf = (fileId: number) => files.find((f) => f.id === fileId)?.file_name || ''
+  return (
+    <div data-testid="tk-artifacts" style={{ marginTop: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.artifactsTitle')}</div>
+      {groups.map((g) => (
+        <ArtifactGroup key={g.key} ticketId={ticketId} group={g} fileName={nameOf(g.fileId)} running={running} lang={lang} t={t} />
+      ))}
+    </div>
+  )
+}
+
+// ArtifactGroup 单个（文件 × 语种）分组的预览与两个下载按钮。
+export function ArtifactGroup({
+  ticketId, group, fileName, running, lang, t,
+}: {
+  ticketId: number
+  group: { key: string; fileId: number; lang: string; items: TicketArtifactItem[] }
+  fileName: string
+  running: boolean
+  lang: string
+  t: (k: string, ...args: any[]) => string
+}) {
+  const [preview, setPreview] = useState<{ text: string; truncated: boolean } | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const md = group.items.find((i) => i.kind === 'md')
+  const original = group.items.find((i) => i.kind === 'original')
+  const openPreview = async () => {
+    if (!md) return
+    if (preview) { setPreview(null); return }
+    setLoading(true)
+    try {
+      setPreview(await ticketArtifactPreview(ticketId, md.id))
+    } catch (e: any) {
+      toastError(String(e?.message || t('tk.artifactExpired')))
+    } finally {
+      setLoading(false)
+    }
+  }
+  const dl = async (aid: number) => {
+    setBusy(true)
+    try { await ticketArtifactDownload(ticketId, aid) } catch (e: any) { toastError(String(e?.message || t('tk.artifactExpired'))) } finally { setBusy(false) }
+  }
+  return (
+    <div style={{ borderTop: '1px solid var(--lc-border-card)', padding: '8px 0' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, flexWrap: 'wrap' }}>
+        <Icon n="doc" />
+        <span style={{ color: 'var(--lc-text-2)', wordBreak: 'break-all' }}>{fileName || `#${group.fileId || '-'}`}</span>
+        {group.lang ? <span style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>{langLabel(group.lang, lang)}</span> : null}
+        {md && (
+          <Link onClick={() => void openPreview()}>{loading ? t('tk.previewLoading') : t('tk.preview')}</Link>
+        )}
+        {md && <Link onClick={() => !busy && void dl(md.id)}>{t('tk.downloadMd')}</Link>}
+        {original ? (
+          <Link onClick={() => !busy && void dl(original.id)}>{t('tk.downloadOriginal')}</Link>
+        ) : (
+          <span data-testid="tk-original-pending" style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>
+            {running ? t('tk.originalPending') : t('tk.originalUnavailable')}
+          </span>
+        )}
+      </div>
+      {preview && (
+        <div style={{ marginTop: 6 }}>
+          <pre data-testid="tk-preview" style={{ maxHeight: 260, overflow: 'auto', whiteSpace: 'pre-wrap', fontSize: 13.5, background: 'var(--lc-inset)', padding: 8, borderRadius: 8, margin: 0 }}>{preview.text}</pre>
+          {preview.truncated ? <div style={{ fontSize: 13, color: 'var(--lc-text-3)', marginTop: 4 }}>{t('tk.previewTruncated')}</div> : null}
+        </div>
+      )}
+    </div>
+  )
+}

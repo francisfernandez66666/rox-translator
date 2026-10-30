@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（514 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（523 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -100,6 +100,8 @@ var exactEN = map[string]string{
 	"临时缓存写入失败":                                              "Temp cache write failed",
 	"二维码生成失败":                                               "QR code generation failed",
 	"二维码生成失败: ":                                             "QR code generation failed: ",
+	"产物不存在":                                                 "Artifact not found",
+	"产物不存在或已过保留期，请重新发起工单获取":                                 "Artifact not found or past its retention period; start a new ticket to generate it again",
 	"产物文件不存在":                                               "Deliverable file not found",
 	"人工修订记录读取失败，本次回写已中止，请重试":                                "Failed to read manual revision records; this write-back was aborted, please retry",
 	"人工修订记录读取失败，请稍后重试":                                      "Failed to read manual revision records; please retry later",
@@ -108,6 +110,7 @@ var exactEN = map[string]string{
 	"仅平台超管可操作数据采集":                                          "Only platform super-admins can operate data collection",
 	"仅平台超管可配置报价币种与汇率":                                       "Only platform super admins can configure quote currency and FX rate",
 	"仅平台超管可配置计费预估系数":                                        "Only platform super-admins can configure the billing estimate coefficients",
+	"仅支持 GET":                                               "GET only",
 	"仅支持 POST":                                              "POST only",
 	"仅普通用户支持自助注销；管理员账号请联系上级处理":                              "Self-deactivation is for regular users only; admins should contact a superior",
 	"仅超管可创建行业":                                              "Only super-admins can create industries",
@@ -185,6 +188,7 @@ var exactEN = map[string]string{
 	"发票已作废":                   "Invoice voided",
 	"发送过于频繁，请稍后再试":            "Sends too frequent; please retry later",
 	"口令未能写入，请重试":              "The password could not be saved; please retry",
+	"只有纯文案 .md 产物支持预览":        "Only plain-text .md artifacts can be previewed",
 	"只能设置本租户品牌":               "You can only set your own tenant's brand",
 	"合并失败或文件超限":               "Merge failed or file exceeds limit",
 	"合并文件不存在或已过期":             "Merged file not found or expired",
@@ -204,9 +208,10 @@ var exactEN = map[string]string{
 	"图片不存在":                       "Image not found",
 	"图片数据格式无法解析（或超出上限）":           "Could not decode the image (or it exceeds the size limit)",
 	"图片暂存失败":                      "Failed to stage the image on the server",
-	"均摊系数不能小于 1.0":                "Sharing factor must not be less than 1.0",
-	"处理超时，长文本请改用翻译工单":             "Processing timed out; for long texts, please create a translation ticket instead",
-	"套餐不存在或已下架":                   "Plan not found or delisted",
+	"图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式": "Image exceeds the instant-translation limit (3 MB). Send it to a translation ticket: up to 40 MB, with the original format restored",
+	"均摊系数不能小于 1.0":    "Sharing factor must not be less than 1.0",
+	"处理超时，长文本请改用翻译工单": "Processing timed out; for long texts, please create a translation ticket instead",
+	"套餐不存在或已下架":       "Plan not found or delisted",
 	"如果该账号存在且绑定了邮箱，验证码已发送。10 分钟内没收到请检查邮箱拼写与垃圾箱，或改用用户名找回": "If this account exists with a bound email, a code has been sent. If it does not arrive within 10 minutes, check the address and your spam folder, or try recovering by username",
 	"存储未初始化": "Storage not initialized",
 	"密码保存失败": "Failed to save password",
@@ -243,6 +248,7 @@ var exactEN = map[string]string{
 	"当前订阅套餐已下架，请先选择其他套餐":                                   "Current subscribed plan is delisted; choose another plan first",
 	"录音数据格式无法解析（或超出上限）":                                    "Could not decode the audio recording (or it exceeds the size limit)",
 	"录音暂存失败":                                               "Failed to stage the recording on the server",
+	"录音超出即时翻译上限，请交给翻译工单（上限 40 MB）":                         "Audio exceeds the instant-translation limit. Send it to a translation ticket (up to 40 MB).",
 	"手册下载仅支持 GET":                                          "Manual download supports GET only",
 	"手册地址形如 /docs/manual/<语种码>.pdf（例：/docs/manual/zh.pdf）": "Manual URLs look like /docs/manual/<lang>.pdf (e.g. /docs/manual/zh.pdf)",
 	"手册文件格式异常（非 PDF），已停止下载":                                "The manual file is not a valid PDF; the download was stopped",
@@ -287,10 +293,12 @@ var exactEN = map[string]string{
 	"无权更新该类型的知识库包":                                         "No permission to update this type of knowledge pack",
 	"无权查看":                                                 "No view permission",
 	"无权查看他人工单":                                             "No permission to view others' tickets",
+	"无权访问他人工单产物":                                           "No access to another user's ticket artifacts",
 	"无权访问该工单":                                              "You cannot access this ticket",
 	"无法保存文件":                                               "Cannot save file",
 	"无法创建上传目录":                                             "Unable to create upload directory",
 	"无法确定链接归属的企业":                                          "Could not determine which company this link belongs to",
+	"无法读取这段录音的时长，请换一段录音或交给翻译工单":                            "Cannot read this recording's duration. Use another recording or send it to a translation ticket.",
 	"时间窗格式非法或 start≥end":                                   "Invalid time window or start >= end",
 	"暂无可下载的翻译结果":                                           "No downloadable translation yet",
 	"暂无已生成的产物（部分文件可能处理失败）":                                 "No deliverables generated yet (some files may have failed)",
@@ -479,6 +487,7 @@ var exactEN = map[string]string{
 	"请输入注册邮箱":                                                "Enter your registered email",
 	"请输入要试译的内容":                                              "Enter the text you would like to trial-translate",
 	"请阅读并同意《用户协议》与《隐私协议》":                                    "Please read and accept the Terms of Service and Privacy Policy",
+	"读取产物失败":                                                 "Failed to read the artifact",
 	"读取前端入口失败":                                               "Failed to read frontend entry",
 	"读取文件失败: ":                                               "File read failed: ",
 	"账号不存在或已被删除，请重新登录后再试":                                    "Account not found or already deleted; please sign in again and retry",

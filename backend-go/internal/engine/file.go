@@ -135,16 +135,21 @@ type FileTranslateData struct {
 }
 
 // writebackDelivery 写回交付形态（纯函数，便于单测）：
-//   - 返回 "xlsx"：无原格式回写能力的格式（srt/vtt/json/yaml/yml），以 xlsx 对照表为唯一交付形态；
 //   - 返回 "image"：图片格式（P1a，经 OCR 投喂翻译）——交付形态＝**译后图片（同容器，P4 原位叠字）
 //     ＋译文 .md**；叠字渲染不出来时退回「只有译文 .md」（择优产出，绝不判死整单）；
-//   - 返回 "audio"：音频格式（P2，经 ASR 转写投喂翻译）——交付形态＝译后音频（**同容器**，见
-//     dubTranslatedAudio）＋译文 .md＋译文字幕 .srt（带原时间轴）＋原音频副本；
-//   - 返回 "inplace"：有原格式写写能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级 xlsx。
+//   - 返回 "audio"：音频格式（P2，经 ASR 转写投喂翻译）——★ 2026-10-30 改档后交付形态＝**两件**：
+//     译后音频（同容器，见 dubTranslatedAudio）＋译文 .md。
+//     **不再产字幕 .srt、不再随包原音频副本**（用户裁决：客户要的是能听的译文，字幕与原音轨是打包噪音）；
+//     TTS 失败或目标语种无语音 ⇒ 只有 .md，并把该语言记进 degraded/gate_warnings 点名原因；
+//   - 返回 "inplace"：有原格式写回能力的格式（pdf/docx/pptx/txt/csv/md），写回失败自动重试、不降级。
+//
+// ⚠️ 旧档 `"xlsx"`（srt/vtt/json/yaml/yml 以双语对照表为唯一交付形态）**已于 2026-10-30 退役**：
+// 这五种纯文本容器同时撤出准入（fileproc.TranslateFormatOrder），所以这里不再有那一档，
+// `isComparisonTableFormat`／`fileproc.WriteComparisonXlsx` 一起退役。
+// 等价锁＝writeback_delivery_test.go / file_gate_test.go 拿 TranslateFormatOrder **全量**逐条比对——
+// 清单里还剩一个格式而这里判不出对应档，那条锁就红（两份列表再漂一次当场抓到）。
 func writebackDelivery(ext string) string {
 	switch {
-	case isComparisonTableFormat(ext):
-		return "xlsx"
 	// ★ 媒体两档**委托** fileproc 的集合判定，不在这里再抄一份扩展名列表
 	//   （2026-10-16：这两份列表漂过——engine 那份加了 .heic/opus，fileproc 那份没加，
 	//   表现是"上传口放行、这里判 inplace"，客户拿到一个走了 Office 回写分支的图片）。
@@ -262,19 +267,6 @@ func (e *Engine) retryImageSegments(ctx context.Context, texts []string, tr map[
 		out = append(out, fileproc.UntranslatedItem{Line: i + 1, Source: src, Reason: reason})
 	}
 	return out, upstreamDead
-}
-
-// isComparisonTableFormat 无原格式回写能力、以 xlsx 对照表为唯一交付形态的格式。
-//
-// ★ 这一份清单**就该留在这里**：AGENTS §一·14 规定"交付形态判据只有一处＝本文件的 writebackDelivery"，
-// 所以它是这条规则的事实源，不下沉到 fileproc（fileproc 只管"准入与否/是不是图片音频"）。
-func isComparisonTableFormat(ext string) bool {
-	switch ext {
-	case ".srt", ".vtt", ".json", ".yaml", ".yml":
-		return true
-	default:
-		return false
-	}
 }
 
 // dubWithFallback 配音产物的**两段式容器决策**（纯逻辑，便于单测；I/O 由 synth 注入）。
@@ -669,7 +661,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	deliveryText := strings.EqualFold(strings.TrimSpace(optionString(options["delivery"])), "text")
 	// ★ 格式白名单（三期格式补齐；★ 2026-10-14 #43 后清单的唯一事实源在 fileproc/formats.go）：
 	// Office 原格式回写；PDF 走三级降级链（原版式覆盖→版式重建→纯文案）；
-	// txt/csv/md 按原行对齐原位写回；srt/vtt/json/yaml/yml 以 xlsx 对照表为唯一交付形态。
+	// txt/csv/md 按原行对齐原位写回（★ 2026-10-30：srt/vtt/json/yaml/yml 已撤出准入，不再有 xlsx 对照表这一档）。
 	// 交付形态的判据只有本文件的 writebackDelivery 一处（下方第 3 步产物生成）。
 	// 纯文案模式额外准入 anydoc 独占格式（doc/xls/ppt 老格式、odt/ods/odp、rtf/epub 等）。
 	// ★ 2026-10-14 #43：这份清单原本在本包与 internal/api 各有一份字面量（共四份），
@@ -677,12 +669,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	//   它是**执行口**的第二道判定——上传口放行、这一口判不支持时，
 	//   客户看到的是"单建起来了、跑一半报不支持"，而且钱已经扣了。
 	if !fileproc.IsTranslateFormat(ext, deliveryText) {
-		if deliveryText {
-			return &FileTranslateResult{Skill: "translation",
-				Error: "不支持的格式（纯文案模式支持 " + fileproc.FormatHintBase() + "/" + fileproc.FormatHintText() + " 等）"}
-		}
+		// ★ 2026-10-30 C-10：拒绝文案的唯一出口＝`fileproc.RejectHint`。
+		// 撤出的五个纯文本容器给「请直接粘贴内容到文本翻译」，其余给现值清单句——
+		// 清单是现算的，所以改档位这句话自己跟着变，不留第二份对外文案。
 		return &FileTranslateResult{Skill: "translation",
-			Error: "不支持的格式（支持 " + fileproc.FormatHintBase() + "）"}
+			Error: fileproc.RejectHint(ext, deliveryText, "不支持的格式")}
 	}
 	// 显式判一次可读性：落盘件可能已被保留期清理删掉，提前拦下才能给出「文件不存在」
 	// 这种用户可行动的文案，而不是把底层 open 错误原样抛进工单轨迹。
@@ -1446,24 +1437,70 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		container, fellBack, serr := dubWithFallback(ext, synth)
 		if serr != nil {
-			observability.Warn(ctx, "译文配音跳过（不影响字幕与译文交付）",
+			observability.Warn(ctx, "译文配音跳过（不影响译文 .md 交付）",
 				"lang", lc, "error", serr.Error())
-			return nil, fmt.Sprintf("%s 未生成译文配音（%s）；字幕与译文已完整交付", config.LangNames[lc], serr.Error())
+			return nil, fmt.Sprintf("%s 未生成译文配音（%s）；译文 .md 已完整交付", config.LangNames[lc], serr.Error())
 		}
 		if fellBack {
 			observability.Warn(ctx, "译文配音回落 mp3（原容器转码不可用）", "lang", lc)
 			return []string{paths[container]}, fmt.Sprintf(
-				"%s 配音已回落 mp3（原容器 %s 转码不可用，服务器需安装 ffmpeg）；字幕与译文不受影响",
+				"%s 配音已回落 mp3（原容器 %s 转码不可用，服务器需安装 ffmpeg）；译文 .md 不受影响",
 				config.LangNames[lc], fileproc.DubContainerFor(ext))
 		}
 		return []string{paths[container]}, ""
 	}
 
 	// writeTextMd 生成某语言的纯文案 .md 产物（按提取顺序输出；未译段保留原文）。
-	writeTextMd := func(lc string) (string, error) {
+	// 参数 tr 传**交付口径**的译文（deliveryTranslations 的产物），不直接读 langTranslations：
+	// 拒译句/标识符还原/单行收敛这些出栈卫生都在那一层，md 与写回件必须同一份译文。
+	writeTextMd := func(lc string, tr map[string]string) (string, error) {
 		suffix := e.artifactLangSuffix(lc) + "-text.md"
 		p := filepath.Join(outputDir, artifactBase(lc, suffix)+suffix)
-		return p, fileproc.WriteTranslationMd(p, texts, langTranslations[lc])
+		return p, fileproc.WriteTranslationMd(p, texts, tr)
+	}
+
+	// ★ 2026-10-30 三事合一批 · 组5「两段式交付（md 先行）」
+	// artStage 是本次 HandleFile 的产物事件发射器（未订阅＝空函数，即时翻译链零开销）。
+	// mdPaths 记本语言已落地的纯文案 .md：末尾 textOut 段只搬运它、**不再重写**。
+	// 为什么 md 要先写：客户在轮询里先看到可读的 md、再等到原格式件；旧形态是"全都好了才一起出现"，
+	// 大文件（PDF 版式重建）动辄几十秒，那段时间页面上是一片空白。
+	artStage := newArtifactStage(ctx, filePath)
+	mdPaths := map[string]string{}
+	degradedHit := func(lc string) bool {
+		for _, d := range degraded {
+			if d == lc {
+				return true
+			}
+		}
+		return false
+	}
+	// appendUntranslatedNotes 给已写好的 .md 追加「未译出内容」一节（AGENTS §19 裁决 7）。
+	// md 从"旁路"升成主阅读面之后，它若不含这一节，客户看到的就是一份「看起来全译好了」的文档
+	// ——这正是 §19 要消灭的形态。空清单 ⇒ 整节不出现（连标题都不写）。
+	// 追加失败只出声＋进 gate_warnings，不判死：译文已落盘，不能因为一节附注没写上把整单打成失败。
+	appendUntranslatedNotes := func(lc, p string, notes []fileproc.UntranslatedItem) {
+		if len(notes) == 0 {
+			return
+		}
+		if nerr := fileproc.AppendUntranslatedNotes(p, notes); nerr != nil {
+			observability.Warn(ctx, "交付文档「未译出内容」一节追加失败", "lang", lc, "error", nerr.Error())
+			gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几段未译出", config.LangNames[lc], nerr.Error()))
+			return
+		}
+		gateWarnings = append(gateWarnings, fmt.Sprintf("%s 有 %d/%d 段未译出，已按原文交付并在交付文档文末逐段点名", config.LangNames[lc], len(notes), len(texts)))
+	}
+	// writeLangMD 写纯文案 .md（含未译出点名）并立刻发 kind=md 事件——「md 先行」的唯一写点。
+	// 任何格式分支都必须先调它、再产出 original；重写同一语言会重复追加「未译出」那一节，
+	// 所以调用方一律先看 mdPaths[lc]。
+	writeLangMD := func(lc string, tr map[string]string, notes []fileproc.UntranslatedItem) (string, error) {
+		p, perr := writeTextMd(lc, tr)
+		if perr != nil {
+			return "", perr
+		}
+		appendUntranslatedNotes(lc, p, notes)
+		mdPaths[lc] = p
+		artStage.emitOne(ArtifactKindMD, lc, p, false, false)
+		return p, nil
 	}
 
 	if deliveryText {
@@ -1490,20 +1527,30 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			}
 			// ★ 2026-10-26 裁决 7（「交付文档只记录未翻译的内容」）在**第二个交付口**的同一把尺子：
 			//   纯文案 .md 就是这一语言的主交付物，未译出的段必须在文末点名。
-			//   图片那一口本轮已接上，这里漏了就会出现"同一个产品两种诚实度"——
-			//   客户在图片单上能看见"哪几行没翻"，在 srt/json 这类单上却只有一句"已完成"。
-			if notes := untranslatedNotesFromSegments(texts, tr); len(notes) > 0 {
-				if nerr := fileproc.AppendUntranslatedNotes(outPath, notes); nerr != nil {
-					observability.Warn(ctx, "纯文案交付文档「未译出内容」一节追加失败", "lang", lc, "error", nerr.Error())
-					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几段没译出", config.LangNames[lc], nerr.Error()))
-				} else {
-					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 有 %d/%d 段未译出，已按原文交付并在交付文档文末逐段点名", config.LangNames[lc], len(notes), len(texts)))
-				}
-			}
+			//   ★ 2026-10-30 组5：改用统一助手（口径与图片/Office 各口一致）。
+			appendUntranslatedNotes(lc, outPath, untranslatedNotesFromSegments(texts, tr))
 			filesOut = append(filesOut, outPath)
 			langArtifact[lc] = outPath // 纯文案产物即该语言主交付物（.md 可直读比对指纹）
+			// ★ 两段式：纯文案模式没有「原格式」这一件，md 就是主产物 ⇒ primary=1，
+			//   否则前端会按「该组还没有 original」把它画成「生成中…」（等一个永远不会来的件）。
+			mdPaths[lc] = outPath
+			artStage.emitOne(ArtifactKindMD, lc, outPath, true, false)
 		}
 	} else if isXlsxInput {
+		// ★ 两段式阶段①：md 先行。xlsx 是「一份文件含全部语言」的合并交付，写回只有一次，
+		//   等到写回完再写 md 就等于「md 永远晚于 original」——在那条链上 md 先行会完全落空。
+		//   md 逐语言写（每语言一行 artifact，path 各不相同），original 是同一份 xlsx（每语言一行、同 path）。
+		for _, lc := range finalLangs {
+			tr := deliveryTranslations(lc, langTranslations[lc])
+			if len(tr) == 0 {
+				continue
+			}
+			if _, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr)); perr != nil {
+				// md 失败不判死：原格式件仍可能交付成功（它与 md 是两条独立写路径）。
+				observability.Warn(ctx, "xlsx 纯文案 .md 先行生成失败（不影响原格式交付）", "lang", lc, "error", perr.Error())
+				gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案 .md 生成失败（不影响原格式交付）：%s", config.LangNames[lc], perr.Error()))
+			}
+		}
 		// ★ 产物名（RC-4）：xlsx 是「一份文件含全部语言」的合并交付，无单一语言可归属，
 		//   按首目标语言翻 base（单语言场景本就是该语言；多语言场景取首语言名，与 Sheet 名=语言码一致）。
 		xlsxSuffix := "-multi.xlsx"
@@ -1534,63 +1581,62 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		}
 		if aerr == nil {
 			filesOut = append(filesOut, outPath)
+			for _, lc := range finalLangs {
+				if len(langTranslations[lc]) == 0 {
+					continue
+				}
+				langArtifact[lc] = outPath
+				// ★ 两段式阶段②：一份 xlsx 承载多语言 ⇒ 每个语种各一行 original、指向同一 path
+				//   （唯一索引含 lang，不会冲突）。
+				artStage.emitOne(ArtifactKindOriginal, lc, outPath, true, false)
+			}
 		} else {
 			_ = os.Remove(outPath)
-			// ★ 双模式（2026-09-13）：回写失败降级纯文案交付（翻译是资产，回写是增值）
+			// ★ 双模式（2026-09-13）：回写失败降级纯文案交付（翻译是资产，回写是增值）。
+			// ★ 两段式：md 已在阶段①发过 ⇒ 这里**不再发 original**，只把对应 md 行标成 degraded
+			//   （服务层按唯一键 upsert，是"更新一行"不是"多一行"）。
 			log.Printf("[file-degrade] xlsx 回写失败，降级纯文案: %v", aerr)
 			for _, lc := range finalLangs {
 				if len(langTranslations[lc]) == 0 {
 					continue
 				}
-				if p, perr := writeTextMd(lc); perr == nil {
-					filesOut = append(filesOut, p)
-					langArtifact[lc] = p // 降级交付的 .md 是该语言真实产物，保真比对应读它
-					degraded = append(degraded, lc)
+				p := mdPaths[lc]
+				if p == "" {
+					// 阶段①的 md 没写成（极少见）：现场补一次，宁可晚到也不能让该语言颗粒无收。
+					if p2, perr := writeLangMD(lc, deliveryTranslations(lc, langTranslations[lc]), untranslatedNotesFromSegments(texts, deliveryTranslations(lc, langTranslations[lc]))); perr == nil {
+						p = p2
+					}
 				}
+				if p == "" {
+					continue
+				}
+				filesOut = append(filesOut, p)
+				langArtifact[lc] = p // 降级交付的 .md 是该语言真实产物，保真比对应读它
+				degraded = append(degraded, lc)
+				artStage.emitOne(ArtifactKindMD, lc, p, false, true)
 			}
 			if len(degraded) == 0 {
 				return &FileTranslateResult{Skill: "translation", Error: "xlsx 写回失败: " + aerr.Error()}
 			}
 		}
 	} else {
-		// ★ P2：音频入口：产物 srt 的时间轴是对**原音频**算的，用户拿回去要能直接挂载播放，
-		//   故把原始音频随产物一并交付（只拷一次，不随语言数放大；用展示名而非内部落盘名，
-		//   与其余产物同一取名口径）。拷贝失败不判死——字幕与译文才是翻译资产。
-		if writebackDelivery(ext) == "audio" {
-			audioSrc := filepath.Join(outputDir, sanitizeArtifactBaseName(baseName, ext)+ext)
-			if cerr := copyFileContents(filePath, audioSrc); cerr != nil {
-				// 走 observability 而不是标准库：AGENTS「日志与观测」那条口径，且存量 log.Printf 受棘轮只减不增约束。
-				observability.Warn(ctx, "音频原文件随产物拷贝失败（不影响字幕交付）", "error", cerr.Error(), "artifact", filepath.Base(audioSrc))
-				// ★ G18：原音频副本缺位必须进 GateWarnings——用户拿不到原音轨就无法挂载字幕自行核对。
-				gateWarnings = append(gateWarnings, fmt.Sprintf("原音频副本未随包交付：%s", cerr.Error()))
-			} else {
-				filesOut = append(filesOut, audioSrc)
-			}
-		}
-		// ★ 非 xlsx 格式：每个目标语言独立产物文件，文件名标注语言
+		// ⚠️ 这里原本会把**原始音频本体**随产物拷一份（理由是要给客户把 .srt 挂回原音轨自行核对）。
+		// ★ 2026-10-30 三事合一批：字幕产物已取消（音频交付＝译文 .md ＋ 同容器配音两件），
+		//   那条挂载理由随之不成立 ⇒ 副本不再随包（同一份字节 × N 语言本来也是浪费，见 AGENTS §一·14）。
+		// ★ P1a：图片格式经 OCR 投喂翻译，交付面没有「原图副本」这一说，逐语言出译后图＋.md。
+		// ★ 每个目标语言独立产物文件，文件名标注语言
 		for _, lc := range finalLangs {
 			tr := deliveryTranslations(lc, langTranslations[lc])
 			if len(tr) == 0 {
 				continue
 			}
 			// ★ 产物名（RC-4）：base 已按该语言翻译，后缀（"_en.docx"）保持既有口径不动。
-			//   对照表交付形态的真实文件名多带一层 ".xlsx"，故把它一并计入后缀做字节预留。
 			nameSuffix := e.artifactLangSuffix(lc) + ext
-			if writebackDelivery(ext) == "xlsx" {
-				// 对照表产物：base-en.xlsx（不再把原扩展名叠进文件名）
-				nameSuffix = e.artifactLangSuffix(lc) + ".xlsx"
-			}
 			outPath := filepath.Join(outputDir, artifactBase(lc, nameSuffix)+nameSuffix)
-			// ★ 2026-09-09 产品决策：无原格式回写能力的格式（srt/vtt/json/yaml）以 xlsx 对照表
-			//   为唯一交付形态（设计如此，非降级）；还原模式下另有纯文案 .md 旁路产物（L788+）。
-			if writebackDelivery(ext) == "xlsx" {
-				if xerr := fileproc.WriteComparisonXlsx(outPath, texts, tr); xerr != nil {
-					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 对照表生成失败：%s", config.LangNames[lc], xerr.Error())}
-				}
-				filesOut = append(filesOut, outPath)
-				langArtifact[lc] = outPath // 二进制对照表：保真闸门自动回落段级视图口径
-				continue
-			}
+			// ⚠️ 这里曾经有一整档「xlsx 双语对照表」交付（srt/vtt/json/yaml/yml 的唯一形态，
+			//   2026-09-09 产品决策）。★ 2026-10-30 三事合一批把那五种格式**撤出准入**，
+			//   对照表这一档连同 `fileproc.WriteComparisonXlsx` 一起退役（AGENTS §一·14）。
+			//   历史工单已产出的对照表照常可下载——准入判据只作用于建单侧，绝不套到下载侧。
 			// ★ P1a：图片格式（经 OCR 投喂翻译）无原格式可原位回写，交付形态为译文 .md 文档。
 			// 产物名 {base}_{lang}.md（与 md 源码翻译同源 WriteTranslationMd，按提取顺序输出译文段）。
 			if writebackDelivery(ext) == "image" {
@@ -1625,6 +1671,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					//   只留一行日志就等于把交付面缺东西写成"一切正常"。
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几行没译出", config.LangNames[lc], uerr.Error()))
 				}
+				// ★ 两段式阶段①：图片的 md 必须在这里发——它的内容依赖**补译之后**的 tr（R-5：
+				//   图片链的未译出清单走 retryImageSegments 的未译段，不填 UntranslatedSegments），
+				//   但顺序仍在译后图（阶段②）之前，md 先行的语义不变。
+				mdPaths[lc] = imgPath
+				artStage.emitOne(ArtifactKindMD, lc, imgPath, false, false)
 				if imgUpstreamDead {
 					observability.Warn(ctx, "图片原位链逐段补译判上游断，剩余未译段不再逐行烧调用",
 						"lang", lc, "untranslated_segments", len(unresolved))
@@ -1646,8 +1697,12 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					observability.Warn(ctx, "图片原位回填跳过（退回仅译文 .md）", "error", rerr.Error(), "reason", reason, "artifact", filepath.Base(inPlacePath))
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 图片原位回填未生成（%s）：%s；译文 .md 已完整交付", config.LangNames[lc], reason, rerr.Error()))
 					degraded = append(degraded, lc)
+					// ★ 两段式：md 已发 ⇒ 不再发 original，把 md 行标成 degraded（服务层按唯一键 upsert）。
+					artStage.emitOne(ArtifactKindMD, lc, imgPath, false, true)
 				} else {
 					filesOut = append(filesOut, inPlacePath)
+					// ★ 两段式阶段②：译后图即该语言主产物。
+					artStage.emitOne(ArtifactKindOriginal, lc, inPlacePath, true, false)
 					// ★ G3-c：有行没译出（由原文顶上）必须出声——否则「图上还是中文」被静默交付。
 					if stats.Residue > 0 {
 						observability.Warn(ctx, "图片原位回填存在未译出行（保留原文）", "lang", lc, "residue", stats.Residue, "total", stats.Total)
@@ -1666,46 +1721,37 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				continue
 			}
 			// ★ P2：音频格式（经 ASR 转写投喂翻译）同样没有「原位回写」这回事——译文是文本，
-			//   不可能塞回原音频。交付三件套：
-			//     ① {base}_{lang}.srt  译文字幕（**带原时间轴**，可直接挂到原音轨上播放）
-			//     ② {base}_{lang}.md   译文纯文案（便于阅读/校对/再加工）
-			//     ③ 原音频本体的一个副本已于上方一次性落 outputDir（见 copyOriginalAudio 一次调用）
-			//   —— srt 的时间轴是对着**原音频**算的，缺了它就点不齐，故必须随包交付；
-			//      每一语种都拷一份是本末倒置（同一份字节 × N 语言），只拷一次。
+			//   不可能塞回原音频。
+			// ★ 2026-10-30 三事合一批改档（AGENTS §一·14）：交付**两件**——
+			//     ① {base}_{lang}.md          译文纯文案（阅读/校对/再加工的主面）
+			//     ② {base}_{lang}.<原容器>    同容器译后配音（照搬输入容器，mp3 进 mp3 出）
+			//   旧形态的 ③ 译文字幕 .srt（带原时间轴）与 ④ 原音频副本**一并取消**：
+			//   字幕存在的理由是把译文挂回原音轨自行核对，而配音本身就是可听的交付物，两件并存是噪音。
+			//   ⚠️ 「拿不到配音 ⇒ 这一组只有 .md、原格式按钮禁用并给原因」那一档**落在产物层**表达
+			//   （组5 的 ticket_artifacts 行 `degraded`），这里**不抬** `degraded_langs`：
+			//   泰语这类「语音引擎本就没有该语种」是能力档，不是质检存疑，混进去就是把设计报成缺陷。
 			if writebackDelivery(ext) == "audio" {
-				cues := fileproc.AudioCues(filePath)
-				srtSuffix := e.artifactLangSuffix(lc) + ".srt"
-				srtPath := filepath.Join(outputDir, artifactBase(lc, srtSuffix)+srtSuffix)
-				if serr := fileproc.WriteTranslationSrt(srtPath, cues, texts, tr); serr != nil {
-					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 字幕产物生成失败：%s", config.LangNames[lc], serr.Error())}
-				}
-				filesOut = append(filesOut, srtPath)
-				if len(cues) == 0 {
-					degraded = append(degraded, lc) // 时间轴未带上：srt 退化为无时间轴编号（译文不丢）
-				}
 				mdSuffix := e.artifactLangSuffix(lc) + ".md"
 				audPath := filepath.Join(outputDir, artifactBase(lc, mdSuffix)+mdSuffix)
 				if merr := fileproc.WriteTranslationMd(audPath, texts, tr); merr != nil {
 					return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文文档生成失败：%s", config.LangNames[lc], merr.Error())}
 				}
+				// ★ 两段式阶段①：md 先行（配音可能要等 TTS 子进程几十秒，那段时间客户先拿到可读的译文）。
+				//   未译出的行同样点名（B18）：音频链的 md 也是主阅读面。
+				appendUntranslatedNotes(lc, audPath, untranslatedNotesFromSegments(texts, tr))
+				mdPaths[lc] = audPath
+				artStage.emitOne(ArtifactKindMD, lc, audPath, false, false)
 				filesOut = append(filesOut, audPath)
 				langArtifact[lc] = audPath // 译文 .md：保真比应对读它
-				// ★ P2 收口：④ {base}_{lang}.mp3 译文配音（择优产出，v2 方案 §4.3 第 3 件）。
-				//   语种越界（Chatterbox 23 语之外）或合成失败 ⇒ 跳过并在 GateWarnings 明示，
-				//   工单仍 completed——语音是增值，译文三件套（.srt/.md/原音频）才是资产。
-				//   缝合顺序按 cues（＝srt 的顺序），没有 cues 时退化为 texts 顺序，与 srt 同源。
-				ttsLines := make([]string, 0, len(cues))
-				if len(cues) > 0 {
-					for _, c := range cues {
-						if v, ok := tr[c.Text]; ok && strings.TrimSpace(v) != "" {
-							ttsLines = append(ttsLines, v)
-						}
-					}
-				} else {
-					for _, t := range texts {
-						if v, ok := tr[t]; ok && strings.TrimSpace(v) != "" {
-							ttsLines = append(ttsLines, v)
-						}
+				// ★ P2 收口：译文配音（择优产出）。语种越界（语音引擎没有该语种，判据现读
+				//   `fileproc.TtsCoveredLangs()` 的**有效档**而非声明档）或合成失败 ⇒ 跳过并在
+				//   GateWarnings 明示，工单仍完成——配音是增值，译文 .md 才是资产。
+				//   缝合顺序按 **texts 的提取顺序**：字幕取消后不再有「与 srt 同源」那条约束，
+				//   而 texts 是提取层给出的唯一有序口径（同一件跑两次必然同顺序＝产物可复算）。
+				ttsLines := make([]string, 0, len(texts))
+				for _, t := range texts {
+					if v, ok := tr[t]; ok && strings.TrimSpace(v) != "" {
+						ttsLines = append(ttsLines, v)
 					}
 				}
 				if len(ttsLines) == 0 {
@@ -1713,6 +1759,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					//   让审批/QA 看得出「这一语言没有配音」是内容层原因而非合成层原因。
 					observability.Warn(ctx, "译文配音跳过（无可用译文行）", "lang", lc)
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 未生成译文配音（无可用译文行）", config.LangNames[lc]))
+					// ★ 两段式：没有 original ⇒ md 行标 degraded（UI 右钮禁用并给原因），不发 original。
+					artStage.emitOne(ArtifactKindMD, lc, audPath, false, true)
 				} else {
 					// ★ 2026-10-16 用户令「处理完回成原文件格式」：配音容器**照搬输入音频的容器**
 					//   （mp3 进就 mp3 出、m4a 进就 m4a 出），用户拿回去能直接替换原件。
@@ -1721,10 +1769,49 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					//   合成失败 ⇒ 只记 warning。配音是增值产物，**绝不**因此判死整单。
 					dubFiles, dubWarn := dubTranslatedAudio(lc, ttsLines)
 					filesOut = append(filesOut, dubFiles...)
+					if len(dubFiles) > 0 {
+						// ★ 两段式阶段②：音频只有这一件 original（译后配音，同容器）。
+						artStage.emitOne(ArtifactKindOriginal, lc, dubFiles[0], true, false)
+					} else {
+						// 合成失败（不是"没有该语种"那一档，但同样没有 original）⇒ md 标 degraded。
+						artStage.emitOne(ArtifactKindMD, lc, audPath, false, true)
+					}
 					if dubWarn != "" {
 						gateWarnings = append(gateWarnings, dubWarn)
 					}
 				}
+				continue
+			}
+			// ★ 2026-10-30 组5 · 两段式阶段①：**md 先行**。
+			// 为什么放在这里而不是语言循环开头：图片/音频的 md 内容依赖各自的重试/收敛结果，
+			// 它们在自己的分支里写；office/pdf/txt/csv 的 md 与写回件取的是同一份 tr，
+			// 所以统一在这一处先落 md、再走下面的原格式写回（大文件版式重建动辄几十秒，
+			// 那段时间客户已经能读到译文，而不是对着空白页等）。
+			// .md 输入件是唯一例外：回写件本身就是 markdown ⇒ md 与 original 同一路径
+			// （同路径去重口径，B10），阶段① 直接把行对齐写回做掉、写回段复用结果。
+			notes := untranslatedNotesFromSegments(texts, tr)
+			mdIsOriginal := false
+			if ext == ".md" {
+				if werr := fileproc.ApplyAlignedText(".md", filePath, outPath, tr); werr == nil {
+					appendUntranslatedNotes(lc, outPath, notes)
+					mdPaths[lc] = outPath
+					mdIsOriginal = true
+					artStage.emitOne(ArtifactKindMD, lc, outPath, false, false)
+				} else {
+					// 先行写回失败：交给下面的写回段重试（它才是"版式还原"的权威路径），
+					// 这里只出声、不判死——重试成功时补发 md（同一路径 ⇒ 服务层收敛成一行）。
+					observability.Warn(ctx, "md 输入件纯文案先行写回失败，转由写回段重试", "lang", lc, "error", werr.Error())
+				}
+			} else if _, perr := writeLangMD(lc, tr, notes); perr != nil {
+				// md 失败不判死：原格式件仍可能成功（两条独立写路径），末尾 textOut 段还会补一次。
+				observability.Warn(ctx, "纯文案 .md 先行生成失败（不影响原格式交付）", "lang", lc, "error", perr.Error())
+				gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案 .md 生成失败（不影响原格式交付）：%s", config.LangNames[lc], perr.Error()))
+			}
+			if mdIsOriginal {
+				filesOut = append(filesOut, outPath)
+				langArtifact[lc] = outPath
+				// 同一路径再发一次 original（primary=1）：服务层据此把 md 行收敛成主产物，不插第二行。
+				artStage.emitOne(ArtifactKindOriginal, lc, outPath, true, false)
 				continue
 			}
 			// ★ 2026-09-09 产品决策：写回失败不降级 xlsx 对照表（避免「翻译 PDF 却下载到 Excel」），
@@ -1802,45 +1889,68 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★ 双模式（2026-09-13）：重试仍败不再整单判死——该语言交付物降级为
 				//   纯文案 .md（翻译是资产、回写是增值），工单成功但带 warning 轨迹与通知。
 				_ = os.Remove(outPath)
-				if p, perr := writeTextMd(lc); perr == nil {
+				// ★ 两段式：md 已在阶段① 发过 ⇒ **不再发 original**，该语言进 degraded_langs，
+				//   并把 md 行标成 degraded（服务层按唯一键 upsert，是"更新一行"不是"多一行"）。
+				p := mdPaths[lc]
+				if p == "" {
+					// 阶段① 的 md 没写成（磁盘/权限）：现场补一次，宁可晚到也不能让该语言颗粒无收。
+					if p2, perr := writeLangMD(lc, tr, notes); perr == nil {
+						p = p2
+					}
+				}
+				if p != "" {
 					log.Printf("[file-degrade] %s 写回失败（%v），已降级纯文案交付 %s", config.LangNames[lc], aerr, filepath.Base(p))
 					filesOut = append(filesOut, p)
 					langArtifact[lc] = p // 降级后的 .md 才是该语言真实交付物，保真比对应读它
 					degraded = append(degraded, lc)
+					artStage.emitOne(ArtifactKindMD, lc, p, false, true)
 					continue
 				}
 				return &FileTranslateResult{Skill: "translation", Error: fmt.Sprintf("%s 译文写回失败（已自动重试3次，纯文案兜底亦生成失败）：%s", config.LangNames[lc], aerr.Error())}
 			}
+			if mdPaths[lc] == "" && ext == ".md" {
+				// 阶段① 的先行写回失败过、这里重试成功：补发 md（同一路径 ⇒ 服务层收敛成一行）。
+				appendUntranslatedNotes(lc, outPath, notes)
+				mdPaths[lc] = outPath
+				artStage.emitOne(ArtifactKindMD, lc, outPath, false, false)
+			}
 			filesOut = append(filesOut, outPath)
 			langArtifact[lc] = outPath
+			// ★ 两段式阶段②：原格式写回件即该语言主产物。
+			artStage.emitOne(ArtifactKindOriginal, lc, outPath, true, false)
 		}
 	}
 
 	// ★ 还原模式纯文案旁路产物（2026-09-13 双模式层次1）：还原成功时也逐语言生成 .md
 	//   附加交付物——用户对还原不满意可直接取文案；降级语言的主产物已是 .md，不重复生成。
+	// ★ 2026-10-30 组5：md 已在阶段①（md 先行）写好了，这一段改为**搬运已有路径**，
+	//   不再重写（重写会重复追加「未译出内容」那一节，且与 dedupe 的事件流打架）。
+	//   只有一种例外走补写：阶段① 的 md 失败过（磁盘/权限，极少见）⇒ 末尾补一次，
+	//   别让"两段式"变成"少了那一段"。按路径去重后进 TextFiles（B6/B10 的去重腿）。
 	var textOut []string
 	if !deliveryText {
+		seenText := map[string]bool{}
 		for _, lc := range finalLangs {
-			if len(langTranslations[lc]) == 0 {
+			if len(langTranslations[lc]) == 0 || degradedHit(lc) {
 				continue
 			}
-			hit := false
-			for _, d := range degraded {
-				if d == lc {
-					hit = true
-					break
+			p := mdPaths[lc]
+			if p == "" {
+				tr := deliveryTranslations(lc, langTranslations[lc])
+				p2, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr))
+				if perr != nil {
+					// ★ G18：旁路产物失败不判死，但必须进 GateWarnings（否则客户以为一直都有 .md 可读）。
+					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案旁路产物生成失败（不影响主交付）：%s", config.LangNames[lc], perr.Error()))
+					observability.Warn(ctx, "纯文案旁路产物生成失败（不影响主交付）", "lang", lc, "error", perr.Error())
+					continue
 				}
+				p = p2
 			}
-			if hit {
-				continue
+			if p == langArtifact[lc] || seenText[p] {
+				continue // 同一份文件（.md 输入件）或已被别的语言引用：只登记一次
 			}
-			if p, perr := writeTextMd(lc); perr == nil {
-				textOut = append(textOut, p)
-			} else {
-				// ★ G18：旁路产物失败不判死，但必须进 GateWarnings（否则客户以为一直都有 .md 可读）。
-				gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案旁路产物生成失败（不影响主交付）：%s", config.LangNames[lc], perr.Error()))
-				observability.Warn(ctx, "纯文案旁路产物生成失败（不影响主交付）", "lang", lc, "error", perr.Error())
-			}
+			seenText[p] = true
+			textOut = append(textOut, p)
 		}
 	}
 	prog("第3步/3：完成", 3, 3)
