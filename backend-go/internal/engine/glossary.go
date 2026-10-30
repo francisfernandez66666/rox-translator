@@ -379,7 +379,7 @@ func (e *Engine) glossaryProfile(ctx context.Context, tid int64, chain, sample s
 			// 下一次请求直接命中（0 延迟）。写负缓存会把预热结果挡住。
 			// 30s 占位：防同一句话在预热期间被并发请求反复触发（预热最多 5s，占位先到期也没关系）。
 			e.glossaryRemember(fp, nil, now.Add(30*time.Second))
-			go e.glossaryWarm(tid, fp, sample, langs, lim)
+			go e.glossaryWarm(ctx, tid, fp, sample, langs, lim)
 		} else {
 			e.glossaryRemember(fp, nil, now.Add(10*time.Minute))
 		}
@@ -437,7 +437,18 @@ func sampleTexts(texts []string, maxRunes int) string {
 }
 
 // glossaryWarm 即时链超时后的后台预热（独立 ctx、5s；结果写进程内 + DB 缓存）。
-func (e *Engine) glossaryWarm(tid int64, fp, sample string, langs []string, lim domain.Limits) {
+//
+// ★★ 这一腿**两条分支都必须出声**（2026-10-30 现网换来的口径）：旧写法两条分支都静默 return，
+//
+//	于是"换了 detect_model 到底有没有效"这件事在日志上**完全读不出来**——
+//	即时链同步那一枪恒 `reason=timeout`（600ms 预算下这是设计），真正干活的就是这一腿，
+//	而它一声不吭 ⇒ 现场只剩 `domain_profiles rows=0` 一个孤零零的数，
+//	分不清是"模型答不出 JSON""上游 400""wiki 全查不到""样本太短压根没判"哪一种
+//	（本批就是靠连拨三次探针才把"样本 162 rune < 即时链门槛 200 ⇒ 静默跳过"
+//	和"判了但预热失败"这两件事分开——那种归因成本本该由一行日志付掉）。
+//	预算有限、不 flooding：这一腿只在即时链超时后各拨一次，且按指纹去重（同一句话 10 分钟内不再重拨）。
+func (e *Engine) glossaryWarm(ctx0 context.Context, tid int64, fp, sample string, langs []string, lim domain.Limits) {
+	warmStart := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	d := &domain.Detector{
@@ -449,6 +460,17 @@ func (e *Engine) glossaryWarm(tid int64, fp, sample string, langs []string, lim 
 	if err != nil || p == nil {
 		// 预热失败写一条 10 分钟负缓存：否则同一句话会被反复重试（每请求一次后台调用）。
 		e.glossaryRemember(fp, nil, time.Now().Add(10*time.Minute))
+		reason := "empty_profile"
+		if err != nil {
+			reason = err.Error()
+		}
+		if ctx.Err() != nil {
+			reason = "timeout" // 预热预算（5s）到点，与上游慢/排队同形，故一并出 latency
+		}
+		observability.Info(ctx0, "domain_glossary",
+			"chain", "instant", "cache", "warm", "reason", reason,
+			"tenant", tid, "sample_runes", len([]rune(sample)),
+			"latency_ms", time.Since(warmStart).Milliseconds())
 		return
 	}
 	raw, _ := json.Marshal(p)
@@ -463,4 +485,12 @@ func (e *Engine) glossaryWarm(tid int64, fp, sample string, langs []string, lim 
 		ExpiresAt:   time.Now().Add(ttl).UTC().Format(time.RFC3339),
 	})
 	e.glossaryRemember(fp, p, time.Now().Add(ttl))
+	pairs := 0
+	for _, t := range p.Terms {
+		pairs += len(t.Targets)
+	}
+	observability.Info(ctx0, "domain_glossary",
+		"chain", "instant", "cache", "warm", "code", p.Code, "conf", p.Confidence,
+		"terms", len(p.Terms), "resolved", pairs, "langs", len(langs), "tenant", tid,
+		"latency_ms", time.Since(warmStart).Milliseconds())
 }

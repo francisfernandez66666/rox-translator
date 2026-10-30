@@ -33,7 +33,7 @@ scp -P "$SSH_PORT" -q "$LOCAL_PROBE" "$SSH_HOST:/tmp/probe_domain_glossary_20261
 
 ssh -p "$SSH_PORT" "$SSH_HOST" \
   "chmod +x /tmp/opskey-20261030 /tmp/probe_domain_glossary_20261030.sh && \
-   TID=$TID UID_=$UID_ OPSKEY=/tmp/opskey-20261030 bash /tmp/probe_domain_glossary_20261030.sh"
+   TID=$TID UID_=$UID_ PROBE_VARIANT=${PROBE_VARIANT:-A} OPSKEY=/tmp/opskey-20261030 bash /tmp/probe_domain_glossary_20261030.sh"
 RC=$?
 echo "PROBE_REMOTE_EXIT=$RC"
 exit "$RC"

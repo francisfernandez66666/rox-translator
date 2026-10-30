@@ -41,6 +41,10 @@ q() { sudo -u postgres psql -d "$DB" -Atc "$1" 2>/dev/null; }
 
 FIN_SAMPLE='本账户今日总盈亏 -11312.00 元，已实现 0.00 元，浮动盈亏 -11312.00 元，成交笔数 7 笔，0胜/0负。买入额 4716 元，卖出额 0 元，笔数按战法统计：manual 6 笔、动量 1 笔。形态战法（内置）含龙头战法、双响炮、N形超短、龙回头（中线），因子战法含波动突破战法；全局仓位留空或 0 表示使用全局单票金额，元/次按信号计费。关闭的战法信号不进入实盘链路，模拟盘不受影响；因子与形态类战法需先在自动研究页审批应用后才会出现在此处。'
 GENERIC_SAMPLE='今天天气不错，我们下午一起去公园散步，顺便买一些水果和饮料回来。'
+# ★ 第二次拨（换了 domain_detect_model 之后）必须换**另一段**金融样本：
+#   判域结果按 (租户,样本) 指纹缓存，失败侧还写 10 分钟进程内负缓存——
+#   拿同一段重拨会直接命中负缓存返回 nil，把"换了模型还是不行"读成假红、或把"其实没拨"读成"拨过了"。
+FIN_SAMPLE_B='持仓明细如下：多头建仓 4716 元，空头平仓 0 元，止损位已触发；今日集合竞价阶段成交量放大，换手率 3.2%，市盈率 18.6，市净率 2.1。融资融券余额下降，量化交易策略触发波动率对冲信号，做市商报价价差收窄。请核对资产负债表与现金流量表口径，确认已实现盈亏与浮动盈亏的分摊方式，并按全局单票金额复核仓位留空规则。'
 
 # ---- 0. 日志基线（按字节偏移取增量，不靠"近 N 分钟"凑）----
 SZ0=$(stat -c %s "$LOG" 2>/dev/null || echo 0)
@@ -73,8 +77,57 @@ PY
   printf '%s\n' "$resp" | head -c 300; echo
 }
 
-call "$FIN_SAMPLE" "A 金融样本（应判出域并注入词表）"
-call "$GENERIC_SAMPLE" "B 通用样本（负向对照：低置信 ⇒ 不注入）"
+SAMP="$FIN_SAMPLE"; VTAG="A"
+if [ "${PROBE_VARIANT:-A}" = "B" ]; then SAMP="$FIN_SAMPLE_B"; VTAG="B"; fi
+call "$SAMP" "${VTAG} 金融样本（即时链 600ms；超时是设计内，看后台预热那一腿）"
+call "$GENERIC_SAMPLE" "负向对照 通用样本（低于该链样本门槛 ⇒ 不判，也不该有日志）"
+
+# ---- 2b. 文本工单腿（chain=text，预算 4s）----
+#   为什么必须单独拨这一枪：即时链的样本门槛 200 rune、预算 600ms，
+#   "零日志"有两种完全不同的成因（样本太短被静默跳过 / 这一腿真没接上），只拨即时链分不开。
+#   文本链门槛 120、预算 4s，出 JSON 的空间是够的 ⇒ 拿它回答"这台主模型到底答不答得出 JSON"才有效。
+FIN_SAMPLE_C='该证券账户今日的整体盈亏为负一万一千三百一十二元，其中已实现为零元，浮动盈亏为负一万一千三百一十二元，成交七笔，零胜零负。按战法汇总：manual 六笔、动量一笔；买入额四千七百一十六元，卖出额为零。形态战法内置含龙头战法、双响炮、N形超短与龙回头中线，因子战法含波动突破战法。全局档位按元每次计费，仓位留空或使用全局单票金额。关闭的战法信号不进入实盘链路，模拟盘不受影响；因子与形态类战法需先在自动研究页完成审批应用后才会出现在此处。交易流水与整体盈亏每三十秒刷新一次，已实现按加权成本重放计算，浮动等于市值减去成本乘数量。'
+if [ "${PROBE_TASK:-1}" = "1" ]; then
+  echo "----- C 文本工单腿（chain=text）-----"
+  TBODY=$(mktemp); TCFG=$(mktemp); chmod 700 "$TBODY" "$TCFG"
+  python3 - "$FIN_SAMPLE_C" > "$TBODY" <<'PY'
+import json,sys
+print(json.dumps({"text":sys.argv[1],"target_langs":["en"],"title":"20261030 领域词表手拨·文本链","mode":"pro"},ensure_ascii=False))
+PY
+  {
+    printf 'header = "Content-Type: application/json"\n'
+    printf 'header = "Authorization: Bearer %s"\n' "$KEY"
+    printf 'url = "%s/openapi/v1/tasks"\n' "$B"
+    printf 'data-binary = @%s\n' "$TBODY"
+    printf 'max-time = 60\nsilent\nshow-error\n'
+  } > "$TCFG"
+  RTASK=$(curl -K "$TCFG" 2>&1); rm -f "$TBODY" "$TCFG"
+  printf '%s\n' "$RTASK" | head -c 260; echo
+  TK=$(printf '%s' "$RTASK" | python3 -c 'import json,sys
+try:
+    d=json.load(sys.stdin)
+    print(d.get("task_id") or d.get("id") or (d.get("task") or {}).get("id") or "")
+except Exception:
+    print("")' 2>/dev/null)
+  if [ -n "${TK:-}" ]; then
+    echo "READ task_id=${TK}（轮询至多 90s）"
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18; do
+      RS=$(curl -s --max-time 20 -H "Authorization: Bearer $KEY" "$B/openapi/v1/tasks/status?id=$TK")
+      ST=$(printf '%s' "$RS" | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("status",""))
+except Exception:
+    print("")' 2>/dev/null)
+      case "$ST" in
+        completed|done|success|failed) echo "READ status=${ST}（第 ${i} 次轮询）"; break;;
+        *) sleep 5;;
+      esac
+    done
+    printf '%s\n' "$RS" | head -c 300; echo
+  else
+    echo "BAD 没从响应里读到 task_id ⇒ 文本链那一枪根本没打出去（别把零日志读成判域失败）"
+  fi
+fi
 
 # ---- 3. 只取本次新增日志里的 domain_glossary 行 ----
 echo "----- 本次新增日志里的 domain_glossary 读数 -----"

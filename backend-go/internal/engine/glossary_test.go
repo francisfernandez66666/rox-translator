@@ -163,11 +163,36 @@ func TestDomainLLMNoThinkingWired(t *testing.T) {
 	}
 }
 
-// TestInstantWarmWired 即时链超时必须起后台预热（否则长段即时翻译永远吃不到词表）。
+// TestInstantWarmWired 即时链超时必须起后台预热（否则长段即时翻译永远吃不到词表），
+// 且**预热腿的两条分支各自都要出声**。
+//
+// 第二条是 2026-10-30 现网换来的：旧写法两条分支都静默 return，而即时链同步那一枪在
+// 600ms 预算下**恒** `reason=timeout`（设计如此），真正干活的预热腿一声不吭 ⇒
+// 现场只剩 `domain_profiles rows=0` 一个孤数，分不清是"模型答不出 JSON"「上游 400」
+// 「wiki 全查不到」还是"样本短于该链门槛、压根没判"。本批连拨三次探针才把后两件事分开，
+// 那种归因成本本该由一行日志付掉（AGENTS §三「判'某件事成功过'要问成功路径真会写的东西」）。
 func TestInstantWarmWired(t *testing.T) {
 	src := readEngineSrc(t, "glossary.go")
-	if !strings.Contains(src, "go e.glossaryWarm(tid, fp, sample, langs, lim)") {
-		t.Fatalf("即时链超时后没有后台预热（go e.glossaryWarm(...)）")
+	if !strings.Contains(src, "go e.glossaryWarm(ctx, tid, fp, sample, langs, lim)") {
+		t.Fatalf("即时链超时后没有后台预热（go e.glossaryWarm(ctx, …)）")
+	}
+	at := strings.Index(src, "func (e *Engine) glossaryWarm(")
+	if at < 0 {
+		t.Fatalf("读不到 glossaryWarm 函数体 ⇒ 本锁已失明（不是「预热被删了」）")
+	}
+	rest := src[at:]
+	end := strings.Index(rest, "\n}\n")
+	if end < 0 {
+		t.Fatalf("glossaryWarm 函数体切不出来 ⇒ 判据形态变了，本锁要跟着改而不是跳过")
+	}
+	body := rest[:end+3]
+	if n := strings.Count(body, "observability.Info("); n < 2 {
+		t.Fatalf("预热腿成功/失败分支各自出声的要求是 ≥2 处，现读 %d 处 ⇒ 零行日志分不开「没拨」与「拨了却失败」", n)
+	}
+	for _, want := range []string{`"cache", "warm"`, `"reason", reason`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("预热腿缺少读数片段 %s（分档名与 cache 档是对外排障契约）", want)
+		}
 	}
 }
 
