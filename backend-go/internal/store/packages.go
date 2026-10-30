@@ -36,8 +36,12 @@ type Package struct {
 	DurationDays int     `json:"duration_days"` // 有效期（天，包月=30）
 	Enabled      int     `json:"enabled"`       // 1=上架 0=下架
 	SortOrder    int     `json:"sort_order"`    // 展示排序（升序）
-	CreatedAt    string  `json:"created_at"`    // 创建时间（RFC3339 字符串）
-	UpdatedAt    string  `json:"updated_at"`    // 更新时间（RFC3339 字符串）
+	// Tier 套餐档位（月/年/长期），★ 2026-10-30 组3 W10：发放 plan 台账时按**这一列**决定
+	// 那笔钱进第 ④/⑤/⑥ 档，不再是"按 duration_days 现猜"。空串＝未钉档（老库未回填），
+	// 由 txPackageTier 归 legacy（排最后扣但仍会扣）；新建/改档由管理台写入。
+	Tier      string `json:"tier"`
+	CreatedAt string `json:"created_at"` // 创建时间（RFC3339 字符串）
+	UpdatedAt string `json:"updated_at"` // 更新时间（RFC3339 字符串）
 }
 
 // 商业包类型常量
@@ -50,15 +54,15 @@ const (
 // ============ 商业包 CRUD ============
 
 // packageCols packages 表查询列清单（统一使用，避免遗漏）
-const packageCols = "id, tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at"
+const packageCols = "id, tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at, tier"
 
 // CreatePackage 创建商业包（超管）。
 // 参数：pkg=待创建的包对象（code/name/ptype 必填）；返回新包对象。
 func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 	now := time.Now().Format(time.RFC3339)
 	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
-		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now)
+		"INSERT INTO packages (tenant_id, code, name, ptype, sentences, points, price_money, duration_days, enabled, sort_order, created_at, updated_at, tier) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+		pkg.TenantID, pkg.Code, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, now, now, pkg.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -70,7 +74,7 @@ func (s *Store) CreatePackage(pkg *Package) (*Package, error) {
 func (s *Store) GetPackage(id int64) (*Package, error) {
 	var p Package
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+" FROM packages WHERE id=?", id).
-		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt, &p.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +92,7 @@ func (s *Store) GetPackageByCode(tenantID int64, code string) (*Package, error) 
 	err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+packageCols+
 		" FROM packages WHERE code=? AND tenant_id IN (0, ?) ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END, id LIMIT 1",
 		code, tenantID, tenantID).
-		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt)
+		Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt, &p.Tier)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +110,7 @@ func (s *Store) ListCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt, &p.Tier); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -125,7 +129,7 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 	var out []*Package
 	for rows.Next() {
 		var p Package
-		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := rows.Scan(&p.ID, &p.TenantID, &p.Code, &p.Name, &p.PType, &p.Sentences, &p.Points, &p.PriceMoney, &p.DurationDays, &p.Enabled, &p.SortOrder, &p.CreatedAt, &p.UpdatedAt, &p.Tier); err != nil {
 			continue // 单行解析失败跳过
 		}
 		out = append(out, &p)
@@ -137,8 +141,8 @@ func (s *Store) ListEnabledCommercialPackages() ([]*Package, error) {
 // 参数：pkg=待更新的包对象（全部字段整体覆盖）；返回错误。
 func (s *Store) UpdatePackage(pkg *Package) error {
 	_, err := db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, points=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=? WHERE id=?",
-		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.ID)
+		"UPDATE packages SET tenant_id=?, name=?, ptype=?, sentences=?, points=?, price_money=?, duration_days=?, enabled=?, sort_order=?, updated_at=?, tier=? WHERE id=?",
+		pkg.TenantID, pkg.Name, pkg.PType, pkg.Sentences, pkg.Points, pkg.PriceMoney, pkg.DurationDays, pkg.Enabled, pkg.SortOrder, time.Now().Format(time.RFC3339), pkg.Tier, pkg.ID)
 	return err
 }
 

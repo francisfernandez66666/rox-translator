@@ -108,6 +108,7 @@ func Encode(v *Visitor) (string, error) {
 	return base64.StdEncoding.EncodeToString(b), nil
 }
 
+// 验签失败的四个内部档位（调用方只据此回落匿名＋去重 WARN，**不返 4xx**，见 P-5）。
 var (
 	// ErrNoKey 密钥未配置（两侧都没配时画像不启用，不是错误路径）。
 	ErrNoKey = errors.New("profile key not configured")

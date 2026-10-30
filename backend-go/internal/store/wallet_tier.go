@@ -155,6 +155,26 @@ func TierNamesInOrder() []string {
 	return out
 }
 
+// PinPackageTier 把管理台提交的套餐档位归一成合法值；空/未知时按有效期**在写入时**钉一次。
+// 为什么要"写时钉、读时只认列"（W10 的两半）：发放侧只读 `packages.tier` 这一列，不按 duration_days 现猜。
+// 若把推导留在读侧，运营把一个月包的期限改成年包时，读侧会**静默**把历史行重新解释一遍；
+// 钉在写入那一刻，读侧只搬运事实，档位变化必须经过一次显式保存。
+// 三档推导：≤31 天＝月包；≤366 天＝年包；其余（含 0＝不限期）＝长期包。
+func PinPackageTier(tier string, durationDays int) string {
+	switch t := strings.TrimSpace(tier); t {
+	case TierPlanMonthly, TierPlanYearly, TierPlanPermanent:
+		return t
+	}
+	switch {
+	case durationDays <= 0 || durationDays > 366:
+		return TierPlanPermanent
+	case durationDays > 31:
+		return TierPlanYearly
+	default:
+		return TierPlanMonthly
+	}
+}
+
 // TierOf 把一条台账行的既有字段归一成档位（回填与新建行**共用这一个判据**）。
 // 参数 kind: quota_grants.kind（trial|plan|task|…）；source: 发放来源（register|admin|task|…）；
 // pkgTier: 该行引用的套餐的 `packages.tier` 列现值（非套餐行传空串）。

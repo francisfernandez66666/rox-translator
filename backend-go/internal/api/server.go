@@ -1020,6 +1020,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   点下去必然失败的朗读钮；前端据此按目标语种收门（同"能力缺失不摆必错入口"那条口径）。
 		//   同 #42 口径：只出语种码，不出路径、模型名或权重文件名。空/缺 ⇒ 前端按"未知"放行（fail-open）。
 		"tts_langs": fileproc.TtsCoveredLangs(),
+		// ★ 2026-10-30 组4（H-2／§5.6②）：免费档的**状态词**（on/off/unknown）。
+		//   免费档被运营关掉（free_daily_points 或 free_ip_daily = -1）时，界面必须收起
+		//   「免费」徽标改按付费档展示——否则是假承诺。这里只出状态词，**不出任何额度数字**
+		//   （暗额度一旦出栈就会被直接用来算薅羊毛的量）。
+		//   unknown＝启动早期存储尚未就绪：按「不宣传免费」处理（前端的 isInstantFreeOff 只认 off，
+		//   读不到时保留原展示并走付费判据，方向保守）。
+		"instant_free": s.instantFreeHealthWord(r),
 		// ★ 文档转换远程派发（2026-09-28 §5.2）：off=未开闸；online=远端就绪；degraded=连续失败降级中。
 		//   同 #42 口径：本端点无鉴权，只出状态词，**绝不出远端主机、路径或文件名**。
 		"dispatch":          disp.Status,

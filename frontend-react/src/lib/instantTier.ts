@@ -42,14 +42,68 @@ export const INSTANT_TIER_LIMITS: Record<InstantTier, InstantLimits> = {
   paid: { imageMaxBytes: 3 * MIB, imageMaxSide: 2000, audioMaxSec: 60 },
 }
 
+/**
+ * 运营现值的覆盖层（★ S2 跨面同尺）。
+ *
+ * 为什么需要它：上面那张表是**出厂默认**，而即时档位可由运营在管理台改（ops 九键）。
+ * 后端把现值挂在公开的 `GET /api/instant/caps` 上，前端启动时读一次覆盖到这里；
+ * 不覆盖的话，运营把免费档从 1 MiB 调到 2 MiB 之后，界面仍按 1 MiB 压缩/提示——
+ * 那是"对外报价与实扣不一致"的同族形态（用户被按旧档压图，却看到新档的文案）。
+ *
+ * 取不到时保留出厂默认（fail-open）：一次网络抖动不该把界面钉死在更小的档。
+ * 只接受正数字段；长边（imageMaxSide）不在 caps 里，继续用默认值（它是压缩策略不是对外档位）。
+ */
+type CapsOverride = {
+  free?: Partial<Pick<InstantLimits, 'imageMaxBytes' | 'audioMaxSec'>>
+  paid?: Partial<Pick<InstantLimits, 'imageMaxBytes' | 'audioMaxSec'>>
+}
+
+let capsOverride: CapsOverride | null = null
+
+/** applyInstantCaps 把 `/api/instant/caps` 的现值并入两档（幂等；负值/非数字一律忽略）。 */
+export function applyInstantCaps(caps: {
+  free_image_max_mb?: unknown
+  free_audio_max_sec?: unknown
+  image_max_mb?: unknown
+  audio_max_sec?: unknown
+} | null | undefined): void {
+  if (!caps || typeof caps !== 'object') return
+  const num = (v: unknown): number | null =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null
+  const next: CapsOverride = {}
+  const freeImg = num(caps.free_image_max_mb)
+  const freeAud = num(caps.free_audio_max_sec)
+  const paidImg = num(caps.image_max_mb)
+  const paidAud = num(caps.audio_max_sec)
+  if (freeImg != null || freeAud != null) {
+    next.free = {}
+    if (freeImg != null) next.free.imageMaxBytes = freeImg * MIB
+    if (freeAud != null) next.free.audioMaxSec = freeAud
+  }
+  if (paidImg != null || paidAud != null) {
+    next.paid = {}
+    if (paidImg != null) next.paid.imageMaxBytes = paidImg * MIB
+    if (paidAud != null) next.paid.audioMaxSec = paidAud
+  }
+  capsOverride = Object.keys(next).length > 0 ? next : null
+}
+
+/** resetInstantCaps 测试用：清掉覆盖层，回到出厂默认。 */
+export function resetInstantCaps(): void {
+  capsOverride = null
+}
+
 /** instantLimits 取某一档的宽度；未知值一律回落免费档（保守方向见文件头） */
 export function instantLimits(tier: InstantTier | null | undefined): InstantLimits {
-  return tier === 'paid' ? INSTANT_TIER_LIMITS.paid : INSTANT_TIER_LIMITS.free
+  const key: InstantTier = tier === 'paid' ? 'paid' : 'free'
+  const base = INSTANT_TIER_LIMITS[key]
+  const ov = capsOverride?.[key]
+  return ov ? { ...base, ...ov } : base
 }
 
 /** 即时翻译的**硬顶**（超过即引导工单）：付费档就是硬顶，免费档不是 */
 export function instantHardLimits(): InstantLimits {
-  return INSTANT_TIER_LIMITS.paid
+  return instantLimits('paid')
 }
 
 /** 从单个来源里读显式档位；读不到返回 null（不猜） */

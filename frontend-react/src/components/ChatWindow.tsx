@@ -62,6 +62,8 @@ import { slowVerdict } from '../lib/slowEstimate'
 //   两套断点（1 MiB/1600 与 3 MiB/2000、30 s/60 s）**只在 lib/instantTier.ts 一份**，
 //   本文件只按档取用——否则运营改一档、界面还按旧档说话，且没有闸门看得见。
 import { instantLimits, instantHardLimits, resolveInstantTier, isKnownFreeAccount, isInstantFreeOff, type InstantTier } from '@/lib/instantTier'
+// ★ S2 跨面同尺：运营改档后界面必须跟着用现值（否则按旧档压图/提示）。公开只读、失败保留默认。
+import { loadInstantCaps } from '@/api/instantCaps'
 import { compressImage, toJpegFile } from '@/lib/imageCompress'
 import { shouldShowInstantUpgrade, markInstantUpgradeShown } from '@/lib/instantUpsell'
 import { writeInstantTicketHandoff } from '@/lib/instantTicketHandoff'
@@ -256,6 +258,12 @@ export default function ChatWindow() {
   // 组件挂载时初次加载余额与用户上下文
   useEffect(() => {
     void loadBalance()
+    // ★ S2：拉一次即时档位现值（失败保留出厂默认，不阻塞首屏）。
+    //   `free_on=false` 是运营显式关掉免费档 —— 与 me/context 的 instant_free 同一口径，
+    //   必须收起「免费」徽标并改按付费档展示，否则是假承诺。
+    void loadInstantCaps().then((caps) => {
+      if (caps && caps.free_on === false) setFreeOff(true)
+    })
     // ★ 2026-10-30：/api/me/context 是档位的另一来源（显式 `instant_tier`/`paid` 优先），
     //   失败不影响任何既有链路——拿不到就按免费档（保守方向见 lib/instantTier.ts 文件头）。
     void meContext()

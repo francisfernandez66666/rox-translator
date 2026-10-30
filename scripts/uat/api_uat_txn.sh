@@ -4889,6 +4889,13 @@ ckn T77-wallet-no-free-tier '"tier":"free"' "$T77PKG"
 # ③ 扣档明细表与幂等标记列必须已随启动幂等升级落库（数据层面判据，不判"列在不在文档里"）
 ckq T77-debit-table-exists 1 "$(dbq "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='usage_debit_lines'" 2>/dev/null | tr -dc '0-9' || echo 1)"
 ckq T77-debit-refunded-col 1 "$(dbq "SELECT COUNT(*) FROM usage_debit_lines WHERE 1=0" >/dev/null 2>&1 && echo 1 || echo 0)"
+# ④ 健康面免费档状态词（H-2，2026-10-31 补）：只出 on/off/unknown 三档词，
+#    **不许带任何额度数字**（匿名可达；数字出栈＝把暗额度直接交出去）。
+T77H=$(curl -s "$T77B/api/health" --max-time 30)
+ckF T77-health-free-word '"instant_free":"' "$T77H"
+ckn T77-health-free-no-digits '"instant_free":"[^"]*[0-9]' "$T77H"
+# ⑤ 套餐档位列随启动幂等补列落库（W10 的写路径前提：没有列则新建套餐永远落 legacy）。
+ckq T77-packages-tier-col 1 "$(dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='packages' AND column_name='tier'" 2>/dev/null | tr -dc '0-9' || echo 1)"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

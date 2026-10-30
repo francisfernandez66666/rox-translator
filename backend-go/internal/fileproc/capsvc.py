@@ -10,7 +10,7 @@
 
 三条硬边界（改这个文件之前先读）：
   ① **不复制识别逻辑**：本服务 `import` 既有脚本，直接调它的 `cmd_probe()` / `cmd_image(path)`，
-     用 `contextlib.redirect_stdout` 把 stdout 收进缓冲再回包。识别阈值、后处理、`ERR:<Variant>`
+     用**线程局部缓冲**把 stdout 收进本次请求的回包。识别阈值、后处理、`ERR:<Variant>`
      全部自动同源；脚本的 `main()` 保留，子进程回落路径继续可用（AGENTS §一·12「桩只认协议」
      那一族：warm 与 subprocess 是同一套错误档位，不是两套）。
   ② **协议只有一份**：Unix domain socket，帧＝uint32 大端长度 + UTF-8 JSON，单帧上限 8 MiB；
@@ -37,7 +37,6 @@
 """
 import argparse
 import base64
-import contextlib
 import importlib
 import importlib.util  # noqa: F401 —— OcrCapability.probe 用 find_spec 判依赖是否装得上
 import io
@@ -59,6 +58,74 @@ FRAME_MAX = 8 << 20  # 单帧上限 8 MiB（超限直接断开并记 oversize）
 
 DEFAULT_SOCKET = "/run/langcross/capsvc.sock"
 SELFTEST_OK = "CAPSVC_SELFTEST_ALL_OK=1"
+
+
+# ---------------------------------------------------------------- 线程局部输出捕获
+# ★ 2026-10-31 修正（组6 收口）：**禁止**用 contextlib.redirect_stdout 抓能力脚本的输出。
+#   它改的是**进程级** sys.stdout，而 capsvc 是「一连接一线程」（handle_conn 起线程）：
+#   两个 OCR 调用并发时，A 线程的 JSON 会写进 B 线程的缓冲（或两边各拿到半截），
+#   回包解析失败并被归到 Internal 档——A5 的 mock 用例单人跑永远看不见这一形态。
+#   这里改成线程局部缓冲：每个线程各写各的，未开启捕获的线程照常走原始 stdout。
+_orig_stdout = sys.stdout
+_orig_stderr = sys.stderr
+
+
+class _ThreadCapture(io.TextIOBase):
+    """把 write 路由到当前线程的缓冲；没有缓冲就落回原始流。"""
+
+    def __init__(self, fallback):
+        self._fallback = fallback
+        self._local = threading.local()
+
+    def write(self, s):
+        buf = getattr(self._local, "buf", None)
+        if buf is not None:
+            return buf.write(s)
+        return self._fallback.write(s)
+
+    def flush(self):
+        buf = getattr(self._local, "buf", None)
+        if buf is not None:
+            return None
+        return self._fallback.flush()
+
+    def isatty(self):
+        return False
+
+
+_capture_out = None
+_capture_err = None
+
+
+def _install_capture():
+    """一次性把 sys.stdout/stderr 换成线程局部代理（幂等）。"""
+    global _capture_out, _capture_err
+    if _capture_out is None:
+        _capture_out = _ThreadCapture(_orig_stdout)
+        _capture_err = _ThreadCapture(_orig_stderr)
+        sys.stdout = _capture_out
+        sys.stderr = _capture_err
+
+
+class _Capture:
+    """with _Capture() as (out, err): ——只捕获**本线程**的输出（可嵌套，退出时恢复上一层）。"""
+
+    def __init__(self):
+        _install_capture()
+        self.out = io.StringIO()
+        self.err = io.StringIO()
+
+    def __enter__(self):
+        self._prev_out = getattr(_capture_out._local, "buf", None)
+        self._prev_err = getattr(_capture_err._local, "buf", None)
+        _capture_out._local.buf = self.out
+        _capture_err._local.buf = self.err
+        return self.out, self.err
+
+    def __exit__(self, *_exc):
+        _capture_out._local.buf = self._prev_out
+        _capture_err._local.buf = self._prev_err
+        return False
 
 
 # ---------------------------------------------------------------- 环境与小工具
@@ -178,8 +245,7 @@ class ScriptCapability(Capability):
 
     def probe(self):
         mod = self._import_script()
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+        with _Capture() as (buf, _err):
             rc = mod.cmd_probe()
         if rc != 0:
             detail = buf.getvalue().strip().replace("\n", " | ")
@@ -212,7 +278,7 @@ class ScriptCapability(Capability):
             raise CapFailure("Unsupported", "能力 %s 未实现子命令 %s" % (self.name, cmd))
         out, err = io.StringIO(), io.StringIO()
         try:
-            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            with _Capture() as (out, err):
                 rc = fn(*args)
         except TypeError as e:
             raise CapFailure("BadRequest", "%s %s 参数不合法: %s" % (self.name, cmd, e))

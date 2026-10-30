@@ -114,6 +114,9 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 		PriceMoney   float64 `json:"price_money"`   // 售价（元）
 		DurationDays int     `json:"duration_days"` // 有效期（天，默认 30）
 		SortOrder    int     `json:"sort_order"`    // 展示排序
+		// Tier 套餐档位（plan_month/plan_year/plan_permanent，可选）：不传时按有效期在**写入时**
+		// 钉一次（见 store.PinPackageTier）。发放 plan 台账只读这一列，不按期限现猜（W10）。
+		Tier string `json:"tier"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" || req.Name == "" {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "code/name 不能为空"))
@@ -146,6 +149,7 @@ func (s *Server) handleAdminPackageCreate(w http.ResponseWriter, r *http.Request
 	p, err := s.Store.CreatePackage(&store.Package{
 		TenantID: req.TenantID, Code: req.Code, Name: req.Name, PType: req.PType, Sentences: req.Sentences,
 		Points: req.Points, PriceMoney: req.PriceMoney, DurationDays: req.DurationDays, Enabled: 1, SortOrder: req.SortOrder,
+		Tier: store.PinPackageTier(req.Tier, req.DurationDays),
 	})
 	if err != nil {
 		// ★ 脱敏（2026-09-12）：驱动错误不透吐
@@ -185,6 +189,8 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 		DurationDays *int     `json:"duration_days"` // ★ C14：指针——nil=不修改，0=改回不限期
 		Enabled      *int     `json:"enabled"`       // 启停（0/1，nil=不修改）
 		SortOrder    *int     `json:"sort_order"`    // 排序（nil=不修改）
+		// Tier 套餐档位（nil=不修改；显式传值按白名单归一；老包档位为空时按当前有效期补钉）
+		Tier *string `json:"tier"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID <= 0 {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误"))
@@ -242,6 +248,14 @@ func (s *Server) handleAdminPackageUpdate(w http.ResponseWriter, r *http.Request
 	}
 	if req.SortOrder != nil {
 		cur.SortOrder = *req.SortOrder
+	}
+	// ★ W10 写侧：显式传入即按白名单归一；没传但老包档位为空（列是组3 新加的）时，
+	//   按当前有效期补钉一次——不补的话这批老包发出去的台账永远落 legacy 最后一档。
+	//   已有档位且本次没传 ⇒ 一字不动（档位变化必须显式保存，不跟着期限改）。
+	if req.Tier != nil {
+		cur.Tier = store.PinPackageTier(*req.Tier, cur.DurationDays)
+	} else if strings.TrimSpace(cur.Tier) == "" {
+		cur.Tier = store.PinPackageTier("", cur.DurationDays)
 	}
 	// 合并完成后整行落库并记 package_update 审计（cur 为原记录+增量字段的合成值）
 	if err := s.Store.UpdatePackage(cur); err != nil {

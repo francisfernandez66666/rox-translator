@@ -138,6 +138,13 @@ func (s *Store) CleanupTicketResults(id int64) ([]string, error) {
 	if derr := s.DeleteTicketArtifactsForTicket(id); derr != nil {
 		return paths, derr
 	}
+	// ★ 2026-10-31 补 W25 的半条：**逐段真值同样进保留期清理**。
+	//   ticket_segments 存的是「源文→译文」段落（含客户原文），与产物文件不同：
+	//   它没有磁盘路径，只删行即可；GDPR 侧的擦除清单早含它，保留期这边此前漏了——
+	//   表现是"产物文件按期删了，客户原文段落还留在库里"，而任何清理腿都扫不到。
+	if _, serr := db.Exec(s.db, db.CurrentDialect(), "DELETE FROM ticket_segments WHERE ticket_id=?", id); serr != nil {
+		return paths, serr
+	}
 	now := time.Now().Format(time.RFC3339)
 	if _, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE tickets SET result_path='', text_result_path='', result_expires_at='', updated_at=? WHERE id=?", now, id); err != nil {

@@ -188,3 +188,50 @@ func TestInstantFree_N1SourceFilesExist(t *testing.T) {
 		t.Fatal("原因码契约漂了：use_ticket 字面必须含 ticket（前端按它出引导卡）")
 	}
 }
+
+// G23：免费档九键写入侧校验（跨键倒挂必须 400，且只校验本次整包语义）。
+// ★ 2026-10-31 补锁：此前只有实现没有断言——运营把「免费档图片 5 MiB」写进
+// 硬顶 3 MiB 的站点，准入层会先按硬顶引导工单、再也不会走到免费档，
+// 而管理台显示保存成功（界面与事实相反）。
+func TestInstantFree_G23CrossKeyValidation(t *testing.T) {
+	i64 := func(v int64) *int64 { return &v }
+	// 合法档：免费 1 MiB ≤ 硬顶 3 MiB、免费 30 s ≤ 硬顶 60 s。
+	if err := instantFreeValidate(ops.InstantPatch{FreeImageMaxMB: i64(1), ImageMaxMB: i64(3), FreeAudioMaxSec: i64(30), AudioMaxSec: i64(60)}); err != nil {
+		t.Fatalf("G23：合法档不应被拒，实得 %v", err)
+	}
+	// 任一键 < -1 拒收（-1/0/N 三态之外没有第四种含义）。
+	if err := instantFreeValidate(ops.InstantPatch{FreeDailyPoints: i64(-2)}); err == nil {
+		t.Fatal("G23：free_daily_points=-2 必须拒收")
+	}
+	// 免费档不得宽于付费硬顶（图片）。
+	if err := instantFreeValidate(ops.InstantPatch{FreeImageMaxMB: i64(5), ImageMaxMB: i64(3)}); err == nil {
+		t.Fatal("G23：免费图片 5 MiB > 硬顶 3 MiB 必须拒收")
+	}
+	// 免费档时长不得宽于硬顶（音频）。
+	if err := instantFreeValidate(ops.InstantPatch{FreeAudioMaxSec: i64(90), AudioMaxSec: i64(60)}); err == nil {
+		t.Fatal("G23：免费音频 90 s > 硬顶 60 s 必须拒收")
+	}
+	// 免费时长折算体积离谱（>1800 KB）⇒ 拒收，逼运营同时核对音频体积硬顶。
+	if err := instantFreeValidate(ops.InstantPatch{FreeAudioMaxSec: i64(1200)}); err == nil {
+		t.Fatal("G23：1200 s 免费音频折算体积过大，必须拒收")
+	}
+}
+
+// K2/K5：IP 次数上限走 store.RateDayCeilReached 这一把尺子——
+// limit<=0（0 不限 / -1 关档）一律不拦；到量即转付费（不拒绝）。
+func TestInstantFree_K2IPCeilSingleRuler(t *testing.T) {
+	cfg := instCfg()
+	cfg.FreeIPDaily = 3
+	// 已用 2 次 ⇒ 仍免费；已用 3 次 ⇒ 转付费档。
+	if r := instantFreeEligible(cfg, instantInput{Kind: "text", LangCount: 1, FreeIP: 2, FreeUser: 0, FreeTenant: 0}); !r.Free {
+		t.Fatalf("K2：IP 未到量应免费，实得 %+v", r)
+	}
+	if r := instantFreeEligible(cfg, instantInput{Kind: "text", LangCount: 1, FreeIP: 3, FreeUser: 0, FreeTenant: 0}); r.Free || r.Reason != instantReasonQuotaIP {
+		t.Fatalf("K2：IP 到量应转付费（quota_ip），实得 %+v", r)
+	}
+	// 0＝不限：即使已用很多次也照常免费；-1＝关档由第 1 步判（这里只证明 0 不被当"没配"）。
+	cfg.FreeIPDaily = 0
+	if r := instantFreeEligible(cfg, instantInput{Kind: "text", LangCount: 1, FreeIP: 99999}); !r.Free {
+		t.Fatalf("K2：free_ip_daily=0 表示不限，实得 %+v", r)
+	}
+}

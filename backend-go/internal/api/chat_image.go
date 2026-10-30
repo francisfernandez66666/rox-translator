@@ -63,6 +63,13 @@ import (
 // 又挡得住"误传一张几百 MB 的扫描件把 OCR 与内存打满"。
 const chatImageMaxBytes = 20 << 20
 
+// errChatFileTooLarge 落盘时发现实际字节数已超硬帽。
+// ★ N4／P-2 的判据：旧形态用 `io.LimitReader(f, max)` 抄完不比对字节数 ⇒
+//
+//	超限文件被**静默截断**成半截图送进 OCR，响应看起来还是成功的（客户拿到糊图）。
+//	现在抄 max+1 字节，多出 1 字节即判超限，由调用方显式引导到翻译工单。
+var errChatFileTooLarge = errors.New("图片超出即时翻译上限")
+
 // chatImageResp /api/chat/image 的成功出参。
 type chatImageResp struct {
 	Text         string            `json:"text"`         // OCR 识别出的原文（多行，\n 分隔）
@@ -74,6 +81,10 @@ type chatImageResp struct {
 	PointsUsed   int64             `json:"points_used"`  // 本次消耗积分（与 /api/chat 同口径）
 	Mode         string            `json:"mode"`         // 命中模式描述（前端模式徽标吃这个字段）
 	TargetLangs  []string          `json:"target_langs"` // 全部目标语种
+	// ImageLangsRendered 本次**真正出图**的语种数（P-3/N7 的诚实读数）。
+	// 当前实现只为首个目标语种出图 ⇒ 成功时恒 1、降级时 0；多语种请求因此不会
+	// 被误读成"每语种都有一张图"。前端据此在多语种场景提示"图片仅出首个语种"。
+	ImageLangsRendered int `json:"image_langs_rendered"`
 }
 
 // imageReason 把 fileproc 抛出的 OCR 错误归到前端可用的档位（与 asrReason 同族）。
@@ -125,6 +136,10 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请以 multipart/form-data 提交图片"))
 		return
 	}
+	// ★ 2026-10-31（组4 N4／P-2 收口）：请求体必须在进入 multipart 解析**之前**设硬帽。
+	//   ParseMultipartForm 的 maxMemory 只是"超过就落磁盘"的阈值，不是总大小限制——
+	//   不设这一道，一个伪造大文件就能把磁盘写满（与 upload.go 同款教训）。
+	r.Body = http.MaxBytesReader(w, r.Body, chatImageMaxBytes)
 	if err := r.ParseMultipartForm(chatImageMaxBytes); err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "图片数据格式无法解析（或超出上限）"))
 		return
@@ -149,19 +164,13 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	if v := strings.ToLower(filepath.Ext(hdr.Filename)); v != "" && fileproc.IsImageFormat(v) {
 		ext = v
 	}
-	// 落盘到临时文件：OCR 脚本与回填脚本都要**文件路径**（不是字节流）。
-	tmpPath, cleanup, terr := stageChatImage(f, ext)
-	if terr != nil {
-		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "图片暂存失败"))
-		return
-	}
-	defer cleanup()
-
 	// ★ 2026-10-30 组4（C-1／P-2／G10）：免费档判定——**尺寸先定档**（第 0 步），再判身份。
 	//   · 免费档 ≤ free_image_max_mb（默认 1 MiB）：不扣积分；
 	//   · 付费即时档 ≤ image_max_mb（默认 3 MiB）：按量计费（客户自己压不到 1 MiB 时给的选择）；
 	//   · 超硬顶：不在这里硬扛，出 use_ticket 引导去翻译工单（上限 40 MB，还得还原原格式）。
 	//   体积判据吃 multipart 头里的真实字节数（hdr.Size），不靠 Content-Length 自报。
+	// ★ 2026-10-31 顺序修正：判定与闸门必须**排在落盘之前**——旧形态先把文件抄到临时目录
+	//   （最多 20 MiB）再判"超即时上限去工单"，等于为一个注定不处理的请求白写一遍磁盘。
 	imgTid := s.currentTenant(r)
 	imgUID := int64(0)
 	if u := s.authUser(r); u != nil {
@@ -193,6 +202,25 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = imgRoute
+
+	// 落盘到临时文件：OCR 脚本与回填脚本都要**文件路径**（不是字节流）。
+	tmpPath, cleanup, terr := stageChatImage(f, ext)
+	if terr != nil {
+		// ★ 超硬顶（N4）：不许静默截断后把半截图送进 OCR——那会让客户拿到一张糊图，
+		//   而响应看起来是成功的。这里显式引导到工单。
+		if errors.Is(terr, errChatFileTooLarge) {
+			writeJSON(w, 200, map[string]interface{}{
+				"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式",
+				"reason":  instantReasonTooLarge,
+				"suggest": "ticket",
+				"file":    map[string]interface{}{"name": hdr.Filename, "size": hdr.Size},
+			})
+			return
+		}
+		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "图片暂存失败"))
+		return
+	}
+	defer cleanup()
 
 	// ★ 2026-10-26 修「即时翻译图片上传像失败」的真因：本链路 OCR＋整段翻译＋分腿对齐
 	//   在现网实测 125 s（生产日志 trace 87c3727a…：duration_ms=125157），而跨境边缘
@@ -378,10 +406,16 @@ func stageChatImage(f io.Reader, ext string) (string, func(), error) {
 	}
 	tmpPath := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpPath) }
-	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatImageMaxBytes)); cerr != nil {
+	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatImageMaxBytes+1)); cerr != nil {
 		tmp.Close()
 		cleanup()
 		return "", nil, cerr
+	}
+	// 用文件实际尺寸判超限（不靠 Content-Length 自报，也不靠"抄到哪算哪"）。
+	if st, serr := tmp.Stat(); serr == nil && st.Size() > chatImageMaxBytes {
+		tmp.Close()
+		cleanup()
+		return "", nil, errChatFileTooLarge
 	}
 	if cerr := tmp.Close(); cerr != nil {
 		cleanup()
@@ -419,6 +453,9 @@ func renderChatImage(r *http.Request, srcPath, lang string, lines []string, tran
 		return
 	}
 	resp.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)
+	// P-3/N7：只有到这里才是"真的出了一张图"。降级分支（行数不齐/渲染失败）保持 0，
+	// 让前端与排障能区分"多语种只出一版属于设计"与"这一版也没出来"。
+	resp.ImageLangsRendered = 1
 	_ = lang // 语种只用于排障日志，当前不再加入出参（ImageLang 已表达）
 }
 

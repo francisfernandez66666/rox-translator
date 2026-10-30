@@ -132,7 +132,9 @@ func instantFreeEligible(cfg ops.InstantEffective, in instantInput) instantRoute
 		return instantRoute{Reason: instantReasonQuotaTenant}
 	}
 	// —— 第 5 步：IP 次数 ——
-	if cfg.FreeIPDaily > 0 && in.FreeIP >= cfg.FreeIPDaily {
+	// 走 store.RateDayCeilReached 这一处判据（limit<=0 恒不拦的 0/负数语义在那边只有一份），
+	// 禁止在这里再写一遍 `> 0 && >=` —— 那是 §一·11「多把尺子」的同族形态。
+	if store.RateDayCeilReached(store.DayState{Used: in.FreeIP}, cfg.FreeIPDaily) {
 		return instantRoute{Reason: instantReasonQuotaIP}
 	}
 	return instantRoute{Free: true}
@@ -265,6 +267,20 @@ func instantFreeValidate(p ops.InstantPatch) error {
 		}
 	}
 	return nil
+}
+
+// instantFreeHealthWord 免费档状态词（/api/health 的 instant_free 字段）。
+// 只出三档词：on＝开放；off＝运营显式关档（任一暗额度为 -1）；unknown＝启动早期存储未就绪。
+// ⚠️ 不许在这里带出任何额度数字（H-2/W-4）：这是匿名可达的健康面，数字出栈即被拿去算薅羊毛的量。
+func (s *Server) instantFreeHealthWord(r *http.Request) string {
+	if s == nil || s.Store == nil {
+		return "unknown"
+	}
+	cfg := s.instantEffective(s.currentTenant(r))
+	if cfg.FreeDailyPoints < 0 || cfg.FreeIPDaily < 0 {
+		return "off"
+	}
+	return "on"
 }
 
 // handleInstantCaps GET /api/instant/caps —— 即时翻译**对外档位宽度**的公开读数。

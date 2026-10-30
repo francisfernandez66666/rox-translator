@@ -77,6 +77,12 @@ func TestCleanupTicketResults(t *testing.T) {
 		t.Fatalf("登记产物行失败: %v", err)
 	}
 
+	// ★ 2026-10-31 补 W25 的第二半：逐段真值（含客户原文）也必须进保留期清理。
+	if err := s.SaveTicketSegments(1, id, "/tmp/x/b.pdf", "en", []TicketSegment{
+		{SegIndex: 0, Source: "客户原文一段", Target: "translated paragraph"},
+	}); err != nil {
+		t.Fatalf("SaveTicketSegments: %v", err)
+	}
 	paths, err := s.CleanupTicketResults(id)
 	if err != nil {
 		t.Fatalf("CleanupTicketResults: %v", err)
@@ -99,5 +105,13 @@ func TestCleanupTicketResults(t *testing.T) {
 	// ★ 行与文件是两件事，判据要问两件：路径进了返回集（上一段已断）＋行真的被删了。
 	if list, _ := s.ListTicketArtifacts(id); len(list) != 0 {
 		t.Fatalf("清理后 artifacts 行应全部删除，实得 %d 行（只删文件不删行/或反之都是缺陷）", len(list))
+	}
+	// ★ W25：逐段真值同样要清（GDPR 早已含该表，保留期此前漏了——客户原文留在库里而产物已删）。
+	var segCount int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM ticket_segments WHERE ticket_id=?", id).Scan(&segCount); err != nil {
+		t.Fatalf("查 ticket_segments: %v", err)
+	}
+	if segCount != 0 {
+		t.Fatalf("清理后 ticket_segments 应清空，实得 %d 行（保留期漏了客户原文段落）", segCount)
 	}
 }

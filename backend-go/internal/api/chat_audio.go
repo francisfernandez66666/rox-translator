@@ -91,6 +91,8 @@ func (s *Server) handleChatASR(w http.ResponseWriter, r *http.Request) {
 	}
 	ext := ".webm"
 	if ct := r.Header.Get("Content-Type"); strings.Contains(ct, "multipart/") {
+		// ★ 2026-10-31（组4 N4）：请求体硬帽必须设在解析前（maxMemory 只是落盘阈值，不是总大小）。
+		r.Body = http.MaxBytesReader(w, r.Body, chatAudioMaxBytes)
 		if err := r.ParseMultipartForm(chatAudioMaxBytes); err != nil {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "录音数据格式无法解析（或超出上限）"))
 			return
@@ -123,9 +125,20 @@ func (s *Server) handleChatASR(w http.ResponseWriter, r *http.Request) {
 	defer os.Remove(tmpPath)
 	// ★ 落盘必须限流：MaxBytesReader 管的是请求体大小，COPY 阶段不加这道墙，
 	//   一个伪造的 Content-Length 就能把磁盘写满（ parseUpload 同款教训）。
-	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatAudioMaxBytes)); cerr != nil {
+	if _, cerr := io.Copy(tmp, io.LimitReader(f, chatAudioMaxBytes+1)); cerr != nil {
 		tmp.Close()
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "录音暂存失败"))
+		return
+	}
+	// ★ N4：抄 max+1 后按实际尺寸判超限——旧形态静默截断，截出来的半段录音
+	//   时长探测也跟着偏小，于是"超限"被读成"免费档内的短录音"。
+	if st, serr := tmp.Stat(); serr == nil && st.Size() > chatAudioMaxBytes {
+		tmp.Close()
+		writeJSON(w, 200, chatVoiceFailure{
+			Error:   "这段录音超出即时翻译上限，请交给翻译工单（上限更大，译完交付配音与译文）",
+			Reason:  "too_long",
+			Suggest: "ticket",
+		})
 		return
 	}
 	tmp.Close()
@@ -228,9 +241,17 @@ func (s *Server) handleChatTTS(w http.ResponseWriter, r *http.Request) {
 		ttsUID = u.ID
 	}
 	ttsRoute := s.instantDecide(r, ttsTid, ttsUID, instantInput{Kind: "text", LangCount: 1})
-	tid, release, gateErr := s.gateUsage(r)
+	// ★ 2026-10-31 修正（组4 收口）：这里**只能过一道闸**。
+	//   旧形态先无条件 `gateUsage` 再在免费档覆盖成 `gateUsageInstant` —— 前一次的
+	//   并发名额释放闭包被直接丢弃 ⇒ 每朗读一次泄漏一个并发名额，攒够上限后
+	//   全站朗读恒回「并发请求过多」，而日志里没有任何异常（纯资源泄漏）。
+	var tid int64
+	var release func()
+	var gateErr error
 	if ttsRoute.Free {
 		tid, release, gateErr = s.gateUsageInstant(r)
+	} else {
+		tid, release, gateErr = s.gateUsage(r)
 	}
 	defer release()
 	if gateErr != nil {
