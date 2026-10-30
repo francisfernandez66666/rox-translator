@@ -68,7 +68,14 @@ SSH="ssh -p $PORT -o ConnectTimeout=20 -o BatchMode=yes root@$HOST"
 
 MAIN_URL="https://langcross.lexicorn.cn"     # 主站块 translator.conf → 8787，root /opt/translator/web
 DEMO_URL="https://rox-test.lexicorn.cn"      # 演示块 translator-demo.conf → 8789，root /opt/translator-demo/web
-TENANT_URL="https://rox.lexicorn.cn"         # 租户通配块 translator-tenant.conf → 8787，/assets/* 与主站**同一份磁盘**
+# ★ 2026-10-30：租户通配块的探针域从 `rox.lexicorn.cn` 换成 `tenant-probe.lexicorn.cn`——
+#   rox 已按用户令退役（源站显式 respond 410，见 translator-tenant.conf 顶端那个块），
+#   再拿它当"通配块健康样本"会让每一次发版都红、而且红的是退役本该有的结果。
+#   通配块要验的是**通配那一条规则**，任何未登记子域都等价（brandingPayload 回落平台默认）；
+#   `*.lexicorn.cn` 的泛解析实测覆盖这个新名字（dig 回同一对 CF 地址）。
+TENANT_URL="https://tenant-probe.lexicorn.cn"  # 租户通配块 translator-tenant.conf → 8787，/assets/* 与主站**同一份磁盘**
+# 退役锁：rox 必须继续是 410（有人把那个块删了、或把域名重新绑上租户，这条立刻红）
+RETIRED_URL="https://rox.lexicorn.cn"
 # ★ 三个域都要过公网那一段，一个都不能省：本批**动了三份 conf**（主站／演示／租户通配），
 #   而这三段的 `file_server { precompressed br gzip }` 是三处各写一遍的独立站点块——
 #   主站测通了不代表通配块也接上了（Caddy 的站点块按 Host 精确优先，通配块那条腿只有打租户域名才走到）。
@@ -212,7 +219,7 @@ echo "----- F 源站直读（绕开 CDN）：三档编码字节等值 ＋ /asset
 #      所以只能走 file＋handle_errors 这两档；两档都在隔离实例（:8099，`admin off`）现读过：
 #      加段前后 `/`、`/assets/<存在件>`、死上游 502 三条响应一字不差，只有 `/assets/<不存在件>` 多出 no-store。
 GZPROBE="index-POSTDEPLOYNOTHERE.js"
-for h in langcross.lexicorn.cn rox-test.lexicorn.cn rox.lexicorn.cn; do
+for h in langcross.lexicorn.cn rox-test.lexicorn.cn tenant-probe.lexicorn.cn; do
   RES="--resolve $h:443:127.0.0.1"
   # F-1 br 档：源站必须发侧车字节
   curl -sk $RES -H 'Accept-Encoding: br' -o /tmp/_pd_src -D /tmp/_pd_srch --max-time 20 "https://$h/$ENTRY" || echo CURL_FAIL >/dev/null
@@ -415,6 +422,18 @@ for u in "$MAIN_URL" "$DEMO_URL" "$TENANT_URL"; do
     echo "  BAD  $u 的 /assets 404 cache-control=${cc:-<无>}（含 immutable/31536000 ⇒ 一次探针就能把 404 在边缘钉一年，本批事故就是这么发生的）code=$CODE cf=$cfs curl_rc=${CURL_RC:-?} 拨了 ${PD_TRIES:-?} 次/末次 ${CURL_PROTO:-?}"
     PUB_RC=1
   fi
+done
+
+
+# ----- G2 退役域负向锁（★ 2026-10-30 用户令：rox.lexicorn.cn 已下线）-----
+# 抓的只有一件事：**退役的站又活过来了**（有人删了 translator-tenant.conf 顶端那个 respond 410 块，
+# 或把该域名重新绑给某个租户）。两条腿：源站直读（绕 CDN、不受边缘缓存影响）与公网。
+# ⚠️ 公网允许在边缘 TTL（2h）内仍回旧 HTML 缓存——那一档记读数不判红；
+#    只要**不是 410 也不是缓存命中**（例如又回 200 且 cf=MISS/HIT 新鲜）就判红。
+for u in "$RETIRED_URL"; do
+  CODE=$(curl -sk --resolve "${u#https://}:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 20 "$u/" 2>/dev/null || echo 000)
+  if [ "$CODE" = "410" ]; then echo "  OK   ${u}（源站）已退役：410"
+  else echo "  BAD  ${u}（源站）退役域没回 410，实得 code=${CODE} ⇒ 查 /etc/caddy/translator-tenant.conf 顶端的 respond 块"; RC=1; fi
 done
 
 rm -f "$TMPB" "$TMPH"

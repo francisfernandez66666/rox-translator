@@ -140,11 +140,18 @@ log "6/6 发版后复查（只读）"
 bash deploy/postdeploy_20261012.sh > /tmp/rel_b_postdeploy.log 2>&1
 RC=$?
 grep -E 'REMOTE_ALL_OK|POSTDEPLOY_ALL_OK|POSTDEPLOY_FAIL|POSTDEPLOY_EXIT' /tmp/rel_b_postdeploy.log | tail -4
-grep -q 'POSTDEPLOY_ALL_OK=1' /tmp/rel_b_postdeploy.log || {
+if ! grep -q 'POSTDEPLOY_ALL_OK=1' /tmp/rel_b_postdeploy.log; then
   grep -E '^  BAD' /tmp/rel_b_postdeploy.log | head -6
-  grep -q 'REMOTE_ALL_OK=1' /tmp/rel_b_postdeploy.log || bad "发版后复查**远端段**判红 ⇒ 现网接线有问题，按 §31.4 回滚"
-  log "公网段有红（exit=${RC}）：若读数 code=000／curl_rc=6／半截体 ⇒ 本机这一跳，复跑再判"
-}
+  # ★ 2026-10-30 修：旧写法在「远端段绿、公网段红」时只打一行 log、**不计 FAIL**，
+  #   于是末行照样打印 RELEASE_B_ALL_OK=1 —— 屏幕上有 BAD、判定说成功（本仓那族「给失败背书」）。
+  #   公网段红可能只是本机这一跳（code=000／curl_rc≠0／半截体），但**不许判绿**：
+  #   让人看读数、复跑一次再判，才是「没测到 ≠ 通过」。
+  if grep -q 'REMOTE_ALL_OK=1' /tmp/rel_b_postdeploy.log; then
+    bad "发版后复查**公网段**判红（exit=${RC}）⇒ 先分「这一跳没走完」还是「现网不对」，复跑一次再判"
+  else
+    bad "发版后复查**远端段**判红 ⇒ 现网接线有问题，按 §31.4 回滚"
+  fi
+fi
 
 echo
 if [ "$FAIL" = 0 ]; then
