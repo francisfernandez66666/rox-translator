@@ -431,7 +431,10 @@ done
 # ⚠️ 公网允许在边缘 TTL（2h）内仍回旧 HTML 缓存——那一档记读数不判红；
 #    只要**不是 410 也不是缓存命中**（例如又回 200 且 cf=MISS/HIT 新鲜）就判红。
 for u in "$RETIRED_URL"; do
-  CODE=$(curl -sk --resolve "${u#https://}:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 20 "$u/" 2>/dev/null || echo 000)
+  # ⚠️ 不许写 `|| echo 000`：curl 失败时 `-w` 自己就会打 000，再补一个就成了 "000000"
+  #    （AGENTS §23 点名的那个坑，本批首跑真踩——判据比对的字面永远对不上，于是一条"该红的腿"变成"永远红"）。
+  CODE=$(curl -sk --resolve "${u#https://}:443:127.0.0.1" -o /dev/null -w '%{http_code}' --max-time 20 "$u/" 2>/dev/null)
+  [ -n "${CODE}" ] || CODE=000
   if [ "$CODE" = "410" ]; then echo "  OK   ${u}（源站）已退役：410"
   else echo "  BAD  ${u}（源站）退役域没回 410，实得 code=${CODE} ⇒ 查 /etc/caddy/translator-tenant.conf 顶端的 respond 块"; RC=1; fi
 done
