@@ -113,12 +113,14 @@ q "SELECT u.id||' | '||u.username||' | tid='||u.tenant_id||' | role='||COALESCE(
    FROM users u WHERE u.tenant_id IN (1,12) AND COALESCE(u.is_home,1)=1 ORDER BY u.tenant_id,u.id LIMIT 20;"
 
 echo
-if [ "$MODE" = "audit" ]; then  echo "MODE=audit 完成（零写库）。要动手：MODE=packs|terms|gloss 且 APPLY=1。"
+if [ "$MODE" = "audit" ]; then  echo "MODE=audit 完成（零写库）。要动手：MODE=packs|terms|terms_trim|terms_off_tenant|gloss 且 APPLY=1。"
   exit 0
 fi
 
 # ---------------------------------------------------------------- 写档前置闸
-if [ "$APPLY" != "1" ]; then
+# quality 是**只读**质检档（只看成色，不改一行），所以不进这道闸。
+# quality / clean 自带 APPLY 分派（各自先出只读读数、APPLY=1 才写），所以不进这道闸。
+if [ "$MODE" != "quality" ] && [ "$MODE" != "clean" ] && [ "$APPLY" != "1" ]; then
   echo "ABORT=need-apply（MODE=$MODE 是写档，但 APPLY!=1 ⇒ 一个字都没写）"
   exit 2
 fi
@@ -295,6 +297,69 @@ if [ "$MODE" = "terms_trim" ]; then
   q "SELECT '残留高风险条目='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI' AND source_text IN ('交易流水与整体盈亏','形态类交易战法');"
   q "SELECT '人工条目总数='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI';"
   echo "DONE=terms_trim 生效时机同 terms 档（缓存 60s 自然过期）。"
+  exit 0
+fi
+
+# ------------------------------------- MODE=quality 新行业包的条目成色（只读）
+# ★ 采集只做「空源/空译丢弃 + md5 去重」，**不查形状**（tier1 与 tier3 都是）。
+#   所以"扒下来"不等于"能入库"：译文混进中文、译文＝原文、长度爆炸这三类必须量出来。
+#   实现刻意只吐**原始行**（code|tgt_lang|src_lang|src|tgt），所有统计在本机算——
+#   在部署机写带引号/正则的 SQL，一旦 psql 报错就只剩一行「读失败」，读数等于没有（本批首跑真踩两条）。
+if [ "$MODE" = "quality" ]; then
+  "${PSQL[@]}" "SELECT p.code||chr(9)||COALESCE(e.target_lang,'')||chr(9)||COALESCE(e.source_lang,'')||chr(9)||replace(COALESCE(e.source_text,''),chr(9),' ')||chr(9)||replace(COALESCE(e.target_text,''),chr(9),' ')
+     FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+     ORDER BY p.code, e.id;" 2>&1
+  echo "DONE=quality 只读（零写；上面每行 code<TAB>lang<TAB>srclang<TAB>src<TAB>tgt）"
+  exit 0
+fi
+
+# ---------------------------------------- MODE=clean 新行业包的垃圾条目清洗
+# ★ 依据（2026-10-30 现网只读质检，两个新包共 454 行）：
+#   ① 源语＝目标语（7 行，全 zh_hant→zh_hant）＝原样空转，永远帮不上忙；
+#   ② 非中日语却混进汉字（1 行 `kk: 中文 → 哈萨克语（哈萨克斯坦）`）＝客户会看到中文；
+#   ③ 非阿语族却带阿拉伯-印度数字（2 行 mn 的蒙古文里夹 `۶۰`）＝编码/生成垃圾。
+#   **只删这三类**，判据都窄到"能一眼复核"：
+#   「译文＝原文」**不删**（`de: Alpha-Komponente → Alpha-Komponente` 这类是 tier1 的语种标注产物，
+#   它的 target_lang 与文档语种不同，永远不会命中，删它属于顺手清场而不是修缺陷）；
+#   「长度比 >6 倍」**也不删**（中文 2 字对英文 13 字符是正常密度，6 倍判据在 zh→en 上恒假阳）。
+if [ "$MODE" = "clean" ]; then
+  if [ "$APPLY" != "1" ]; then
+    sec "只读：三类垃圾各多少行"
+    q "SELECT '① 源语=目标语: '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+       WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1 AND e.source_lang=e.target_lang;"
+    q "SELECT '② 非中日语混汉字: '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+       WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+         AND e.target_lang NOT IN ('zh','zh_hant','ja') AND e.target_text ~ '[一-鿿]';"
+    q "SELECT '③ 非阿语族带阿拉伯数字: '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+       WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+         AND e.target_lang NOT IN ('ar','fa','ur') AND e.target_text ~ '[٠-٩۰-۹]';"
+    echo "DONE=clean 只读（要看写入请 APPLY=1）"
+    exit 0
+  fi
+  sec "备份 + 删除三类垃圾"
+  "${PSQL[@]}" "CREATE SCHEMA IF NOT EXISTS $bak_schema;" >/dev/null
+  "${PSQL[@]}" "CREATE TABLE IF NOT EXISTS $bak_schema.kb_entries_clean AS SELECT * FROM kb_entries WHERE 1=0;" >/dev/null
+  "${PSQL[@]}" "INSERT INTO $bak_schema.kb_entries_clean
+     SELECT e.* FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+       AND (e.source_lang=e.target_lang
+         OR (e.target_lang NOT IN ('zh','zh_hant','ja') AND e.target_text ~ '[一-鿿]')
+         OR (e.target_lang NOT IN ('ar','fa','ur') AND e.target_text ~ '[٠-٩۰-۹]'));" >/dev/null
+  q "SELECT '备份行数='||COUNT(*) FROM $bak_schema.kb_entries_clean;"
+  "${PSQL[@]}" "DELETE FROM kb_entries WHERE id IN (SELECT id FROM $bak_schema.kb_entries_clean);" >/dev/null
+  echo "--- 回读（三类应各 0；总量应减 10）"
+  q "SELECT '① '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1 AND e.source_lang=e.target_lang;"
+  q "SELECT '② '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+       AND e.target_lang NOT IN ('zh','zh_hant','ja') AND e.target_text ~ '[一-鿿]';"
+  q "SELECT '③ '||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1
+       AND e.target_lang NOT IN ('ar','fa','ur') AND e.target_text ~ '[٠-٩۰-۹]';"
+  q "SELECT p.code||' 剩余='||COUNT(*) FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+     WHERE p.tenant_id=$HOST_TID AND p.code IN ('finance','catering') AND e.layer=1 GROUP BY p.code;"
+  echo "DONE=clean（回滚：INSERT INTO kb_entries SELECT * FROM $bak_schema.kb_entries_clean）"
   exit 0
 fi
 
