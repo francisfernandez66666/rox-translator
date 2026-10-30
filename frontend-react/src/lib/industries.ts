@@ -27,6 +27,11 @@ export const INDUSTRY_META: Record<string, IndustryMeta> = {
   wedding: { code: 'wedding', zh: '婚庆/高端服务', zhHant: '婚慶/高端服務', en: 'Wedding & Premium Services' },
   retail: { code: 'retail', zh: '电商/零售', zhHant: '電商/零售', en: 'E-commerce & Retail' },
   media: { code: 'media', zh: '自媒体/内容创作', zhHant: '自媒體/內容創作', en: 'Content Creation & Media' },
+  // ★ 2026-10-30 新增两行业（与后端 crawler.industryNames / builtinIndustrySeeds 同集合，
+  //   等值锁＝backend-go/internal/crawler/industry_registry_gate_test.go R3）。
+  //   繁体串不得含 industries.test.ts 里 SIMPLIFIED_ONLY 那批字形，且必须与简体不同（F-61 判据）。
+  finance: { code: 'finance', zh: '金融/证券/投资', zhHant: '金融/證券/投資', en: 'Finance & Investment' },
+  catering: { code: 'catering', zh: '餐饮/门店', zhHant: '餐飲/門店', en: 'Catering & Restaurants' },
 }
 
 /** 行业 code → 当前语言展示名（未知 code 回退 code 本身，供表单/表格展示）

@@ -235,6 +235,11 @@ var industryNames = map[string]string{
 	"auto": "汽车", "realestate": "房产/装修", "b2b": "企业服务/B2B",
 	"education": "教育/留学", "ecommerce": "跨境独立站", "wedding": "婚庆/高端服务",
 	"retail": "电商/零售", "media": "自媒体/内容创作",
+	// ★ 2026-10-30 新增两行业；这一份与 builtinIndustrySeeds、前端 INDUSTRY_META **三处必须同集合**
+	// （等值锁＝industry_registry_gate_test.go R1/R3——漏一处不会报错，只会让新行业在
+	//  采集提示词里变成 code 原文、或在管理台下拉里根本选不到）。
+	"finance":  "金融/证券/投资",
+	"catering": "餐饮/门店",
 }
 
 // personaNames 角色 code → 中文名（★ 角色功能 2026-09-19；与 store.builtinPersonas 角色字典对齐）。
