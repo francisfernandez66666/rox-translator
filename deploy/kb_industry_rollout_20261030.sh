@@ -265,6 +265,68 @@ if [ "$MODE" = "terms" ]; then
   exit 0
 fi
 
+# ------------------------------------------------- MODE=terms_trim 撤掉两条高风险条目
+# ★ 2026-10-30 现网实证（探针 C 文本工单腿）：术语是**硬闸**（gate.go 第 9 项，失败重译 N 轮后整单 failed）。
+#   两条写进去以后咬到真实样本：
+#     ① 「交易流水与整体盈亏」是**句子片段**（9 字 > 固定标签档的 8 字上限）⇒ 模型几乎不可能逐字给出
+#        "Trade Blotter and Overall P&L"，而文本链的术语遵循是硬闸 ⇒ 含这句话的工单必红；
+#     ② 「形态类交易战法」与「形态战法」**同译法两源**，命中时两条要求都下发，只会让重译提示自相矛盾。
+#   术语档的取向是"钉住界面短标签"，不是"钉住整句"——所以撤这两条，其余 23 条保留。
+#   只删本次人工批次（module='manual:20261030_UI'）的这两条，先备份再删后回读。
+if [ "$MODE" = "terms_trim" ]; then
+  RISKY=("交易流水与整体盈亏" "形态类交易战法")
+  if [ "$APPLY" != "1" ]; then
+    sec "只读：这两条目前在哪些包里"
+    for s in "${RISKY[@]}"; do
+      q "SELECT '$s'||' | pkg='||e.package_id||' | '||p.code||'（tid='||p.tenant_id||'）| '||e.target_lang||' -> '||e.target_text
+         FROM kb_entries e JOIN kb_packages p ON p.id=e.package_id
+         WHERE e.module='manual:20261030_UI' AND e.source_text='$s';"
+    done
+    echo "DONE=terms_trim 只读（要看写入请 APPLY=1）"
+    exit 0
+  fi
+  sec "备份 + 删除"
+  "${PSQL[@]}" "CREATE SCHEMA IF NOT EXISTS $bak_schema;" >/dev/null
+  "${PSQL[@]}" "CREATE TABLE IF NOT EXISTS $bak_schema.kb_entries_trim AS
+    SELECT * FROM kb_entries WHERE module='manual:20261030_UI' AND source_text IN ('交易流水与整体盈亏','形态类交易战法');" >/dev/null
+  q "SELECT '备份行数='||COUNT(*) FROM $bak_schema.kb_entries_trim;"
+  "${PSQL[@]}" "DELETE FROM kb_entries WHERE module='manual:20261030_UI' AND source_text IN ('交易流水与整体盈亏','形态类交易战法');" >/dev/null
+  echo "--- 回读（这两条应为 0 行；其余人工条目保留）"
+  q "SELECT '残留高风险条目='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI' AND source_text IN ('交易流水与整体盈亏','形态类交易战法');"
+  q "SELECT '人工条目总数='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI';"
+  echo "DONE=terms_trim 生效时机同 terms 档（缓存 60s 自然过期）。"
+  exit 0
+fi
+
+# -------------------------------------- MODE=terms_off_tenant 把人工批次从租户包撤出
+# ★ 2026-10-30 现网实证（探针 C 文本工单腿，连跑三次）：
+#   人工 UI 术语一旦落进**租户自己的企业包**，就进了文本链的**硬闸**（gate.go 第 9 项：源文命中术语
+#   而译文不含规定译法 ⇒ 附提示重译 N 轮 ⇒ 仍不过就整单 task_failed）。实测「形态战法」
+#   规定译法是 `Pattern Strategy`，模型在散文里写 `pattern strategies`/`pattern-based…` ⇒ 8 轮后整单失败。
+#   ⇒ 这批"营销式专名"的正确位置是**行业包**（只在 tenant.industry 命中该行业时可见），
+#     而不是租户企业包（对所有工单常态生效）。本档只撤租户包里那一批，行业包里的原样保留。
+if [ "$MODE" = "terms_off_tenant" ]; then
+  TP="${TEN1_PKG:-1}"
+  if [ "$APPLY" != "1" ]; then
+    sec "只读：租户包 ${TP} 里这批人工条目的影响面"
+    q "SELECT 'pkg='||package_id||' | '||source_text||' -> '||target_text FROM kb_entries
+       WHERE module='manual:20261030_UI' AND package_id=${TP} ORDER BY id LIMIT 40;"
+    echo "DONE=terms_off_tenant 只读（要看写入请 APPLY=1）"
+    exit 0
+  fi
+  sec "备份 + 从租户包 ${TP} 撤出"
+  "${PSQL[@]}" "CREATE SCHEMA IF NOT EXISTS $bak_schema;" >/dev/null
+  "${PSQL[@]}" "CREATE TABLE IF NOT EXISTS $bak_schema.kb_entries_tenant_off AS
+    SELECT * FROM kb_entries WHERE module='manual:20261030_UI' AND package_id=${TP};" >/dev/null
+  q "SELECT '备份行数='||COUNT(*) FROM $bak_schema.kb_entries_tenant_off;"
+  "${PSQL[@]}" "DELETE FROM kb_entries WHERE module='manual:20261030_UI' AND package_id=${TP};" >/dev/null
+  echo "--- 回读"
+  q "SELECT '租户包残留='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI' AND package_id=${TP};"
+  q "SELECT '行业包保留='||COUNT(*) FROM kb_entries WHERE module='manual:20261030_UI' AND package_id<>${TP};"
+  echo "DONE=terms_off_tenant 生效时机同 terms 档（术语缓存 60s 自然过期）。"
+  exit 0
+fi
+
 # ---------------------------------------------------------- MODE=gloss 开词表
 if [ "$MODE" = "gloss" ]; then
   TID="${GLOSS_TID:-0}"

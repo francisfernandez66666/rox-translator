@@ -183,3 +183,33 @@ func TestWikiLookupAllAndCache(t *testing.T) {
 		t.Fatalf("同词第二次应命中缓存（0 次 HTTP），实读 %d 次", got)
 	}
 }
+
+// TestWikiSendsContactUserAgent 出站请求必须带**含联系方式的产品 UA**。
+//
+// 判据来源是现网实测（2026-10-30，同一后端同一端点只换 UA）：
+//
+//	不带（Go 默认 Go-http-client/1.1）→ 403 robot policy；
+//	只有程序名无联系 URL → 429；
+//	带 https:// 产品址 → 200 且正常回 langlinks。
+//
+// 所以这条锁问的是「UA 里有没有可联系的 URL」，不是「UA 是不是某个字面量」
+// （后者在改名时恒红、在真缺陷面前又毫无射程）。⚠️ 摘掉 Header.Set 这一条必须红：
+// 那正是本腿在现网从上线起就死着的形态（每词 403 → 全词丢 → 调用方只看到 no_wiki）。
+func TestWikiSendsContactUserAgent(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		fmt.Fprint(w, `{"query":{"pages":{"1":{"langlinks":[{"lang":"en","*":"Momentum"}]}}}}`)
+	}))
+	defer srv.Close()
+	wk := &Wiki{Base: srv.URL, HTTP: srv.Client(), ttl: time.Hour, cache: map[string]wikiEntry{}}
+	if _, err := wk.LookupAll(context.Background(), "动量"); err != nil {
+		t.Fatalf("查询失败：%v", err)
+	}
+	if gotUA == "" || strings.Contains(gotUA, "Go-http-client") {
+		t.Fatalf("没设 User-Agent（现网实测会被维基 403 挡掉），实读 %q", gotUA)
+	}
+	if !strings.Contains(gotUA, "https://") || !strings.Contains(gotUA, "@") {
+		t.Fatalf("UA 必须带可联系的产品 URL 与邮箱（缺了会被限流成 429），实读 %q", gotUA)
+	}
+}

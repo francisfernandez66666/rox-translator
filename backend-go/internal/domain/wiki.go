@@ -46,6 +46,13 @@ type Wiki struct {
 	cache map[string]wikiEntry
 }
 
+// wikiUserAgent 出站 UA（★ 2026-10-30 现网实证：不带 UA 时 Go 默认发 `Go-http-client/1.1`，
+// 维基媒体直接回 **403「Please set a user-agent and respect our robot policy」**；
+// 只写程序名、不带联系方式的 UA 被限流成 **429**；带产品 URL+邮箱的描述性 UA 才回 200）。
+// ⇒ 这一串**必须含可联系 URL**，不是装饰：少了它本腿每一词都取不到标题，
+// 而调用方看到的只是 `no_wiki`（词表恒空、零报错），是 AGENTS §12 那族最坏的静默形态。
+const wikiUserAgent = "LangCrossDomainGlossary/1.0 (+https://langcross.lexicorn.cn; ops@lexicorn.cn)"
+
 // NewWiki 默认 800ms 单词超时、30 天缓存。
 func NewWiki() *Wiki {
 	return &Wiki{
@@ -82,6 +89,7 @@ func (w *Wiki) LookupAll(ctx context.Context, term string) (map[string]string, e
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", wikiUserAgent)
 	resp, err := w.HTTP.Do(req)
 	if err != nil {
 		return nil, err

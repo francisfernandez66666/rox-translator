@@ -74,3 +74,26 @@ func TestProducerIdle(t *testing.T) {
 		t.Fatal("Probe=true=低占用，Idle 应为 true")
 	}
 }
+
+// TestCrawlerUserAgentAlwaysCarriesContact 采集 UA 必须**恒带可联系的产品 URL**。
+//
+// ★ 2026-10-30 现网实证（同一台机器、同一个 zh.wikipedia 端点，只换 UA）：
+//
+//	`Go-http-client/1.1`（没设头时 Go 的默认值）→ 403「Please set a user-agent and respect our robot policy」
+//	`TranslatorKBPackCrawler/1.0`（只有程序名、无联系方式）→ 429 被限流
+//	`…(+https://<产品站>; 邮箱)` → 200，正常回 langlinks
+//
+// 旧形态把联系方式挂在可选 env `BRAND_DOMAIN_SUFFIX` 上，而现网那台没配
+// ⇒ 缺省串落到"只有程序名"那一档 ⇒ tier-1 每个种子词都撞 429/403，
+// 词一条也进不了包，而流程照旧报"采集完成"（零词、零报错）。
+// ⇒ 缺省档也必须带 URL：判据问「UA 里有没有 https://」，不问具体域名（换域名不该让锁恒红）。
+func TestCrawlerUserAgentAlwaysCarriesContact(t *testing.T) {
+	t.Setenv("BRAND_DOMAIN_SUFFIX", "")
+	if ua := crawlerUserAgent(); !strings.Contains(ua, "https://") || !strings.Contains(ua, "@") {
+		t.Fatalf("缺省档 UA 必须带产品 URL 与邮箱（缺了会被维基限流成 429），实得 %q", ua)
+	}
+	t.Setenv("BRAND_DOMAIN_SUFFIX", "example.test")
+	if ua := crawlerUserAgent(); !strings.Contains(ua, "https://example.test") {
+		t.Fatalf("配了品牌域应带该域，实得 %q", ua)
+	}
+}

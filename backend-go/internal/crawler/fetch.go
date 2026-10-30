@@ -243,12 +243,24 @@ func (f *fetchBase) getJSON(ctx context.Context, rawURL string) ([]byte, error) 
 	return f.doGet(ctx, rawURL)
 }
 
-// crawlerUserAgent 采集器 UA 串；品牌 URL 仅在 BRAND_DOMAIN_SUFFIX 配置后附带。
+// crawlerUserAgent 采集器 UA 串：**恒带一个可联系的产品 URL**。
+//
+// ★ 2026-10-30 现网实证（同一后端、同一 zh.wikipedia 端点，只换 UA）：
+//
+//	`Go-http-client/1.1`（Go 默认，没设头时就是它）→ 403「Please set a user-agent and respect our robot policy」
+//	`TranslatorKBPackCrawler/1.0`（只有程序名、无联系方式）→ 429 被限流
+//	带 https:// 产品址的描述性 UA → 200，正常回 langlinks
+//
+// 旧形态在 BRAND_DOMAIN_SUFFIX 未配时就退回 `TranslatorKBPackCrawler/1.0`，
+// 而现网那台没配这个 env ⇒ tier-1 这一腿每词都撞 429/403、**零词入包且不报错**。
+// 所以联系方式不能挂在可选配置上，缺省也要落到产品站（同 §12「有自动降级的链路，
+// 产物能打开不算验收」——这里连"产物"都没有，只有一张空词表）。
 func crawlerUserAgent() string {
-	if d := strings.TrimSpace(os.Getenv("BRAND_DOMAIN_SUFFIX")); d != "" {
-		return "TranslatorKBPackCrawler/1.0 (+https://" + d + "; 术语包自动采集)"
+	d := strings.TrimSpace(os.Getenv("BRAND_DOMAIN_SUFFIX"))
+	if d == "" {
+		d = "langcross.lexicorn.cn"
 	}
-	return "TranslatorKBPackCrawler/1.0"
+	return "TranslatorKBPackCrawler/1.0 (+https://" + d + "; ops@lexicorn.cn)"
 }
 
 // sleepCtx ★ D9（2026-09-12）：ctx 感知的重试退避——旧裸 Sleep 在客户端
