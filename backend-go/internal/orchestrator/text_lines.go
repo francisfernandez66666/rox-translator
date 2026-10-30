@@ -119,6 +119,7 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 			observability.Warn(ctx, "文本工单逐行翻译：上游已判断，本语种整语种跳过模型调用并按原文回填",
 				"lang", lc, "backfilled_lines", len(needSrc))
 		} else if len(needSrc) > 0 {
+			// 本单领域词表已经挂在 ctx 上（见 workflow.go 的文本走期入口），批量层在 opts 为空时回落 ctx。
 			batch, truncated := w.Engine.BatchTranslateMarked(ctx, needSrc, lc, 15, nil)
 			// isPlaceholderish 这一槽是不是「上游压根没吐」那一档（空串／失败占位，且**不是**被截断）。
 			//  ★ 八-3c／九-3 的分档点就落在这一句上：截空与"没返回"在字节上同形，

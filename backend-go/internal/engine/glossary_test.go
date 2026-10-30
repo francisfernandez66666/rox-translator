@@ -336,3 +336,126 @@ func TestGlossaryProfileFailOpenOnLLMError(t *testing.T) {
 		t.Fatalf("上游报错应返回空词表，实得 %+v", p)
 	}
 }
+
+// TestPrepareTicketGlossaryFailOpen 文本工单链的词表入口必须 fail-open：
+// 每一档"不做"都回 (nil, 0)，绝不返回错误、绝不 panic——判不出就照常翻，
+// 不许因为一个可选增强把客户整单拖住（同 §19 族处置的总口径）。
+func TestPrepareTicketGlossaryFailOpen(t *testing.T) {
+	ctx := tenant.WithTenant(context.Background(), 1)
+	var nilEng *Engine
+	if p, n := nilEng.PrepareTicketGlossary(ctx, strings.Repeat("样本内容", 60), []string{"en"}); p != nil || n != 0 {
+		t.Fatalf("nil engine 必须回 (nil,0)，实得 %v/%d", p, n)
+	}
+	e := &Engine{}
+	if p, n := e.PrepareTicketGlossary(ctx, strings.Repeat("样本内容", 60), nil); p != nil || n != 0 {
+		t.Fatalf("没有目标语种必须回 (nil,0)：本腿判不出任何语种的词表，判了也是白花一次调用")
+	}
+	// St 为 nil ⇒ 开关读不到 ⇒ 默认关（与 domainGlossaryEnabled 同一条口径）。
+	if p, n := e.PrepareTicketGlossary(ctx, strings.Repeat("样本内容", 60), []string{"en"}); p != nil || n != 0 {
+		t.Fatalf("开关取不到时必须回 (nil,0)，实得 %v/%d", p, n)
+	}
+	// 开关开着、但样本短于 TextLimits.MinSampleRunes(120) ⇒ 不做（低置信度判域只会污染提示词）。
+	st := newTestStore(t)
+	if err := st.SetConfig("domain_glossary_enabled.1", "1"); err != nil {
+		t.Fatalf("写开关失败: %v", err)
+	}
+	e2 := &Engine{St: st}
+	if p, n := e2.PrepareTicketGlossary(ctx, "太短的一句话", []string{"en"}); p != nil || n != 0 {
+		t.Fatalf("样本不足门槛时必须回 (nil,0)，实得 %v/%d", p, n)
+	}
+}
+
+// TestPrepareTicketGlossaryPositive 文本工单链真的能拿到词表（含每语种上限）。
+// 假判域回 6 个候选词、假维基全部解析成 en ⇒ TextLimits 要求 ≥6 词、每语种 ≥3 命中，应恰好过线。
+func TestPrepareTicketGlossaryPositive(t *testing.T) {
+	st := newTestStore(t)
+	if err := st.SetConfig("domain_glossary_enabled.1", "1"); err != nil {
+		t.Fatalf("写开关失败: %v", err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 每个词都回一条 en 标题（词条名带前缀，便于断言确实取到了 wiki 那一路）。
+		title := strings.TrimSpace(r.URL.Query().Get("titles"))
+		fmt.Fprintf(w, `{"query":{"pages":{"1":{"langlinks":[{"lang":"en","*":"EN-%s"}]}}}}`, title)
+	}))
+	defer srv.Close()
+
+	e := &Engine{St: st}
+	e.glossaryCall = func(ctx context.Context, system, user string) (string, error) {
+		return `{"domain":"finance","label":"金融","confidence":0.9,` +
+			`"terms":["市盈率","市值","融资融券","换手率","涨停板","集合竞价"]}`, nil
+	}
+	wk := domain.NewWiki()
+	wk.Base, wk.HTTP = srv.URL, srv.Client()
+	e.glossaryWiki = &wikiClient{w: wk}
+
+	// 样本必须 ≥ TextLimits.MinSampleRunes(120)：判域对短样本一律不做，这条长度就是那道门槛。
+	sample := "今日市盈率与市值同步走高，融资融券余额抬升，换手率放大，涨停板与集合竞价出现异动。" +
+		"请核对资产负债表、现金流量表与已实现盈亏的口径，并按全局单票金额复核仓位留空规则。" +
+		"若账户出现浮亏，请先确认止损位与保证金比例，再决定是否加仓；数据以交易流水为准。"
+	prof, maxTerms := e.PrepareTicketGlossary(tenant.WithTenant(context.Background(), 1), sample, []string{"en"})
+	if prof == nil {
+		t.Fatalf("判域应成功（假模型回 6 词、假维基全命中），实得 nil")
+	}
+	if maxTerms != domain.TextLimits.MaxTerms {
+		t.Fatalf("每语种上限应取 text 档 %d，实得 %d", domain.TextLimits.MaxTerms, maxTerms)
+	}
+	terms := prof.TermsFor("en", maxTerms)
+	if len(terms) == 0 {
+		t.Fatalf("en 词表为空（profile=%v）", prof)
+	}
+	if !strings.HasPrefix(terms[0].Tgt, "EN-") {
+		t.Fatalf("词表应来自 wiki 那一路（EN- 前缀），实得 %q", terms[0].Tgt)
+	}
+	if prof.DisplayLabel() != "金融" {
+		t.Fatalf("标签应透传模型的 label，实得 %q", prof.DisplayLabel())
+	}
+}
+
+// TestApplyCtxGlossaryFallback 批量腿的词表兜底：ctx 有词表就按**本语种**切片补进 opts，
+// opts 显式给的**永远优先**（文件链按语种切好显式传，不能被 ctx 覆盖）。
+//
+// 为什么这条要用函数级锁：文本工单链把词表挂在 ctx 上（workflow.go 每单判一次），
+// 而批量腿过去只认 opts.Glossary ⇒ 逐行腿拿不到。判据三档：
+// 空 ctx＝零值（提示词与没有这个特性时逐字相同）／ctx 有词表＝按语种切片填上／opts 优先。
+func TestApplyCtxGlossaryFallback(t *testing.T) {
+	base := BatchOptions{}
+	if got := applyCtxGlossary(context.Background(), "en", base); len(got.Glossary) != 0 {
+		t.Fatalf("ctx 没词表时不该填任何东西，实得 %v", got.Glossary)
+	}
+	prof := &domain.Profile{Code: "finance", Label: "金融", Confidence: 0.9, Terms: []domain.TermTargets{
+		{Src: "市盈率", Targets: map[string]string{"en": "P/E ratio", "ja": "PER"}},
+		{Src: "市值", Targets: map[string]string{"en": "market cap", "ja": "時価総額"}},
+	}}
+	ctx := WithGlossary(context.Background(), prof, 5)
+	en := applyCtxGlossary(ctx, "en", base)
+	if len(en.Glossary) != 2 || en.Glossary[0].Tgt != "P/E ratio" {
+		t.Fatalf("应填上 en 两条词表，实得 %v", en.Glossary)
+	}
+	if en.GlossaryLabel != "金融" {
+		t.Fatalf("标签应透传 profile 的中文名，实得 %q", en.GlossaryLabel)
+	}
+	// 目标语种不在 profile 里 ⇒ 不填（绝不能把别的语种的词表塞进这个语种）。
+	if ru := applyCtxGlossary(ctx, "ru", base); len(ru.Glossary) != 0 {
+		t.Fatalf("ru 没有对应词表时不该填，实得 %v", ru.Glossary)
+	}
+	// opts 显式给的赢：文件链显式传的切片不能被 ctx 覆盖。
+	explicit := BatchOptions{Glossary: []domain.Term{{Src: "市值", Tgt: "EXPLICIT"}}, GlossaryLabel: "文件链"}
+	if got := applyCtxGlossary(ctx, "en", explicit); len(got.Glossary) != 1 || got.Glossary[0].Tgt != "EXPLICIT" || got.GlossaryLabel != "文件链" {
+		t.Fatalf("opts 显式给的必须优先，实得 %v/%q", got.Glossary, got.GlossaryLabel)
+	}
+}
+
+// TestBatchAppliesCtxGlossaryWiring 批量腿必须真调 ctx 兜底，且排在 sysBatch 组装之前。
+// 判据是**接线**不是判据：`applyCtxGlossary` 自身有行为锁，但"没人调它"照样全绿（本仓 §三 那条）。
+// 顺序也要判：词表既进提示词、也进译文记忆键（tmContextHash），排在组装之后就只进了一处。
+func TestBatchAppliesCtxGlossaryWiring(t *testing.T) {
+	src := readEngineSrc(t, "engine.go")
+	call := strings.Index(src, "opts = applyCtxGlossary(ctx, targetLang, opts)")
+	if call < 0 {
+		t.Fatalf("批量腿没调 applyCtxGlossary：文本工单的逐行腿会拿不到词表（静默，不报错）")
+	}
+	batch := strings.Index(src, "sysBatch := translateInstruction(")
+	if batch < 0 || call > batch {
+		t.Fatalf("ctx 兜底必须排在 sysBatch 组装之前（call=%d sysBatch=%d）", call, batch)
+	}
+}

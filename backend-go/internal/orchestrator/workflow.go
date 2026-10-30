@@ -367,6 +367,16 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		return nil
 	}
 
+	// ★ 2026-10-30：文本工单链**第一次**接领域词表（此前只进「即时/工作台」与「文件/图片」两条链；
+	//   现网读数＝同一次探针里即时链有 domain_glossary、这条腿 0 行）。
+	//   位置在**两条腿分叉之前**、每单只判一次（样本＝整单源文、语种＝全部目标语种）：
+	//     · 整篇腿 `TranslateLangsInto` → `singleLangRaw` 自己从 ctx 读词表（已经有了）；
+	//     · 逐行腿 `translateTextPerLine` → 批量层，那里在 opts 为空时**回落 ctx**。
+	//   开关关/判不出 ⇒ 不挂 ctx（下游逐字不变）。
+	if prof, maxTerms := w.Engine.PrepareTicketGlossary(ctx, p.SourceText, p.TargetLangs); prof != nil {
+		ctx = engine.WithGlossary(ctx, prof, maxTerms)
+	}
+
 	// ★ DEF-02（2026-10-24）：文本工单逐行翻译/增量补译。
 	//   - 首次：按 \n 切行，非空行批量翻译，行数保持；
 	//   - 重发：读回旧 payload，正确行复用，只把缺失/错误行送模型；

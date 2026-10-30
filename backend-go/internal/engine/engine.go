@@ -2361,6 +2361,10 @@ func (e *Engine) BatchTranslateMarkedOpts(ctx context.Context, texts []string, t
 		return result, truncated
 	}
 
+	// ★ 2026-10-30：词表 ctx 兜底（文本工单链挂在 ctx 上；文件链显式传 opts，优先级见 applyCtxGlossary）。
+	//   位置必须在 tmContextHash 与 sysBatch 组装**之前**——词表既进提示词、也进译文记忆键。
+	opts = applyCtxGlossary(ctx, targetLang, opts)
+
 	log.Printf("[llm-batch] start lang=%s segs=%d", targetLang, len(texts))
 	defer func(t0 time.Time) {
 		log.Printf("[llm-batch] done  lang=%s segs=%d took=%s", targetLang, len(texts), time.Since(t0).Round(time.Millisecond))

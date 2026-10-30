@@ -134,6 +134,30 @@ func (e *Engine) domainGlossaryEnabled(tid int64) bool {
 	return false
 }
 
+// applyCtxGlossary 批量腿的**词表 ctx 兜底**：opts 里没显式给词表时，从 ctx 取本单那一份。
+//
+// ★ 2026-10-30：文本工单链的词表挂在 ctx 上（`orchestrator/workflow.go` 每单判一次、两条腿共用），
+// 而批量腿过去只认 `opts.Glossary`（只有文件链在填）⇒ 逐行腿拿不到词表。
+// 优先级：**opts 显式给的赢**（文件链按语种切片后显式传，不能被 ctx 覆盖）；
+// opts 为空才回落 ctx，且按目标语种切片（ctx 里存的是全语种 profile）。
+// 空词表 ⇒ 原样返回 opts（零值），提示词与没有这个特性时**逐字相同**。
+func applyCtxGlossary(ctx context.Context, targetLang string, opts BatchOptions) BatchOptions {
+	if len(opts.Glossary) > 0 {
+		return opts
+	}
+	prof, maxTerms := glossaryFromCtx(ctx)
+	if prof == nil {
+		return opts
+	}
+	terms := prof.TermsFor(targetLang, maxTerms)
+	if len(terms) == 0 {
+		return opts
+	}
+	opts.Glossary = terms
+	opts.GlossaryLabel = prof.DisplayLabel()
+	return opts
+}
+
 // DomainGlossaryEnabled 开关的导出读点（预估腿与判定腿共用同一把尺子，避免"收钱不收钱"各判一次）。
 func DomainGlossaryEnabled(st *store.Store, tid int64) bool {
 	if st == nil {
@@ -141,6 +165,37 @@ func DomainGlossaryEnabled(st *store.Store, tid int64) bool {
 	}
 	e := &Engine{St: st}
 	return e.domainGlossaryEnabled(tid)
+}
+
+// PrepareTicketGlossary 文本工单链（orchestrator）的入口：按**整单样本 + 全部目标语种**判一次域。
+//
+// ★ 2026-10-30 补：文本工单链此前**完全不读领域词表**（只有即时/工作台链与文件/图片链读），
+// 现网读数＝同一次探针里即时链 2 行 `domain_glossary`、文本工单腿 0 行。
+//
+// 为什么判定放在调用方这一层、而不塞进批量层（`BatchTranslateMarkedOpts`）：
+// 文本工单是**逐语种循环调批量层**（`orchestrator/text_lines.go` 的 `for _, lc := range p.TargetLangs`）。
+// 判定放进批量层就会让同一个样本被判 N 次（N＝语种数）——既重复花判定成本（每单每日上限 500 的张数
+// 按语种数被吃掉），又撞上「profile 的缓存键只有 (租户,样本)、不含语种」这个事实：
+// 第二次起拿到的是**只含首语种标题**的那一份，后面几个语种词表恒空且不报错。
+// ⇒ 判定只在这里做一次，循环里各自 `TermsFor(lc)` 取本语种那几条。
+//
+// 入参 sample 由本函数截到 2000 字符（与文件链 `sampleTexts(texts, 2000)` 同口径）：
+// 判域只需开头这一截，整篇送进模型既贵又会把判定带偏。
+// 返回 nil 表示**不做**（开关关／平台上下文／样本太短／判定失败／超日上限）——调用方 fail-open 照常翻。
+func (e *Engine) PrepareTicketGlossary(ctx context.Context, sample string, langs []string) (*domain.Profile, int) {
+	if e == nil || len(langs) == 0 {
+		return nil, 0
+	}
+	tid := e.tenantID(ctx)
+	if !e.domainGlossaryEnabled(tid) {
+		return nil, 0
+	}
+	lim := e.glossaryLimits("text")
+	p := e.glossaryProfile(ctx, tid, "text", sampleTexts([]string{sample}, 2000), langs, lim)
+	if p == nil {
+		return nil, 0
+	}
+	return p, lim.MaxTerms
 }
 
 // GlossaryMaxTerms 预估腿用：某条链每语种词表上限（配置优先，默认见 domain.*Limits）。

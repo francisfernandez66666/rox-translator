@@ -16,6 +16,7 @@ package orchestrator
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 )
@@ -167,5 +168,51 @@ func TestTranslateTextPerLineRetranslatesBadLine(t *testing.T) {
 	}
 	if got[0] != reused {
 		t.Errorf("同批里的正确行不该被连带覆盖，实得 %q（期望 %q）", got[0], reused)
+	}
+}
+
+// TestTextTicketWireGlossary 文本工单链必须真把领域词表接进来，且**两条腿都要吃到**。
+//
+// ★ 2026-10-30 之前这条链**完全不读词表**：同一次现网探针里即时链有 domain_glossary、文本工单腿 0 行。
+// 这条链有两条腿，**任何一条漏了都表现为"这个特性对文本客户不存在"**：
+//
+//	· 多行 ⇒ translateTextPerLine（逐行、走批量层）；
+//	· 单段落 / text_ticket_per_line=0 ⇒ TranslateLangsInto（整篇、走 singleLangRaw）。
+//
+// 所以判定必须落在**分叉之前**、挂进 ctx（整篇腿本来就读 ctx；批量层在 opts 为空时回落 ctx）。
+//
+// 四腿判据：
+//
+//	① 判定在 workflow.go 里、参数是本单源文与**全部**目标语种；
+//	② 判定结果挂进 ctx（`engine.WithGlossary`）——只算不挂等于没接；
+//	③ 顺序：判定必须排在 `translateTextPerLine` 之前（排在后面就只覆盖整篇腿）；
+//	④ 负向：不许在 text_lines.go 里再出现"只给批量腿传 opts"那半截——两套机制并存，
+//	   下次有人改一处就会漏一处（本仓「多把尺子」的老形态）。
+func TestTextTicketWireGlossary(t *testing.T) {
+	raw, err := os.ReadFile("workflow.go")
+	if err != nil {
+		t.Fatalf("读 workflow.go 失败：%v", err)
+	}
+	wf := string(raw)
+	for _, want := range []string{
+		"PrepareTicketGlossary(ctx, p.SourceText, p.TargetLangs)",
+		"engine.WithGlossary(ctx, prof, maxTerms)",
+	} {
+		if !strings.Contains(wf, want) {
+			t.Fatalf("文本工单链没接上领域词表：workflow.go 缺 %q", want)
+		}
+	}
+	callAt := strings.Index(wf, "PrepareTicketGlossary(")
+	lineAt := strings.Index(wf, "w.translateTextPerLine(ctx, p)")
+	if callAt < 0 || lineAt < 0 || callAt > lineAt {
+		t.Fatalf("判定必须放在两条腿分叉之前（call=%d line=%d）：放后面就只覆盖整篇腿，逐行腿永远拿不到", callAt, lineAt)
+	}
+
+	tlRaw, err := os.ReadFile("text_lines.go")
+	if err != nil {
+		t.Fatalf("读 text_lines.go 失败：%v", err)
+	}
+	if strings.Contains(string(tlRaw), "bopts.Glossary") {
+		t.Fatalf("text_lines.go 里又出现了自带的词表传递：词表的唯一载体是 ctx（批量层回落），两套并存迟早漏一处")
 	}
 }
