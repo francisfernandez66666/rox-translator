@@ -148,7 +148,8 @@ ssh -p "$PORT" "root@$HOST" \
 
 echo "===== P3 读回三域响应头（判据＝三条口径真出现在线上）====="
 ssh -p "$PORT" "root@$HOST" bash -s <<'REMOTE'
-for u in "https://langcross.lexicorn.cn/" "https://rox-test.lexicorn.cn/" "https://rox.lexicorn.cn/"; do
+# ★ 2026-10-31：rox.lexicorn.cn 已退役（410），安全头基线改在通配块活体面 tenant-probe 上验。
+for u in "https://langcross.lexicorn.cn/" "https://rox-test.lexicorn.cn/" "https://tenant-probe.lexicorn.cn/"; do
   h=$(curl -sI --max-time 20 "$u" | tr -d '\r')
   pp=$(printf '%s\n' "$h" | grep -i '^permissions-policy:' | head -1)
   csp=$(printf '%s\n' "$h" | grep -i '^content-security-policy:' | head -1)

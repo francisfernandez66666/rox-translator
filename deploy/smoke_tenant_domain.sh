@@ -30,9 +30,14 @@
 #   T7 HTTP ⇒ HTTPS：http:// 必须 301/308 跳 https。
 #   T8 反向不串号：主站首页不得出现租户 brand_name（主站被租户域「污染」是另一类事故）。
 #
+# ★ 2026-10-31 用户令：`rox.lexicorn.cn` 已退役（Caddy 对该 Host 直接 `respond 410`）。
+#   它**不再是**「已登记租户域」的验收靶子；默认 `TENANT_BASE` 留空，T1/T2/T4/T5/T6 在没有
+#   现役租户域时**跳过（NOT_APPLICABLE，不计数）**，退役行为由 **T0 反向锁**钉住（必须 410 且
+#   不返回站点内容）。将来有新的现役租户域时，显式传 TENANT_BASE/EXPECT_TENANT_ID 即可恢复那五段。
+#
 # 用法（全部只读，纯 GET，不写库不改配置）：
-#   bash deploy/smoke_tenant_domain.sh                                   # 用下面默认值（现网口径）
-#   TENANT_BASE=https://rox.lexicorn.cn EXPECT_TENANT_ID=1 EXPECT_BRAND_NAME=极石 \
+#   bash deploy/smoke_tenant_domain.sh                                   # 现网口径：T0/T3/T7/T8 全跑
+#   TENANT_BASE=https://<现役租户域> EXPECT_TENANT_ID=<id> EXPECT_BRAND_NAME=<名> \
 #     UNREGISTERED_BASE=https://zzz-nodata-0w.lexicorn.cn bash deploy/smoke_tenant_domain.sh
 #   SKIP_ASSETS=1 bash deploy/smoke_tenant_domain.sh                     # 只跑路由/品牌判据（离线快检）
 #
@@ -44,7 +49,10 @@
 # ============================================================================
 set -uo pipefail
 
-TENANT_BASE="${TENANT_BASE:-https://rox.lexicorn.cn}"
+# 现役租户域（★ 2026-10-31 起默认空：默认租户的 rox 已退役；没有靶子就跳过 T1/T2/T4/T5/T6）
+TENANT_BASE="${TENANT_BASE:-}"
+# 退役域：源站必须对它回 410（T0 反向锁；退役不是"删 DNS 就完事"，源站行为要可判）
+RETIRED_BASE="${RETIRED_BASE:-https://rox.lexicorn.cn}"
 UNREGISTERED_BASE="${UNREGISTERED_BASE:-https://zzz-nodata-0w.lexicorn.cn}"
 MAIN_BASE="${MAIN_BASE:-https://langcross.lexicorn.cn}"
 EXPECT_TENANT_ID="${EXPECT_TENANT_ID:-1}"
@@ -66,8 +74,11 @@ inc() { echo "  ⏳ $1"; UNMEASURED=$((UNMEASURED + 1)); }
 # host_of 剥掉协议与端口，得到探针要用的域名
 host_of() { echo "$1" | sed -E 's#^[a-z]+://##; s#[:/].*$##'; }
 TENANT_HOST=$(host_of "$TENANT_BASE")
+RETIRED_HOST=$(host_of "$RETIRED_BASE")
 UNREG_HOST=$(host_of "$UNREGISTERED_BASE")
 MAIN_HOST=$(host_of "$MAIN_BASE")
+# B_NAME1/T1 读到的租户品牌名：没有现役租户域时它保持空（T3/T8 据此判定参照物是否存在）。
+B_NAME1=""
 
 # ★ 2026-10-28：公网这一跳（跨境 Cloudflare→Caddy）实测会偶发 `curl: (52) Empty reply`／`(28)`，
 #   而它和"配置坏了"在脚本里长得一模一样（都是 code=000）。按 AGENTS §一·5 那条口径分两档：
@@ -149,9 +160,27 @@ print("" if v is None else v)
 PY
 }
 
-echo "==> 租户品牌域名冒烟：${TENANT_HOST}（对照 $UNREG_HOST ／ ${MAIN_HOST}）"
+echo "==> 租户品牌域名冒烟：现役域=${TENANT_HOST:-<未配置>}（退役域 ${RETIRED_HOST} ／ 对照 $UNREG_HOST ／ ${MAIN_HOST}）"
+
+# ---- T0 退役域：必须 410 且不返回站点内容（★ 2026-10-31 用户令）----------------
+# 为什么要有这一腿：rox.lexicorn.cn 已按用户令退役（Caddy 精确块 `respond ... 410`）。
+# 退役的判据不是"配置里有那一行"，而是**公网真的拿不到站点内容**——所以这里对公网真拨一次：
+#   ① 状态码必须是 410（200＝又有人把退役块删了/写回通配块；404/000 是另一种形态，都要红）；
+#   ② 正文必须点名 retired（防止 410 被别的错误页复用，把"谁挂了"读成"已退役"）。
+if [ -n "$RETIRED_BASE" ]; then
+  R0=$(fetch "$RETIRED_BASE/")
+  code0=$(echo "$R0" | cut -d'|' -f1); ok0=$(echo "$R0" | cut -d'|' -f5)
+  if [ "$ok0" != "1" ]; then
+    inc "T0 退役域这一跳没走完（重拨 ${CURL_RETRY} 次，末次 code=${code0}）⇒ 稍后复跑"
+  elif [ "$code0" = "410" ] && grep -qi 'retired' "$BODY"; then
+    ok "T0 退役域 $RETIRED_HOST ⇒ 410 且正文点名 retired（不再返回站点内容）"
+  else
+    bad "T0 退役域 $RETIRED_HOST 异常：code=$code0 body=$(head -c 80 "$BODY" | tr '\n' ' ')（期望 410 + retired）⇒ 退役块被删/被通配块抢走"
+  fi
+fi
 
 # ---- T1 租户域首页：后端直出 + 注入体归属正确 --------------------------------
+if [ -n "$TENANT_BASE" ]; then
 R1=$(get_code "$TENANT_BASE/"); CODE1=$(echo "$R1" | cut -d'|' -f1); COK1=$(echo "$R1" | cut -d'|' -f2)
 HITS1=$(grep -c '__BRANDING__' "$BODY" || true)
 B_TID1=$(python3 - "$BODY" <<'PY'
@@ -263,6 +292,10 @@ PY
   [ "$got" -ge 1 ] || echo "  ℹ️  T2 本轮没有可验的品牌件（该租户两张图都未配置）——属正常空值分支，不算红"
 fi
 
+else
+  echo "  — T1/T1b/T2 跳过：未配置现役租户域（默认租户域 rox 已退役；退役行为见 T0）"
+fi
+
 # ---- T3 未登记子域负向：不得串到任何租户品牌 ----------------------------------
 # ★ 2026-10-28 判据修正（原口径「brand_name 必须为空」自 10-23 起**结构性恒红**）：
 #   平台主站把 brand_name 写进 `system_config.platform_branding` 之后（现网 2026-10-23 21:27 写入
@@ -318,6 +351,7 @@ else
 fi
 
 # ---- T4 接口链诚实：401 语义 + JSON 形状（证明 API 反代落到后端）--------------
+if [ -n "$TENANT_BASE" ]; then
 R4a=$(get_code "$TENANT_BASE/api/me/tasks"); C4=$(echo "$R4a" | cut -d'|' -f1); ok4a=$(echo "$R4a" | cut -d'|' -f2)
 if [ "$ok4a" != "1" ]; then
   inc "T4a /api/me/tasks 这一跳没走完（重拨 ${CURL_RETRY} 次，末次 code=${C4}）⇒ 稍后复跑"
@@ -371,14 +405,19 @@ else
 fi
 rm -f /tmp/.std_h.$$
 
+else
+  echo "  — T4/T5/T6 跳过：未配置现役租户域（默认租户域 rox 已退役）"
+fi
+
 # ---- T7 HTTP ⇒ HTTPS ---------------------------------------------------------
 # 注意：这一腿**不能用 -L**（跟随后就看不到 308 了），所以自带走一条只认传输失败的重拨。
+T7_HOST="${TENANT_HOST:-$RETIRED_HOST}"
 C7=000
 for i in $(seq 1 "$CURL_RETRY"); do
   if [ "$i" = "1" ]; then
-    C7=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$CURL_MAX_TIME" "http://$TENANT_HOST/"); rc7=$?
+    C7=$(curl -s -o /dev/null -w '%{http_code}' --max-time "$CURL_MAX_TIME" "http://$T7_HOST/"); rc7=$?
   else
-    C7=$(curl -s -o /dev/null --http1.1 -w '%{http_code}' --max-time "$CURL_MAX_TIME" "http://$TENANT_HOST/"); rc7=$?
+    C7=$(curl -s -o /dev/null --http1.1 -w '%{http_code}' --max-time "$CURL_MAX_TIME" "http://$T7_HOST/"); rc7=$?
   fi
   [ "$rc7" = "0" ] && [ "$C7" != "000" ] && break
 done
@@ -389,6 +428,9 @@ else
 fi
 
 # ---- T8 反向不串号：主站首页不得出现该租户品牌名 ------------------------------
+if [ -z "$B_NAME1" ]; then
+  echo "  — T8 跳过：无现役租户品牌名可比对（T1 未跑或无品牌名）"
+else
 R8=$(fetch "$MAIN_BASE/"); code8=$(echo "$R8" | cut -d'|' -f1); ok8=$(echo "$R8" | cut -d'|' -f5)
 if [ "$ok8" != "1" ]; then
   # 半截体里"没出现租户品牌"会读成"不串号"——这条负向锁不能吃半截体
@@ -396,12 +438,13 @@ if [ "$ok8" != "1" ]; then
 elif [ -n "$B_NAME1" ] && grep -qF "$B_NAME1" "$BODY"; then
   bad "T8 主站首页出现租户品牌「${B_NAME1}」⇒ 平台根域名被套上了租户品牌（应永远回平台默认）"
 else
-  ok "T8 主站首页不含租户品牌「${B_NAME1:-（无品牌名可比对）}」（反向不串号）"
+  ok "T8 主站首页不含租户品牌「${B_NAME1}」（反向不串号）"
+fi
 fi
 
 echo ""
 echo "============================================================"
-echo "smoke_tenant_domain｜租户域 ${TENANT_HOST}｜PASS=$PASS FAIL=$FAIL UNMEASURED=$UNMEASURED"
+echo "smoke_tenant_domain｜现役域 ${TENANT_HOST:-<无>}／退役域 ${RETIRED_HOST}｜PASS=$PASS FAIL=$FAIL UNMEASURED=$UNMEASURED"
 echo "============================================================"
 # ★ 2026-10-28 三态退出码：红项优先（1），其次"没测到"（2），全绿才 0。
 #   发版判据＝FAIL=0 **且** UNMEASURED=0；拿到 2 就是这一跳没走完，复跑一次再判，不许当通过。

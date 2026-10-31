@@ -103,9 +103,14 @@ PY
       *"/run/"*|*"/opt/"*) bad "F3 控制面负载出现内部路径（同 dispatch 纪律：只许状态词与计数）" ;;
       *) ok "F3 负载无内部路径（负向腿）" ;;
     esac
-    MODEL_LOADS=$(printf '%s' "$STATUS_JSON" | "$PY" -c 'import json,sys;print(int(json.load(sys.stdin).get("model_loads",-1)))' 2>/dev/null || echo -1)
-    COLD_COUNT=$(printf '%s' "$STATUS_JSON" | "$PY" -c 'import json,sys;print(int(json.load(sys.stdin).get("cold_count",-1)))' 2>/dev/null || echo -1)
-    CAPS_N=$(printf '%s' "$STATUS_JSON" | "$PY" -c 'import json,sys;print(len(json.load(sys.stdin).get("caps") or {}))' 2>/dev/null || echo -1)
+    # ★ 2026-10-31 修正（判据自伤）：协议帧的**外层**只有 ok/stdout/stderr/…，
+    #   计数在 `stdout` 那个 JSON 字符串里（capsvc.py 的 _svc_status 输出）。旧写法直接
+    #   对外层取 model_loads ⇒ 恒得 -1、caps 恒 0，于是"服务好好的"被读成"注册表为空 +
+    #   冷启动读数不可信"（两条 BAD 全是判据自己的错）。
+    INNER=$(printf '%s' "$STATUS_JSON" | "$PY" -c 'import json,sys;print(json.load(sys.stdin).get("stdout",""))' 2>/dev/null || echo "")
+    MODEL_LOADS=$(printf '%s' "$INNER" | "$PY" -c 'import json,sys;print(int(json.load(sys.stdin).get("model_loads",-1)))' 2>/dev/null || echo -1)
+    COLD_COUNT=$(printf '%s' "$INNER" | "$PY" -c 'import json,sys;print(int(json.load(sys.stdin).get("cold_count",-1)))' 2>/dev/null || echo -1)
+    CAPS_N=$(printf '%s' "$INNER" | "$PY" -c 'import json,sys;print(len(json.load(sys.stdin).get("caps") or {}))' 2>/dev/null || echo -1)
     echo "F3 model_loads=${MODEL_LOADS} cold_count=${COLD_COUNT} caps=${CAPS_N}"
     if [ "$CAPS_N" -ge 1 ] 2>/dev/null; then ok "F3 能力注册表非空"; else bad "F3 能力注册表为空（caps=${CAPS_N}）"; fi
     # F5 冷启动不变量
