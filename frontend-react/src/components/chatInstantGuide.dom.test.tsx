@@ -1,7 +1,7 @@
 // ============================================================================
 // components/chatInstantGuide.dom.test.tsx — 即时翻译免费档的「墙」与徽标（★ 2026-10-30 组 4 D 段）
 //
-// 锁什么（对应方案 G17–G19 / G22 / G24）：
+// 锁什么（对应方案 G17–G19 / G22 / G24 / G12 / N6）：
 //   ① 首屏零付费字样（W-2 / G22）：明确免费的账号、单语种、未撞墙时，
 //      **聊天区 DOM 不出现「积分/充值/付费/升级/开通」**；正向对照「免费」徽标必须在位
 //      （没有这条对照，负向腿就是永真空转——AGENTS 反复强调的那条）。
@@ -10,6 +10,10 @@
 //   ③ 工单按钮真的接线（G19）：点击后写一次性交接槽（sessionStorage）并 navigate('/tickets')。
 //   ④ 升级卡三分钟节流（W-5 / G24）：同一会话第二次撞墙不再弹；dismissed 不落库。
 //   ⑤ 多语种同出是付费权益（G12）：选 ≥2 个目标语种时就地给「按积分计费」口径。
+//   ⑨ ★ 2026-10-31 补：G12 只是"提示在位"，N6 要的是**不静默收费**——付费档的预估区间
+//      必须在按发送之前就渲染出来，且请求带模式档与 ui_lang（AGENTS §一·5④ 那一把尺子）。
+//   ⑩ ★ 同批补 G24 的第二腿：节流**不许跨会话**（写进 localStorage 的实现在 ⑦ 上照样绿，
+//      只有这一条会红）。
 //
 // 与 ChatWindow.image.dom.test.tsx 的分工：那份锁**图片结果卡**与能力门；
 // 本文件只锁「墙的出路」与新文案口径，桩集合因此单独一份（同族做法见 micCapability）。
@@ -29,6 +33,10 @@ const mocks = vi.hoisted(() => ({
   cap: { tts: null as boolean | null, langs: null as string[] | null, asr: null as boolean | null, ocr: true as boolean | null },
   translate: vi.fn(),
   navigate: vi.fn(),
+  // 预估桩（★ N6）：默认 null＝"取不到预估就不显示"，需要判预估上屏的那条腿自己改返回值。
+  // 形参必须显式写出来：`vi.fn(async () => null)` 会让 tsc 把 mock.calls 的元素推成空元组，
+  // 于是"读第 2/4 个入参"这条判据在类型检查期就红（⑨ 判的正是入参形状）。
+  estimate: vi.fn(async (_text: string, _langs: string[], _mode: string, _uiLang: string): Promise<any> => null),
   chat: {
     messages: [] as any[],
     isLoading: false,
@@ -66,7 +74,7 @@ vi.mock('@/api', () => ({
   myPackage: apiMocks.myPackage, meContext: apiMocks.meContext,
   getAuthToken: () => 'tok-under-test', getActiveTenantId: () => 1,
 }))
-vi.mock('@/api/translate', () => ({ estimateTranslation: vi.fn(async () => null) }))
+vi.mock('@/api/translate', () => ({ estimateTranslation: mocks.estimate }))
 vi.mock('./MessageBubble', () => ({ default: () => <div className="bubble-row" /> }))
 vi.mock('./modals', () => ({ FeedbackModalFromMessage: () => null }))
 vi.mock('@/components/LangMultiSelect', () => ({
@@ -209,5 +217,57 @@ describe('即时翻译免费档：首屏口径与墙的出路', () => {
     const hint = screen.getByTestId('chat-multi-paid')
     expect(hint.textContent).toContain('多语种同出为付费权益')
     expect(hint.getAttribute('title')).toContain('仅支持 1 个目标语种')
+  })
+
+  it('⑨ 多语种不静默收费（N6）：付费档预估在发送前就上屏，且请求带 ui_lang', async () => {
+    // ★ 2026-10-31 补 G12 的**另一半**：⑧ 只证明"提示在位"，没证明"扣多少在按发送之前就给了"。
+    //   N6 的原话是「≥2 语种 ⇒ 付费档**且响应/前端有预估**（ui_lang 必送）」，
+    //   静默收费（扣完才知道）正是这条点名要抓的形态，所以这里三件一起判：
+    //   ① 预估请求真发出去了，且吃的是**本次选中的两个语种**（分档判据读的就是语种数）；
+    //   ② 带模式档与界面语言 ui_lang——中/英界面是两套提示词，不送就只能按中文那套量
+    //      （AGENTS §一·5④：预估与实扣同尺，缺这一维英文界面访客看到偏高区间）；
+    //   ③ 区间真的渲染进 `chat-estimate`（"发出去了但界面没显示"依然是静默收费）。
+    mocks.chat.selectedLangs = ['en', 'ja']
+    mocks.estimate.mockResolvedValue({
+      success: true, points_min: 12, points_max: 30, cost_sentences_approx: 8, points_balance: 500, llm_queue_depth: 0,
+    })
+    const { container } = renderWindow()
+    const input = container.querySelector('[data-testid="translate-input"]') as HTMLTextAreaElement
+    expect(input, '工作台输入框未渲染').toBeTruthy()
+    fireEvent.change(input, { target: { value: '请在傍晚前把设备送到客户手上。' } })
+    // 预估有 600ms 防抖（打字停顿量级），所以这里等到它真被调用为止，不假设同一帧出结果
+    await waitFor(() => expect(mocks.estimate).toHaveBeenCalled(), { timeout: 5000 })
+    const args = mocks.estimate.mock.calls[0]
+    expect(args[1], `预估必须带本次的两个目标语种（实到 ${JSON.stringify(args[1])}）`).toEqual(['en', 'ja'])
+    expect(['fast', 'pro']).toContain(args[2])
+    expect(args[3], '预估必须把界面语言当 ui_lang 送出去（缺它＝按中文提示词量英文界面的钱）').toBe('zh')
+    const est = screen.getByTestId('chat-estimate')
+    const estText = (est.textContent || '').replace(/[,\s]/g, '')
+    expect(/12.{0,40}30/.test(estText), `预估区间没上屏：${est.textContent}`).toBeTruthy()
+    expect(est.textContent).toContain('积分')
+    // 同一时刻两处面必须在位：付费提示（⑧）与预估区间——只剩一个是"半个口径"
+    expect(screen.getByTestId('chat-multi-paid'), '多语种付费提示与预估区间只出了一处').toBeTruthy()
+  })
+
+  it('⑩ 升级卡节流的会话边界（G24 第二腿）：刷新页面即按新会话计，仍会弹', async () => {
+    // ⑦ 判的是"同一会话内第二次撞墙不再弹"；G24 还有第二条腿——**节流不许跨会话**。
+    //   实现用模块级内存量（lib/instantUpsell.ts），整页刷新＝模块重新初始化＝归零；
+    //   这里用测试专用入口 resetInstantUpgradeThrottle() 演这一次刷新，再重挂一次工作台。
+    //   射程自证：把 lastShownAt 写进 localStorage 的实现能在 ⑦ 上照样绿（模块变量归零
+    //   清不掉那份持久态），只有这一条腿会红——而"关掉一次就永远不再提示"正是 W-5 点名要防的另一头。
+    await rejectWith('too_large')
+    const { container } = renderWindow()
+    pickImage(container)
+    await waitFor(() => expect(screen.getByTestId('chat-instant-upgrade')).toBeTruthy())
+    // 先收起这一次（组件态清干净），再演"刷新页面"
+    fireEvent.click(screen.getByText('稍后'))
+    await waitFor(() => expect(screen.queryByTestId('chat-instant-upgrade')).toBeNull())
+
+    resetInstantUpgradeThrottle()
+    cleanup()
+    const c2 = renderWindow()
+    pickImage(c2.container)
+    await waitFor(() => expect(screen.getByTestId('chat-instant-guide')).toBeTruthy(), { timeout: 5000 })
+    expect(screen.getByTestId('chat-instant-upgrade'), '新会话（刷新页面）后升级卡再不出现 ⇒ 节流跨会话了').toBeTruthy()
   })
 })

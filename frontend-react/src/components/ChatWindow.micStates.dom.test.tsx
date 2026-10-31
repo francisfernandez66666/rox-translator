@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   asrText: '你好世界',
   // 停止后是否挂住 final（S3 要观察"识别中"那一跳）
   holdStop: false,
+  // ★ S7（G11）：引擎 start 收到的 maxSec 流水（档位接线唯一可读的证据）
+  seenMaxSec: [] as number[],
   chat: {
     messages: [] as any[], isLoading: false, isBackendOnline: true, isBackendLoading: false,
     isBackendChecking: false, errorMessage: '', selectedLangs: ['en'] as string[],
@@ -40,9 +42,14 @@ vi.mock('@/hooks/useChat', async () => {
   const { createContext } = await import('react')
   return { useChat: () => mocks.chat, PkgRefreshCtx: createContext<unknown>(null) }
 })
+const apiMocks = vi.hoisted(() => ({
+  // 返回值显式放宽成 any：S7 要按用例改回**带 instant_tier 的形态**，
+  // 而推成 {success:boolean} 的窄类型会让那条入参在 tsc 期就红（判据本身没变）。
+  myPackage: vi.fn(async (): Promise<any> => ({ success: false })),
+  meContext: vi.fn(async (): Promise<any> => ({ success: false })),
+}))
 vi.mock('@/api', () => ({
-  myPackage: vi.fn(async () => ({ success: false })),
-  meContext: vi.fn(async () => ({ success: false })),
+  myPackage: apiMocks.myPackage, meContext: apiMocks.meContext,
   getAuthToken: () => '', getActiveTenantId: () => 0,
 }))
 vi.mock('@/api/translate', () => ({ estimateTranslation: vi.fn(async () => null) }))
@@ -53,7 +60,9 @@ vi.mock('@/api/asrEngines', () => ({
   getAsrEngine: async () => ({
     kind: 'server',
     isAvailable: async () => true,
-    start: (h: { onState?: (s: string) => void }) => {
+    start: (h: { onState?: (s: string) => void; maxSec?: number }) => {
+      // ★ S7：记下调用方按档传进来的时长上限（-1＝根本没传，那正是 G11 要抓的形态）
+      mocks.seenMaxSec.push(Number(h.maxSec ?? -1))
       if (mocks.emit !== 'silent') h.onState?.(mocks.emit)
       return {
         final: new Promise<string>((res) => {
@@ -80,6 +89,7 @@ vi.mock('@/components/ModeToggle', () => ({ default: () => <div data-stub="mode-
 
 import ChatWindow from './ChatWindow'
 import { PkgRefreshCtx } from '@/hooks/useChat'
+import { applyInstantCaps, resetInstantCaps } from '@/lib/instantTier'
 
 function renderWindow() {
   return render(
@@ -107,6 +117,10 @@ describe('麦克风四态 · 录音/识别中/回填/空结果（M7）', () => {
     mocks.emit = 'recording'
     mocks.asrText = '你好世界'
     mocks.holdStop = false
+    mocks.seenMaxSec.length = 0
+    apiMocks.myPackage.mockResolvedValue({ success: false })
+    apiMocks.meContext.mockResolvedValue({ success: false })
+    resetInstantCaps()
     mocks.chat.sendMessage.mockClear()
     delete (globalThis as any).__resolveMic
     ;(Element.prototype as any).scrollTo = (Element.prototype as any).scrollTo || vi.fn()
@@ -172,6 +186,55 @@ describe('麦克风四态 · 录音/识别中/回填/空结果（M7）', () => {
     expect(await firstToast()).toBe(t('chat.micNoSpeech'))
     expect((getByTestId('translate-input') as HTMLTextAreaElement).value).toBe('')
     expect(mocks.chat.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('S7 录音时长按档传进引擎（G11）：免费 30／付费 60／运营改档即跟（30/60 不是写死的）', async () => {
+    // ① 默认（档位取不到＝保守按免费档）⇒ 引擎必须收到 30
+    const a = renderWindow()
+    await waitFor(() => expect(a.getByTestId('mic-btn')).toBeTruthy())
+    // 地面态的 title 必须先读**点击之前**那一次：录音中它换成"录音中 Ns，点击停止"，
+    // 按下去之后再问就永远拿不到档位数字（这条判据会退化成恒红）。
+    expect(a.getByTestId('mic-btn').getAttribute('title'), '未录音时的 title 必须点名本档时长上限')
+      .toContain('30')
+    fireEvent.click(a.getByTestId('mic-btn'))
+    await waitFor(() => expect(mocks.seenMaxSec.length).toBeGreaterThan(0))
+    expect(mocks.seenMaxSec[0], '免费档必须把 30 秒传给引擎（0/-1＝压根没按档传）').toBe(30)
+    cleanup()
+
+    // ② 付费档 ⇒ 60 秒（这条判的是"分档"，不是"上限更大"那种单向锁）
+    apiMocks.meContext.mockResolvedValue({ success: true, instant_tier: 'paid' })
+    const b = renderWindow()
+    await waitFor(() => expect(b.getByTestId('mic-btn')).toBeTruthy())
+    fireEvent.click(b.getByTestId('mic-btn'))
+    await waitFor(() => expect(mocks.seenMaxSec.length).toBeGreaterThan(1))
+    expect(mocks.seenMaxSec[1], '付费档必须走 60 秒那一档').toBe(60)
+    cleanup()
+
+    // ③ 运营把硬顶改成 90 秒 ⇒ 同一个界面立刻跟到新档（S2 跨面同尺；
+    //    写死 30/60 的实现在这一枪必红——那正是"运营调档、客户还被按旧档掐"的现网形态）
+    applyInstantCaps({ audio_max_sec: 90, free_audio_max_sec: 45 })
+    const c = renderWindow()
+    await waitFor(() => expect(c.getByTestId('mic-btn')).toBeTruthy())
+    fireEvent.click(c.getByTestId('mic-btn'))
+    await waitFor(() => expect(mocks.seenMaxSec.length).toBeGreaterThan(2))
+    expect(mocks.seenMaxSec[2], 'caps 现值必须覆盖出厂默认（付费档 90 秒）').toBe(90)
+  })
+
+  it('S8 到点前三秒的倒计时与告警色（G11 第二半：不许到点才让人发现）', async () => {
+    // 把免费档压到 4 秒（经**现读覆盖层**，不改产品默认），这样第一次 1s 心跳就已进入"剩 3 秒"那一档。
+    // 为什么用覆盖而不是等 27 秒：判据问的是"剩余 ≤3 时换不换脸"，与出厂数字无关；
+    // 等 27 秒只会把这条腿变成 flaky（AGENTS §三「判据过时/预算」那一族的反面教材）。
+    applyInstantCaps({ free_audio_max_sec: 4 })
+    const { getByTestId } = renderWindow()
+    await waitFor(() => expect(getByTestId('mic-btn')).toBeTruthy())
+    fireEvent.click(getByTestId('mic-btn'))
+    await waitFor(() => expect(getByTestId('mic-btn').getAttribute('aria-label')).toBe(t('chat.micStop')))
+    expect(getByTestId('mic-elapsed').textContent, '第 0 拍还是常规读数（不该一上来就告警）').toBe('0s')
+    await waitFor(() => {
+      const el = getByTestId('mic-elapsed')
+      expect(el.className, '剩余 ≤3 秒必须切到告警色 class（cw-mic-warn）').toContain('cw-mic-warn')
+      expect(el.textContent, '剩余 ≤3 秒必须改念倒计时，不再是"已录几秒"').toBe(tpl('chat.micCountdown', { sec: 3 }))
+    }, { timeout: 6000 })
   })
 
   it('S6 开麦被拒 ⇒ 回到地面态并提示权限（不是识别失败）', async () => {

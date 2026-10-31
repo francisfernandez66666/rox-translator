@@ -32,7 +32,7 @@ MODE="${1:-}"
 case "$MODE" in
   --status|--apply) ;;
   ""|-h|--help) awk '/^set -uo/{exit} {print}' "$0"; exit 0 ;;
-  *) echo "未知参数：$MODE（--status／--apply）" >&2; exit 2 ;;
+  *) echo "未知参数：${MODE}（--status／--apply）" >&2; exit 2 ;;
 esac
 
 fail() { echo "BAD  $*" >&2; FAIL=$((FAIL + 1)); }
@@ -44,7 +44,7 @@ current() {
   awk -F= -v k="$KEY_NAME" '$1==k {sub(/^[^=]*=/, ""); print; exit}' "$1" 2>/dev/null
 }
 
-say "===== 助手画像密钥（$KEY_NAME）====="
+say "===== 助手画像密钥（${KEY_NAME}）====="
 rexisting=""
 for f in "${ENV_FILES[@]}"; do
   if [ ! -f "$f" ]; then
@@ -59,9 +59,9 @@ for f in "${ENV_FILES[@]}"; do
   v=$(current "$f")
   if [ -n "$v" ]; then
     [ -z "$rexisting" ] && rexisting="$v"
-    echo "OK   $f：$KEY_NAME 行数=$n 长度=${#v}"
+    echo "OK   ${f}：${KEY_NAME} 行数=${n} 长度=${#v}"
   else
-    echo "⏳   $f：$KEY_NAME 未配置（行数=$n）"
+    echo "⏳   ${f}：${KEY_NAME} 未配置（行数=${n}）"
   fi
 done
 
@@ -102,7 +102,7 @@ if not hit:
 open(path, "w", encoding="utf-8").write("\n".join(out) + "\n")
 PY
   chown root:root "$f" && chmod 600 "$f" || fail "权限修正 $f 失败"
-  echo "OK   $f 已写入（备份 $(basename "$f").bak.$TS）"
+  echo "OK   ${f} 已写入（备份 $(basename "$f").bak.${TS}）"
 done
 
 for u in "${UNITS[@]}"; do

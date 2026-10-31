@@ -1248,7 +1248,9 @@ export function ArtifactGroup({
     try { await ticketArtifactDownload(ticketId, aid) } catch (e: any) { toastError(String(e?.message || t('tk.artifactExpired'))) } finally { setBusy(false) }
   }
   return (
-    <div style={{ borderTop: '1px solid var(--lc-border-card)', padding: '8px 0' }}>
+    // data-testid 供 e2e 数「分组数＝（文件 × 语种）数」：产物区里标题 div 与各分组都是直接子节点，
+    // 没有稳定锚点时 e2e 只能按 DOM 顺序猜（多一个标题就整体错位，是"假绿"的温床）。
+    <div data-testid="tk-artifact-group" style={{ borderTop: '1px solid var(--lc-border-card)', padding: '8px 0' }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 14, flexWrap: 'wrap' }}>
         <Icon n="doc" />
         <span style={{ color: 'var(--lc-text-2)', wordBreak: 'break-all' }}>{fileName || `#${group.fileId || '-'}`}</span>

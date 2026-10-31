@@ -59,6 +59,56 @@ describe('TicketArtifacts 两段式产物区', () => {
     expect(getByTestId('tk-original-pending').textContent).toBe(t('tk.originalUnavailable'))
   })
 
+it('多文件 × 多语种 ⇒ 每个（文件×语种）各一组、各有一套下载钮', () => {
+    const props: any = {
+      ticketId: 9,
+      status: 'completed',
+      files: [{ id: 3, file_name: '合同.pdf' }, { id: 4, file_name: '发票.docx' }],
+      lang: 'zh',
+      t,
+      groups: [
+        {
+          key: '3|en', fileId: 3, lang: 'en',
+          items: [
+            { id: 11, file_id: 3, lang: 'en', kind: 'md', name: '合同_en.md', size: 100, primary: false, degraded: false },
+            { id: 12, file_id: 3, lang: 'en', kind: 'original', name: '合同_en.pdf', size: 200, primary: true, degraded: false },
+          ],
+        },
+        {
+          key: '4|ja', fileId: 4, lang: 'ja',
+          items: [
+            { id: 13, file_id: 4, lang: 'ja', kind: 'md', name: '发票_ja.md', size: 100, primary: false, degraded: false },
+            { id: 14, file_id: 4, lang: 'ja', kind: 'original', name: '发票_ja.docx', size: 200, primary: true, degraded: false },
+          ],
+        },
+      ],
+    }
+    const { getAllByText, container } = render(<TicketArtifacts {...props} />)
+    // 两组成员各一枚：不是"整页只出现一次"的合并渲染。
+    expect(getAllByText(t('tk.downloadMd'))).toHaveLength(2)
+    expect(getAllByText(t('tk.downloadOriginal'))).toHaveLength(2)
+    expect(container.textContent || '').toContain('合同.pdf')
+    expect(container.textContent || '').toContain('发票.docx')
+  })
+
+  it('音频无配音（只有 md）⇒ 终态给明确原因，不是"失败"', () => {
+    const props: any = {
+      ticketId: 10,
+      status: 'completed',
+      files: [{ id: 5, file_name: '会议录音.mp3' }],
+      lang: 'zh',
+      t,
+      groups: [{
+        key: '5|en', fileId: 5, lang: 'en',
+        items: [{ id: 21, file_id: 5, lang: 'en', kind: 'md', name: '会议录音_en.md', size: 100, primary: false, degraded: true }],
+      }],
+    }
+    const { getByTestId, container } = render(<TicketArtifacts {...props} />)
+    expect(getByTestId('tk-original-pending').textContent).toBe(t('tk.originalUnavailable'))
+    expect(container.textContent || '').not.toContain('失败')
+    expect(getByTestId('tk-artifacts')).toBeTruthy()
+  })
+
   it('两件就绪 ⇒ 两个下载按钮都在；点预览出文本与截断提示', async () => {
     const props = mdOnly(false)
     props.groups[0].items.push({ id: 12, file_id: 3, lang: 'en', kind: 'original' as const, name: '合同_en.pdf', size: 9000, primary: true, degraded: false })

@@ -790,9 +790,11 @@ export default function ChatWindow() {
               三处消费方（platformBilling 单测／e2e translate_flow／e2e-manual 实时余额）已同批改锚。 */}
           {balance && <span data-testid="chat-balance">{tpl('chat.balanceTokens', { n: fmtPoints(balance.points), s: fmtNum(balance.approx) })}</span>}
           {orgBudget && <span>{tpl('chat.orgBudgetFmt', { name: orgBudget.name, used: fmtPoints(orgBudget.used), limit: fmtPoints(orgBudget.limit) })}</span>}
-          {/* 预估消耗：积分区间与 ≈句数都由后端直出（零换算）；low（预估上限已超余额）转琥珀加粗 */}
+          {/* 预估消耗：积分区间与 ≈句数都由后端直出（零换算）；low（预估上限已超余额）转琥珀加粗
+              data-testid 供 N6 判据锚定——「≥2 语种＝付费档」这条分档**不许静默收费**，
+              扣多少必须在按发送之前就在这条上露出来（chatInstantGuide.dom ⑨ 判的是"预估真的上屏"）。 */}
           {estimate && (
-            <span style={estimate.low ? { color: '#D29922', fontWeight: 600 } : undefined}>
+            <span data-testid="chat-estimate" style={estimate.low ? { color: '#D29922', fontWeight: 600 } : undefined}>
               {tpl('chat.estimateTokens', { min: fmtPoints(estimate.min), max: fmtPoints(estimate.max), s: fmtNum(estimate.s), bal: balance ? fmtPoints(balance.points) : '0' })}
               {estimate.low && ` · ${t('chat.estLow')}`}
             </span>

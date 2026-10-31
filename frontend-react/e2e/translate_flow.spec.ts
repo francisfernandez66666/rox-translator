@@ -260,4 +260,54 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
 
     await page.screenshot({ path: 'artifacts/tf1_translate_flow.png' });
   });
+  // ★ 2026-10-31 补 G12／N6／G19 的**浏览器面**（TF5）。
+  //   为什么这条必须挂在真 e2e 上，而不是只留在 jsdom（chatInstantGuide ⑧⑨）：
+  //   ① 语种选择器是真实组件（Popup 自绘面板），jsdom 那边把它整颗 mock 掉了 —— 
+  //      "选到第二个语种"这个动作本身在单测里从没发生过；
+  //   ② 预估条要等一次真 `/api/translation/estimate` 往返才有数字，单测里它是桩；
+  //   ③ 「不静默收费」这句话的完整意思＝**发送前**看得见区间 **且** 发送后真扣到钱，
+  //      两头都在同一条链上才成立（TF2 已扣过钱，这一条补的是"事前看得见"那一半）。
+  test('TF5 多语种＝付费档：预估在发送前上屏、扣费在完成后现身（G12/N6/G19）', async ({ page }) => {
+    test.setTimeout(300_000);
+    await login(page, USER, PASS);
+    await page.goto('/');
+
+    const input = page.getByTestId('translate-input');
+    await expect(input, '工作台输入框未渲染').toBeVisible({ timeout: 20000 });
+    // 对照组：单语种时**不该**有多语种付费提示（这条负向让下面的正向不是"永远在场"的假绿）
+    await expect(page.getByTestId('chat-multi-paid'), '单语种却出现多语种付费提示').toHaveCount(0);
+
+    // 勾第二个目标语种（面板开→选项行→收起，与 multilang_zip 的 pickLang 同一套锚点）
+    const trigger = page.getByTestId('lang-multi-trigger').first();
+    await trigger.click();
+    const panel = page.getByTestId('lang-multi-panel').first();
+    await expect(panel, '语种面板未打开').toBeVisible({ timeout: 10000 });
+    const opt = panel.locator('[role="option"]', { hasText: '日语' }).first();
+    await expect(opt, '语种面板里没有日语这一行').toBeVisible({ timeout: 10000 });
+    if ((await opt.getAttribute('aria-selected')) !== 'true') await opt.click();
+    await expect(opt).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
+    await trigger.click(); // 收起
+    await expect(page.getByTestId('lang-chips').locator('.tag-lang')).toHaveCount(2, { timeout: 10000 });
+
+    // ① 付费提示在位（选中的这一刻就该知道"这一档是要花钱的"）
+    const paidHint = page.getByTestId('chat-multi-paid');
+    await expect(paidHint, '选了 2 个语种却没有付费提示 ⇒ 分档在界面上是隐形的').toBeVisible({ timeout: 10000 });
+    expect(await paidHint.getAttribute('title'), '付费提示必须点名免费档的语种上限').toContain('1');
+
+    // ② 预估条：**点发送之前**就要有数字（防抖 600ms ＋一次往返，给 20s 预算）
+    await input.fill(`多语种付费回归 ${RUN_TAG}_multi：设备需在傍晚前送达客户。`);
+    const est = page.getByTestId('chat-estimate');
+    await expect(est, '≥2 语种时预估条未上屏 ⇒ 静默收费（N6 点名要抓的形态）').toBeVisible({ timeout: 20000 });
+    const estText = (await est.innerText()).trim();
+    expect(/[\d,]{2,}/.test(estText), `预估条里没有区间数字：${estText}`).toBeTruthy();
+
+    // ③ 发送 → 译文回流 → 本轮消耗读数 >0（钱真的扣了，不是只提示了一下）
+    await page.getByRole('button', { name: /^(发送|翻译|Send|Translate)$/ }).click();
+    await expect(page.locator('.translation-results'), '90s 内没有出现结果表').toHaveCount(1, { timeout: 90_000 });
+    await expect
+      .poll(() => readRoundCost(page), { timeout: 30_000, message: '完成后本轮消耗读数未出现或不大于 0' })
+      .toBeGreaterThan(0);
+    await page.screenshot({ path: 'artifacts/tf5_multilang_paid.png' });
+  });
+
 });

@@ -318,7 +318,16 @@ export function getAsrEngine(): Promise<AsrEngine> {
       }
     }
     return new ServerAsrEngine()
-  })()
+  })().then((eng) => {
+    // ★ N8（2026-10-31）：端侧引擎**不经过服务端**，所以"这一轮走的是哪条腿"只有这里能记账。
+    //   口径与方案一致：ondevice＝端侧 WASM，server＝服务端 /api/chat/asr。
+    //   只记一行、且随引擎缓存只出现一次（每次点录音刷一行等于把日志变成噪音）。
+    //   不含音频内容/用户标识（同 §一·12 的"只出状态词"纪律）。
+    if (typeof console !== 'undefined') {
+      console.info(`[asr-engine] engine=${eng.kind === 'wasm' ? 'ondevice' : 'server'}`)
+    }
+    return eng
+  })
   return cached
 }
 
