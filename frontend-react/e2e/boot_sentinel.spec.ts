@@ -63,3 +63,47 @@ test('反向对照：入口脚本真失败 ⇒ 出全屏面板并点明脚本没
     { message: '确定失效时骨架没撤：错误面板背后还在转圈（用户会以为再等等就好）', timeout: 10000 })
     .toBe(0)
 })
+
+// ★★ L3（2026-11-01，专打 DEF-P0-01 那个早退洞）：慢链横幅在位时，封顶**必须升级成全屏面板**，
+//   骨架必须随之撤掉；放行入口后界面挂载，面板与骨架**都要撤干净**。
+//
+// 为什么 L1/L2 碰不到这个缺陷（写在这里，免得下一位以为"两条腿已覆盖哨兵全部形态"）：
+//   · L1 入口 10s 到达 ⇒ 在 60s 封顶之前就挂载了，走的是 `#root` 非空那条撤销分支；
+//   · L2 入口被 abort ⇒ `show('panel')` 是**第一次**调用，`__boot_fail` 还不存在 ⇒ 不会被早退吞掉。
+//   只有"先出 slow 横幅、再到封顶"这一条路径会撞上 `if (box) return`，所以必须专门造一条腿。
+//
+// 时间用 `window.__LC_BOOT_CFG` 压到秒级（只影响这一个 context，生产不注入该全局量）；
+// 放行用**测试自己持有的 promise**，不用 `page.unroute()`——unroute 不会取消已经在跑的
+// route handler，那个 120s 的 setTimeout 会一直挂着（首跑就是这么把自己判红的）。
+test('慢链走到封顶：横幅必须升级成全屏面板，放行挂载后两者都要撤', async ({ page }) => {
+  test.setTimeout(60000)
+  let release!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  await page.addInitScript(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(window as any).__LC_BOOT_CFG = { deadline: 1200, ceiling: 3000, tick: 100 }
+  })
+  await page.route(ENTRY_RE, async (route) => {
+    await held
+    await route.continue()
+  })
+  await page.goto(BASE, { waitUntil: 'commit' })
+
+  await expect(page.locator('#__boot_fail[data-kind="slow"]'),
+    '慢链横幅没出（本腿的靶子是"横幅在位时面板出不来"，横幅不出就没有射程）').toBeVisible({ timeout: 8000 })
+  // 封顶（3s）之后应当换脸成 panel；缺陷形态是"一直挂着横幅"
+  await expect(page.locator('#__boot_fail[data-kind="panel"]'),
+    'slow 横幅把全屏面板吞掉了（show() 的 if (box) return 早退缺陷复现）').toBeVisible({ timeout: 10000 })
+  // 面板盖上去时，黑底转圈的骨架必须已经撤掉（否则错误文案背后还在"假装加载"）
+  expect(await page.locator('#__boot_skeleton').count(),
+    '全屏面板出了，但骨架黑幕还盖在后面').toBe(0)
+
+  // 放行入口 ⇒ 界面挂载 ⇒ 面板与骨架都得撤干净（旧形态：定时器已清，没人再撤）
+  release()
+  await expect(page.locator('#root > *').first(),
+    '放行后界面仍没挂载（本腿没有射程，先查预览服务与入口哈希）').toBeVisible({ timeout: 20000 })
+  await expect.poll(() => page.locator('#__boot_fail').count(),
+    { message: '界面已经挂载，全屏面板还盖在脸上（出面板后撤销机会被关掉的那件）', timeout: 15000 }).toBe(0)
+  await expect.poll(() => page.locator('#__boot_skeleton').count(),
+    { message: '界面已经挂载，骨架黑幕还盖在脸上', timeout: 15000 }).toBe(0)
+})

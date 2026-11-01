@@ -180,6 +180,38 @@ class H(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    # _send_sse —— 流式回执（★ 2026-11-01 DEF-P1-04/05 批新增）。
+    # 为什么桩必须认 `stream:true`：客户端（llm.Client.StreamChat）在 **Content-Type 不是
+    #   text/event-stream 时直接判"端点不支持流式"**，于是引擎走"透明回退非流式"那一档——
+    #   结果是**整条 delta 链在 HTTP 级从来没有被走到过一次**：B1 的契约过滤器、B2 的
+    #   "pro 档初翻静默／审校出流"这两件只有 Go 侧确定性假上游在证，UAT 矩阵一条帧都没收到。
+    #   这是"有自动降级的链路，能交付不算验收"那一族（AGENTS §一·12）：回退让界面一切正常，
+    #   而流式那条腿死着，屏幕上零症状。
+    # 分片形态照客户端的解析口径来（`data:` 前缀 + choices[].delta.content + 尾包 usage +
+    #   `data: [DONE]`），**按固定字节宽度切**而不是按词切：客户端要的是"多帧增量"这个形状，
+    #   按空格切会在"源文本身是英文"那条回显支上退化成很少的帧。
+    def _send_sse(self, content, pt, ct):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+
+        def frame(obj):
+            self.wfile.write(('data: ' + json.dumps(obj, ensure_ascii=False) + '\n\n').encode('utf-8'))
+
+        step = 24
+        chunks = [content[i:i + step] for i in range(0, len(content), step)] or ['']
+        for piece in chunks:
+            frame({'id': 'mock-stream', 'object': 'chat.completion.chunk',
+                   'choices': [{'index': 0, 'delta': {'content': piece}, 'finish_reason': None}]})
+        frame({'id': 'mock-stream', 'object': 'chat.completion.chunk',
+               'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]})
+        # 尾包 usage（客户端读 prompt/completion/cached；include_usage 在请求里带上了 ⇒ 必须给）
+        frame({'id': 'mock-stream', 'object': 'chat.completion.chunk', 'choices': [],
+               'usage': {'prompt_tokens': pt, 'completion_tokens': ct, 'total_tokens': pt + ct}})
+        self.wfile.write(b'data: [DONE]\n\n')
+        self.wfile.flush()
+
     def do_POST(self):
         n = int(self.headers.get('Content-Length', 0))
         raw = self.rfile.read(n)
@@ -199,6 +231,10 @@ class H(BaseHTTPRequestHandler):
             content = fake_translate(last, all_text)
             pt = max(1, len(last) // 4 + 50)
             ct = max(1, len(content) // 4)
+            # ★ 2026-11-01：`stream:true` 必须回 SSE（口径与为什么不回 JSON 那条见 _send_sse 的注释）。
+            #   非流式请求**一律保持原形状**——A7/B2/B3/T34/T47 那几十条锁认的就是这个 JSON 体。
+            if req.get('stream'):
+                return self._send_sse(content, pt, ct)
             return self._send({
                 'id': 'mock-1', 'object': 'chat.completion',
                 'choices': [{'index': 0, 'message': {'role': 'assistant', 'content': content},

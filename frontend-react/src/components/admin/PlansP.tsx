@@ -27,6 +27,14 @@ import {
   TEXT_LINE_TIER_RANGES,
   type TextLineTierField,
 } from '@/lib/textLineTiers'
+// ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两档的字段名/键名/区间/缺省同样只走纯模块
+//   （与上面同一族纪律；⚠️ 这一族**下界是 0**——0 是真实档位，别照抄那族的"0 拒收"）。
+import {
+  CHAT_SEG_TIER_CONFIG_KEYS,
+  CHAT_SEG_TIER_FIELDS,
+  CHAT_SEG_TIER_RANGES,
+  type ChatSegTierField,
+} from '@/lib/chatSegTiers'
 import { fmtPoints } from '@/utils/points' // ★ S1 积分展示
 import type { ChangeEvent } from 'react'
 import { Button, DataTable, Dialog, Switch, StatusPill, Badge, Link, type StatusTone } from '@/ui/langcross/src'
@@ -47,6 +55,8 @@ import {
   adminEstTokens, adminEstTokensSave, EST_TOKEN_FIELDS, type EstTokenField,
   // ★ 2026-10-26 裁决九-4：逐行翻译两条档位的运营配置口（形态与上面预估系数同一族）。
   adminTextLineTiers, adminTextLineTiersSave,
+  // ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两条档位（走不走分段／分段总积分上限）的运营配置口。
+  adminChatSegTiers, adminChatSegTiersSave,
   adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
@@ -148,6 +158,29 @@ function statusTheme(s: string): StatusTone {
 }
 
 // PlansP 套餐中心面板主组件：计费配置、套餐/订阅管理、充值订单、发票与超管商业包操作入口。
+/**
+ * 预估系数六个输入框的标签词典键：**按字段名 exhaustive 映射**（DEF-P3-08 的根治腿）。
+ *
+ * 由来：旧写法在 JSX 里再内联一份 `[['k_pro', t(...)], ...]` 六元组清单，
+ * 而回显与提交两侧吃的是 `@/api/billing` 的 `EST_TOKEN_FIELDS` —— 两把尺子。
+ * 后果不是难看，是**测试里会炸**：mock 只给 4 个键时，`estForm` 被回显腿整表替换成 4 键，
+ * 而渲染仍按硬编码 6 个字段取 `estForm[f]` ⇒ 另两格 value 变 undefined ⇒
+ * React 报「changing a controlled input to be uncontrolled」（4 键 mock 复现 1 次、6 键 mock 复现 0 次）。
+ * 现在渲染**由同一个常量派生**，`Record<EstTokenField, string>` 让 TS 在"新增第 7 个键但忘了配标签"时
+ * 当场编译不过（而不是等某个测试的 mock 少两个键才发现）。
+ */
+const EST_FIELD_LABEL_KEYS: Record<EstTokenField, string> = {
+  k_pro: 'billing.estKPro',
+  k_fast: 'billing.estKFast',
+  fixed_pro: 'billing.estFixedPro',
+  fixed_fast: 'billing.estFixedFast',
+  fixed_lang_pro: 'billing.estFixedLangPro',
+  fixed_lang_fast: 'billing.estFixedLangFast',
+}
+
+// 套餐与定价管理面（超管）。★ 2026-11-01 起"预估系数"六个输入框的名单与标签都派生自 EST_TOKEN_FIELDS
+//（名单一份、标签映射一份 exhaustive Record，缺任何一个键 TS 与闸门都会当场拦——DEF-P3-08 的机械修法）。
+
 export function PlansP() {
   const ad = useAdmin()
   const [, t, tpl] = useT()
@@ -230,6 +263,16 @@ export function PlansP() {
   const [tlMeta, setTlMeta] = useState<{
     ready: boolean
     rows: Partial<Record<TextLineTierField, { stored: string; dirty: boolean; def: number }>>
+  }>({ ready: false, rows: {} })
+  // ★ 2026-11-01 DEF-P1-05 B2 即时翻译分段两档（per_paragraph／max_points）。
+  //   与 tlForm 同一口径的两条判据都不许省：① 表单填**生效值**（读侧现读，AllowZero 后真的在用那一档）；
+  //   ② ready 为假 ⇒ 禁提交（回显没成功就不许写，防"空值整批覆盖档位"）。
+  //   ⚠️ 这一族的 0 是合法档（0＝关分段／0＝不设上限），所以"0"不许被当脏输入拦掉——
+  //      那条判据方向与上面逐行翻译那族相反，两处各写一份迟早打架（等值锁按值判，见 csHint 那条锁）。
+  const [csForm, setCsForm] = useState<Record<ChatSegTierField, string>>({ per_paragraph: '', max_points: '' })
+  const [csMeta, setCsMeta] = useState<{
+    ready: boolean
+    rows: Partial<Record<ChatSegTierField, { stored: string; dirty: boolean; def: number }>>
   }>({ ready: false, rows: {} })
   // ★ #75 C 端报价口径：/api/me/package 透出的 quote_currency + fx_rates_snapshot，
   //   收银台据此把人民币实收金额折算成本币展示值（仅展示，实扣仍是 CNY）。
@@ -439,13 +482,43 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     setTlMeta({ ready: true, rows })
   }, [isSuper, guardRead])
 
+  // loadCsTiers 回显即时翻译分段两档（★ 2026-11-01 B2）。与 loadTlTiers 同一口径：
+  // 输入框填 tiers（读侧现读的生效值），库里原值另存 rows.stored 只做标注——
+  // 绝不把脏字面量塞进输入框（原样点保存＝把"系统从没在用过的数"钉成正式配置）。
+  // 区间预拦不在这里，在 saveCsTiers 里读 CHAT_SEG_TIER_RANGES 那一份唯一出处
+  //（本组件不写第二份 0~1 / 0~100000；三方等值由 chatSegTiers.crossSide 那条锁钉）。
+  const loadCsTiers = useCallback(async () => {
+    if (!isSuper) return
+    const r: Any = await guardRead(adminChatSegTiers)
+    if (!r.success) {
+      setCsMeta((m) => ({ ...m, ready: false }))
+      return
+    }
+    const eff = (r.tiers as Record<string, number>) || {}
+    const stored = (r.stored as Record<string, string>) || {}
+    const defs = (r.defaults as Record<string, number>) || {}
+    const form = {} as Record<ChatSegTierField, string>
+    const rows: Record<string, { stored: string; dirty: boolean; def: number }> = {}
+    for (const k of CHAT_SEG_TIER_FIELDS) {
+      const e = Number(eff[k] ?? 0)
+      form[k] = String(e)
+      const st = String(stored[CHAT_SEG_TIER_CONFIG_KEYS[k]] ?? '').trim()
+      // 库内原值与生效值不等 ⇒ 标脏（被钳位、或脏串回落缺省）。
+      // ⚠️ 本族"0 与生效值 0"是**相等**的（0 合法），别在这里加"0 也算脏"的分支——
+      //    那等于把刚按下那颗关分段的闸在界面上标成脏值，读起来像"我配错了"。
+      rows[k] = { stored: st, dirty: st !== '' && !(Number.isInteger(Number(st)) && Number(st) === e), def: Number(defs[k] ?? 0) }
+    }
+    setCsForm(form)
+    setCsMeta({ ready: true, rows })
+  }, [isSuper, guardRead])
+
   // loadAll 计费面板整体刷新：租户先取套餐，再并行拉订单/发票/配额/商业包
   // ★ F-55（批 I-3）时序半：切换器一改就整盘重取。旧实现只在挂载时拉一次，
   //   超管从租户 A 切到 B 后屏上仍是 A 的配额，此时点保存＝把 A 的数写进 B（读写同源的另一半）。
   const loadAll = useCallback(async () => {
     if (!isSuper) await loadPackage()
-    await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs(), loadTlTiers()])
-  }, [isSuper, ad.activeTenantId, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs, loadTlTiers])
+    await Promise.all([loadOrders(), loadInvoices(), loadQuota(), loadPkgs(), loadTlTiers(), loadCsTiers()])
+  }, [isSuper, ad.activeTenantId, loadPackage, loadOrders, loadInvoices, loadQuota, loadPkgs, loadTlTiers, loadCsTiers])
   useEffect(() => { void loadAll() }, [loadAll])
 
     // subscribe 订阅套餐：建单→弹收款台（券码非空时一并提交，服务端按折后金额出码）
@@ -960,6 +1033,41 @@ async function savePayChannels() {
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
 
+  // saveCsTiers 保存即时翻译分段两档（★ 2026-11-01 B2）。客户端先把与服务端同区间的三道门挡住
+  //  （两项齐全、是整数、落在 ranges 内），脏输入不进请求。
+  // ★★ 与 saveTlTiers 唯一的判据差异：**0 在本族是合法值**，所以预拦只看 ranges 的下界（0），
+  //    不许像那一族那样把 0 当"没有 0 档语义"额外拦掉——那会把"关掉分段"这颗闸在界面上按不下去，
+  //    而接口和后端都是收的，表现是"填 0 点了保存没反应"（AGENTS §一·5 那条静默失败形态）。
+  // ★ 区间一律取 CHAT_SEG_TIER_RANGES 现值（与后端 chatSegCfgFields 同源，别在这里写死数字）。
+  async function saveCsTiers() {
+    const nums: Partial<Record<ChatSegTierField, number>> = {}
+    for (const k of CHAT_SEG_TIER_FIELDS) {
+      const raw = String(csForm[k] ?? '').trim()
+      const n = Number(raw)
+      const [lo, hi] = CHAT_SEG_TIER_RANGES[k]
+      if (raw === '' || !Number.isInteger(n) || n < lo || n > hi) {
+        void toastWarn(t('billing.csNeedAll'))
+        return
+      }
+      nums[k] = n
+    }
+    try {
+      const r: Any = await adminChatSegTiersSave(nums)
+      // 保存成功后**用响应体回显生效值**（不自己拼入参）：钳位/脏值时两者不同，
+      // 界面上留下的必须是"链路此刻真正在用的那一档"。
+      if (toastResp(r, t('common.save'))) await loadCsTiers()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
+  // resetCsTiers 清空分段两档回代码缺省（批量清空动作 ⇒ 二次确认，只在动作函数内部弹一次）
+  async function resetCsTiers() {
+    if (!(await confirmDialog({ body: t('billing.csConfirmReset'), danger: true }))) return
+    try {
+      const r: Any = await adminChatSegTiersSave({ reset: true })
+      if (toastResp(r, t('common.save'))) await loadCsTiers()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
     // confirmManual 管理员确认人工到账→积分入双桶
   async function confirmManual(o: Any) {
     const tx = (manualTxInputs[String(o.id)] || '').trim()
@@ -1418,14 +1526,8 @@ async function savePayChannels() {
             {estMeta.formula ? (
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '0 0 6px', fontFamily: 'monospace' }}>{estMeta.formula}</div>
             ) : null}
-            {([
-              ['k_pro', t('billing.estKPro')],
-              ['k_fast', t('billing.estKFast')],
-              ['fixed_pro', t('billing.estFixedPro')],
-              ['fixed_fast', t('billing.estFixedFast')],
-              ['fixed_lang_pro', t('billing.estFixedLangPro')],
-              ['fixed_lang_fast', t('billing.estFixedLangFast')],
-            ] as Array<[EstTokenField, string]>).map(([f, label]) => {
+            {EST_TOKEN_FIELDS.map((f) => {
+              const label = t(EST_FIELD_LABEL_KEYS[f])
               const m = estMeta.rows[f]
               return (
                 <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
@@ -1482,6 +1584,48 @@ async function savePayChannels() {
                 retry: String(tlForm.retry_max ?? ''), streak: String(tlForm.upstream_dead_streak ?? ''),
                 storedRetry: String(tlMeta.rows.retry_max?.stored ?? ''),
                 storedStreak: String(tlMeta.rows.upstream_dead_streak?.stored ?? ''),
+              })}
+            </div>
+          </div>
+
+          {/* ★ 2026-11-01（DEF-P1-05 B2）即时翻译分段两条档位：与逐行翻译同一面板同一形态
+              （同为"影响每一单消耗"的平台级运营档位），不新造页面、不开第二套 KV 编辑面。
+              ⚠️ 这一族与上面那族的判据方向相反：**0 是真实档位**（0＝这一单走整篇／0＝不设积分上限），
+              所以输入框的 min 是 0、预拦不许额外把 0 拦掉；区间一律取 CHAT_SEG_TIER_RANGES 现值。
+              每个字段右侧标注的是**库内原值 vs 生效值**的差异（钳位/脏值），
+              没有这行标注，运营会把库里那个数当成链路在用的数。 */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.csSection')}</span>
+              <Button onClick={saveCsTiers} disabled={!csMeta.ready}>{t('common.save')}</Button>
+              <Button onClick={resetCsTiers} disabled={!csMeta.ready}>{t('billing.estReset')}</Button>
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.csHint')}</div>
+            {([
+              ['per_paragraph', t('billing.csSwitch')],
+              ['max_points', t('billing.csMaxPoints')],
+            ] as Array<[ChatSegTierField, string]>).map(([f, label]) => {
+              const m = csMeta.rows[f]
+              const [lo, hi] = CHAT_SEG_TIER_RANGES[f]
+              return (
+                <div key={f} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 15, color: 'var(--adm-hint)', width: 300 }}>{label}</span>
+                  <input className="lc-input" type="number" step="1" min={lo} max={hi} style={{ width: 140 }}
+                         value={csForm[f]} disabled={!csMeta.ready}
+                         onChange={(e) => setCsForm((c) => ({ ...c, [f]: e.target.value }))} />
+                  {!m || m.stored === '' ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{tpl('billing.estDefault', { v: String(m?.def ?? '') })}</span>
+                  ) : m.dirty ? (
+                    <span style={{ fontSize: 14, color: 'var(--adm-amber-tx)' }}>{tpl('billing.estDirty', { v: m.stored, d: String(m.def) })}</span>
+                  ) : null}
+                </div>
+              )
+            })}
+            <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>
+              {tpl('billing.csRange', {
+                seg: String(csForm.per_paragraph ?? ''), cap: String(csForm.max_points ?? ''),
+                storedSeg: String(csMeta.rows.per_paragraph?.stored ?? ''),
+                storedCap: String(csMeta.rows.max_points?.stored ?? ''),
               })}
             </div>
           </div>

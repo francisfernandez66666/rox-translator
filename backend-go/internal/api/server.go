@@ -218,6 +218,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/register/personas", s.handleRegisterPersonas) // ★ 角色功能（2026-09-19）：公开角色字典
 	// ★ P1-3（2026-09-18）：营销留资（匿名 POST，IP 限流+蜜罐+可选 Turnstile，落 feedbacks 通道）
 	s.mux.HandleFunc("/api/lead", s.handleLeadCreate)
+	// ★ DEF-P0-03（2026-11-01）：零 JS／拿不到 captcha token 时的留资降级通道（匿名 POST，
+	//   默认免人机验证；四道自保＋两条升级信号见 lead_public.go 文件头）。
+	s.mux.HandleFunc("/api/lead/public", s.handleLeadCreatePublic)
 	// ★ 〇-Z（2026-09-28）：免登录即时翻译试用（匿名 POST，设备号+IP+平台日预算三档额度，
 	//   服务端强制 pro 模式与语种白名单；成本记租户 0 留痕、不动任何客户余额）。见 trial.go 文件头。
 	s.mux.HandleFunc("/api/trial/translate", s.handleTrialTranslate)
@@ -547,6 +550,10 @@ func (s *Server) routesBilling() {
 	// ★ 2026-10-26 裁决九-4：逐行翻译两条档位（补译轮数／上游断早停连续数）给运营配的口子。
 	//   形态照 est-tokens（白名单枚举 + 校验先行整批落库），不新造页面、不开第二套 KV 编辑面。
 	s.mux.HandleFunc("/api/admin/config/text-lines", s.handleAdminTextLineConfig)
+	// ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两条档位（走不走分段／分段形态总积分上限）给运营配的口子。
+	//   同一形态照 text-lines／est-tokens（白名单枚举＋校验先行整批落库），不新造页面；
+	//   与那一族的**唯一判据差异**是这一族 0 是真实档位（关分段＝0，不设上限＝0），见该文件头 ①②③。
+	s.mux.HandleFunc("/api/admin/config/chat-segments", s.handleAdminChatSegConfig)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
 	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)

@@ -120,12 +120,34 @@ func (e *Engine) singleLang(ctx context.Context, zhText, targetLang string, exam
 	//   顶层 attempt>0（来自 singleLangRaw 截断重试等）不再拆分，防递归嵌套。
 	if attempt == 0 {
 		if segs := splitForChatTranslate(zhText); len(segs) > 1 {
+			// ★ DEF-P1-05 第二条成因（2026-11-01）：这里原来是**无分隔拼接**——源文里的段界
+			//   （\n\n）被 splitForChatTranslate 留在下一段开头，而模型对每一段都会把首尾空白洗掉
+			//   （后处理链里也有 TrimSpace），于是三段进去、一段出来，结构在**拼回这一步**被抹平，
+			//   与模型完全无关。现在把"段引导空白"从正文里剥出来单独搬回：
+			//   body 送模型（不背包袱）、lead 由本函数原样写回，并经 emitStreamLead 同步给流式客户端
+			//   （delta 与 done 必须是同一份拼法，否则又长出第二份文本）。
 			var joined strings.Builder
-			for _, seg := range segs {
-				one, err := e.singleLangProtected(ctx, seg, targetLang, examples, sourceLang, stage, 0)
+			for i, seg := range segs {
+				lead, body := "", seg
+				if i > 0 {
+					lead = leadWhitespaceOf(seg)
+					body = trimLeadWhitespace(seg)
+				}
+				if strings.TrimSpace(body) == "" {
+					// 纯空白段：不拨模型（白花一次钱），但空白本身要留在成品里
+					if lead == "" {
+						lead = seg
+					}
+					joined.WriteString(lead)
+					emitStreamLead(ctx, targetLang, lead)
+					continue
+				}
+				emitStreamLead(ctx, targetLang, lead)
+				one, err := e.singleLangProtected(ctx, body, targetLang, examples, sourceLang, stage, 0)
 				if err != nil {
 					return "", err
 				}
+				joined.WriteString(lead)
 				joined.WriteString(one)
 			}
 			return joined.String(), nil
@@ -164,4 +186,45 @@ func (e *Engine) singleLangProtected(ctx context.Context, zhText, targetLang str
 		final = sb.String()
 	}
 	return final, nil
+}
+
+// ============ 流式静默档（★ DEF-P1-05 B2，2026-11-01） ============
+
+type streamSuppressKeyT struct{}
+
+// streamSuppressKey ctx 键单例：本支调用**不往流式客户端吐字**。
+var streamSuppressKey streamSuppressKeyT
+
+// WithStreamSuppressed 影子覆盖：只把"这一支"的流式吐字关掉，**不改调用方那棵树**
+// （形态照 llm.WithoutFileMode——同一条链上"哪一支该出声"必须是分支的决定，不是全局开关）。
+//
+// 用途＝专业档（pro）的初翻腿。现网 DEF-P1-05 的病症正是这条腿：初翻先流式吐给客户，
+// 随后整篇审校**静默**把那份覆盖掉 ⇒ 用户读完一版、成品是另一版（实测连用词都不同，
+// complete→absolute）。D-1 拍板"全部要做流式"之后唯一自洽的形态是：
+// 初翻闭嘴（静默跑完），审校逐段接流式 ⇒ 流式吐的就是最终稿，delta 与 done 是同一份东西。
+func WithStreamSuppressed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, streamSuppressKey, true)
+}
+
+// streamSuppressedFromCtx 取本支的静默标记（缺省 false＝照常出声）。
+func streamSuppressedFromCtx(ctx context.Context) bool {
+	v, _ := ctx.Value(streamSuppressKey).(bool)
+	return v
+}
+
+// emitStreamLead 把"源文里的段界/句间空白"补发给流式客户端（B2 的分隔符保真腿）。
+// 走 sink 的这一个入口，不许在调用方各写一遍 outer(lang, …)：
+// pro 档初翻被静默时，段界也必须一起静默——否则 delta 里会多出 done 里没有的空行，
+// 而"delta 与 done 不是同一份东西"正是本批要消灭的那个缺陷本体。
+func emitStreamLead(ctx context.Context, lang, s string) {
+	if s == "" || streamSuppressedFromCtx(ctx) {
+		return
+	}
+	if inner := streamSinkInnerFromCtx(ctx); inner != nil {
+		inner(s)
+		return
+	}
+	if outer := streamSinkFromCtx(ctx); outer != nil {
+		outer(lang, s)
+	}
 }

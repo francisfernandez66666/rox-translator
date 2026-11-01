@@ -394,4 +394,71 @@ describe('建单准入一把尺子：前端清单必须与后端 formats.go 等�
       '反证落空：文档类被当成撤除档时补集判据应当非零',
     ).toBeGreaterThan(0)
   })
+
+  // P8 ★ 2026-11-01（DEF-P1-05 §B2-4「对外三处口径同批更新」这一族里被漏掉的那一处）：
+  // 官网 FAQ 那句「文档工单支持…格式」是**对客户承诺**，它抄的是第二份清单——
+  // 2026-10-30 撤掉 srt/vtt/json/yaml/yml 时，开放 API 三件（规范＋中英内置文档）与工单页文案都改了，
+  // 唯独这一句 12 份词典**一字未动**：现网表现＝客户照官网把 .srt 做成文件上传，建单当场被拒。
+  // 这正是 AGENTS §一·14 那句「撤格式不许静默收口」与 §一·5「对外报价只有一个事实源」的同形缺陷。
+  it('P8 官网格式承诺（land.cfaq7.a，十二份词典）不许承诺已撤除的容器，且总数必须现算', () => {
+    // 现算的格式总数：还原模式 ＋ 仅纯文案模式（两份清单本来互斥，仍按并集去重算，
+    // 免得哪天出现重叠项时这句对外数字先失真）
+    const supported = new Set<string>()
+    for (const e of [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ONLY_EXTS]) supported.add(e.toLowerCase())
+    const total = supported.size
+    expect(total, '现算的准入总数异常（<30 ⇒ 前面的 P1/P2 解析腿应当已经先红；这里判的是判据自身失明）').toBeGreaterThanOrEqual(30)
+
+    // 禁用名：撤除清单现读（五种）＋ xml（**从未准入过**，旧文案里却承诺了它）。
+    // xml 单独列出并写明理由，不塞进 RETIRED_TEXT_EXTS：那五档是"撤掉的"（拒绝文案要给出路），
+    // xml 是"从来就没有的"（给出路句会指错方向）。
+    const banned = [...RETIRED_TEXT_EXTS.map((e) => e.replace(/^\./, '')), 'xml']
+    // 两把判据各收成一个函数：正例、反例共用同一把尺子（regex 写两遍迟早漂，而漂了的那一份只会"恒干净"）。
+    //   bannedIn＝这句承诺里出现了不准入的容器名；faqNumbers＝这句里"像总数"的数字（≥10，排除 40MB 那类）。
+    const bannedIn = (text: string): string[] =>
+      banned.filter((b) => new RegExp(`(^|[^a-z0-9])${b}([^a-z0-9]|$)`, 'i').test(text))
+    const faqNumbers = (text: string): string[] =>
+      ((text.match(/(?<!\d)\d+(?!\d)/g) || []) as string[]).filter((n) => Number(n) >= 10)
+    const files = [
+      'src/i18n/panels/landing.ts',
+      ...['de', 'ar', 'es', 'fr', 'th', 'ru', 'zh-hant', 'pt', 'ko', 'ja'].map((c) => `src/i18n/locales/${c}.ts`),
+    ]
+    // landing.ts 里同一个键出现两次（zh 块与 en 块）⇒ 这一份要收两条，其余各一条，共 12 条读数
+    const bad: string[] = []
+    let seen = 0
+    for (const f of files) {
+      const src = stripTsComments(read(f))
+      const hits = [...src.matchAll(/['"]land\.cfaq7\.a['"]\s*:\s*(['"])((?:\\.|(?!\1)[^\\])*)\1/g)]
+      if (!hits.length) {
+        bad.push(`${f}：取不到 land.cfaq7.a（键改名或引号写法变了＝本腿失明，不许当成"文案干净"）`)
+        continue
+      }
+      for (const h of hits) {
+        seen += 1
+        const text = h[2]
+        const hitBanned = bannedIn(text)
+        if (hitBanned.length) bad.push(`${f}：对外承诺里出现了不准入的容器名 ${hitBanned.join('/')}（准入清单＝fileproc/formats.go；拒绝文案侧另有出路句）`)
+        // 总数必须是**现算那一个数**：既不许写死旧数字，也不许整句不提数字（提法改了就得同步改这条锚）
+        const nums = faqNumbers(text)
+        if (!nums.length) bad.push(`${f}：这句承诺里没有 ≥10 的格式总数读数 ⇒ 要么写法变了（本腿失明），要么承诺不再给范围`)
+        else if (!nums.includes(String(total))) bad.push(`${f}：格式总数不是现算的 ${total}（实得 ${nums.join('/')}）⇒ 清单变了而文案没跟，或文案写了第二份数`)
+      }
+    }
+    expect(seen, `应当收到 12 条以上对外承诺句（zh/en 在 landing.ts 两个块里各一条），实得 ${seen} ⇒ 词典面没扫全`)
+      .toBeGreaterThanOrEqual(12)
+    expect(bad, `官网格式承诺与准入清单打架：\n${bad.join('\n')}`).toEqual([])
+
+    // 反证三枚（同一把判据函数走不了这么远，就用上面这套判据本身各喂一次坏文本）：
+    // ① 旧文案那一形态（承诺了被撤的容器）必须被抓；
+    const oldCopy = '文档工单支持 Word、Excel、PPT、PDF、纯文本、Markdown、JSON、XML、YAML、字幕（SRT/VTT）、EPUB、OpenDocument 等约 30 种格式。'
+    expect(bannedIn(oldCopy), '反证①：旧文案里的被撤容器名必须逐个被抓到').toEqual(
+      expect.arrayContaining(['json', 'yaml', 'srt', 'vtt', 'xml']),
+    )
+    expect(faqNumbers(oldCopy).includes(String(total)), '反证①另一半：旧文案那个「约 30」不等于现算总数，两条判据都应当红').toBe(false)
+    // ② 只写总数、不提任何容器名，但数字写错 ⇒ 必须因数字红（证明数字那条腿独立有射程）
+    const wrongTotal = 'Document tickets support ' + (total + 1) + ' formats: Word, Excel, PPT, PDF, plain text, CSV and Markdown.'
+    expect(faqNumbers(wrongTotal).length, '反证②：写错的总数必须仍然被数到（否则下面那条等值判据是空转）').toBe(1)
+    expect(faqNumbers(wrongTotal).includes(String(total)), '反证②：总数差一档必须判不出等值').toBe(false)
+    // ③ 一句完全不含数字的承诺 ⇒ 射程腿必须红（否则"没承诺范围"会被读成"承诺干净"）
+    expect(faqNumbers('Document tickets support many formats.'), '反证③：无数字文案必须落进「射程失明」那一档').toEqual([])
+  })
 })

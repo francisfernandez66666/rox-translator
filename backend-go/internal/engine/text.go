@@ -35,6 +35,13 @@ type TextTranslateResult struct {
 	// 2026-09-19 积分口径：token 裸值仅内部计量（不外发），对外只出 points_used。
 	TokensUsed int64 `json:"-"`
 	PointsUsed int64 `json:"points_used"`
+	// ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：即时翻译**落在免费档内**时，
+	// 实扣为 0（`points_used` 那条 F-49① 承诺不许动），但客户仍应看得到「这一单值多少」。
+	// 两只桶各答一件事：points_used＝真扣了多少，points_equiv＋points_free＝本该收多少、本次免扣。
+	// ⚠️ 非免费单必须**整条缺席**（omitempty）而不是 0/false：0 会被读成「本该收 0 分」，
+	// 与 points_used=0 合起来就是「这次翻译不值钱」那一族误导（AGENTS §一·5④ 同族）。
+	PointsEquiv int64 `json:"points_equiv,omitempty"`
+	PointsFree  bool  `json:"points_free,omitempty"`
 }
 
 // TextTranslateData 文本翻译结构化数据
@@ -290,153 +297,221 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 			}
 		}
 	}
-
-	// KB 翻译
+	// ★ DEF-P1-05 B2（2026-11-01）：即时翻译的**段落能力**。判定由 api 侧算好挂进 ctx——
+	//   预估与执行必须是同一次判定、同一个函数（chat_paragraphs.go 口径 A：两处各判一次＝两把尺子，
+	//   会长出"横幅按分段报价、执行按整篇跑"这种客户备钱备少了的形式）。
+	//   没有这个标记 ⇒ 走整篇旧路径：引擎不自己猜价格，也就不会长出第二套折算。
+	plan, hasPlan := ChatSegPlanFromCtx(ctx)
+	segs := []string(nil)
+	if hasPlan && plan.Use && len(plan.Paragraphs) > 1 {
+		segs = plan.Paragraphs
+	} else if hasPlan && plan.Reason == "whole_text_fallback:points_cap" {
+		// 回落是一条**读数**，不是失败：不报错、不加钱、照常交付（见 chat_paragraphs.go 口径 B）。
+		observability.Info(ctx, "即时翻译分段成本超上限，本次按整篇执行（成本保护，不是故障）",
+			"paragraphs", len(plan.Paragraphs), "est_max_tokens", plan.MaxTokens, "reason", plan.Reason)
+	}
+	var allTr map[string]string
+	var allSrc map[string]string
+	var chatSegWarnings []string // 分段路径攒下来的逐段点名串（与整篇路径的 gateWarnings 同一条出栈）
+	// 这两组是**两条路径共用**的出栈原料（整篇路径写、分段路径也写）：
+	//   · otherNames 喂 Data.LangNames（语种显示名），分段路径里也按 directOther 逐个填；
+	//   · kbResult 喂 Data.Mode/Similarity/MatchedZH（知识库命中读数）——分段执行时它保持
+	//     "无知识库"那个默认值，因为逐段调用没有"整篇命中"这一件事可报，**不许**伪造命中读数。
 	kbResult := &TranslateResult{Translations: map[string]string{}, Mode: "模型翻译（无知识库）"}
-	kbSrc := map[string]string{}
-	if len(kbTarget) > 0 {
-		prog("知识库匹配中...", 1, 4)
-		// ★ 整改 D2：阶段回调经 ctx 传递（替代 Engine.OnPhase 单例字段——并发请求
-		//   共享字段读改写会竞争且回调串台，go test -race 必报）
-		kbCtx := WithProgressCallback(ctx, func(phase string) {
-			if phase == "ai_generating" {
-				prog("AI生成中...", 2, 4)
-			}
-		})
-		// ★ 品牌保护：如果有保护后的源文，使用第一个 KB 语言的保护版本
-		kbText := cleanText
-		for _, lc := range kbTarget {
-			if prot, ok := protectedTexts[lc]; ok {
-				kbText = prot
-				break
-			}
-		}
-		kbResult, _ = e.TranslateOne(kbCtx, kbText, kbTarget, false, config.StageKBMatch)
-		for lc := range kbResult.Translations {
-			src := "model"
-			if kbResult.MatchedZH != "" {
-				src = "kb"
-			}
-			kbSrc[lc] = src
-		}
-	}
-
-	// 其他语言 → 纯模型（并发）
-	otherTr := map[string]string{}
 	otherNames := map[string]string{}
-	for i, code := range directOther {
-		name := config.LangNames[code]
-		if name == "" {
-			name = code
+	if len(segs) > 1 {
+		prog("知识库匹配中...", 1, 4)
+		for i, code := range directOther {
+			name := config.LangNames[code]
+			if name == "" {
+				name = code
+			}
+			otherNames[code] = name
+			prog(fmt.Sprintf("AI翻译%s...", name), 2+i, 4+len(directOther))
 		}
-		otherNames[code] = name
-		prog(fmt.Sprintf("AI翻译%s...", name), 2+i, 4+len(directOther))
-	}
-	if len(directOther) > 0 {
-		// 并发限制（信号量）：最多 3 路并发调用其他语言模型翻译，避免打爆 LLM API
-		const maxConcurrent = 3
-		sem := make(chan struct{}, maxConcurrent)
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		for _, code := range directOther {
-			wg.Add(1)
-			go func(lc string) {
-				defer wg.Done()
-				defer recoverPipeline("chat_other:" + lc) // 整改 D4
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					return
+		// segWarnings：逐段修复腿的点名串。它必须并进后面那条 gateWarnings——
+		//   客户面上"哪一段没翻出来"只有一处出口，另开一条就长成两份文案（§一·5 单一事实源同族）。
+		segWarnings := []string{}
+		segInit, segSrc := e.chatInitialByParagraph(ctx, segs, kbTarget, directOther, srcLang, fast, brandTermsAll, prog, &segWarnings)
+		chatSegWarnings = segWarnings
+		allTr = make(map[string]string, len(segInit))
+		allSrc = make(map[string]string, len(segInit))
+		for lc, arr := range segInit {
+			allTr[lc] = ComposeParagraphOutput(arr)
+			allSrc[lc] = segSrc[lc]
+		}
+		// ★ pro 档：审校**逐段**并**接流式**（D-1 拍板"全部要做流式"的唯一自洽形态）。
+		//   初翻那条腿已被 WithStreamSuppressed 静默 ⇒ 流式吐的就是最终稿，delta 与 done 同一份东西。
+		if !fast {
+			rev := e.chatReviewByParagraph(ctx, segs, srcLang, segInit, prog)
+			for lc, arr := range rev {
+				if len(arr) == len(segs) {
+					allTr[lc] = ComposeParagraphOutput(arr)
+					continue
 				}
-				defer func() { <-sem }()
-				// ★ 品牌保护：使用保护后的源文（如有）
-				srcText := cleanText
+				observability.Warn(ctx, "逐段审校返回的段数与源文不符，整语种保留初翻",
+					"lang", lc, "want", len(segs), "got", len(arr))
+			}
+		}
+		prog("翻译完成", 4, 4)
+	}
+
+	// 整篇路径（单段／分段开关关掉／分段成本超上限回落）：与 B2 之前逐字同形，
+	// 只多一条口径——pro 档的初翻腿在这里同样被静默，否则"done 静默换稿"那个缺陷原样留着。
+	if len(segs) <= 1 {
+		// KB 翻译
+		// ★ DEF-P1-05 B2：pro 档初翻闭嘴（fast 档保持出流，那是它"快"的可见性来源）。
+		initCtx := ctx
+		if !fast {
+			initCtx = WithStreamSuppressed(ctx)
+		}
+		kbSrc := map[string]string{}
+		if len(kbTarget) > 0 {
+			prog("知识库匹配中...", 1, 4)
+			// ★ 整改 D2：阶段回调经 ctx 传递（替代 Engine.OnPhase 单例字段——并发请求
+			//   共享字段读改写会竞争且回调串台，go test -race 必报）
+			kbCtx := WithProgressCallback(initCtx, func(phase string) {
+				if phase == "ai_generating" {
+					prog("AI生成中...", 2, 4)
+				}
+			})
+			// ★ 品牌保护：如果有保护后的源文，使用第一个 KB 语言的保护版本
+			kbText := cleanText
+			for _, lc := range kbTarget {
 				if prot, ok := protectedTexts[lc]; ok {
-					srcText = prot
+					kbText = prot
+					break
 				}
-				tr, _ := e.TranslateOtherLang(ctx, srcText, lc, srcLang, config.StageAIInitial)
-				mu.Lock()
-				otherTr[lc] = tr
-				mu.Unlock()
-			}(code)
-		}
-		wg.Wait()
-	}
-
-	prog("翻译完成", 4, 4)
-
-	// 合并
-	allTr := map[string]string{}
-	allSrc := map[string]string{}
-	for lc, v := range kbResult.Translations {
-		allTr[lc] = v
-		allSrc[lc] = kbSrc[lc]
-	}
-	for lc, v := range otherTr {
-		allTr[lc] = v
-		allSrc[lc] = "model"
-	}
-
-	// ★ 校对 Agent：初翻结果逐语言审校修正（3 路并发限流）。
-	// ★ 2026-10-17 用户令：**只有 pro 跑校对腿**——fast 的「快」就快在这一步（原形态
-	//   fast 反而更慢：它绕过 KB 直配、把每条腿都逼进模型初翻+校对，命中知识库的文本
-	//   在专业档是 0 次模型调用）。
-	if !fast && len(allTr) > 0 {
-		prog("AI 校对中...", 3, 4)
-		sem := make(chan struct{}, 3)
-		var mu sync.Mutex
-		var wg sync.WaitGroup
-		// ★ 〇-Z（2026-09-28）：先把待校对的语言**快照成切片**再并发，range 期间不得有
-		//   goroutine 往 allTr 里写。旧写法是 `for lc, tr := range allTr { go func(){ allTr[lc]=… } }`：
-		//   mu 只挡住了校对线程彼此，挡不住「主线程还在 range、已放出去的线程在写同一张 map」，
-		//   而 map 的「边遍历边写」在 Go 里是 **runtime fatal error（concurrent map iteration and
-		//   map write）**——不是 panic，recoverPipeline 兜不住，整个进程直接挂。
-		//   线上没炸是因为真模型调用要几百毫秒到几秒，range 早就跑完了；
-		//   单测/UAT 的本地假上游瞬间返回，每次都撞在窗口里（-race 稳定复现，见
-		//   internal/api/trial_test.go 与 internal/engine/review_snapshot_test.go）。
-		type reviewJob struct {
-			lang string
-			text string
-		}
-		jobs := make([]reviewJob, 0, len(allTr))
-		for lc, tr := range allTr {
-			if strings.TrimSpace(tr) == "" {
-				continue
 			}
-			// ★ 2026-10-26 P0-01：已经明显不可用的译文（如模型退化成 "and"）
-			//   不再送审校——审校模型对这类退化串同样救不回来，只会多烧一次调用；
-			//   留给 review 之后的 repairChatTranslations 走极简/ fallback 兜底。
-			if e.chatUsabilityIssue(ctx, cleanText, srcLang, lc, tr) != "" {
-				continue
-			}
-			jobs = append(jobs, reviewJob{lang: lc, text: tr})
-		}
-		for _, j := range jobs {
-			wg.Add(1)
-			go func(lc, tr string) {
-				defer wg.Done()
-				defer recoverPipeline("chat_review:" + lc) // 整改 D4
-				select {
-				case sem <- struct{}{}:
-				case <-ctx.Done():
-					return
+			kbResult, _ = e.TranslateOne(kbCtx, kbText, kbTarget, false, config.StageKBMatch)
+			for lc := range kbResult.Translations {
+				src := "model"
+				if kbResult.MatchedZH != "" {
+					src = "kb"
 				}
-				defer func() { <-sem }()
-				if revised := e.ReviewTranslation(ctx, cleanText, tr, lc, config.StageReview); strings.TrimSpace(revised) != "" {
+				kbSrc[lc] = src
+			}
+		}
+
+		// 其他语言 → 纯模型（并发）
+		otherTr := map[string]string{}
+		for i, code := range directOther {
+			name := config.LangNames[code]
+			if name == "" {
+				name = code
+			}
+			otherNames[code] = name
+			prog(fmt.Sprintf("AI翻译%s...", name), 2+i, 4+len(directOther))
+		}
+		if len(directOther) > 0 {
+			// 并发限制（信号量）：最多 3 路并发调用其他语言模型翻译，避免打爆 LLM API
+			const maxConcurrent = 3
+			sem := make(chan struct{}, maxConcurrent)
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			for _, code := range directOther {
+				wg.Add(1)
+				go func(lc string) {
+					defer wg.Done()
+					defer recoverPipeline("chat_other:" + lc) // 整改 D4
+					select {
+					case sem <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+					defer func() { <-sem }()
+					// ★ 品牌保护：使用保护后的源文（如有）
+					srcText := cleanText
+					if prot, ok := protectedTexts[lc]; ok {
+						srcText = prot
+					}
+					tr, _ := e.TranslateOtherLang(initCtx, srcText, lc, srcLang, config.StageAIInitial)
 					mu.Lock()
-					allTr[lc] = revised
+					otherTr[lc] = tr
 					mu.Unlock()
-				}
-			}(j.lang, j.text)
+				}(code)
+			}
+			wg.Wait()
 		}
-		wg.Wait()
+
+		prog("翻译完成", 4, 4)
+
+		// 合并
+		allTr = map[string]string{}
+		allSrc = map[string]string{}
+		for lc, v := range kbResult.Translations {
+			allTr[lc] = v
+			allSrc[lc] = kbSrc[lc]
+		}
+		for lc, v := range otherTr {
+			allTr[lc] = v
+			allSrc[lc] = "model"
+		}
+
+		// ★ 校对 Agent：初翻结果逐语言审校修正（3 路并发限流）。
+		// ★ 2026-10-17 用户令：**只有 pro 跑校对腿**——fast 的「快」就快在这一步（原形态
+		//   fast 反而更慢：它绕过 KB 直配、把每条腿都逼进模型初翻+校对，命中知识库的文本
+		//   在专业档是 0 次模型调用）。
+		if !fast && len(allTr) > 0 {
+			prog("AI 校对中...", 3, 4)
+			sem := make(chan struct{}, 3)
+			var mu sync.Mutex
+			var wg sync.WaitGroup
+			// ★ 〇-Z（2026-09-28）：先把待校对的语言**快照成切片**再并发，range 期间不得有
+			//   goroutine 往 allTr 里写。旧写法是 `for lc, tr := range allTr { go func(){ allTr[lc]=… } }`：
+			//   mu 只挡住了校对线程彼此，挡不住「主线程还在 range、已放出去的线程在写同一张 map」，
+			//   而 map 的「边遍历边写」在 Go 里是 **runtime fatal error（concurrent map iteration and
+			//   map write）**——不是 panic，recoverPipeline 兜不住，整个进程直接挂。
+			//   线上没炸是因为真模型调用要几百毫秒到几秒，range 早就跑完了；
+			//   单测/UAT 的本地假上游瞬间返回，每次都撞在窗口里（-race 稳定复现，见
+			//   internal/api/trial_test.go 与 internal/engine/review_snapshot_test.go）。
+			type reviewJob struct {
+				lang string
+				text string
+			}
+			jobs := make([]reviewJob, 0, len(allTr))
+			for lc, tr := range allTr {
+				if strings.TrimSpace(tr) == "" {
+					continue
+				}
+				// ★ 2026-10-26 P0-01：已经明显不可用的译文（如模型退化成 "and"）
+				//   不再送审校——审校模型对这类退化串同样救不回来，只会多烧一次调用；
+				//   留给 review 之后的 repairChatTranslations 走极简/ fallback 兜底。
+				if e.chatUsabilityIssue(ctx, cleanText, srcLang, lc, tr) != "" {
+					continue
+				}
+				jobs = append(jobs, reviewJob{lang: lc, text: tr})
+			}
+			for _, j := range jobs {
+				wg.Add(1)
+				go func(lc, tr string) {
+					defer wg.Done()
+					defer recoverPipeline("chat_review:" + lc) // 整改 D4
+					select {
+					case sem <- struct{}{}:
+					case <-ctx.Done():
+						return
+					}
+					defer func() { <-sem }()
+					if revised := e.ReviewTranslation(ctx, cleanText, tr, lc, config.StageReview); strings.TrimSpace(revised) != "" {
+						mu.Lock()
+						allTr[lc] = revised
+						mu.Unlock()
+					}
+				}(j.lang, j.text)
+			}
+			wg.Wait()
+		}
 	}
 
 	// ★ 2026-10-26 P0-01：即时翻译的可用性修复腿必须在品牌归一化/质量闸门**之前**，
 	//   这样极简/fallback 救回的译文仍会继续过品牌词归一化、术语/文化闸门、纯度清洗。
 	//   正常译文在这里零额外调用；只有被判不可用（如 "and"）的语种才会走兜底。
 	//   gateWarnings 从这里开始累积，稍后 applyOutputGates 的警告直接 append 进来。
-	gateWarnings := []string{}
+	gateWarnings := chatSegWarnings // 分段路径的逐段点名先排在前面（客户看到的顺序与段序一致）
+	if gateWarnings == nil {
+		gateWarnings = []string{}
+	}
 	e.repairChatTranslations(ctx, cleanText, srcLang, allTr, &gateWarnings)
 
 	// ★ 品牌术语归一化收尾（2026-09-10 需求，放在 AI 校对与重翻之后）：
@@ -558,7 +633,13 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		sim = &s
 	}
 
-	return &TextTranslateResult{
+	// ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：积分出参按**两条腿**分派。
+	// 为什么必须显式判免费而不是让 UsageDisplayTokens 一路兜下去：
+	// 免费腿按 F-49① 不写实收桶 ⇒ `BilledTotal()==0` ⇒ 那一支的「取不到就保守回退真实用量」
+	// 会兜到 prompt+completion ⇒ **钱没掉、报文却写着「消耗 N 积分」**（现网形态，本批修掉）。
+	// 回退本身是对的（单测/未接线降级路径不能报恒零），错的是它够不到免费这一档——
+	// 这一档「本该收多少」有现场读数（freeBilled 那只桶），不该拿真实用量去猜。
+	res := &TextTranslateResult{
 		Skill: "translation",
 		Reply: sb.String(),
 		Data: TextTranslateData{
@@ -577,6 +658,14 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		TokensUsed: rawTokens,
 		// ★ F-49①：对外积分一律按**实收**口径（与 points_used 出参、台账扣费同源），
 		// 不再用裸真实用量折算——后者比实收少一个 markup，客户按报文折算必然对不上。
+		// 下面免费那一支会覆写本字段（所以这里先按实收腿给值，不改那条承诺的默认形态）。
 		PointsUsed: e.PointsOfTokens(billed),
 	}
+	if freeTokens, isFree := e.UsageFreeBilledTokens(ctx); isFree {
+		// 免费档：实扣为 0 是**事实**（不是隐藏），等值量单独出一维、并明确标注免扣。
+		res.PointsUsed = 0
+		res.PointsEquiv = e.PointsOfTokens(freeTokens)
+		res.PointsFree = res.PointsEquiv > 0 // 折不出积分（小量）时不标注免扣：没有可展示的等值，就别给一行「0 积分 · 免扣」
+	}
+	return res
 }

@@ -79,8 +79,14 @@ type chatImageResp struct {
 	ImageError   string            `json:"image_error"`  // 译后图降级原因（空＝正常产出）
 	LineCount    int               `json:"line_count"`   // OCR 行数（前端可据此提示"识别到 N 行"）
 	PointsUsed   int64             `json:"points_used"`  // 本次消耗积分（与 /api/chat 同口径）
-	Mode         string            `json:"mode"`         // 命中模式描述（前端模式徽标吃这个字段）
-	TargetLangs  []string          `json:"target_langs"` // 全部目标语种
+	// ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：与 /api/chat 同口径的两条腿。
+	// 免费档实扣 0 ⇒ points_used=0（F-49①「出参＝实扣」不许动），这一单**本该收**多少走 points_equiv，
+	// 并由 points_free 明说"本次免扣"；非免费单两个字段整条缺席（omitempty），
+	// 出 0 会被读成「这一单不值钱」，与"没扣钱"合起来就是第二条 §19 那一族「读数给失败背书」。
+	PointsEquiv int64    `json:"points_equiv,omitempty"`
+	PointsFree  bool     `json:"points_free,omitempty"`
+	Mode        string   `json:"mode"`         // 命中模式描述（前端模式徽标吃这个字段）
+	TargetLangs []string `json:"target_langs"` // 全部目标语种
 	// ImageLangsRendered 本次**真正出图**的语种数（P-3/N7 的诚实读数）。
 	// 当前实现只为首个目标语种出图 ⇒ 成功时恒 1、降级时 0；多语种请求因此不会
 	// 被误读成"每语种都有一张图"。前端据此在多语种场景提示"图片仅出首个语种"。
@@ -283,6 +289,9 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	//   注意这里**保留换行**：joined 里的 \n 是"行↔译文"对齐的唯一线索。
 	//   行数对不上的语种随后由 chatImageAlignTranslations 分腿重译（见文件头注）。
 	joined := strings.Join(lines, "\n")
+	// chat-seg:n/a 图片件的 joined 里每个 \n 都是「第 i 行 ↔ 第 i 条译文」对齐的唯一线索，
+	//   分段执行会把 OCR 行按空行重切成段（段数≠行数）⇒ 原位回填会把译文画到错误的框上。
+	//   图片链的段落结构由 OCR 行承担，不走即时分段（理由写死在这里，闸门按全集判这条标记在位）。
 	res := s.Engine.HandleText(ctx, joined, options, nil)
 
 	resp := chatImageResp{
@@ -324,6 +333,15 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	resp.Translations = res.Data.Translations
 	resp.Mode = res.Data.Mode
 	resp.PointsUsed = res.PointsUsed
+	// ★ 2026-11-01 等值那一维：按**收集器现读**，不拿各腿返回值相加——整段那一枪与多行分腿
+	// 都在同一个请求级 ctx 上记账，freeBilled 那只桶天生就是"这一单累计"的口径；
+	// 若在调用方各加一份就又长出第二把尺子（AGENTS §一·11 那一族），而分腿的返回值里没有等值维。
+	if s.Engine != nil {
+		if freeTokens, isFree := s.Engine.UsageFreeBilledTokens(ctx); isFree {
+			resp.PointsEquiv = s.Engine.PointsOfTokens(freeTokens)
+			resp.PointsFree = resp.PointsEquiv > 0 // 折不出积分就不标注免扣：一行「0 积分 · 免扣」没有信息量
+		}
+	}
 
 	// 译后图：只为**首个目标语种**出图（多目标语种各出一张会让接口语义与体积都失控；
 	// 其余语种的译文走 translations 文本，用户要图可对单语种再来一次）。
@@ -659,6 +677,7 @@ func (s *Server) chatImageAlignTranslations(ctx context.Context, options map[str
 			opts[k] = v
 		}
 		opts["target_langs"] = []interface{}{lang}
+		// chat-seg:n/a 同上一条：分腿重译的靶子是「那一行」，分段会把一行切成多段。
 		res := s.Engine.HandleText(ctx, text, opts, nil)
 		if res == nil {
 			return "", 0, errors.New("引擎未返回结果")

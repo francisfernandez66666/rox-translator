@@ -394,6 +394,106 @@ print("OK" if d.get("success") and int(d.get("points_min",0))>=1 else "BAD")' 2>
 echo "$A6R" | grep -qE '^OK$' && { PASS=$((PASS+1)); echo "PASS|A6-segment-form-nonzero"; } || { FAIL=$((FAIL+1)); echo "FAIL|A6-segment-form-nonzero|got=${A6JS:0:220}"; }
 echo "INFO|A6-estimate|$A6J"
 
+# ---------- A6b ★ 即时翻译 SSE 的分段能力与 delta 洁净（2026-11-01 DEF-P1-04/05 发版判据） ----------
+# 这条腿测的是**流式那一侧**，四件事都必须同时成立（历史病症：气泡里流进 <t> 标签、
+# 段落被压成一坨、pro 档"读到的"与"成品"是两份东西）：
+#   ① 有 delta 帧（没有就一切"看起来对"＝空转，所以先钉射程再钉内容，AGENTS §一·6 同口径）；
+#   ② 任一 delta 帧**不含**契约标签 <t / </t；
+#   ③ delta 拼接里**必须有正文**（只有段间分隔符＝流式腿空转——本轮第一次跑出来的正是这一形态）；
+#   ③b done 非空且带上游正文（`TranslatedEN`）；
+#   ④ fast 与 pro 各跑一次都要满足以上三条（pro 档流式吐的是审校稿，不是"没输出"）。
+# ⚠️ 本条刻意**不**断言"pro 的 delta 必须与 fast 不同"——上游是模型，两档同词是合法结果；
+#    "初翻被静默"由 engine 侧 text_paragraph_gate_test.go 用确定性假上游钉（那里才分得开）。
+# ★★ 也刻意**不**在 HTTP 级钉"delta 拼接 === done"与"空行段数必须等于 3"，两条理由都要写出来：
+#   1) delta 与最终腿是**两条管线**（AGENTS §25 第一条）：delta 只过"契约提取＋伪标签拆除"两层，
+#      术语替换／去中文／尾段截断／审校改写**只在最终腿** ⇒ 上游回显形态下两侧可以合法不相等，
+#      把它写成等值锁就是一条恒红的锁（施工方案 §B2-3.1 末尾"闸门改写单列"同族）。
+#   2) "三段进三段出"要的是**上游按段作答**这一行为；UAT 的桩按"把提示词逐行回显"作答，
+#      它对段落结构的忠实度不是产品的性质 ⇒ 拿它当判据＝替上游形态背书。
+#      结构等值由 engine 侧那把确定性假上游钉（用例 1/4/8：段数==3、段间 \n\n、两级分隔符都在）。
+#   ⇒ 那本段证的是什么？证的是**流式那条腿真被走到、且不把契约标签投给客户**——这在本仓是第一次：
+#      桩原先只回 JSON，而客户端（llm.Client.StreamChat）一见 Content-Type 不是 text/event-stream
+#      就判"端点不支持流式"并**透明回退非流式** ⇒ delta 帧在整条 UAT 矩阵里从来没有出现过，
+#      交付一切正常、死着的正是流式腿（AGENTS §一·12"有自动降级的链路，能交付不算验收"）。
+A6B_SRC='第一段：甲乙丙丁戊己。\n\n第二段：庚辛壬癸子丑寅卯。\n\n第三段：辰巳午未申酉戌亥。'
+for A6B_MODE in fast pro; do
+  A6B_BODY=$(curl -sN --max-time 120 $B/api/chat/stream -H "$H1" -H "$J" \
+    -d "{\"message\":\"$A6B_SRC\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"$A6B_MODE\",\"lang\":\"zh\"}}")
+  A6B_R=$(A6B_MODEV="$A6B_MODE" A6B_BODYV="$A6B_BODY" python3 -c '
+import json,os,re,sys
+mode=os.environ["A6B_MODEV"]
+deltas=[];done_reply=""
+for line in os.environ["A6B_BODYV"].split("\n"):
+    if not line.startswith("data:"): continue
+    payload=line[5:].strip()
+    if not payload or payload=="[DONE]": continue
+    try: fr=json.loads(payload)
+    except Exception: continue
+    if fr.get("type")=="delta": deltas.append(str(fr.get("text","")))
+    if fr.get("type")=="done": done_reply=str((fr.get("result") or {}).get("reply") or "")
+if not deltas: sys.exit("NO-DELTA(射程失效：一条 delta 都没有 ⇒ 流式腿根本没被走到，本段其余判据失去前提)")
+joined="".join(deltas)
+if not joined.strip(): sys.exit("EMPTY-DELTA(有 %d 帧却没有一个字是正文：只剩段间分隔符＝流式腿空转)" % len(deltas))
+if any(re.search(r"</?\s*t\b", d, re.I) for d in deltas): sys.exit("LEAK-TAG(delta 里出现契约标签)")
+if not done_reply.strip(): sys.exit("EMPTY-DONE")
+if "TranslatedEN" not in done_reply: sys.exit("NO-PAYLOAD(done 里没有上游正文 ⇒ 整条链其实没翻)")
+print("OK")
+' 2>&1 | tail -1)
+  if [ "$A6B_R" = "OK" ]; then PASS=$((PASS+1)); echo "PASS|A6b-stream-paragraphs-$A6B_MODE"; else FAIL=$((FAIL+1)); echo "FAIL|A6b-stream-paragraphs-$A6B_MODE|got=${A6B_R:0:160}"; fi
+done
+
+# ---------- A6c ★ 分段维进没进预估（2026-11-01 DEF-P1-05 B2-2；与 A6b 成对，缺一半等于没验） ----------
+# A6b 证的是"开着分段时长文真按段交付"；这一条证的是**同一份输入下报价跟着形态走**。
+# 由来（施工方案 §B2-2 那条★★）：分段＝固定指令开销 × 段数，成本真的更高；
+# 如果执行按分段跑、横幅仍按整篇报，客户按预估备的钱**不够花**——
+# 那是 §一·5④ 那一族「两把尺子」最坏的形态（不是报错，是账单对不上横幅）。
+# 三条判据取向：
+#   ① 开关开 vs 关 ⇒ 同一份 3 段源文的读数必须**不等**（开的那一档更高）；
+#   ② 上限压到 1 积分 ⇒ 判定必须回落整篇，读数必须**等于"关"那一档**
+#      （回落是成本保护：不报错、不加钱、照常交付——写成都报错就是把保护做成故障）；
+#   ③ 全部钉回"没配"之后读数必须回到 ① 的那一档（证明这条维是**可逆的运行期档位**，不是构建期常量）。
+# ⚠️ 判据一律用"两档读数之间的等值/大小关系"，不写死任何积分数：系数与汇率都是运维可改的现值，
+#    写死数字的锁在调过档的库上恒红，而恒红最后总是被人"放宽一点"抹掉（本仓反复踩的那一族）。
+# ⚠️ 这三条都要求 UAT 实例带 `SYSTEM_CONFIG_CACHE_TTL_SEC=0`（run_uat／multi_instance 都已注入）：
+#    否则 dbcfg 是库外进程写、进程内 5s 缓存不失效，"翻档没反应"会被读成产品缺陷。
+A6C_ARGS="{\"text\":\"$A6B_SRC\",\"target_langs\":[\"en\"],\"mode\":\"pro\",\"ui_lang\":\"zh\"}"
+a6cEst(){ curl -s --max-time 60 $B/api/translation/estimate -H "$H1" -H "$J" -d "$A6C_ARGS"; }
+a6cMax(){ python3 -c 'import sys,json
+try: print(int(json.load(sys.stdin).get("points_max",-1)))
+except Exception: print(-1)'; }
+dbcfg text_chat_per_paragraph 1 >/dev/null
+A6C_ON=$(a6cMax <<<"$(a6cEst)")
+dbcfg text_chat_per_paragraph 0 >/dev/null
+A6C_OFF=$(a6cMax <<<"$(a6cEst)")
+ck A6c-estimate-carries-segmentation-dim '^[0-9]+$' "$A6C_ON"
+ck A6c-estimate-off-is-number '^[0-9]+$' "$A6C_OFF"
+A6C_CMP=$(A6C_ONV="$A6C_ON" A6C_OFFV="$A6C_OFF" python3 -c 'import os,sys
+on=int(os.environ["A6C_ONV"]); off=int(os.environ["A6C_OFFV"])
+if on<0 or off<0: sys.exit("PARSE-FAIL(预估读数取不到，本条无判据)")
+sys.exit("OK" if on>off else "EQUAL(开关翻档后预估一字不变 ⇒ 分段维没进预估)")' 2>&1 | tail -1)
+[ "$A6C_CMP" = "OK" ] && { PASS=$((PASS+1)); echo "PASS|A6c-seg-dim-in-estimate(on=$A6C_ON off=$A6C_OFF)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A6c-seg-dim-in-estimate|got=$A6C_CMP(on=$A6C_ON off=$A6C_OFF)"; }
+# ② 上限压成 1 积分 ⇒ 分段预估超上限 ⇒ 本次按整篇估（读数必须与"关"那一档相等，且零报错）。
+dbcfg text_chat_per_paragraph 1 >/dev/null
+dbcfg chat_segment_max_points 1 >/dev/null
+A6C_EST=$(a6cEst)
+A6C_FALLBACK=$(a6cMax <<<"$A6C_EST")
+ck A6c-points-cap-fallback-no-error '"success":true' "$A6C_EST"
+A6C_EQ=$(A6C_FB="$A6C_FALLBACK" A6C_OFFV="$A6C_OFF" python3 -c 'import os,sys
+fb=int(os.environ["A6C_FB"]); off=int(os.environ["A6C_OFFV"])
+sys.exit("OK" if fb==off else "NEQ(回落档报价=%s 整篇档=%s ⇒ 回落与预估不是同一把尺子)"%(fb,off))' 2>&1 | tail -1)
+[ "$A6C_EQ" = "OK" ] && { PASS=$((PASS+1)); echo "PASS|A6c-cap-fallback-quotes-whole-text($A6C_FALLBACK)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A6c-cap-fallback-quotes-whole-text|got=$A6C_EQ"; }
+# ③ 两把键都钉回"没配"⇒ 回到默认开的那一档（可逆性；留着 0/1 进后面的段就是"改了配置没反应"最难查的形态）。
+dbcfg text_chat_per_paragraph "" >/dev/null
+dbcfg chat_segment_max_points "" >/dev/null
+A6C_BACK=$(a6cMax <<<"$(a6cEst)")
+A6C_RE=$(A6C_BACKV="$A6C_BACK" A6C_ONV="$A6C_ON" python3 -c 'import os,sys
+b=int(os.environ["A6C_BACKV"]); on=int(os.environ["A6C_ONV"])
+sys.exit("OK" if b==on else "NEQ(清空后=%s 默认开=%s ⇒ 库里「没表态」与「显式开」不同形)"%(b,on))' 2>&1 | tail -1)
+[ "$A6C_RE" = "OK" ] && { PASS=$((PASS+1)); echo "PASS|A6c-keys-reset-restores-default($A6C_BACK)"; } \
+  || { FAIL=$((FAIL+1)); echo "FAIL|A6c-keys-reset-restores-default|got=$A6C_RE"; }
+
 # ---------- A7 聊天翻译 + 计量入账（usage_ledger 行增） ----------
 # ★ 2026-09-21（#33 任务系统）：口径改为「净消耗」= 窗口前容量 + 窗口内新发放 − 窗口后容量。
 # 原因有二：① 任务临时积分（有效期 3/7 天）到期早于体验台账，按「先到期先消耗」必然先被扣，
@@ -406,14 +506,28 @@ TID7=$(sess_tid "$H1")
 if [ -z "$TID7" ]; then FAIL=$((FAIL+1)); echo "FAIL|A7-metering(/api/auth/me 取不到 tenant_id，净消耗无法核对)"; fi
 cap7(){ NOW7=$(date -u +%Y-%m-%dT%H:%M:%SZ); dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$TID7 AND expires_at>'$NOW7') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$TID7)"; }
 gtot7(){ dbq "SELECT COALESCE(SUM(total),0) FROM quota_grants WHERE tenant_id=$TID7 AND kind='task'"; }
-if [ -n "$TID7" ]; then Q1=$(cap7); G1=$(gtot7); fi
+if [ -n "$TID7" ]; then Q1=$(cap7); G1=$(gtot7); L17=$(dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TID7" | tr -dc '0-9'); fi
 CH=$(curl -s $B/api/chat -H "$H1" -H "$J" --max-time 90 -d '{"message":"早上好，欢迎使用翻译助手平台。","options":{"target_langs":["en"]}}')
 ck A7-chat-ok 'TranslatedEN' "$CH"
 sleep 5
+# ★ 2026-11-01 改成**两分支判据**。旧写法只认"净消耗>0"，而即时翻译自 2026-10-30 起有**免费档**：
+#   走免费支时余额**物理上就是不动**（留痕行照写、不扣分）。于是这条锁在两种现场下给同一个读数——
+#   「这一单免扣」与「扣费链路整个断了」分不开，而后者被前者掩护着可以红零次、坏一年
+#   （AGENTS §三 那条"读数要分得开"／§一·11 那条"三把尺子"同族）。
+#   现在＝净消耗>0（付费支）**或** 本段窗口内 usage_ledger 真新增过行（免费/策略免扣支的库侧事实）；
+#   两支都不是才判红。走的是哪一支写进 PASS 读数，跑完一眼看得见这台机器/这个档的路径。
+lg7(){ dbq "SELECT COUNT(*) FROM usage_ledger WHERE tenant_id=$TID7" | tr -dc '0-9'; }
 if [ -n "$TID7" ]; then
-Q2=$(cap7); G2=$(gtot7)
+Q2=$(cap7); G2=$(gtot7); L2=$(lg7)
 NET7=$(( Q1 + G2 - G1 - Q2 ))
-[ "$NET7" -gt 0 ] && { PASS=$((PASS+1)); echo "PASS|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; } || { FAIL=$((FAIL+1)); echo "FAIL|A7-metering(净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)))"; }
+DL7=$(( ${L2:-0} - ${L17:-0} ))
+if [ "$NET7" -gt 0 ]; then
+  PASS=$((PASS+1)); echo "PASS|A7-metering(付费支·净消耗$NET7|$Q1->$Q2 发放+$((G2-G1)) 流水+$DL7)"
+elif [ "$DL7" -gt 0 ]; then
+  PASS=$((PASS+1)); echo "PASS|A7-metering(免扣支·净消耗0 但窗口内新增 $DL7 条流水留痕行)"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|A7-metering(净消耗$NET7 且流水零新增 ⇒ 扣费与留痕两件事都没发生，这才是真断了|$Q1->$Q2 发放+$((G2-G1)))"
+fi
 fi
 ck A7-usage-me '"success":true' "$(curl -s "$B/api/billing/usage/me" -H "$H1")"
 

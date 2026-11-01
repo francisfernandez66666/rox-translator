@@ -81,6 +81,11 @@ vi.mock('@/api', () => ({
   adminEstTokens: vi.fn(async () => ({ success: true, coefficients: {}, stored: {}, defaults: {} })),
   adminEstTokensSave: vi.fn(async () => ({ success: true })),
   // ---- 本文件主测对象：两条档位的读与写 ----
+  // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
+  //   桩给的是**代码缺省态**（开分段／上限 60／库里没表态）——这些文件测的不是这张卡，
+  //   但缺这两个导出会让整块面板在渲染期撞 undefined 调用（AGENTS 那条「夹具必须补齐全部导出」）。
+  adminChatSegTiers: vi.fn(async () => ({ success: true, tiers: { per_paragraph: 1, max_points: 60 }, stored: { text_chat_per_paragraph: '', chat_segment_max_points: '' }, defaults: { per_paragraph: 1, max_points: 60 }, ranges: { per_paragraph: [0, 1], max_points: [0, 100000] } })),
+  adminChatSegTiersSave: vi.fn(async () => ({ success: true })),
   adminTextLineTiers: vi.fn(async () => {
     if (S.getFail === '403') {
       // 后端读面对非平台超管回 403（bizResp 会把 403 照抛以触发重登录），这里造同一形态

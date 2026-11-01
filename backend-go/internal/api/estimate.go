@@ -125,7 +125,10 @@ func (s *Server) handleTranslationEstimate(w http.ResponseWriter, r *http.Reques
 func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64, int64) {
 	var minTokens, maxTokens int64
 	if req.Text != "" {
-		minTokens, maxTokens = engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, "", req.UILang)
+		// ★ DEF-P1-05 B2：这一单到底走不走分段，与进引擎那次是**同一个判定**（口径 A：
+		//   两处各判一次＝两把尺子，会长出"横幅按整篇报价、执行按分段跑"那种客户备钱备不够的形态）。
+		//   回落档（超上限）在这里同样按整篇报价——预估与实扣同尺（AGENTS §一·5④）。
+		_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, "", req.UILang)
 	} else {
 		minTokens, maxTokens = engine.EstimateSegmentTokens(req.SegmentCount, req.TargetLangs, mode, "", req.UILang)
 	}
@@ -166,14 +169,9 @@ func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64,
 // 返回: 预估实收 token（不低于原值——系数异常时的兜底方向与 ChargeUsageRealtime 里
 // 「billed<total 就按 total 计」那条一致，宁可多估也不让客户备钱备少）。
 func applyMarkup(tokens int64, markup float64) int64 {
-	if tokens <= 0 {
-		return 0
-	}
-	billed := int64(float64(tokens) * markup)
-	if billed < tokens {
-		billed = tokens
-	}
-	return billed
+	// ★ 2026-11-01（DEF-P1-05 B2）：换算本体搬进 engine.ApplyMarkup（分段判定要用同一个数），
+	//   这里只剩薄委托——**不许**在本文件再写一遍乘法（两条链各折一次迟早分家）。
+	return engine.ApplyMarkup(tokens, markup)
 }
 
 // atLeastOne 对外积分读数的下限保底。

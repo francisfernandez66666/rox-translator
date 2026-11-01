@@ -270,22 +270,126 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     expect(bad, bad.join('\n')).toEqual([])
   })
 
-  // 反证 9：三条腿各摘一条（写回固定截止／慢链路改回全屏面板／撤掉撤销调用），必须各自判红
-  it('反证 9：固定截止／慢链路走全屏／不撤销 —— 三处各自改坏都要判红', () => {
-    const fixed = code.replace('var DEADLINE_MS = SLOW_LINK ? 30000 : 8000', 'var DEADLINE_MS = 6000')
-    expect(fixed, '反证失效：变异没落地').not.toBe(code)
-    expect(adaptiveFailures(fixed).length, '固定 6s 截止没被判红').toBeGreaterThan(0)
-    expect(adaptiveFailures(code)).toEqual([])
+  // ★★ 2026-11-01 DEF-P0-01 的三件后果 + A-2 自动恢复（用户拍板要做）——这一组锁的入库前提：
+  //   **每条都先在"未修代码"上拨一次并确认判红**。上一版方案里的正则
+  //   `/data-kind'\)[\s\S]{0,400}removeChild\(box\)/` 对当时那段有 bug 的代码**也返回 true**
+  //   （慢→慢那一支本来就摘节点），一旦入库就是永远绿灯的空锁，比没锁更坏。
+  //   所以下面只钉**语义**：不许有"旧节点存在就当没事发生"的分支、撤销腿不许随定时器一起死。
+  function upgradeFailures(src: string): string[] {
+    const bad: string[] = []
+    const at = src.indexOf('function show(kind)')
+    const end = src.indexOf('var timer = setInterval')
+    if (at < 0 || end < at) { bad.push('读不到 show() 函数体（判据射程失效）'); return bad }
+    const body = src.slice(at, end)
+    // ① 早退分支不许以任何形态存在（"有旧节点 ⇒ 直接 return"是本案的本体）
+    if (/if\s*\(\s*box\s*\)\s*return/.test(body)) {
+      bad.push('show() 仍有「旧节点存在就 return」的早退：slow 横幅会吞掉全屏面板（DEF-P0-01 本体）')
+    }
+    // ② 摘旧节点不许被 kind === 'slow' 绑住（绑住＝升级时不摘，早退就回来了）
+    if (!/if\s*\(\s*box\s*(&&|\))\s*box\.parentNode/.test(body) && !/if\s*\(\s*box\s*&&\s*box\.parentNode\s*\)/.test(body)) {
+      bad.push('摘旧节点仍带形态条件（slow→panel 升级不摘 ⇒ show(panel) 静默失效）')
+    }
+    // ③ 顺序：撤骨架必须排在把面板节点挂上去之前（否则错误文案背后有个转圈，像"还在加载"）
+    const atSkeleton = body.indexOf('dismissBootSkeleton()')
+    const atAppend = body.indexOf('appendChild(box)')
+    if (atSkeleton < 0 || atAppend < 0) bad.push('读不到撤骨架或挂面板那一步（判据射程失效）')
+    else if (atSkeleton > atAppend) bad.push('面板盖上去时骨架还没撤（黑底转圈留在错误面板背后）')
+    // ④ 出面板后必须还有"界面后来挂载就撤干净"的兜底哨（判**调用形态**，判裸词会被函数定义喂饱）
+    const tail = src.slice(src.lastIndexOf('clearInterval(timer)'))
+    if (!/watchMountAfterPanel\(\)/.test(tail)) bad.push('出面板后没有兜底撤销哨（横幅/面板/骨架会永久留在脸上）')
+    if (!/function watchMountAfterPanel\(\)[\s\S]{0,300}dismissBootSkeleton\(\)/.test(src)) {
+      bad.push('兜底哨只撤了一半（没撤骨架 ⇒ 界面挂载了仍被黑底盖住）')
+    }
+    // ⑤ A-2 自动恢复：四条刹车一条都不许省，且"别 reload"的两个条件不许用 && 连
+    if (!/function autoRecover\(\)/.test(src)) bad.push('没有自动恢复腿（DEF-P0-01 已拍板要做）')
+    else {
+      const body2 = src.slice(src.indexOf('function autoRecover()'), src.indexOf('var timer = setInterval'))
+      if (/if\s*\(\s*!rootEmpty\(\)\s*&&/.test(body2)) bad.push('自动恢复的两条刹车被 && 连起来了（＝两条都不成立才刹车，慢链照旧被 reload）')
+      if (!/resCount\(\)\s*!==\s*before/.test(body2)) bad.push('自动恢复没问「链路还在动吗」（慢链越 reload 越慢）')
+      if (!/storageBlocked\(\)/.test(body2)) bad.push('自动恢复没排除「站点数据被拒」那一档（reload 一万次也不会好）')
+      if (!/try\s*\{[\s\S]{0,160}sessionStorage/.test(body2)) bad.push('重试计数直读 sessionStorage 没包 try（被拒时抛 SecurityError，见启动链黑屏批）')
+      if (!/AUTO_RETRY_MAX\s*=\s*2/.test(src)) bad.push('自动恢复没有次数上限（无限刷新循环比白屏更坏）')
+    }
+    // ⑥ 测试注入口必须有 clamp 且生产默认值仍是那三个字面量（防"抽了配置就没人守默认档"）
+    if (/__LC_BOOT_CFG/.test(src)) {
+      // 逐行判 clamp：只看"把注入值赋给那三个档位"的行。
+      // （整串 contains Math.min 那种写法 M7 抓不到——另两行还带着 clamp，一放宽就全绿。）
+      const inject = src.split('\n').filter((l) => /cfg\./.test(l) && /(DEADLINE_MS|CEILING_MS|TICK_MS_CFG)\s*=/.test(l))
+      if (inject.length < 3) bad.push('读不到三个注入档位赋值（判据射程失效）')
+      for (const l of inject) if (!/Math\.max\(\d+, Math\.min\(/.test(l)) bad.push('注入赋值缺 clamp（一个 ceiling:0 就退化成每 tick 都判到期）: ' + l.trim())
+      if (!/Number\.isFinite/.test(src)) bad.push('注入值没走 Number.isFinite（NaN/字符串会被当成有效档）')
+      if (!/DEADLINE_MS = SLOW_LINK \? 30000 : 8000/.test(src)) bad.push('注入进去后默认档字面量丢了（生产节奏不再由源码定死）')
+    }
+    return bad
+  }
 
-    const blocked = code.replace("show('slow')", "show('panel')")
-    expect(blocked, '反证失效：变异没落地').not.toBe(code)
-    expect(slowPathFailures(blocked).length, '慢链路改回全屏面板没被判红').toBeGreaterThan(0)
+  it('升级路径四条语义锁：不早退／无条件摘旧节点／先撤骨架／出面板后保留撤销腿＋自动恢复', () => {
+    const bad = upgradeFailures(code)
+    expect(bad, bad.join('\n')).toEqual([])
+  })
 
-    const noDismiss = code.replace('clearInterval(timer); dismissBootNotice(); dismissBootSkeleton(); return',
-      'clearInterval(timer); return')
-    expect(noDismiss, '反证失效：变异没落地').not.toBe(code)
-    expect(slowPathFailures(noDismiss).length, '挂载后不撤销没被判红').toBeGreaterThan(0)
-    expect(slowPathFailures(code)).toEqual([])
+  // 反证 11：五枚各改一处（未修代码形态），每枚都必须让**对应那一条**判红
+  it('反证 11：六枚各改一处（未修代码形态），每枚都必须让**对应那一条**判红', () => {
+    // ★ 变异必须**限定在目标函数体内**做：`if (box && box.parentNode) box.parentNode.removeChild(box)`
+    //   这一行在 dismissBootNotice() 与 show() 里**逐字相同**，全局 replace 会先替到 dismiss 那一份
+    //   ——首跑真踩（"早退被装回"改在了 dismiss 上，锁当然不红，看起来像锁没射程）。
+    const inShow = (from: string, to: string): string => {
+      const at = code.indexOf('function show(kind)')
+      const end = code.indexOf('var timer = setInterval')
+      const body = code.slice(at, end)
+      expect(body, '反证前置失效：show() 里找不到锚点').toContain(from)
+      const mutatedBody = body.replace(from, to)
+      expect(mutatedBody, '变异没落地（空替换＝no-op 会伪装成锁有效）').not.toBe(body)
+      return code.slice(0, at) + mutatedBody + code.slice(end)
+    }
+    const inAutoRecover = (from: string, to: string): string => {
+      const at = code.indexOf('function autoRecover()')
+      const end = code.indexOf('var timer = setInterval')
+      const body = code.slice(at, end)
+      expect(body, '反证前置失效：autoRecover() 里找不到锚点').toContain(from)
+      const mutatedBody = body.replace(from, to)
+      expect(mutatedBody, '变异没落地（空替换＝no-op）').not.toBe(body)
+      return code.slice(0, at) + mutatedBody + code.slice(end)
+    }
+
+    // M1 把早退装回 show() 开头 ⇒ 锁①必须红
+    expect(upgradeFailures(inShow(
+      "          var box = document.getElementById('__boot_fail')\n",
+      "          var box = document.getElementById('__boot_fail')\n          if (box) return\n",
+    )).some((x) => x.includes('早退')), 'M1 早退装回没被抓').toBe(true)
+
+    // M2 摘旧节点重新被 kind === 'slow' 绑住（＝未修代码的形态）⇒ 锁②必须红
+    expect(upgradeFailures(inShow(
+      "          if (box && box.parentNode) box.parentNode.removeChild(box)\n",
+      "          if (box && kind === 'slow' && box.getAttribute('data-kind') === 'slow') { box.parentNode.removeChild(box) }\n",
+    )).some((x) => x.includes('形态条件')), 'M2 升级不摘旧节点没被抓').toBe(true)
+
+    // M3 撤骨架从"盖面板之前"挪走（未修代码里它在早退之后，等于面板出不来时不撤）⇒ 锁③必须红
+    expect(upgradeFailures(inShow("          dismissBootSkeleton()\n", "")).some((x) => x.includes('骨架还没撤')),
+      'M3 面板背后留转圈没被抓').toBe(true)
+
+    // M4 删掉出面板后的兜底哨 ⇒ 锁④必须红（未修代码就是这个形态：clearInterval 之后没人再撤）
+    expect(upgradeFailures(code.replace("          watchMountAfterPanel()\n", ""))
+      .some((x) => x.includes('兜底撤销哨')), 'M4 出面板后不撤销没被抓').toBe(true)
+
+    // M5 两条刹车改回 && 连（＝两条都不成立才刹车）⇒ 锁⑤必须红
+    expect(upgradeFailures(inAutoRecover(
+      "            if (!rootEmpty()) return",
+      "            if (!rootEmpty() && resCount() === before) { return }\n            if (false) return",
+    )).some((x) => x.includes('&&')), 'M5 刹车被 && 连起来没被抓').toBe(true)
+
+    // M6 自动恢复整条腿被摘 ⇒ 锁⑤必须红
+    expect(upgradeFailures(code.replace('function autoRecover() {', 'function autoRecoverDisabled() {'))
+      .some((x) => x.includes('自动恢复')), 'M6 摘掉自动恢复没被抓').toBe(true)
+
+    // M7 注入口去掉 clamp ⇒ 锁⑥必须红
+    expect(upgradeFailures(code.replace(
+      "            if (Number.isFinite(cfg.ceiling)) CEILING_MS = Math.max(2000, Math.min(cfg.ceiling, 600000))",
+      "            if (cfg.ceiling) CEILING_MS = cfg.ceiling",
+    )).some((x) => x.includes('clamp')), 'M7 注入无 clamp 没被抓').toBe(true)
+
+    // 对照组：真实源码必须干净（否则上面七枚"红"没有意义）
+    expect(upgradeFailures(code)).toEqual([])
   })
 
   // 反证 5：摘掉哨兵那一段 `<script>` 后，三段哨兵判据必须全部失效
@@ -355,7 +459,10 @@ describe('启动链锁 D：首屏骨架在位且会撤（轻量化批 C）', () 
     expect(noNode, '反证失效：变异没落地').not.toBe(code)
     expect(skeletonFailures(noNode).length, '摘掉骨架没被判红').toBeGreaterThan(0)
 
-    const noDismiss = code.replace(/clearInterval\(timer\); dismissBootNotice\(\); dismissBootSkeleton\(\); return/,
+    // ⚠️ 这里刻意用「clearInterval(timer) 到 return 之间整段」而不是逐字点名撤了哪几件：
+    //   2026-11-01 DEF-P0-03 给那一支加了第四件（dismissBootLead），按旧字面量写死的变异锚当场切不到靶子，
+    //   表现是"反证失效：变异没落地"——那是判据自伤，不是实现错。撤了几件不由本判据关心。
+    const noDismiss = code.replace(/clearInterval\(timer\);[^}]*?return/,
       'clearInterval(timer); return')
     expect(noDismiss, '反证失效：变异没落地').not.toBe(code)
     expect(skeletonFailures(noDismiss).length, '挂载不撤骨架没被判红').toBeGreaterThan(0)
@@ -435,5 +542,140 @@ describe('启动链锁 C：main.tsx 的渲染期兜底在位', () => {
     expect(main).toContain('console.error')
     expect(main).not.toContain('error.stack')
     expect(main).not.toContain('/src/')
+  })
+})
+
+// ============ 启动链锁 E：零 JS 静态留资表单（★ DEF-P0-03，2026-11-01） ============
+// 这一组守的是"链路真死那一档还剩不还剩一条客户入口"。三条最容易被改坏的形态：
+//  ① 表单被塞进首屏骨架里（骨架容器 pointer-events:none ⇒ 点不动，屏幕上看着还在）；
+//  ② 撤销腿被并进 dismissBootNotice()／被挂到 show('panel') 里 ⇒ **恰好删在它唯一有用的那一档**；
+//  ③ 字段名与后端 leadReq 的 json tag 漂开 ⇒ 用户填完、后端读不到，回一句"请填写公司/团队名称"，
+//     而这条腿本来就是没有 JS 才能走到——没有人会来修（所以这里做**跨语言等值**，不靠人对表）。
+describe('启动链锁 E：零 JS 静态留资表单（DEF-P0-03）', () => {
+  const html = readFileSync(ROOT + 'index.html', 'utf-8')
+  const stripComments = (src: string) => src.replace(/<!--[\s\S]*?-->/g, '')
+  const code = stripComments(html)
+  const leadAt = code.indexOf('<form id="__boot_lead"')
+  const leadEnd = code.indexOf('</form>', leadAt)
+  const nodeLead = leadAt >= 0 && leadEnd > leadAt ? code.slice(leadAt, leadEnd) : ''
+  const skelAt = code.indexOf('<div id="__boot_skeleton"')
+  const skelEnd = code.indexOf('</div>', skelAt)
+  const skeletonRange = skelAt >= 0 && skelEnd > skelAt ? code.slice(skelAt, skelEnd) : ''
+
+  // 射程自证：先证明"表单节点真的被切出来了"——切不出来的话下面每条负向腿都会**恒真**空转。
+  it('射程自证：静态表单节点能切出来且非空（切不出来＝本组判据全部失明）', () => {
+    expect(leadAt, 'index.html 里没有 <form id="__boot_lead"> ⇒ DEF-P0-03 复发').toBeGreaterThanOrEqual(0)
+    expect(nodeLead.length, '表单节点被切空了（下面的负向锁会集体空转）').toBeGreaterThan(200)
+    expect(skeletonRange.length, '骨架节点没切出来').toBeGreaterThan(20)
+  })
+
+  it('① 零 JS 留资表单在位，打的是同源免验证通道', () => {
+    expect(/<form id="__boot_lead"[^>]*action="\/api\/lead\/public"/.test(code),
+      '没有零 JS 静态留资表单，或 action 不是 /api/lead/public').toBe(true)
+    expect(/method="post"/.test(nodeLead), '留资表单不是 POST').toBe(true)
+  })
+
+  it('② 不许挂在骨架容器里（骨架是 pointer-events:none ⇒ 表单点不动）', () => {
+    expect(skeletonRange.includes('__boot_lead'),
+      '静态留资被塞进 #__boot_skeleton：骨架容器 pointer-events:none ⇒ 看着在、点不动').toBe(false)
+  })
+
+  it('③ 表单自身显式恢复可交互，且 box-sizing 把内垫算进宽度', () => {
+    expect(/pointer-events:auto/.test(nodeLead), '留资表单没写 pointer-events:auto').toBe(true)
+    expect(/box-sizing:border-box/.test(nodeLead), '输入框没带 box-sizing:border-box ⇒ 内垫会把表单顶出容器').toBe(true)
+  })
+
+  it('④ 后端契约要求的字段一个不许少（按 leadReq 的 json tag 现读现比）', () => {
+    const leadGo = readFileSync(ROOT + '../backend-go/internal/api/lead.go', 'utf-8')
+    const tags = new Set<string>()
+    for (const m of leadGo.matchAll(/json:"([a-z_]+)"/g)) tags.add(m[1])
+    // 正向对照：靶子必须真有这些 tag（读空集会让"每个 name 都在 tag 里"恒真）
+    expect(tags.size, '读不到 leadReq 的 json tag ⇒ 本条判据失明').toBeGreaterThanOrEqual(7)
+    for (const must of ['company', 'email', 'site']) {
+      expect(tags.has(must), `后端契约里居然没有 ${must} 字段（判据靶子搬家了）`).toBe(true)
+      expect(nodeLead.includes(`name="${must}"`), `留资表单缺字段 name="${must}"`).toBe(true)
+    }
+    // 反向：表单里的每个 name 都必须在后端契约里（多出来的字段会被静默丢掉＝用户填了等于没填）
+    const names = [...nodeLead.matchAll(/name="([a-z_]+)"/g)].map((m) => m[1])
+    expect(names.length, '一个 name 都没解析出来（正则或表单形状变了）').toBeGreaterThanOrEqual(4)
+    for (const n of names) {
+      expect(tags.has(n), `表单字段 ${n} 不在后端 leadReq 的 json tag 里 ⇒ 提交后被静默丢弃`).toBe(true)
+    }
+  })
+
+  it('⑤ 蜜罐用位移隐藏（display:none／visibility:hidden／hidden 属性都会让蜜罐失效）', () => {
+    // 按**整个标签**取（真源码里 style 在换行的下一行，按行取会读不到 left:-9999px ⇒ 判据自伤）
+    const tagMatch = nodeLead.match(/<input[^>]*name="site"[^>]*>/)
+    expect(tagMatch, '没定位到蜜罐字段那一段（<input …name="site"…>）').not.toBeNull()
+    const joined = tagMatch ? tagMatch[0] : ''
+    expect(joined.length, '蜜罐标签被切空 ⇒ 本条负向锁空转').toBeGreaterThan(40)
+    // \shidden(\s|=) 只抓**属性形态**的 hidden（aria-hidden 是可达性标注，不改变可见性，必须放行——
+    // 早先按 \bhidden\b 写会把自家合规的 aria-hidden 判成缺陷，属"负向锁被同形词喂饱"）
+    expect(/display:\s*none|visibility:\s*hidden|\shidden(\s|=)/.test(joined),
+      `蜜罐用了 display/visibility/hidden 隐藏（bot 也填不到 ⇒ 蜜罐失效）：${joined}`).toBe(false)
+    expect(/left:\s*-9999px/.test(joined), '蜜罐必须是位移隐藏').toBe(true)
+    expect(/tabindex="-1"/.test(joined), '蜜罐必须带 tabindex="-1"（键盘用户不该撞上它）').toBe(true)
+  })
+
+  it('⑥ 表单不许依赖 JS（挂 onsubmit／内联脚本＝链路塌时它一起失效）', () => {
+    expect(/onsubmit|onclick|addEventListener|<script/.test(nodeLead),
+      '静态留资挂了 JS：本表单存在的理由就是"JS 没跑起来"').toBe(false)
+  })
+
+  it('⑦ 撤销腿只挂「界面挂载成功」，三个撤销函数各管各的', () => {
+    // 每一次 dismissBootLead() 都必须和 rootEmpty() 在同一行（＝只在界面真起来了才撤）
+    const calls = code.split('\n').filter((l) => l.includes('dismissBootLead()') && !l.includes('function dismissBootLead'))
+    expect(calls.length, '没有任何撤销腿 ⇒ 会与 React 的 LeadForm 并存两份').toBeGreaterThanOrEqual(2)
+    for (const l of calls) {
+      expect(l.includes('rootEmpty()'), `撤销腿没问 rootEmpty：${l.trim()}`).toBe(true)
+    }
+    // show('panel') 那一支**不许**撤它（撤了就是把留资删在链路真死那一档）
+    const showBody = code.slice(code.indexOf('function show(kind)'), code.indexOf('function watchMountAfterPanel'))
+    expect(showBody.length, 'show() 函数体没切出来（判据失明）').toBeGreaterThan(100)
+    expect(showBody.includes('dismissBootLead()'), 'show() 里撤了静态表单 ⇒ 恰好删在它唯一有用的那一档').toBe(false)
+    // 三个撤销函数必须各自独立存在（合并成一个就是上面两条坏法的机制来源）
+    for (const fn of ['dismissBootNotice', 'dismissBootSkeleton', 'dismissBootLead']) {
+      expect(code.includes(`function ${fn}() {`), `${fn} 不再是独立函数（被合并＝两判据必有一条会撒谎）`).toBe(true)
+    }
+  })
+
+  it('⑧ action 必须同源（Caddy 的 CSP 有 form-action self，写成第三方域会被自家拦死）', () => {
+    const action = nodeLead.match(/action="([^"]+)"/)?.[1] ?? ''
+    expect(/^\/api\//.test(action), `留资 action 不是同源相对路径（会被 form-action 'self' 拦）：${action}`).toBe(true)
+    expect(/http/.test(action), `留资 action 不许指向绝对 URL：${action}`).toBe(false)
+  })
+
+  it('⑨ 跨侧接线：后端真注册了这个端点（404 会走 SPA 兜底回整页 HTML＝看起来"提交成功"）', () => {
+    const serverGo = readFileSync(ROOT + '../backend-go/internal/api/server.go', 'utf-8')
+    expect(serverGo.includes('"/api/lead/public"'), '路由表里没有 /api/lead/public ⇒ 静态表单打的是空气').toBe(true)
+    const pubGo = readFileSync(ROOT + '../backend-go/internal/api/lead_public.go', 'utf-8')
+    expect(pubGo.includes('func (s *Server) handleLeadCreatePublic('), 'handler 签名变了 ⇒ 路由注册与判据都要重核').toBe(true)
+    // 免验证通道的三道自保必须都在源码里（少一道就是把匿名写接口敞着）
+    for (const must of ['leadGuardPublicPrefix', 'leadDisposableDomain', 'req.Site']) {
+      expect(pubGo.includes(must), `免验证通道的自保腿少了 ${must}`).toBe(true)
+    }
+  })
+
+  // ---------- 反证（每条都在"修后代码"上拨一次，必须判红） ----------
+  it('反证 10：把表单塞进骨架／改掉 action／撤掉 pointer-events／合并撤销腿／display:none 蜜罐，各自都要被抓住', () => {
+    const cases: Array<[string, string, (m: string) => boolean]> = [
+      ['塞进骨架', nodeLead.replace('<form id="__boot_lead"', '<div id="__boot_skeleton"><form id="__boot_lead"'),
+        (m) => m.includes('__boot_lead')],
+      ['改掉 action', nodeLead.replace('action="/api/lead/public"', 'action="https://api.example/lead"'), (m) => /https:\/\//.test(m)],
+      ['摘掉 pointer-events', nodeLead.replace('pointer-events:auto', ''), (m) => !/pointer-events:auto/.test(m)],
+      ['蜜罐改 display:none', nodeLead.replace('left:-9999px', 'display:none'), (m) => /display:\s*none/.test(m)],
+      ['挂上 onsubmit', nodeLead.replace('<button type="submit"', '<form onsubmit="return true"><button type="submit"'), (m) => /onsubmit/.test(m)],
+      ['字段名漂开', nodeLead.replace('name="company"', 'name="org"'), (m) => /name="org"/.test(m) && !/name="company"/.test(m)],
+    ]
+    for (const [name, mutated, detect] of cases) {
+      expect(detect(mutated), `反证「${name}」没落地（变异没改到靶子＝这条负向锁是空转的）`).toBe(true)
+    }
+    // 合并撤销腿的反证：把 show() 里加一句 dismissBootLead()，判据⑦必须能抓到
+    const showMerged = code.replace('function watchMountAfterPanel()', 'function watchMountAfterPanel()')
+    const showWithLead = code.replace('(document.body || document.documentElement).appendChild(box)',
+      'dismissBootLead(); (document.body || document.documentElement).appendChild(box)')
+    expect(showWithLead).not.toBe(showMerged)
+    const showBody2 = showWithLead.slice(showWithLead.indexOf('function show(kind)'), showWithLead.indexOf('function watchMountAfterPanel'))
+    expect(showBody2.includes('dismissBootLead()'), '在 show() 里撤留资没能被识别 ⇒ 判据⑦的负向腿空转').toBe(true)
   })
 })

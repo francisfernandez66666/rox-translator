@@ -319,6 +319,11 @@ function createChatStore(msgsKey: string) {
           data: res.data,
           files: res.files,
           points_used: res.points_used,
+          // ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：免费档那两条维度按名取，
+          //   非免费单后端整条缺席 ⇒ 这里取到 undefined，正好让展示层落回实扣那一支
+          //   （不许在此兜 0：0 会被读成"这一单本该收 0 分"）。
+          points_equiv: res.points_equiv,
+          points_free: res.points_free,
           progress: undefined,
           draft: undefined,
           slowWarning: undefined, // ★ 决策⑪②：done 即终态，慢预警横幅一并撤下

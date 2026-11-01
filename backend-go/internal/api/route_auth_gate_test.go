@@ -148,6 +148,12 @@ var publicRouteAllowlist = map[string]string{
 	"/metrics":       "Prometheus 抓取端点：默认关闭，需 METRICS_TOKEN Bearer 或显式 METRICS_PUBLIC=1",
 	"/api/qr-image/": "支付/邀请二维码图片读取：匿名购买者扫码页需要；路径已做 basename 归一，只读 _qr 目录",
 	"/api/lead":      "营销留资（留言获取方案）：匿名 POST，IP 限流 + 蜜罐 + 可选 Turnstile",
+	// ★ DEF-P0-03（2026-11-01）：留资的**免验证降级通道**——入口 JS 没跑起来／拿不到 captcha token 的
+	//   访客唯一的客户入口（`index.html` 直出的零 JS 静态表单打的正是它）。公开理由与四道自保见 lead_public.go 文件头：
+	//   蜜罐 + 更紧的 IP 配额（3/日、10s 间隔，与 /api/lead 各记一本账）+ 一次性邮箱域名黑名单 +
+	//   两条升级信号（同 IP＋同设备出现 ≥2 个登录身份 / 同 IP 近 5 分钟登录失败 ≥2 次 ⇒ 当场要求人机验证）；
+	//   落库摘要与站内信、告警一律点名「免验证通道」。
+	"/api/lead/public": "留资免验证降级通道：匿名 POST，蜜罐 + IP 日配额 3 + 一次性邮箱黑名单 + 两条升级信号",
 	// ★ 〇-Z（2026-09-28）：官网首页的免登录即时翻译试用。公开理由与兜底见 trial.go 文件头：
 	//   射程只有一句文本（≤300 字符、单目标语种、语种白名单取 /api/translation/langs 同一份事实）、
 	//   模式服务端强制 pro（请求体无 mode/options 可读）、额度三档（设备号 5 句／IP 每日／平台日预算）

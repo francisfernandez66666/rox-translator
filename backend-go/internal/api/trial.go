@@ -182,6 +182,9 @@ func (s *Server) handleTrialTranslate(w http.ResponseWriter, r *http.Request) {
 		"lang": i18n.FromRequest(r),
 	}
 	ctx := tenant.WithTenant(tenant.WithLang(tenant.WithMode(r.Context(), "pro"), lang), 0)
+	// chat-seg:n/a 免登录试用**一律整篇**：分段把固定指令开销按段数重发，而这一档的成本记在
+	//   平台头上（租户 0、charge_kind='log'），且它是匿名可达面——按段放大等于把「白嫖长文」
+	//   的成本从常数变成线性。理由写死在这里，闸门按全集判这条标记在位。
 	res := s.Engine.HandleText(ctx, text, options, nil)
 	if res == nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrTranslationFailed, "试用暂时不可用，请稍后再试或注册后使用完整功能"))

@@ -7,6 +7,7 @@ package api
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -56,8 +57,13 @@ func TestSSEHeadersClearsWriteDeadline(t *testing.T) {
 		if spy.calls != 1 || !spy.last.IsZero() {
 			t.Fatalf("%s: 期望恰好一次 SetWriteDeadline(零值=无限) 实际 calls=%d last=%v ⇒ Unwrap 链或豁免腿断了", tc.name, spy.calls, spy.last)
 		}
-		if got := spy.Header().Get("Content-Type"); got != "text/event-stream" {
-			t.Fatalf("%s: SSE 头被豁免腿改动: %q", tc.name, got)
+		if got := spy.Header().Get("Content-Type"); got != sseContentType {
+			t.Fatalf("%s: SSE 头被豁免腿改动: %q（期望 %q）", tc.name, got, sseContentType)
+		}
+		// ★ 2026-11-01 DEF-P3-06 正锁：只放宽前缀判＝"charset 又被人删掉"这一族没人守。
+		//   这一条与 sseHeaders 的实现同批改过（旧写法在此处等值钉死了不带 charset 的现状）。
+		if !strings.Contains(spy.Header().Get("Content-Type"), "charset=utf-8") {
+			t.Fatalf("%s: SSE 响应头丢了 charset=utf-8（非浏览器客户端会按 latin1 解成乱码）: %q", tc.name, spy.Header().Get("Content-Type"))
 		}
 	}
 }

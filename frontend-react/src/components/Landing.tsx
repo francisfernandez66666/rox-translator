@@ -809,6 +809,47 @@ function DevSample() {
 }
 
 /** 胶囊按钮（画布一律 radius 999：主=白底黑字 / 次=描边 / 卡内=浮面底） */
+// ★ DEF-P0-03 出路提示（2026-11-01）：`index.html` 直出的零 JS 静态留资表单提交后，
+//   后端 303 回 `/?lead=ok|err`。那张表单只在"入口 JS 没跑起来"时存在，而它自己没法把结果说给人看
+//   ——界面起来之后必须补这一句，否则访客的观感是"填完表单，页面忽然正常了，刚那条线索去哪了不知道"。
+//   三条口径：
+//   ① 读完立刻 replaceState 清掉 query（刷新不许再提示一次；`t=` 那个稳定码只给排障看，不进界面）；
+//   ② 文案只用既有的 land.leadSuccess / land.leadFail（新增面板键要 12 语种同步补译，
+//      而这句话本来就有现成同源文案——复用比再造一条更不容易漂）；
+//   ③ 配色跟着**所在面**走：这块 CTA 是白卡（见下面 .lc-lead-input 的白底黑字），
+//      所以提示也用白底深字，失败态用 #E5484D——不许把深色主题的 #E7E9EA 搬上来（那是"文字色"档，在白卡上直接看不见）。
+function LeadNotice() {
+  const [, t] = useT()
+  const [kind, setKind] = useState<'' | 'ok' | 'err'>('')
+  useEffect(() => {
+    let v = ''
+    try {
+      v = new URLSearchParams(window.location.search).get('lead') || ''
+    } catch {
+      return // 读不到地址栏就不提示（这条只是补充说明，不是主流程）
+    }
+    if (v !== 'ok' && v !== 'err') return
+    setKind(v)
+    try {
+      const u = new URL(window.location.href)
+      u.searchParams.delete('lead')
+      u.searchParams.delete('t')
+      window.history.replaceState(null, '', u.pathname + (u.search || '') + u.hash)
+    } catch {
+      /* 清不掉 query 不影响这一次提示本身 */
+    }
+  }, [])
+  if (!kind) return null
+  return (
+    <div className="lc-lead-notice" data-kind={kind} role="status" aria-live="polite">
+      {kind === 'ok' ? t('land.leadSuccess') : t('land.leadFail')}
+    </div>
+  )
+}
+
+// 官网按钮的唯一形态件：variant 选档（白底黑字／描边／卡内浮面／黑卡实心），size 选字阶。
+// ⚠️ 它渲染的是 <button>（Link 形态除外），e2e 取它按 role=button，不按 role=link（AGENTS §一·24 同族）。
+
 function Pill(props: {
   variant?: 'pri' | 'ghost' | 'soft' | 'dark' // pri 主投（白底黑字）/ ghost 描边次投 / soft 卡内浮面 / dark 反相卡上的实心黑
   size?: 'sm' | 'md' | 'lg' // 三档定高 42 / 50 / 56：导航用 sm，收尾用 lg，其余一律 md
@@ -1394,6 +1435,7 @@ export default function Landing() {
           <Pill variant="dark" size="lg" href="/login" onClick={openTrial}>{t('land.ctaFree')}</Pill>
           {/* ★ P1-3 留资表单：不注册也能让销售跟上进来——匿名 POST /api/lead（限流+蜜罐+可选验证码） */}
           <div className="lc-lead-sep"><span>{t('land.leadOr')}</span></div>
+          <LeadNotice />{/* ★ DEF-P0-03：零 JS 静态表单那条腿的提交结果，界面起来后补一句 */}
           <LeadForm source="landing" />
         </div>
       </section>
@@ -1909,6 +1951,9 @@ const LANDING_CSS = `
 /* 分隔线两侧各一段 1px 短线：把"免费自助注册"与"留资等回电"两条路在视觉上并置成二选一 */
 .lc-lead-sep{display:flex;align-items:center;gap:14px;width:100%;max-width:560px;font-size:15px;color:var(--lc-text-4)}
 .lc-lead-sep::before,.lc-lead-sep::after{content:'';flex:1;height:1px;background:rgba(0,0,0,.12)}
+/* 静态留资出路提示（DEF-P0-03）：与白卡同面色；失败用 #E5484D，全站无绿（交付色档） */
+.lc-lead-notice{width:100%;max-width:560px;padding:10px 12px;border-radius:10px;font-size:15px;line-height:1.5;border:1.2px solid rgba(0,0,0,.16);background:#fff;color:rgba(0,0,0,.78);text-align:left}
+.lc-lead-notice[data-kind='err']{border-color:#E5484D;color:#E5484D}
 /* 表单与分隔线同宽：白块居中排版下两条"路"共享同一根行长轴；relative 给蜜罐的 absolute 定位兜底 */
 .lc-lead{position:relative;width:100%;max-width:560px;display:flex;flex-direction:column;gap:14px;text-align:left}
 .lc-lead-row{display:flex;gap:14px}

@@ -313,6 +313,21 @@ func (e *Engine) UsageBilledTokens(ctx context.Context) (int64, bool) {
 	return 0, false
 }
 
+// UsageFreeBilledTokens 返回本次请求**即时翻译免费档**的等值 token 合计
+// （= 那一行 `usage_ledger` 留痕的 quantity，`charge_kind='log'`、`biz_kind='instant_free'`）。
+// 参数 ctx: 请求级上下文（须已注入用量收集器）。返回: (等值 token, ok)；
+// ok=false 表示这一单**不是**免费档（或链路没有计量口径），出参侧必须让等值字段整条缺席，
+// 不许写成 0 —— 0 会被读成「这一单本该收 0 积分」，与「没扣钱」合起来就是「这次翻译不值钱」。
+// 与 UsageBilledTokens 的分工是钱那一维：本函数只答「本该收多少」，实扣仍只由那一支回答（F-49①）。
+func (e *Engine) UsageFreeBilledTokens(ctx context.Context) (int64, bool) {
+	if uc := llm.CollectorFrom(ctx); uc != nil {
+		if n := uc.FreeBilledTotal(); n >= 0 {
+			return n, n > 0
+		}
+	}
+	return 0, false
+}
+
 // UsageDisplayTokens 展示侧统一取数：优先实收口径，取不到时保守回退真实用量。
 // 参数 ctx: 请求级上下文（须已注入用量收集器）。返回: 用于折算对外积分的 token 数。
 // 回退的理据与 ChargeUsageRealtime 里「billed<total 就按 total 计」同一条：
@@ -1175,7 +1190,48 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	// ★ 2026-10-15 截断修复：预算按待产出译文的长度定档（旧形态写死 2048，长译文的审校
 	//   输出被截断），并读回 finish_reason —— 仍被截断就丢弃，让调用方保留完整初翻
 	//   （半截译文覆盖满版初翻，正是现网「译文中间断掉」的形态）。
-	content, finishReason, err := e.LLM.CallChat(ctx, base, key, model, messages, translateOutputBudget(translation), false, e.Cfg.FallbackTemp)
+	// ★ DEF-P1-05 B2（2026-11-01，D-1 拍板「全部要做流式」）：专业档客户**最终读到的就是这一腿的产物**
+	//   （初翻那条腿已被 WithStreamSuppressed 静默），所以出声的是这里：带 sink 时走 StreamChat，
+	//   增量按与 delta 同一把尺子过契约过滤器（每次调用各一份实例，形态与 singleLangRaw 一致）。
+	// ⚠️ 诚实交代这一档的分叉窗口（**禁止**把它写成"delta 永远等于 done"）：审校产物若稍后被
+	//    finish_reason=length 或 purity 判据丢弃，那些字**已经吐出去、收不回**，而成品退回初翻
+	//    ⇒ 这一档 delta≠done。方向上它比"客户读到两版混排"轻（那正是本缺陷的原形态），
+	//    门禁里"审校坏产物不许覆盖初翻"那条测的是**成品段数与内容**，不是逐字等值。
+	revCtx := ctx
+	if outer := streamSinkFromCtx(ctx); outer != nil && !streamSuppressedFromCtx(ctx) {
+		cf := NewContractFilter()
+		revCtx = withStreamSinkInner(ctx, func(d string) {
+			if out := cf.Push(d); out != "" {
+				outer(targetLang, out)
+			}
+		})
+		defer func() {
+			if out := cf.Flush(); out != "" {
+				outer(targetLang, out)
+			}
+		}()
+	}
+	var content string
+	var finishReason string
+	var err error
+	if sink := streamSinkInnerFromCtx(revCtx); sink != nil {
+		c, f, serr := e.LLM.StreamChat(revCtx, base, key, model, messages, translateOutputBudget(translation), e.Cfg.FallbackTemp, sink)
+		if serr == nil {
+			content, finishReason, err = c, f, nil
+		} else {
+			// ★ 流式腿失败 ⇒ **透明回退非流式**（与 tryMainModel 的 D20 取向逐字一致）。
+			//   不把回退写成"这一轮没有审校"：那会把"这一家网关不支持流式"这个传输问题，
+			//   变成客户手上"审校静默失效、成品停在初翻"的功能问题——而日志上一条红都没有。
+			//   ⚠️ 这一档的已知分叉：回退之前可能已经吐出去半截审校稿（收不回），
+			//   而 done 是非流式那一份 ⇒ delta≠done。方向上是"多看了半截"而不是"少看了内容"，
+			//   并且必须出声（下面这条 WARN 就是给排障分得开"不支持流式"与"上游真坏了"用的）。
+			observability.Warn(ctx, "审校流式腿失败，已透明回退非流式（本段 delta 与 done 可能不同一份）",
+				"lang", targetLang, "stage", stage, "err", serr.Error())
+			content, finishReason, err = e.LLM.CallChat(revCtx, base, key, model, messages, translateOutputBudget(translation), false, e.Cfg.FallbackTemp)
+		}
+	} else {
+		content, finishReason, err = e.LLM.CallChat(revCtx, base, key, model, messages, translateOutputBudget(translation), false, e.Cfg.FallbackTemp)
+	}
 	if err != nil || strings.TrimSpace(content) == "" {
 		return ""
 	}
@@ -1712,9 +1768,29 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	cfg := e.Cfg
 	// ★ D20：外层 sink 是 (lang,delta) 二元；此处套上本次调用的目标语言，
 	//   内层降级/重试逻辑统一看单参 sink（tryMainModel 消费）。
+	// ★ DEF-P1-04（2026-11-01）：delta 这一侧过去**一个字都没洗**——上游按契约吐的 <t>…</t>
+	//   原样进了客户屏幕（实测帧序：`<t` / `>This` / 全程无闭合），而最终腿在下方
+	//   PostProcessTranslation 里是洗过的 ⇒ 表现正是"气泡里流进标签、刷新后没了"。
+	//   现在 delta 过同一个尺子的流式版（只钉契约+伪标签这两层，术语/去中文/审校改写仍不做）。
+	// ⚠️ 过滤器实例必须**每次上游调用各一份**：下面 finish_reason=length 会递归重试，
+	//   共享实例会把上一轮的 inside 状态带进新一轮 ⇒ 整轮正文被吞掉（比现状更坏的静默形态）。
 	lang := targetLang
-	if outer := streamSinkFromCtx(ctx); outer != nil {
-		ctx = withStreamSinkInner(ctx, func(d string) { outer(lang, d) })
+	// ★ DEF-P1-05 B2（2026-11-01）：pro 档的初翻腿走 WithStreamSuppressed 进来 ⇒ **不套 sink**，
+	//   于是 tryMainModel 也走非流式 CallChat（这一腿本来就没人看它的字）。
+	//   静默档只在这里判一次：sink 的装配点就是"谁在听"的唯一现场。
+	if outer := streamSinkFromCtx(ctx); outer != nil && !streamSuppressedFromCtx(ctx) {
+		cf := NewContractFilter()
+		ctx = withStreamSinkInner(ctx, func(d string) {
+			if e := cf.Push(d); e != "" {
+				outer(lang, e)
+			}
+		})
+		// 流结束（含失败返回与递归重试）必须结算一次：候选扣住的、块尾扣住的空白都在这里出栈。
+		defer func() {
+			if e := cf.Flush(); e != "" {
+				outer(lang, e)
+			}
+		}()
 	}
 	// ★ B4（方案 B Phase 1）前缀重组：system 只放「固定翻译规范头」——
 	//   指令骨架 + 输出契约 + 文化块（排序稳定），同 (源语言,目标语言,界面语言,租户)

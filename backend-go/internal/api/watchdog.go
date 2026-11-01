@@ -44,13 +44,22 @@ import (
 // 生产由 watchdog「启动即扫 + 24h 周期」自动执行；本端点为 UAT/发布矩阵提供
 // 「注入到期 → 触发 → 断言 permissions 实际摘除」的可验证入口，操作幂等。
 func (s *Server) handleWatchdogSubscriptionScan(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "仅支持 POST"))
+	// ★ 2026-11-01 DEF-P3-05 的**第四处**（全路由一致性锁现出来的，原报告与复核都只列了三条）：
+	//   旧形态把「方法判定」排在「鉴权」之前，且鉴权那句写成 `err != nil || !IsSuperAdmin`，
+	//   于是未登录的 **POST** 拿到的是 403 而不是 401（GET 探过去回 405，把这条藏住了——
+	//   现网普查只看到 405，所以谁都没发现这第三条 403）。
+	//   现改成：先鉴权（未登录 401／角色不足 403 走既有分流），再判方法（405 留给真正的用错方法）。
+	u, err := s.requireTenantAdmin(r)
+	if err != nil {
+		s.writeAuthzError(w, r, err)
 		return
 	}
-	u, err := s.requireTenantAdmin(r)
-	if err != nil || !auth.IsSuperAdmin(u) {
+	if !auth.IsSuperAdmin(u) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可触发订阅到期扫描"))
+		return
+	}
+	if r.Method != http.MethodPost {
+		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "仅支持 POST"))
 		return
 	}
 	s.runSubscriptionScan()

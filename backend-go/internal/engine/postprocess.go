@@ -317,6 +317,15 @@ func stripTrailingCJKNotesStrict(text string) string {
 // 用于白名单提取译文：标签内是译文本体，标签外的注释/术语对照/说明天然被丢弃。
 var contractTagRe = regexp.MustCompile(`(?is)<t\b[^>]*>(.*?)</t\s*>`)
 
+// contractOpenRe／contractCloseRe ＝ contractTagRe 的两半，单独钉出来只为一件事：
+// 流式过滤器（stream_contract.go）必须和整串提取用**同一个**开/闭标签判据。
+// 「两处各写一份迟早打架」在本仓是反复出现过的病根，所以这里用等值锁
+// （TestContractHalvesAgreeWithContractTagRe）把两半钉回 contractTagRe，而不是靠注释提醒。
+var (
+	contractOpenRe  = regexp.MustCompile(`(?i)^<t\b[^>]*>$`)
+	contractCloseRe = regexp.MustCompile(`(?i)^</t\s*>$`)
+)
+
 // extractContractTranslation 输出契约白名单提取：
 // 模型按契约把最终译文用 <t>…</t> 包裹时，只取标签内内容（标签外的注释块整体丢弃）；
 // 未命中契约（模型违约）时原样返回，交由后续黑名单清洗链兜底——不会比无契约时更差。
@@ -607,7 +616,16 @@ func IsSuspectOutput(text string) bool {
 	return collapseDegenerateRepeats(t) != t
 }
 
-// PostProcessTranslation 最终后处理（所有翻译路径必须经过）
+// PostProcessTranslation 最终后处理（**所有翻译路径的最终腿必须经过**）。
+//
+// ★ 2026-11-01 DEF-P1-05 收口：这条注释原先写成"所有翻译路径必须经过"，
+//
+//	在流式（delta）那条腿上**并不成立**，而它正是这个误解让 `<t>` 一路裸奔到客户屏幕的护身符
+//	（AGENTS §一·14 末条那族「注释声称有个事实源而它不存在/不生效」）。现在按分层事实写清：
+//	  · 契约提取 + 伪标签拆除：最终腿（本函数）与 delta 流（stream_contract.go 的 ContractFilter）都过；
+//	  · 术语替换 / 去中文 / 尾段截断 / 品牌归一 / 审校改写：**只在最终腿**，
+//	    delta 上不做（做了就等于"用户读到一版、成品是另一版"，那是 DEF-P1-05 的本体）。
+//	⚠️ 改这一族任何一层，另一层的等值锁（stream_contract_gate_test.go 的分层等值锁）必须同步。
 func PostProcessTranslation(text, langCode string) string {
 	// ★ 输出契约白名单提取（2026-09-09）：prompt 要求模型用 <t>…</t> 包裹最终译文，
 	//   命中契约时只取标签内内容——标签外的注释/术语对照块整体丢弃（结构性根治「译文后

@@ -779,6 +779,9 @@ func (s *Server) handleOpenAPITranslateSync(w http.ResponseWriter, r *http.Reque
 	syncCtx = s.Engine.WithUsageRecorder(syncCtx)
 	syncCtx = llm.WithInteractive(syncCtx)
 	syncCtx = tenant.WithLang(tenant.WithMode(syncCtx, mode), tenant.LangFromOptions(options))
+	// ★ DEF-P1-05 B2：开放 API 的同步文本腿也要挂判定——否则同一个请求走站内是分段、
+	//   走 API 是整篇，客户拿 SDK 验收时看到的段落结构与官网不一致（对外契约分叉）。
+	syncCtx = s.chatSegPlanCtx(syncCtx, req.Text, options)
 	res := s.Engine.HandleText(syncCtx, req.Text, options, nil)
 	if res.Error != "" {
 		s.metrics.countTranslate("text", false)

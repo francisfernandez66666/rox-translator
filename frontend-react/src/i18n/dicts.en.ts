@@ -402,6 +402,8 @@ export const baseEn: Record<string,string> = {
   'audit.action.apikey_rotate': 'Rotate API key',
   'audit.action.apikey_set_limit': 'Set API key limit',
   'audit.action.apikey_delete': 'Delete API key',
+  'audit.action.chat_seg_config_save': 'Save instant-translation segmentation tiers',
+  'audit.action.chat_seg_config_reset': 'Reset instant-translation segmentation tiers',
   'audit.action.apikey_set_status': 'Enable or disable API key',
   'audit.action.approve_edit': 'Approve (merge final)',
   'audit.action.approve_edit_skip': 'Approve (skip final)',
@@ -638,6 +640,7 @@ export const baseEn: Record<string,string> = {
  'msg.copied': 'Copied ',
   // ★ 14.4 (2026-10-10): points meta row at bubble bottom (same row as feedback entry, never inside content)
   'msg.pointsUsed': 'This translation used {n} points',
+  'msg.pointsFree': 'Worth {n} points · free this round',
   'app.loading': 'Loading…',
   'app.personalPlan': 'Personal plan',
   'chat.customGroup': 'More',

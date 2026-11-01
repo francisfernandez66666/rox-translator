@@ -80,14 +80,29 @@ async function readPoints(page: Page, testid: string): Promise<number> {
  * ★ 2026-10-14 起它是 TF2-a 的锚点，取代被撤下的那颗「今日已耗」徽标（理由见文件头那段）。
  * 用 `.last()` 而不是 `.first()`：每完成一轮就多一颗气泡，first 会永远停在预热轮那一颗
  * ——那正是记忆里「`.first()` 命中路由切换遗留的隐藏节点」同族的形态（度量腿要先自证射程）。
- * 这一件只在 `points_used` 非 0 时渲染（免扣费的 TM 精确命中不出这一行），
- * 所以"读得到数"本身就是"这一轮真扣了点"的界面证据。
+ * ★ 2026-11-01 改判据（用户拍板「显示等值积分并注明免扣」）：这一行现在按**两条腿**渲染——
+ *   扣费腿＝「本次消耗 N 积分」（points_used>0），免费档腿＝「等值 N 积分 · 本次免扣」
+ *   （points_used=0 ＋ points_equiv>0 ＋ data-free="1"）。
+ *   ⇒ 「读得到数」不再等于「这一轮真扣了点」，扣费那一维改由下面那条**两个语种（付费权益）腿**证；
+ *     本函数仍负责「这一轮自己报了个数」（两种腿都必须报，静默才是回归）。
+ *   ⚠️ 旧注释那句「只在 points_used 非 0 时渲染」是改前的形态，留着会被下一个人当现行口径。
  */
 async function readRoundCost(page: Page): Promise<number> {
   const txt = await page.getByTestId('msg-meta').last().innerText({ timeout: 10000 });
   const m = txt.match(/[\d,]+/);
   expect(m, `本轮气泡的消耗读数里没解析出数字：${txt.slice(0, 120)}`).toBeTruthy();
   return Number((m as RegExpMatchArray)[0].replace(/,/g, ''));
+}
+
+/**
+ * 本轮气泡那一行是不是**免费档那一支**（读 MessageBubble 落栈时写的 `data-free` 形态标记）。
+ * ★ 2026-11-01：判「这一轮免扣」必须问**界面自己声明的形态**，不许按文案语言猜
+ *   （12 语种跑测时「免扣」两个字根本不在屏幕上，那是记忆里「语种/输入不在射程 ⇒ 判据恒真/恒 0」那一族）。
+ */
+async function readRoundFree(page: Page): Promise<boolean> {
+  const el = page.getByTestId('msg-meta').last();
+  const v = await el.getAttribute('data-free', { timeout: 10000 });
+  return v === '1';
 }
 
 /**
@@ -117,6 +132,26 @@ async function translateOnce(page: Page, source: string, round: number) {
   return out;
 }
 
+
+/**
+ * 勾上第二个目标语种——**这就是「付费档」那把闸**（G12：免费档最多 1 个语种，语种数是付费权益）。
+ * TF1 的扣费腿与 TF5 共用这一份实现（两处各写一遍点击序列，迟早分叉）。
+ * 语种名按 zh 界面点：本 spec 在 login() 里钉了 app_lang=zh，锚点与 multilang_zip 同一套。
+ */
+async function pickSecondLang(page: Page, label: string) {
+    const trigger = page.getByTestId('lang-multi-trigger').first();
+    await trigger.click();
+    const panel = page.getByTestId('lang-multi-panel').first();
+  await expect(panel, '语种面板未打开').toBeVisible({ timeout: 10_000 });
+  const opt = panel.locator('[role="option"]', { hasText: label }).first();
+  await expect(opt, `语种面板里没有「${label}」这一行`).toBeVisible({ timeout: 10_000 });
+    if ((await opt.getAttribute('aria-selected')) !== 'true') await opt.click();
+  await expect(opt).toHaveAttribute('aria-selected', 'true', { timeout: 10_000 });
+  await trigger.click(); // 收起面板
+  await expect(page.getByTestId('lang-chips').locator('.tag-lang'), '第二语种没落成 chip')
+    .toHaveCount(2, { timeout: 10_000 });
+}
+
 test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见）', () => {
   test('TF1+TF2+TF3 即时翻译译文上屏且余额净减少', async ({ page }) => {
     // 多轮 mock LLM 翻译 + 每轮 90s 上限，默认 30s 必然不够
@@ -133,67 +168,108 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
     // 预热轮：吃掉「当日首次发起翻译」的任务奖励发放与首帧渲染抖动
     const warmBal = await readPoints(page, 'chat-balance');
     await translateOnce(page, srcText('warmup'), 1);
-    // ★ 预热轮的消耗读数**只做"存在性"取证、不做数值判定**：预热轮可能被每日奖励补成正数增量，
+    // ★ 预热轮的消耗读数**只做「存在性」取证、不做数值判定**：预热轮可能被每日奖励补成正数增量，
     //   拿它当断言会把用例写成随机红（TF3 的刷新证据在后面的正式测量轮里硬断言）。
     try {
       await expect.poll(() => readRoundCost(page), { timeout: 20_000 }).toBeGreaterThan(0);
     } catch {
       // 预热轮没等到消耗行也继续：正式测量轮自带「本轮消耗 > 0 ＋ 余额减少」的硬断言
-    }
+}
     try {
       await expect
         .poll(() => readPoints(page, 'chat-balance'), { timeout: 20_000 })
         .not.toBe(warmBal);
     } catch {
       // 同上：预热轮没观察到余额条刷新也继续
-    }
+}
 
-    // 净扣费测量：最多 3 轮，抢发（并发 worker 触发同一次每日奖励）只会污染前一两轮
-    let measured = false;
-    let refreshSeen = false;
-    let lastBefore = 0;
-    let lastAfter = 0;
-    for (let attempt = 1; attempt <= 3 && !measured; attempt++) {
+    // 测量段（★ 2026-11-01 重写**靶子**，判据一条没放宽、还多一条）
+    //
+    //   为什么必须拆成两支：短靶子的即时翻译现在**落在免费档内**（库里 charge_kind='log'、实扣 0、
+    //   余额天生不动），而旧写法把「余额没减」直接判成断链——那是判据把免费档当成了缺陷。
+    //   用户 2026-11-01 的裁决＝「显示等值积分并注明免扣」之后，界面自己带出了形态标记
+    //   （msg-meta 上的 data-free），所以这一条可以、也必须按形态分派：
+    //     ① 免扣那一支：本轮必须报出等值数、必须标注免扣、余额**不许减少**（免扣就得真没扣）；
+    //     ② 扣费那一支（勾第二个目标语种＝付费权益）：本轮必须报出消耗数、不许带免扣标注、
+    //        余额条必须在本轮刷新过，且**严格减少**——这才是这条用例原本要证的扣费链路。
+    //   旧 TF3「刷新时机」那条教训原样搬进②（红因分开报的纪律一字未动）：
+    //     消耗行随 SSE done 帧当场渲染，余额要等 useChat 的 PKG_REFRESH_DEBOUNCE_MS（2s）
+    //     ＋一次 myPackage 往返 ⇒ 「刷没刷」必须挑明成独立断言，两种红分开报。
+    //   ⚠️ 每日任务「发起翻译」奖励仍在翻译请求内同步发放（task_hooks.go），所以①那一支
+    //     只判「不许减少」，余额**被抬高**属已知且与本用例无关的一次性事件。
+    let chargedRefreshed = false;
+    let chargedMeasured = false;
+    let chargedBefore = 0;
+    let chargedAfter = 0;
+    let freeLegRounds = 0;
+
+    for (let attempt = 1; attempt <= 3; attempt++) {
       const round = attempt + 1;
       const balBefore = await readPoints(page, 'chat-balance');
       await translateOnce(page, srcText(`m${round}`), round);
 
-      // TF2-a：本轮气泡自己报出「消耗 N 积分」且 N > 0
-      //   （按轮读数 ⇒ 同日其他链路的累计增量与每日奖励都污染不了它，这是"这一轮真扣了点"的界面证据）
+      // TF2-a：本轮气泡自己报出一个 > 0 的数（两种腿都必须报，静默才是回归）
       await expect
-        .poll(() => readRoundCost(page), { timeout: 30_000, message: `第 ${round} 轮完成后本轮消耗读数未出现或未大于 0` })
+        .poll(() => readRoundCost(page), { timeout: 30_000, message: `第 ${round} 轮完成后本轮读数未出现或未大于 0` })
         .toBeGreaterThan(0);
 
-      // TF3：余额条必须在**本轮**被刷新过（不是只在挂载时读一次）——这条现在是显式硬断言。
-      //   ★★ 2026-10-15 归因批（本批 10-14 改锚留下的测量缺陷，非产品缺陷）：
-      //   这一腿过去**隐含**在旧 TF2-a 里——旧写法 poll 的是顶部「今日已耗」，而它与余额由同一次
-      //   `loadBalance` 一起赋值（ChatWindow 里 setBalance/setUsage 同批），poll 到它涨＝余额那一侧
-      //   必然也已经刷过。10-14 把锚点换成气泡自己的 `msg-meta` 之后这条隐含等式**断了**：
-      //   消耗行随 SSE done 帧当场渲染，余额却要等 `useChat` 的 PKG_REFRESH_DEBOUNCE_MS（2s）
-      //   ＋一次 myPackage 往返 ⇒ 下面原先那次"单发读余额"读到的是刷新前的旧值，
-      //   于是三轮全判「未净减少」。现网实测读数是 192986→192986、192981→192981、192976→192976
-      //   （跨轮 −5/轮 ⇒ 钱确实扣了，红的是**时机**）。
-      //   ⇒ 修法＝把"刷没刷"挑明成一条独立断言，再在**已刷新那份读数**上比大小；判据一点没放宽，
-      //     比原来多一条硬断言（旧写法在"已耗涨、余额没刷"这种撕裂形态下反而会误判）。
-      let refreshed = false;
-      try {
-        await expect
+      if (await readRoundFree(page)) {
+        // ① 免扣那一支：钱不许动
+        freeLegRounds++;
+        const balAfter = await readPoints(page, 'chat-balance');
+        expect(balAfter,
+          `第 ${round} 轮界面自己写着「本次免扣」，余额却从 ${balBefore} 掉到 ${balAfter}：免扣是假的（出参与台账至少一边在撒谎）`)
+          .toBeGreaterThanOrEqual(balBefore);
+}
+}
+
+    // ② 扣费腿：勾**第二个目标语种**（G12：免费档最多 1 个语种，语种数是付费权益）。
+    //   为什么不用「把文本拉长」那一支：长文本会撞决策⑪① 的发起前三档预检（pro 档 5 段 × 每字符 4ms
+    //   ⇒ 约 1,500 字就 reject、发送钮直接 disabled），那是产品**有意**拦的形态；
+    //   拿它当扣费靶子＝让判据和一条无关闸门互相打架（2026-11-02 首跑就红在这里：
+    //   3,340 字那一枪根本没发出去，屏幕上只剩「element is not enabled」，看着像前端回归）。
+    //   为什么必须是专业档：B8 段压的 `uat_promo` 窗口把 **fast** 覆盖成 charge=false，
+    //   策略免扣的一单会写等值台账但**不动余额**（§一·11 那族「三把尺子」），
+    //   拿它判「余额净减」就是把一条正确实现判成缺陷；窗口只覆盖 fast，pro 照旧扣钱。
+    //   为什么还要前提自证：万一运营把 `free_lang_limit` 调成 0（不限），这一枪会落回免扣那一支，
+    //   判据必须点名「是环境不是实现」，而不是悄悄放行。
+    {
+      const round = 5;
+      await pickSecondLang(page, '西班牙语'); // en＋es：两个都是拉丁语系，translateOnce 的第③条判据照旧成立
+      const balBefore = await readPoints(page, 'chat-balance');
+      await translateOnce(page, srcText('charged'), round);
+      await expect
+        .poll(() => readRoundCost(page), { timeout: 30_000, message: `第 ${round} 轮（扣费腿）读数未出现或未大于 0` })
+        .toBeGreaterThan(0);
+      // 前提自证：这一枪必须**不是**免扣那一支，否则下面两条判据测的是免费腿。
+      expect(await readRoundFree(page),
+        `第 ${round} 轮勾了两个语种仍被界面判成免扣 ⇒ 这台的免费档语种上限不是 1` +
+        `（ops_policy.instant.free_lang_limit 被改过或出厂档变了）⇒ 扣费链路这一维没被测到。` +
+        `把档位钉回出厂值或换靶子，**不许**放宽判据。`).toBe(false);
+
+    try {
+      await expect
           .poll(() => readPoints(page, 'chat-balance'), { timeout: 30_000 })
           .not.toBe(balBefore);
-        refreshed = true;
-        refreshSeen = true;
-      } catch {
-        // 本轮没等到刷新：留给下一轮（三轮都没刷新的情形由循环后第一条 expect 判红）
-      }
-
-      // TF2-b：余额严格减少（比的是"本轮刷新后"的值，不是刷新前的旧值）
-      lastBefore = balBefore;
-      lastAfter = await readPoints(page, 'chat-balance');
-      measured = refreshed && lastAfter < balBefore;
-    }
-    // 两条红分开报，别混成一条：分不清「余额条压根不刷」和「刷了但没净减」就没法定位。
-    expect(refreshSeen, `连续 3 轮翻译后余额条一次都没刷新（读数恒 ${lastBefore}）：myPackage→余额条刷新链路断了`).toBe(true);
-    expect(measured, `连续 3 轮翻译后余额未净减少（${lastBefore} → ${lastAfter}）：扣费未生效或被每日奖励补平`).toBe(true);
+        chargedRefreshed = true;
+    } catch {
+        // 没等到刷新：交给下面第一条 expect 判红（读数写在消息里，别混成「没净减」）
+}
+      chargedBefore = balBefore;
+      chargedAfter = await readPoints(page, 'chat-balance');
+      chargedMeasured = chargedRefreshed && chargedAfter < balBefore;
+}
+    // 两条红分开报（同 2026-10-15 那条归因）：分不清「余额条压根不刷」和「刷了但没净减」就没法定位。
+    expect(chargedRefreshed, `扣费腿那一轮余额条一次都没刷新（读数恒 ${chargedBefore}）：myPackage→余额条刷新链路断了`).toBe(true);
+    expect(chargedMeasured, `扣费腿那一轮余额未净减少（${chargedBefore} → ${chargedAfter}）：扣费未生效或被每日奖励补平`).toBe(true);
+    if (freeLegRounds === 0) {
+      // 这台机器的免费档没生效（关闸/上限 0）——不是缺陷，但「用户拍板的那个形态」本轮零界面证据，
+      // 按仓内纪律把它写成**可见的读数**而不是悄悄放行（同 §一·5「空态不许伪装成检查过」）。
+      test.info().annotations.push({
+        type: 'info',
+        description: `三段短轮都走扣费腿（免费档未生效）：等值＋注明免扣那一支本轮无界面证据，跑测环境请核 ops_policy.instant`,
+  });
+}
 
     // ★ 2026-10-13 用户令③ TF4：气泡尾部那一排（查看原文／复制／**朗读**／反馈／消耗）**同排、同字号档**。
     //   为什么只能量在这里：jsdom 单测不做 flex 布局、也不加载 theme.css（源码级锁见
@@ -202,18 +278,18 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
     //     字号等值（14，不是「只准更大」的单向锁）＋ 垂直中心同带（同排＝同一高低）。
     //   ★★ 2026-10-15 把「件数＝4」翻成**派生判据**（原写法恒红复现：本批 P3 译文朗读把
     //   `SpeakButton` 放进了同一排，`Array.from(row.children)` 数到 5）：
-    //   钉死数字这类锁的毛病不是"会过时"而是"过时了还在替旧口径说话"——它问的其实不是
+    //   钉死数字这类锁的毛病不是「会过时」而是「过时了还在替旧口径说话」——它问的其实不是
     //   「这一排有几件」，而是「有没有哪件掉出这一排 / 各走一档字号」。改成三条派腿后：
     //     ① 每一枚直接子节点都必须属于 `.msg-act-btn` / `.msg-meta` 这两类之一（第三方类名＝有控件被分排或另加容器）；
     //     ② 点名的功能件逐个必须在场（缺件＝那一件从界面上掉了，这条正是原「数件数」想抓的东西）；
-    //     ③ 射程自证：子节点总数不得低于点名件数（取到空行/锚点漂了 ⇒ 判"锁失明"而不是"通过"，同 §一·14 P0 那条口径）。
+    //     ③ 射程自证：子节点总数不得低于点名件数（取到空行/锚点漂了 ⇒ 判「锁失明」而不是「通过」，同 §一·14 P0 那条口径）。
     //   ⇒ 将来再往这一排加第 N 件（只要它还是 `.msg-act-btn`）不需要改这条锁；而它会**自动**被
     //     下面的字号/同带逐件判据量到，这是写死 4 做不到的。
     const NAMED = ['show-src', 'copy-translation', 'speak-translation', 'msg-meta'];
     // ★ 2026-10-16：朗读钮的**是否渲染**由服务端能力决定（AGENTS §一·17「能力布尔＝入口可见性」：
     //   `/api/health.tts_ready=false` ⇒ 整颗不渲染，同 ChatWindow 麦克风那条）。所以「点名件必须在场」
     //   这一条要按能力分派——本机／CI／UAT 这些**没有投放 TTS 权重**的实例上，朗读钮缺席恰恰是设计，
-    //   把它判成"控件掉了"会让这条锁在无权重环境恒红（恒红＝钝化，同 AGENTS §三「判据过时」那族）。
+    //   把它判成「控件掉了」会让这条锁在无权重环境恒红（恒红＝钝化，同 AGENTS §三「判据过时」那族）。
     //   三档与产品侧同口径：`true` ⇒ 必须在场；`false` ⇒ 必须不在场（反向腿，见下）；`null`（探不到）⇒ 不判
     //   （fail-open：探针自己坏掉不该让这条锁替产品做决定）。
     const ttsCap: boolean | null = await page.request.get('/api/health')
@@ -233,63 +309,54 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
         feedback: row.querySelectorAll('.msg-fb-btn').length,
         items: kids.map((el) => {
           const b = el.getBoundingClientRect();
-          return {
+      return {
             cls: el.className,
             fs: parseFloat(getComputedStyle(el).fontSize),
             off: Math.abs(b.top + b.height / 2 - center),
           };
         }),
-      };
+          };
     }, EXPECT);
     expect(tail.count, `尾部操作行数到 ${tail.count} 件 < 点名的 ${NAMED.length} 件：锚点漂了或这一排压根没渲染（闸门失明）`)
       .toBeGreaterThanOrEqual(NAMED.length);
     expect(tail.missing, `尾部点名件缺席：${tail.missing.join(' / ')}（那件控件从完成态气泡上掉了）`).toEqual([]);
     // 反向腿（★ 2026-10-16）：能力**明确为假**时这颗钮必须在场判红——否则上面那条按能力分派就会
-    // 退化成"只要探不到就永远放行"的单向锁，而渲染门失效（摆了颗点了必错的按钮）没人看得见。
+    // 退化成「只要探不到就永远放行」的单向锁，而渲染门失效（摆了颗点了必错的按钮）没人看得见。
     if (ttsCap === false) {
       const spoke = await page.locator('.msg-actions').last().locator('[data-testid="speak-translation"]').count();
       expect(spoke, 'tts_ready=false 时朗读钮仍在场 ⇒ 渲染门（api/voiceCapability）失效').toBe(0);
-    }
+}
     expect(tail.feedback, `反馈入口不是恰好一枚（实到 ${tail.feedback}）`).toBe(1);
     expect(tail.foreign, `尾部出现第三类控件／被别的容器包了一层：${tail.foreign.join(' / ')}（同排判据要求只有 .msg-act-btn 与 .msg-meta）`)
       .toEqual([]);
     for (const c of tail.items) {
       expect(c.fs, `尾部控件「${c.cls}」字号 ${c.fs}px ≠ 14px（同排必须同档，字号只在 .msg-actions 声明一次）`).toBe(14);
       expect(c.off, `尾部控件「${c.cls}」垂直中心偏离行中心 ${c.off}px ⇒ 已不是一排（高低不统一）`).toBeLessThanOrEqual(6);
-    }
+}
 
     await page.screenshot({ path: 'artifacts/tf1_translate_flow.png' });
   });
   // ★ 2026-10-31 补 G12／N6／G19 的**浏览器面**（TF5）。
   //   为什么这条必须挂在真 e2e 上，而不是只留在 jsdom（chatInstantGuide ⑧⑨）：
   //   ① 语种选择器是真实组件（Popup 自绘面板），jsdom 那边把它整颗 mock 掉了 —— 
-  //      "选到第二个语种"这个动作本身在单测里从没发生过；
+  //      「选到第二个语种」这个动作本身在单测里从没发生过；
   //   ② 预估条要等一次真 `/api/translation/estimate` 往返才有数字，单测里它是桩；
   //   ③ 「不静默收费」这句话的完整意思＝**发送前**看得见区间 **且** 发送后真扣到钱，
-  //      两头都在同一条链上才成立（TF2 已扣过钱，这一条补的是"事前看得见"那一半）。
+  //      两头都在同一条链上才成立（TF2 已扣过钱，这一条补的是「事前看得见」那一半）。
   test('TF5 多语种＝付费档：预估在发送前上屏、扣费在完成后现身（G12/N6/G19）', async ({ page }) => {
     test.setTimeout(300_000);
     await login(page, USER, PASS);
     await page.goto('/');
 
-    const input = page.getByTestId('translate-input');
-    await expect(input, '工作台输入框未渲染').toBeVisible({ timeout: 20000 });
-    // 对照组：单语种时**不该**有多语种付费提示（这条负向让下面的正向不是"永远在场"的假绿）
+  const input = page.getByTestId('translate-input');
+  await expect(input, '工作台输入框未渲染').toBeVisible({ timeout: 20000 });
+    // 对照组：单语种时**不该**有多语种付费提示（这条负向让下面的正向不是「永远在场」的假绿）
     await expect(page.getByTestId('chat-multi-paid'), '单语种却出现多语种付费提示').toHaveCount(0);
 
-    // 勾第二个目标语种（面板开→选项行→收起，与 multilang_zip 的 pickLang 同一套锚点）
-    const trigger = page.getByTestId('lang-multi-trigger').first();
-    await trigger.click();
-    const panel = page.getByTestId('lang-multi-panel').first();
-    await expect(panel, '语种面板未打开').toBeVisible({ timeout: 10000 });
-    const opt = panel.locator('[role="option"]', { hasText: '日语' }).first();
-    await expect(opt, '语种面板里没有日语这一行').toBeVisible({ timeout: 10000 });
-    if ((await opt.getAttribute('aria-selected')) !== 'true') await opt.click();
-    await expect(opt).toHaveAttribute('aria-selected', 'true', { timeout: 10000 });
-    await trigger.click(); // 收起
-    await expect(page.getByTestId('lang-chips').locator('.tag-lang')).toHaveCount(2, { timeout: 10000 });
+    // 勾第二个目标语种：与 TF1 扣费腿共用 pickSecondLang（两份点击序列迟早分叉）
+    await pickSecondLang(page, '日语');
 
-    // ① 付费提示在位（选中的这一刻就该知道"这一档是要花钱的"）
+    // ① 付费提示在位（选中的这一刻就该知道「这一档是要花钱的」）
     const paidHint = page.getByTestId('chat-multi-paid');
     await expect(paidHint, '选了 2 个语种却没有付费提示 ⇒ 分档在界面上是隐形的').toBeVisible({ timeout: 10000 });
     expect(await paidHint.getAttribute('title'), '付费提示必须点名免费档的语种上限').toContain('1');
@@ -302,12 +369,12 @@ test.describe('翻译主流程（即时翻译 → 译文上屏 → 扣费可见�
     expect(/[\d,]{2,}/.test(estText), `预估条里没有区间数字：${estText}`).toBeTruthy();
 
     // ③ 发送 → 译文回流 → 本轮消耗读数 >0（钱真的扣了，不是只提示了一下）
-    await page.getByRole('button', { name: /^(发送|翻译|Send|Translate)$/ }).click();
+  await page.getByRole('button', { name: /^(发送|翻译|Send|Translate)$/ }).click();
     await expect(page.locator('.translation-results'), '90s 内没有出现结果表').toHaveCount(1, { timeout: 90_000 });
-    await expect
+      await expect
       .poll(() => readRoundCost(page), { timeout: 30_000, message: '完成后本轮消耗读数未出现或不大于 0' })
-      .toBeGreaterThan(0);
+        .toBeGreaterThan(0);
     await page.screenshot({ path: 'artifacts/tf5_multilang_paid.png' });
   });
 
-});
+  });

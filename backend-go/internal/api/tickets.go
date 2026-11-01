@@ -370,7 +370,15 @@ func (s *Server) handleTicketCreate(w http.ResponseWriter, r *http.Request) {
 		Mode        string `json:"mode"`         // 翻译模式：fast | pro（默认 pro）
 		MaxLength   int64  `json:"max_length"`   // ★ 缩翻最长字符限制（0=未启用）
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
+	// ★ 2026-11-01 DEF-P2-07：解码失败与"源文本为空"**必须分开报**（旧写法用 `||` 并成一句
+	//   「请提供源文本」）。现网实证：`target_langs` 传成数组 ⇒ 整包 JSON 解析失败，
+	//   而屏幕告诉客户端"你没给源文本"——把排障方向整个带偏（客户端字段齐着呐）。
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+			"请求格式错误：JSON 解析失败（字段类型请照文档传，如 target_langs 须为逗号分隔字符串）"))
+		return
+	}
+	if req.SourceText == "" {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请提供源文本"))
 		return
 	}

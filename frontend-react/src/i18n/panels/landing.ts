@@ -52,9 +52,13 @@ export const zh: Record<string, string> = {
   'land.demoTerm3': '销售线索',
 
   // —— 〇-Z 免登录试用面板（★ 2026-09-28：hero 右侧演示卡点击后就地切成这张卡） ——
-  // 口径：5 句 / 设备、强制专业校对档、超出即引导注册；文案里不出现「免费注册送额度」之外的承诺。
+  // 口径（★ 2026-11-01 用户令改副标语）：**卡片副标语不再摆"每台设备 5 句"这条额度，改成
+  //   "登录后体验全部功能"**——额度本身一字未动（后端仍按 5 句/设备发，界面右上角实时显示「剩 N 句」，
+  //   用完那一屏照旧点名这台设备的额度与注册出路）。改的是**门面说什么**：把配额写在门面
+  //   等于先给客户一张"限制清单"，而这一句真正的卖点是从匿名试翻升级到完整功能。
+  //   仍强制专业校对档、超出即引导注册；文案里不出现「免费注册送额度」之外的承诺。
   'land.trial.title': '现在就试一句',
-  'land.trial.sub': '免登录 · 专业校对档 · 每台设备 5 句',
+  'land.trial.sub': '免登录 · 专业校对档 · 登录后体验全部功能',
   'land.trial.mode': '专业校对档',
   'land.trial.placeholder': '输入或粘贴一段内容，立刻看到译文（单次 300 字以内）',
   'land.trial.to': '目标语言',
@@ -236,7 +240,7 @@ export const zh: Record<string, string> = {
   'land.cfaq6.q': '免费体验有多少额度？',
   'land.cfaq6.a': '新注册即送 14 天体验包，约合 1,000 积分，翻译、术语库、在线编辑器与审批工作台全部功能开放试用；邀请好友通过您的邀请码注册成功，您的体验包再得 1,000 积分并延长 14 天。',
   'land.cfaq7.q': '支持哪些文件格式的翻译？',
-  'land.cfaq7.a': '文档工单支持 Word、Excel、PPT、PDF、纯文本、Markdown、JSON、XML、YAML、字幕（SRT/VTT）、EPUB、OpenDocument 等约 30 种格式，可按需选择「还原排版文件」或「仅纯文案」两种交付模式。',
+  'land.cfaq7.a': '文档工单支持 38 种格式：可还原版式的 Word（.docx）、Excel（.xlsx）、PPT（.pptx）、PDF、纯文本、CSV、Markdown；仅出纯文案的 doc/ppt/xls 老格式与 odt/ods/odp、rtf、epub；以及图片（原位回填译后图）与音频（同容器译后配音）。字幕、配置类这类本身就是纯文本的文件请直接粘贴到文本翻译，不必做成文件。',
   'land.cfaq8.q': '上传知识库有奖励吗？',
   'land.cfaq8.a': '有。上传行业语料、术语表或翻译记忆，经审核入库后即可兑换专属积分额度；审核通过的贡献会记入对应知识库包，全平台用户共享、贡献者获得奖励。',
   // —— 收尾 CTA + 页脚 ——
@@ -386,7 +390,7 @@ export const en: Record<string, string> = {
 
   // —— 〇-Z 免登录试用面板（英文口径；键与 zh 一一对应，占位符 {n} 位置随语序可调） ——
   'land.trial.title': 'Try a sentence right now',
-  'land.trial.sub': 'No login · pro review mode · 5 sentences per device',
+  'land.trial.sub': 'No login · pro review mode · sign in for the full feature set',
   'land.trial.mode': 'Pro review',
   'land.trial.placeholder': 'Type or paste text and see the translation at once (up to 300 characters)',
   'land.trial.to': 'Target language',
@@ -566,7 +570,7 @@ export const en: Record<string, string> = {
   'land.cfaq6.q': 'How much does the free trial include?',
   'land.cfaq6.a': 'Every new account gets a 14-day trial pack worth about 1,000 credits, with all features open — translation, term bases, the online editor and the approval console. When someone signs up with your invite code, your trial pack gains another 1,000 credits and 14 more days.',
   'land.cfaq7.q': 'Which file formats can be translated?',
-  'land.cfaq7.a': 'Document tickets support about 30 formats — Word, Excel, PPT, PDF, plain text, Markdown, JSON, XML, YAML, subtitles (SRT/VTT), EPUB, OpenDocument and more — deliverable either as a layout-restored document or as plain text only.',
+  'land.cfaq7.a': 'Document tickets support 38 formats: layout-restored Word (.docx), Excel (.xlsx), PPT (.pptx), PDF, plain text, CSV and Markdown; plain-text-only legacy doc/ppt/xls, odt/ods/odp, rtf and epub; plus images (translated image in place) and audio (dubbed in the same container). Subtitle and settings-style files are plain text to begin with - paste them into text translation instead of uploading.',
   'land.cfaq8.q': 'Is there a reward for uploading knowledge?',
   'land.cfaq8.a': 'Yes. Upload industry corpora, glossaries or translation memories; once reviewed and admitted, they redeem exclusive credit rewards. Approved contributions join the matching knowledge pack for everyone on the platform while contributors get paid.',
   // —— Bottom CTA + footer ——

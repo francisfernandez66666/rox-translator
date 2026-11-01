@@ -53,6 +53,12 @@ export interface ChatResponse {
   files?: string[]
   // ★ 2026-09-19 积分口径：本次翻译实际消耗（积分，后端由内部 token 折算）
   points_used?: number
+  // ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：即时翻译落在免费档内时，
+  //   points_used 是实扣＝0，"这一单本该收多少"由这两条回答。
+  //   ⚠️ 非免费单后端**整条缺席**（不是 0/false），所以消费方必须按 undefined 判，
+  //   别把"没有这个维度"读成"本该收 0 分"。
+  points_equiv?: number
+  points_free?: boolean
   // 后端返回的错误信息
   error?: string
 }
@@ -115,6 +121,10 @@ export interface ChatMessage {
   data?: ChatResponse['data'] // 结构化响应数据
   files?: string[]        // 附件文件路径列表
   points_used?: number    // ★ 2026-09-19 积分口径：本次翻译消耗（积分）
+  // ★ 2026-11-01：done 帧带下来的免费档两维（等值积分 + 注明免扣），随消息一起落存储，
+  //   历史气泡重渲染时才不会把"这一单免扣"那一行读丢。口径见 ChatResponse 上那两条。
+  points_equiv?: number
+  points_free?: boolean
   // ★ B1（2026-09-19 流式双态）：逐语言 token 级初译草稿（已按后端 <t> 输出契约清洗）。
   //   流式期间与 progress 共存呈现（草稿行 + 细进度条）；done/error/停止时清空，不落盘。
   draft?: Record<string, string>

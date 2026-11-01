@@ -90,6 +90,10 @@ func engineErrorPayload(errStr, reply string) map[string]interface{} {
 	return map[string]interface{}{"error": errStr}
 }
 
+// sseContentType 是 SSE 响应头的唯一取值（含 charset）：实现与测试都引这一个常量，
+// 不在锁里再抄一遍字面量（抄两份就会出现"改了实现忘了锁"或"改了锁忘了实现"）。
+const sseContentType = "text/event-stream; charset=utf-8"
+
 // sseHeaders 设置 SSE 响应头（text/event-stream 及禁用缓冲/代理缓冲）。
 // 参数 w: HTTP 响应写入器。无返回。
 //
@@ -101,7 +105,11 @@ func engineErrorPayload(errStr, reply string) map[string]interface{} {
 // 拿不到 ErrNotSupported 之外的语义，失败一律吞掉——这不是正确性路径，是豁免路径。
 func sseHeaders(w http.ResponseWriter) {
 	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
+	// charset 必须显式声明：浏览器侧 `new TextDecoder()` 默认按 UTF-8 解，终端用户看不出差；
+	// 但按 WHATWG 回退 latin1 的非浏览器客户端会把中文译文解成乱码（表现为"接口坏了"而服务端零报错）。
+	// 全站 SSE 响应头只有这一个出口、两个端点消费（本文件 handleChatStream / handleTranslateStream），
+	// 所以补这一处即全覆盖——**禁止**再去各端点里各设一遍（两把尺子的典型长法）。
+	h.Set("Content-Type", sseContentType)
 	h.Set("Cache-Control", "no-cache")
 	// 禁用 Nginx 等反向代理的缓冲，保证事件实时推送
 	h.Set("X-Accel-Buffering", "no")
@@ -315,6 +323,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	//   只包 runCtx，客户端断开（r.Context cancel）的既有取消语义不变。
 	runCtx, runCancel := context.WithTimeout(ctx, chatStreamTimeout)
 	defer runCancel()
+	// ★ DEF-P1-05 B2：分段判定必须在**进引擎之前**挂好（预估侧与执行侧同一次判定）。
+	runCtx = s.chatSegPlanCtx(runCtx, req.Message, req.Options)
 	// ★ 决策⑪②（2026-10-10）：deadline 前 N 秒发一帧 warning 慢预警——前端据此给
 	//   「继续等待 / 转工单」两按钮（到点行为不变，仍按 F-29 出 chat_timeout error 帧）。
 	//   定时器 goroutine 只竞争 sseMu 写锁，不碰任何引擎状态；runCtx 到点/取消即退出。
@@ -730,6 +740,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if chatRoute.Free {
 		chatCtx = instantMarkCtx(chatCtx)
 	}
+	// ★ DEF-P1-05 B2：非流式那条腿同样挂判定（两条通道一个决定，别一面分段一面整篇）。
+	chatCtx = s.chatSegPlanCtx(chatCtx, req.Message, req.Options)
 	res := s.Engine.HandleText(chatCtx, req.Message, req.Options, nil)
 	if res.Error != "" {
 		// 失败：填充错误回复并计入失败指标

@@ -23,6 +23,11 @@ vi.mock('@/api', () => {
   const ok = (extra: Record<string, unknown> = {}) => ({ success: true, ...extra })
   return {
     // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口（夹具按枚举 mock，新增面必须同步补）
+  // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
+  //   桩给的是**代码缺省态**（开分段／上限 60／库里没表态）——这些文件测的不是这张卡，
+  //   但缺这两个导出会让整块面板在渲染期撞 undefined 调用（AGENTS 那条「夹具必须补齐全部导出」）。
+  adminChatSegTiers: vi.fn(async () => ({ success: true, tiers: { per_paragraph: 1, max_points: 60 }, stored: { text_chat_per_paragraph: '', chat_segment_max_points: '' }, defaults: { per_paragraph: 1, max_points: 60 }, ranges: { per_paragraph: [0, 1], max_points: [0, 100000] } })),
+  adminChatSegTiersSave: vi.fn(async () => ({ success: true })),
     adminTextLineTiers: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
     adminTextLineTiersSave: vi.fn(async () => ({"success": true, "tiers": {"retry_max": 3, "upstream_dead_streak": 3}, "stored": {}, "defaults": {"retry_max": 3, "upstream_dead_streak": 3}, "ranges": {"retry_max": [1, 5], "upstream_dead_streak": [2, 10]}})),
     billingQuota: vi.fn(async () => ok({ qps: 10, concurrent: 3, max_daily_chars: 0 })),
@@ -190,4 +195,28 @@ describe('admin 计费 Hub（PlansP）', () => {
     const opt = Array.from(document.querySelectorAll('option')).find((o) => o.value === 'mock')
     expect(opt?.textContent).toBe('模拟支付（测试）')
   })
+
+  // ★ 2026-11-01 DEF-P3-08：本文件的 mock 只给 4 个预估系数键（仓内 8 个 PlansP.* 测试同形）。
+  //   旧形态下 JSX 另抄一份六字段清单渲染 ⇒ 另两格 value 变 undefined ⇒ React 报
+  //   「changing a controlled input to be uncontrolled」（实测：4 键 mock 出 1 条、6 键 mock 出 0 条）。
+  //   修法是把渲染改成派生自 EST_TOKEN_FIELDS（见 PlansP.estFields.lock.test.ts），
+  //   而这条断言把"告警本身"变成门禁 —— 任何未来的受控/非受控漂移都会在这里被抓住，不止这一处 mock。
+  it('预估系数区不得出现受控→非受控切换告警（本文件 mock 只给 4 键，正是旧缺陷的触发档）', async () => {
+    const seen: string[] = []
+    const real = console.error
+    console.error = (...args: unknown[]) => { seen.push(args.map((a) => String(a)).join(' ')) }
+    try {
+      render(<PlansP />)
+      await vi.waitFor(() => {
+        expect(document.querySelectorAll('input[type="number"]').length).toBeGreaterThan(0)
+      })
+    } finally {
+      console.error = real
+    }
+    expect(
+      seen.filter((m) => /controlled input to be uncontrolled|changing a controlled input/i.test(m)),
+      '出现受控/非受控切换告警 ⇒ 渲染字段集与 EST_TOKEN_FIELDS 又分家了',
+    ).toEqual([])
+  })
+
 })

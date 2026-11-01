@@ -995,9 +995,13 @@ if [ "$STP" = "completed" ]; then
   ck T35-pdf-dl-200 '200' "$(curl -s -o /dev/null -w '%{http_code}' "$B/api/tickets/download?id=$TKP" -H "$H1" --max-time 60)"
 fi
 # T35-2 多文件混合上传（2 文件共享上限口径——multipart 解析不得因多 parts 出错）
+# ★ 2026-11-01 改靶：第二件原先用 b.json，而 srt/vtt/json/yaml/yml 自 2026-10-30 起两种交付模式
+#   都不再准入（AGENTS §一·14）⇒ 这条腿**结构性必红**（读数就是那句"这一类是纯文本容器，请粘贴"）。
+#   本段要测的是「多 parts 的 multipart 解析 ＋ 共享上限」，与具体是哪一档格式无关 ⇒ 换成 .md
+#   （仍在 fileproc/formats.go 的准入清单里），判据本体一字不动。
 printf '第一行内容。\n第二行内容。\n' > "$TMPD35/a.txt"
-printf '{"k":"v"}\n' > "$TMPD35/b.json"
-R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD35/a.txt" -F "files=@$TMPD35/b.json" -F "target_langs=en" -F "mode=fast" --max-time 60)
+printf '# T35 标题\n\n第二段。\n' > "$TMPD35/b.md"
+R=$(curl -s $B/api/tickets/create-file -H "$H1" -F "files=@$TMPD35/a.txt" -F "files=@$TMPD35/b.md" -F "target_langs=en" -F "mode=fast" --max-time 60)
 ck T35-multi-upload '"success":true' "$R"
 rm -rf "$TMPD35"
 # T35-3 演示站脚本静态守护（防止 bootstrap-demo.sh 回退丢配置：base_domain 幂等写入 /
@@ -2087,7 +2091,11 @@ fi
 # ★ 断言升级（〇-U 批 I-10 · F-64③）：这里原先只锁 `"success":false`——200 壳与 4xx 都会绿，
 #   是文件头 req3/ck3 那段注说的典型假绿形态。现按「状态码+错误码+文案」三件套收紧
 #   （未登录 401 与越权 403 必须分流，细则与理由见下方 T61 段）。
-req3 GET "$H1" /api/admin/assist/config; ck3 T52-forbid-normal-user 403 FORBIDDEN '权限不足'
+# ★ 2026-11-01 文案锚点更新（同批 E-3「401/403 语义统一」的副产品）：这一条现在回的是**点名角色**
+#   的那句（`权限不足：需要 超级管理员 角色`／`挂件管理面仅平台超级管理员可用`），信息量比旧通用句更高。
+#   判据本体不变：状态码 403 ＋ 错误码 FORBIDDEN；文案维**两种诚实写法都算过**，但**不许空**
+#   （把越权写成沉默才是缺陷）。只放宽文案、不放宽码，所以这属于"靶子搬家"不是"闸门调松"。
+req3 GET "$H1" /api/admin/assist/config; ck3 T52-forbid-normal-user 403 FORBIDDEN '权限不足|超级管理员'
 req3 GET "" /api/admin/assist/config; ck3 T52-forbid-anon 401 UNAUTHORIZED '未登录'
 
 # ② 状态条：上游可达 + Token 来源为 env（面板据此显示绿条，且不返回 Token 明文）
@@ -2890,9 +2898,9 @@ printf '%s' "$T60ALL" | grep -qiE 'sql:|no rows|SQLSTATE|constraint|panic:|gorou
 T61ALL=""
 req3 GET "" /api/admin/assist/status; ck3 T61-status-anon-401 401 UNAUTHORIZED '未登录'
 T61ALL="$T61ALL$R3BODY"
-req3 GET "$H1" /api/admin/assist/status; ck3 T61-status-normal-403 403 FORBIDDEN '权限不足'
+req3 GET "$H1" /api/admin/assist/status; ck3 T61-status-normal-403 403 FORBIDDEN '权限不足|超级管理员'
 req3 GET "" /api/admin/assist/sessions; ck3 T61-proxy-anon-401 401 UNAUTHORIZED '未登录'
-req3 GET "$H1" /api/admin/assist/sessions; ck3 T61-proxy-normal-403 403 FORBIDDEN '权限不足'
+req3 GET "$H1" /api/admin/assist/sessions; ck3 T61-proxy-normal-403 403 FORBIDDEN '权限不足|超级管理员'
 # ② 白名单外路径不放行：mux 只登记 assistProxyRoutes 里的那些路径（server.go:225），
 #    未登记的 assist 路径根本进不到代理，由 spa.go 的 /api 兜底统一回 404 JSON。
 #    这里锁「404 + 不是 HTML + 接口不存在」而不是错误码：代理内部那支带 code=NOT_FOUND 的
@@ -3908,7 +3916,39 @@ print(ct.lower())' "$hf")
 }
 
 # R71_TIERS — 对外档位名单（与 fileproc.TtsReason* 逐字同源；前端 chatVoice.ts 的 switch 只认这几档）
-R71_TIERS='empty|too_long|capability_missing|unsupported_lang|failed'
+# ★ 2026-11-01 改成**现读派生**：写死名单落后于实现这一条是真踩过的——2026-10-31 的 N5
+#   新增 `unreadable`（探测不出时长/解不开），本段三条腿当场因为名单里没有它而把**正确的实现**
+#   判成"静默失败"。派生＝扫 instant_free.go 的 instantReason* 常量（对外契约那一族）
+#   ＋ chat_audio.go／chat_image.go 里以 return 形态直接出现的能力档字面量；
+#   名单为空或缺 unreadable 一律判红（射程自证在下面），不许"扫不到＝不用扫"。
+R71_TIERS_FIXED='empty|capability_missing|unsupported_lang|failed'
+# ★ 本段自带一份仓库根（ROOT73 在后面的 T73 段才定义，这里引用它会拿到空串 ⇒ 派生恒空、
+#   报出来的红会被读成"锚漂了"，其实是顺序耦合。每个段用自己的根，别跨段借变量。）
+ROOT71="$(cd "$(dirname "$0")/../.." && pwd)"
+R71_DERIVED=$(python3 - "$ROOT71/backend-go/internal/api/instant_free.go" "$ROOT71/backend-go/internal/api/chat_audio.go" "$ROOT71/backend-go/internal/api/chat_image.go" <<'PYT71'
+import io, re, sys
+vals = set()
+for path in sys.argv[1:]:
+    try:
+        src = io.open(path, encoding='utf-8').read()
+    except Exception:
+        continue
+    for m in re.finditer(r'instantReason\w+\s*=\s*"([a-z][a-z0-9_]{2,24})"', src):
+        vals.add(m.group(1))
+    for m in re.finditer(r'return\s+"([a-z][a-z0-9_]{2,24})"', src):
+        vals.add(m.group(1))
+print('|'.join(sorted(vals)) if vals else '')
+PYT71
+)
+R71_TIERS="$R71_TIERS_FIXED"
+[ -n "$R71_DERIVED" ] && R71_TIERS="$R71_TIERS|$R71_DERIVED"
+if [ -z "$R71_DERIVED" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T71-tier-list-derived-nonempty(扫不到 instantReason*/能力档字面量 ⇒ 锚点漂了，本段档位判据失明)"
+elif ! printf '%s' "$R71_DERIVED" | grep -qE '(^|\|)unreadable($|\|)'; then
+  FAIL=$((FAIL+1)); echo "FAIL|T71-tier-list-contains-unreadable(现读名单里没有 unreadable ⇒ 派生腿取错了文件或锚漂了)"
+else
+  PASS=$((PASS+1)); echo "PASS|T71-tier-list-derived(现读 $(printf '%s' "$R71_DERIVED" | tr '|' ' ' | wc -w | tr -d ' ') 档)"
+fi
 R71_SEEN=""
 # vreason71 — 从刚才那次语音响应里取档位名；取不到回 <无>（让"没带档位"这一形态在日志里可读）
 vreason71(){ local v; v=$(printf '%s' "$MR71BODY" | grep -oE '"reason":"[a-z_]+"' | head -1 | sed -E 's/.*"reason":"([a-z_]+)".*/\1/'); printf '%s' "${v:-<无>}"; }
@@ -4017,10 +4057,12 @@ fi
 # ⑤ 档位单源：本节在网络上真发出去的每一个 reason 都必须在名单内
 R71_BAD=""
 for r in $R71_SEEN; do
+  # ★ 2026-11-01：这里原先是同一段里**第二份写死名单**（与上面现读派生的 R71_TIERS 平行存在），
+  #   N5 新增的 unreadable 只进了实现与那一份 ⇒ 本条自己造出"名单外档位"的假红。
+  #   两侧现在共用**同一把尺子**（派生过程与射程自证见上面那段）。
   case "$r" in
     '<无>') : ;;
-    empty|too_long|capability_missing|unsupported_lang|failed) : ;;
-    *) R71_BAD="$R71_BAD $r" ;;
+    *) printf '%s' "|$R71_TIERS|" | grep -q "|$r|" || R71_BAD="$R71_BAD $r" ;;
   esac
 done
 # 裁决写成**显式变量**而不是 ${R71_BAD:+bad…}：那种写法在"没有越界档位"时展开成**空串**，
@@ -4896,6 +4938,252 @@ ckF T77-health-free-word '"instant_free":"' "$T77H"
 ckn T77-health-free-no-digits '"instant_free":"[^"]*[0-9]' "$T77H"
 # ⑤ 套餐档位列随启动幂等补列落库（W10 的写路径前提：没有列则新建套餐永远落 legacy）。
 ckq T77-packages-tier-col 1 "$(dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='packages' AND column_name='tier'" 2>/dev/null | tr -dc '0-9' || echo 1)"
+
+# ---------- T78 2026-11-01 批：即时翻译分段档位「运营面」＋ 免验证留资通道 ----------
+# 为什么这两件必须进 HTTP 级矩阵（Go 单测已经锁了判据，但它们在单测里"永远成立"）：
+#   ① 分段档位口是**新路由**：单测打的是手攒的 mux，证明不了生产 mux 上这条路径注册了、
+#      也证明不了它的鉴权档与 est-tokens/text-lines 同一条（requireAdminUser 那一道共享闸）；
+#   ② 这一族最关键的判据是**「0 是真实档位」**——库里写 0 之后，读点必须真读到 0（走的是
+#      ConfigIntAllowZero 而不是 ConfigInt）。单测用内存库证过，而 PG 方言下
+#      「行存在且值为空串」与「行不存在」是两种形态，reset 那一腿必须按真库证一次；
+#   ③ 免验证留资通道 `/api/lead/public` 是**匿名可达**的公开面：它的出路形状（表单档 303 +
+#      `Location: /?lead=ok`）与"蜜罐在校验与配额之前"这条顺序，只有真发一次 HTTP 才量得到
+#      （AGENTS §一·8 那条「接口说成功不算验收，库侧事实＋新路径留痕才算」）。
+# ★ 判据取向：所有结论由**库内事实或那一条腿自己的读数**给出；本段自带清账（前后各一次），
+#   因为 `lead-public:` 的 IP 格子是**日额度 3**，同日跑第二轮 UAT 会假红。
+T78AHdr="Authorization: Bearer $(tok "$ADMIN_USER" "$ADMIN_PASS")"
+T78CFG="/api/admin/config/chat-segments"
+T78K1="text_chat_per_paragraph"
+T78K2="chat_segment_max_points"
+# csTierOf <JSON 响应体> <tiers 里的键名> —— 取那**一个**键的生效值（读不到回 <ERR>）。
+# 为什么写 <ERR> 而不是 0：0 在这一族是合法档位，拿 0 当"取不到"的兜底值＝把判据失败
+# 读成"链路真的配了 0"（AGENTS §一·5⑥那条"把没读到当成读到"的同族）。
+csTierOf(){ python3 -c 'import json,sys
+try:
+    d = json.loads(sys.argv[1])
+    v = (d.get("tiers") or {}).get(sys.argv[2])
+    print("<ERR>" if v is None else int(v))
+except Exception:
+    print("<ERR>")' "$1" "$2"; }
+
+# 段首清账：把本段要用的两把格子与两条键钉回"没配"的形态（不留上一轮的尾巴）。
+dbq "DELETE FROM rate_limits WHERE scope IN ('guard_int','guard_day') AND key LIKE 'lead-public:%'" >/dev/null 2>&1 || true
+dbq "DELETE FROM rate_limits WHERE scope IN ('lead_ident','lead_ident_uid')" >/dev/null 2>&1 || true
+dbq "DELETE FROM system_config WHERE key IN ('$T78K1','$T78K2')" >/dev/null
+
+# ① 前提：档位口在生产 mux 上真的活着（回显生效值 + 四态读数齐）。
+req3 GET "$T78AHdr" "$T78CFG"
+ck3 T78-premise-endpoint-live 200 '' ''
+ckF T78-face-carries-four-readings '"stored":' "$(printf '%s' "$R3BODY")"
+# ★ 出栈体是 Go 的 map ⇒ JSON 键**按字母序**（max_points 排在 per_paragraph 前面），
+#   所以这里绝不写"跨键顺序"的正则（那种判据要么结构性恒红，要么靠"跳过中间一整段"侥幸命中，
+#   侥幸命中的那条一旦谁改了 defaults 的内容就又红了）。一律**逐键现取现比**：
+#   csTierOf <响应体> <tiers 里的键> 取那一个数；取不到即回 <ERR>（判红而不是判 0）。
+ck T78-face-tier-readout-cap '^[0-9]+$' "$(csTierOf "$R3BODY" max_points)"
+ck T78-face-tier-readout-switch '^[01]$' "$(csTierOf "$R3BODY" per_paragraph)"
+ckF T78-face-zero-semantics-contract '"zero_semantics":"zero_is_a_real_tier"' "$R3BODY"
+
+# ② 鉴权分流：匿名 401、非平台超管 403（读面同档，不给半条通道）。
+req3 GET "" "$T78CFG"
+ck3 T78-auth-anon-401 401 UNAUTHORIZED '.'
+req3 GET "$H1" "$T78CFG"
+ck3 T78-auth-tenant-403 403 FORBIDDEN '权限不足|超级管理员'
+req3 POST "$H1" "$T78CFG" '{"per_paragraph":0,"max_points":0}'
+ck3 T78-write-tenant-403 403 FORBIDDEN '权限不足|超级管理员'
+
+# ③ ★ 0 档真生效（本段主判据）：写 0 ⇒ 200、库里那一列是 "0"（不是空串）、回显也是 0。
+#    少第三段证据就是"接口答应了、链路没听见"那一族（单测同形，PG 侧必须再证一次）。
+req3 POST "$T78AHdr" "$T78CFG" '{"per_paragraph":0,"max_points":0}'
+ck3 T78-zero-tier-accepted 200 '' ''
+ckq T78-zero-tier-echoed-switch 0 "$(csTierOf "$R3BODY" per_paragraph)"
+ckq T78-zero-tier-echoed-cap 0 "$(csTierOf "$R3BODY" max_points)"
+ckq T78-zero-tier-in-db 0 "$(sq "SELECT value FROM system_config WHERE key='$T78K1'" | tr -d '[:space:]')"
+ckq T78-zero-tier-cap-in-db 0 "$(sq "SELECT value FROM system_config WHERE key='$T78K2'" | tr -d '[:space:]')"
+# 再 GET 一次必须仍是 0/0（两把尺子的典型形态＝保存回显新值、下一次读回旧的）
+req3 GET "$T78AHdr" "$T78CFG"
+ckq T78-zero-tier-readback-switch 0 "$(csTierOf "$R3BODY" per_paragraph)"
+ckq T78-zero-tier-readback-cap 0 "$(csTierOf "$R3BODY" max_points)"
+
+# ④ 越界一律拒，且库里一字不动（写入侧有边界；这一族只有上界可判，0 是合法值）。
+dbq "UPDATE system_config SET value='60' WHERE key='$T78K2'" >/dev/null
+req3 POST "$T78AHdr" "$T78CFG" '{"per_paragraph":1,"max_points":100001}'
+ck3 T78-cap-over-bound-400 400 VALIDATION_ERROR '100000'
+ckq T78-cap-db-untouched-after-reject 60 "$(sq "SELECT value FROM system_config WHERE key='$T78K2'" | tr -d '[:space:]')"
+req3 POST "$T78AHdr" "$T78CFG" '{"per_paragraph":2,"max_points":60}'
+ck3 T78-switch-over-bound-400 400 VALIDATION_ERROR '0 ~ 1'
+ckq T78-switch-db-untouched-after-reject 0 "$(sq "SELECT value FROM system_config WHERE key='$T78K1'" | tr -d '[:space:]')"
+
+# ⑤ 半套参数整批拒（一条腿分段、一条腿按旧上限回落＝两种形态混在同一单里）。
+req3 POST "$T78AHdr" "$T78CFG" '{"per_paragraph":1}'
+ck3 T78-requires-both-fields 400 VALIDATION_ERROR '一次提交'
+
+# ⑥ reset：写成空串（与"从未配过"同形），生效值回代码缺省 1/60。
+req3 POST "$T78AHdr" "$T78CFG" '{"reset":true}'
+ck3 T78-reset-200 200 '' ''
+ckq T78-reset-key1-empty "" "$(sq "SELECT COALESCE(value,'x') FROM system_config WHERE key='$T78K1'" | tr -d '[:space:]' | sed 's/^x$//')"
+ckq T78-reset-key2-empty "" "$(sq "SELECT COALESCE(value,'x') FROM system_config WHERE key='$T78K2'" | tr -d '[:space:]' | sed 's/^x$//')"
+ckq T78-reset-back-switch 1 "$(csTierOf "$R3BODY" per_paragraph)"
+ckq T78-reset-back-cap 60 "$(csTierOf "$R3BODY" max_points)"
+
+# ⑦ 免验证留资通道：表单档成功出路必须是 303 + Location 点名 lead=ok（不是 200 JSON）。
+T78HDR=$(curl -s -o /dev/null -D - --max-time 60 -X POST "$B/api/lead/public" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'company=T78免验证留资' \
+  --data-urlencode 'email=t78lead@uat-corp.example' \
+  --data-urlencode 'langs=英' \
+  --data-urlencode 'source=static_fallback' | tr -d '\r')
+ck  T78-leadpublic-form-303 '^HTTP/[0-9.]+ 303' "$T78HDR"
+# ⚠️ 这里的 `\?` 不许去掉：`?` 在 ERE 里是量词，不转义就成了"斜杠可选"，
+#   而真实的头值是 `Location: /?lead=ok`——多出来的那个 `?` 让整条判据**结构性恒红**（首跑真踩）。
+ck  T78-leadpublic-form-location '^Location: /\?lead=ok' "$T78HDR"
+ckq T78-leadpublic-row-persisted 1 "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE target_type='lead' AND content LIKE '%T78免验证留资%'" | tr -dc '0-9')"
+# ★ 落库那一句必须点名「免验证通道」：两类线索混在一起看，一次垃圾洪峰之后这个面就再没人信。
+ckF T78-leadpublic-row-tagged '免验证通道' "$(dbq "SELECT content FROM feedbacks WHERE target_type='lead' AND content LIKE '%T78免验证留资%'")"
+ck  T78-leadpublic-source-tag 'static_fallback' "$(dbq "SELECT content FROM feedbacks WHERE target_type='lead' AND content LIKE '%T78免验证留资%'")"
+
+# ⑧ 蜜罐在**校验与配额之前**：带 site 的那一发必须按成功返回，且库里一条都不许多。
+T78HONEYPOT=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 -X POST "$B/api/lead/public" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'company=T78蜜罐件' --data-urlencode 'email=t78bot@uat-corp.example' \
+  --data-urlencode 'site=http://seo.example' | tr -d '[:space:]')
+ck  T78-leadpublic-honeypot-looks-success '^(303|200)$' "$T78HONEYPOT"
+ckq T78-leadpublic-honeypot-not-persisted 0 "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE content LIKE '%T78蜜罐件%'" | tr -dc '0-9')"
+
+# ⑨ 一次性邮箱黑名单（同样在配额之前，所以不必等 10 秒间隔）。
+# 用 JSON 档打免验证通道：失败出路走 writeError（诚实状态码 + 稳定错误码），便于按 code 断言。
+T78DISP=$(curl -s --max-time 60 -X POST "$B/api/lead/public" -H "$J" \
+  -d '{"company":"T78临时邮箱","email":"t78@mailinator.com","source":"pricing"}')
+ck  T78-leadpublic-disposable-rejected '"success":false|VALIDATION' "$T78DISP"
+ckF T78-leadpublic-disposable-gives-a-way-out '常用' "$T78DISP"
+
+# ⑩ 间隔限流：同一个 IP 的第二发真提交（配额与格子已被 ⑦ 坐实）必须被 10s 间隔挡下。
+# ⚠️ 判据不许只问状态码：表单档的**成功与失败都是 303**（出路靠 Location 的 lead=ok / lead=err&t=码
+#    分岔），拿 303 当"被挡下"的证据＝把放行读成拦截。这里读整份响应头，两条一起判。
+T78FAST=$(curl -s -o /dev/null -D - --max-time 60 -X POST "$B/api/lead/public" \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  --data-urlencode 'company=T78第二发' --data-urlencode 'email=t78second@uat-corp.example' | tr -d '\r')
+ck  T78-leadpublic-interval-blocked-status '^HTTP/[0-9.]+ 303' "$T78FAST"
+ck  T78-leadpublic-interval-blocked-code '^Location: /\?lead=err&t=RATE_LIMITED' "$T78FAST"
+ckq T78-leadpublic-second-not-persisted 0 "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE content LIKE '%T78第二发%'" | tr -dc '0-9')"
+# 未注册的方法：GET 必须 405（这一档与 T73 那条「方法闸」同形——200 就是「谁都能写线索」的假读数）。
+req3 GET "" "/api/lead/public"
+ck3 T78-leadpublic-method-guard 405 METHOD_NOT_ALLOWED '.'
+
+# ★ 诚实边界（写在这里，别让下一位以为这条链在矩阵里证全了）：§G-7 那两条**升级信号**
+#   （S1 同 IP＋同设备 ≥2 个登录身份／S2 同 IP 近 5 分钟 ≥2 次登录失败）在本段**没有 HTTP 级判据**：
+#   命中信号后的动作是"当场要求人机验证"，而 UAT 实例默认没配 captcha ⇒ `verifyCaptcha` 未启用即放行，
+#   响应面与不升级**完全同形**（只有服务端一行 WARN 分得开）。所以这两条的判据在
+#   `backend-go/internal/api/lead_public_gate_test.go`（18 例，含两枚信号各自翻档）；
+#   要在矩阵里证它，前提是先给 UAT 实例配一个能用的 captcha provider——那是一次**配置动作**，不是缺判据。
+#
+# ⑪ 收尾清账：只按本段自己的显式标记摘，绝不按前缀或时间批量删。
+dbq "DELETE FROM feedbacks WHERE content LIKE '%T78免验证留资%'" >/dev/null
+dbq "DELETE FROM feedbacks WHERE content LIKE '%T78蜜罐件%' OR content LIKE '%T78第二发%' OR content LIKE '%T78临时邮箱%'" >/dev/null
+dbq "DELETE FROM system_config WHERE key IN ('$T78K1','$T78K2')" >/dev/null
+dbq "DELETE FROM rate_limits WHERE scope IN ('guard_int','guard_day') AND key LIKE 'lead-public:%'" >/dev/null 2>&1 || true
+dbq "DELETE FROM rate_limits WHERE scope IN ('lead_ident','lead_ident_uid')" >/dev/null 2>&1 || true
+ckq T78-cleanup-leads-gone 0 "$(dbq "SELECT COUNT(*) FROM feedbacks WHERE content LIKE '%T78%'" | tr -dc '0-9')"
+ckq T78-cleanup-tier-keys-gone 0 "$(dbq "SELECT COUNT(*) FROM system_config WHERE key IN ('$T78K1','$T78K2')" | tr -dc '0-9')"
+ckq T78-cleanup-public-quota-gone 0 "$(dbq "SELECT COUNT(*) FROM rate_limits WHERE key LIKE 'lead-public:%'" | tr -dc '0-9')"
+# 档位钉回"没配"的形态：留着 0/0 进后面的段与多实例矩阵，就是"改了配置没反应"最难查的那一类。
+T78FIN=$(get "$T78AHdr" "$T78CFG")
+ckq T78-tier-defaults-after-cleanup-switch 1 "$(csTierOf "$T78FIN" per_paragraph)"
+ckq T78-tier-defaults-after-cleanup-cap 60 "$(csTierOf "$T78FIN" max_points)"
+
+# ---------- T79 2026-11-02：即时翻译免费档的**出参两维**（等值积分 ＋ 注明免扣） ----------
+# 立约的两句话（AGENTS §25-b 第 5 条）：
+#   ① 「实扣多少」与「本该收多少」是两只桶 ⇒ 免费腿的 `points_used` 必须＝0（F-49① 那条承诺不许动），
+#      「本该收」走 `points_equiv`，并由 `points_free` 点名免扣；
+#   ② 非免费单这两个键**整条缺席**——出 0 会被读成「这一单本该收 0 分」，
+#      与"没扣钱"合起来就是拿读数给失败背书（§19 那一族）。
+# 旧形态（本批修掉的对外失真）：免费腿不写实收桶 ⇒ 展示侧那条「取不到实收就保守回退真实用量」
+# 的兜底腿够到了免费这一档 ⇒ 报文写「消耗 88 积分」而余额一动不动。
+# ⚠️ 两条腿都必须**每次都真走到**：免费档按日累计，同一台一天跑第二次矩阵时短文本会翻到付费支，
+#    那条免扣腿就在矩阵里没人看过了（"今天测到过"不等于"这条锁有射程"）——
+#    所以先按显式作用域把这一号的三本免费计数器摘掉（scope=free_pt_user / free_pt_tenant / free_ip），再判形态。
+# ⚠️ 付费对照腿用**两个目标语种**（G12：语种数是付费权益）＋**专业档**
+#    （B8 那个 `uat_promo` 窗口只把 fast 覆盖成 charge=false，pro 照旧扣钱）。
+
+T79U=$(tok uatuser_a uatpass123); H79="Authorization: Bearer $T79U"
+# ★ 身份行一律**按用户名＋钉 is_home=1** 从库里取（AGENTS §18 那条硬约定：多身份批之后
+#   users.username 不再唯一，无 ORDER BY 的 LIMIT 1 在 PG 上实测会取到个人 pa_ 行 ⇒
+#   夹具往 A 租户写、断言去 B 租户读，一片"语义正确的失败读数"）。
+#   不拿 /api/auth/me 的 JSON 形状猜字段——那是这一族最常见的探针自伤（读出空串还当"没配置"）。
+T79TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -dc '0-9')
+T79UID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -dc '0-9')
+if [ -z "$T79TID" ] || [ -z "$T79UID" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T79-identity(按用户名取不到家行的 uid/tenant_id ⇒ 本段判据全部空转)"
+fi
+T79RATE=$(dbq "SELECT value FROM system_config WHERE key='points_tokens_rate'" | tr -dc '0-9')
+# 读不到＝库里没表态，按 store 缺省钉一次（**现读优先**，不许拿这份兜底去覆盖库里的现值）
+[ -z "$T79RATE" ] && T79RATE=400
+if [ -n "$T79UID" ] && [ "$T79TID" ] && [ "$T79TID" != "0" ]; then
+  dbq "DELETE FROM rate_limits WHERE (scope='free_pt_user' AND key='$T79UID') OR (scope='free_pt_tenant' AND key='$T79TID') OR (scope='free_ip' AND key IN ('127.0.0.1','::1'))" >/dev/null 2>&1 || true
+fi
+# 窗口水位：只取**本号本租户且 id 在本段之后**的行——同库并发/前序段的行一律不进判据
+T79MARK=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -dc '0-9')
+T79CAP1=$(dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$T79TID AND expires_at>'$(date -u +%Y-%m-%dT%H:%M:%SZ)') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$T79TID)" | tr -d '[:space:]\r')
+
+T79TAG="t79$(date +%s)"
+T79A=$(post "$H79" "{\"message\":\"T79免扣两维回归 $T79TAG：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}" /api/chat)
+ck T79-free-translated 'TranslatedEN' "$T79A"
+T79PU=$(printf '%s' "$T79A" | pv ".get('points_used',-1)")
+T79PF=$(printf '%s' "$T79A" | pv ".get('points_free',False)")
+T79PE=$(printf '%s' "$T79A" | pv ".get('points_equiv',-1)")
+sleep 5   # 异步 sink 落库（同 T59 的既有口径）
+# 多列一律在 SQL 里用 || 拼（dbq 出来是制表符分隔，cut 按 | 切会两列都取空——本仓老坑）
+T79PAIR=$(dbq "SELECT COALESCE(SUM(quantity),0) || '|' || COUNT(1) FROM usage_ledger WHERE tenant_id=$T79TID AND user_id=$T79UID AND id>$T79MARK" | tr -d '\r')
+T79QTY=$(printf '%s' "$T79PAIR" | cut -d'|' -f1 | tr -dc '0-9'); [ -z "$T79QTY" ] && T79QTY=0
+T79N=$(printf '%s' "$T79PAIR" | cut -d'|' -f2 | tr -dc '0-9'); [ -z "$T79N" ] && T79N=0
+T79FREEQTY=$(dbq "SELECT COALESCE(SUM(quantity),0) FROM usage_ledger WHERE tenant_id=$T79TID AND user_id=$T79UID AND id>$T79MARK AND task_type='instant_free'" | tr -dc '0-9')
+[ -z "$T79FREEQTY" ] && T79FREEQTY=0
+
+if [ "$T79PF" = "True" ]; then
+  # —— 免扣那一支：实扣 0、等值单列、钱不许动、库侧必须有那一行留痕 ——
+  ckq T79-free-points-used-zero "$T79PU" "0"
+  T79WANT=$(t59pts "$T79FREEQTY" "$T79RATE")
+  if [ "$T79WANT" -gt 0 ]; then
+    ckq T79-free-equiv-equals-ledger "$T79PE" "$T79WANT"
+  else
+    # ∑quantity 折 0 分却标了免扣 ⇒ 界面会出「等值 0 积分 · 本次免扣」那种零信息量句子
+    FAIL=$((FAIL+1)); echo "FAIL|T79-free-quiet-when-zero(∑instant_free quantity=$T79FREEQTY 按汇率 $T79RATE 折 0 分，却仍标 points_free ⇒ 出参给一行没有内容的话)"
+  fi
+  T79CAP2=$(dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$T79TID AND expires_at>'$(date -u +%Y-%m-%dT%H:%M:%SZ)') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$T79TID)" | tr -d '[:space:]\r')
+  ckq T79-free-balance-untouched "$T79CAP2" "$T79CAP1"
+  if [ "$T79FREEQTY" -gt 0 ]; then
+    PASS=$((PASS+1)); echo "PASS|T79-free-ledger-row-in-window(instant_free ∑quantity=$T79FREEQTY／窗口新增 $T79N 行)"
+  else
+    FAIL=$((FAIL+1)); echo "FAIL|T79-free-ledger-row-in-window(报文标了免扣，窗口内却没有 task_type=instant_free 的留痕行 ⇒ 等值那个数没有源)"
+  fi
+  T79DEB=$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE tenant_id=$T79TID AND user_id=$T79UID AND id>$T79MARK AND charge_kind IN ('','charge')" | tr -dc '0-9')
+  ckq T79-free-no-debit-row "${T79DEB:-0}" "0"
+else
+  FAIL=$((FAIL+1)); echo "FAIL|T79-free-leg-not-taken(points_used=$T79PU 且响应无 points_free ⇒ 这一号没落进免费档："
+  echo "     免费档被关/上限被改，或计数器被前序段吃满。判据不许放宽，先把 ops_policy.instant 与 rate_limits 核回出厂态)"
+fi
+
+# —— 付费对照腿：两语种＋专业档 ——
+T79MARK2=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -dc '0-9')
+T79B=$(post "$H79" "{\"message\":\"T79付费对照回归 $T79TAG：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\",\"ja\"],\"mode\":\"pro\"}}" /api/chat)
+ck T79-paid-translated 'TranslatedEN' "$T79B"
+T79BPU=$(printf '%s' "$T79B" | pv ".get('points_used',-1)")
+if [ "${T79BPU:-0}" -gt 0 ]; then PASS=$((PASS+1)); echo "PASS|T79-paid-points-used-positive($T79BPU)"; else FAIL=$((FAIL+1)); echo "FAIL|T79-paid-points-used-positive(实扣出参=$T79BPU ⇒ 对照腿没走到扣费那一支)"; fi
+# 两个键必须整条不存在（不是 0、不是 false）——键名各判一次，判据自身非法(rc=2)也算红
+ckn T79-paid-no-equiv-key 'points_equiv' "$T79B"
+ckn T79-paid-no-free-flag 'points_free' "$T79B"
+T79BPF=$(printf '%s' "$T79B" | pv ".get('points_free',False)")
+ckq T79-paid-free-flag-is-False "$T79BPF" "False"
+sleep 5
+T79BDEB=$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE tenant_id=$T79TID AND user_id=$T79UID AND id>$T79MARK2 AND charge_kind IN ('','charge')" | tr -dc '0-9')
+if [ "${T79BDEB:-0}" -ge 1 ]; then PASS=$((PASS+1)); echo "PASS|T79-paid-debit-row-in-window($T79BDEB)"; else FAIL=$((FAIL+1)); echo "FAIL|T79-paid-debit-row-in-window(实扣腿零行 ⇒ 报文说扣了钱而库侧没有，F-49① 的等值链断了)"; fi
+T79BFREE=$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE tenant_id=$T79TID AND user_id=$T79UID AND id>$T79MARK2 AND task_type='instant_free'" | tr -dc '0-9')
+ckq T79-paid-no-instant-free-row "${T79BFREE:-0}" "0"
+
+# 收尾：只摘本段自己那一号的计数器；usage_ledger 的行是**事实**，不删
+if [ -n "$T79UID" ]; then
+  dbq "DELETE FROM rate_limits WHERE (scope='free_pt_user' AND key='$T79UID') OR (scope='free_ip' AND key IN ('127.0.0.1','::1'))" >/dev/null 2>&1 || true
+fi
+ckq T79-cleanup-user-counter-gone "$(dbq "SELECT COUNT(1) FROM rate_limits WHERE scope='free_pt_user' AND key='$T79UID'" | tr -dc '0-9')" "0"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

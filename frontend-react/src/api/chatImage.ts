@@ -23,6 +23,10 @@ export type ChatImageResult = {
   image_error: string // 降级原因（空＝正常产出）
   line_count: number
   points_used: number
+  // ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：与 /api/chat 同口径的免费档两维。
+  //   非免费单后端整条缺席 ⇒ 这里取 undefined，消费方不许兜 0（0＝"本该收 0 分"，不是"没这个维度"）。
+  points_equiv?: number
+  points_free?: boolean
   mode: string
   target_langs: string[]
 }
@@ -88,6 +92,9 @@ export async function chatImageTranslate(
     image_error: j.image_error || '',
     line_count: j.line_count || 0,
     points_used: j.points_used || 0,
+    // 按名直取、**不兜 0**（同上面的注释）：非免费单这两个键在后端响应里根本不存在。
+    points_equiv: j.points_equiv,
+    points_free: j.points_free,
     mode: j.mode || '',
     target_langs: j.target_langs || [],
   }

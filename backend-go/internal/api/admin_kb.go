@@ -499,7 +499,12 @@ func (s *Server) handleKBEntryAdd(w http.ResponseWriter, r *http.Request) {
 		TargetText string `json:"target_text"` // 目标译文
 		Module     string `json:"module"`      // 所属模块
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SourceText == "" {
+	// ★ 2026-11-01 DEF-P2-07 同形态第二条：解码失败与空值分开报（口径同 tickets.go 的建单口）。
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "请求格式错误：JSON 解析失败（字段类型请照界面提示传）"))
+		return
+	}
+	if req.SourceText == "" {
 		s.writeError(w, r, apierrors.New(apierrors.ErrValidation, "source_text 不能为空"))
 		return
 	}

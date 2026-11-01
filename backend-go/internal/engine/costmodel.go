@@ -280,3 +280,21 @@ func OcrFixAllowanceTokens(imageFiles int) int64 {
 	calls := int64(imageFiles) * 4
 	return calls*fixed + int64(imageFiles)*4*20*(perLineInput+perLineOutput)
 }
+
+// ApplyMarkup 真实 token 口径 → 实收口径（唯一实现；api/estimate.go 的 applyMarkup 薄委托它）。
+// 为什么从 api 搬进 engine：分段判定（chat_paragraphs.DecideChatSegments）也要把上限积分折回
+// token 才能比"这次走不走分段"，而判定必须在**预估侧与执行侧同一次算**——
+// 换算留在 api 就只能让引擎自己抄一遍除法式（两把尺子的起点都是"抄一份"）。
+// 参数 tokens: 预估真实 token；markup: modeMarkup 解析出的生效系数。
+// 返回: 预估实收 token（不低于原值——系数异常时的兜底方向与 ChargeUsageRealtime 里
+// 「billed<total 就按 total 计」那条一致，宁可多估也不让客户备钱备少）。
+func ApplyMarkup(tokens int64, markup float64) int64 {
+	if tokens <= 0 {
+		return 0
+	}
+	billed := int64(float64(tokens) * markup)
+	if billed < tokens {
+		billed = tokens
+	}
+	return billed
+}

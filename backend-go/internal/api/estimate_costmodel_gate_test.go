@@ -214,8 +214,12 @@ func TestEstimateHandlerNoOldFormula(t *testing.T) {
 	// ★ 2026-10-28：estimateTokens 现在先算两腿再叠加 OCR 判定 allowance（图片件），
 	//   委托形态从 `return engine.X(...)` 变成 `minTokens, maxTokens = engine.X(...)`；
 	//   反证锚点必须跟着形态改，否则这条反证会退化成"锚点不存在"（本锁自己会判 A 类红）。
-	unhooked := strings.Replace(src, "minTokens, maxTokens = engine.EstimateChatTokens(req.Text, req.TargetLangs, mode, \"\", req.UILang)",
-		"minTokens, maxTokens = int64(len(req.Text)), int64(len(req.Text)) * 2", 1)
+	// ★ 2026-11-01 DEF-P1-05 B2：文本腿的委托口从"直接引 engine.EstimateChatTokens"变成
+	//   "引唯一判定现场 s.chatEstimateAndPlan"（分段与报价必须同一次判定）。
+	//   反证锚点跟着搬——抓的还是同一件事：**有人在接口里自己算一份公式**。
+	unhooked := strings.Replace(src,
+		"_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, \"\", req.UILang)",
+		"minTokens, maxTokens = int64(len(req.Text)), int64(len(req.Text))*2", 1)
 	if unhooked == src {
 		t.Fatal("反证② 未命中锚点（estimateTokens 的委托形态变了，请同步本锁）")
 	}
@@ -249,9 +253,24 @@ func estimateFormulaWiringViolations(t *testing.T, src string) []string {
 			mustRef: []string{"s.estimateTokens(req, mode, tid)", "modeMarkup(", "PointsFromTokens(", "atLeastOne("},
 		},
 		{
+			// 文本腿把判定委托给唯一现场（chatEstimateAndPlan），段数腿仍直接引 engine 公式。
 			anchor:  "func (s *Server) estimateTokens",
 			banned:  []string{"countSentences", "* 2.5", "2*rate"},
-			mustRef: []string{"engine.EstimateChatTokens", "engine.EstimateSegmentTokens"},
+			mustRef: []string{"s.chatEstimateAndPlan", "engine.EstimateSegmentTokens"},
+		},
+		{
+			// 判定与报价的**同一个现场**：分段/整篇两条预估腿都必须从这里引 engine 公式，
+			// 且积分折算只走 store 那一个口（自己写除法＝第二把尺子的起点）。
+			anchor:  "func (s *Server) chatEstimateAndPlan",
+			banned:  []string{"countSentences", "2*rate"},
+			mustRef: []string{"engine.EstimateChatTokens", "engine.EstimateParagraphTokens", "engine.SplitParagraphs", "engine.ApplyMarkup", "PointsFromTokens(", "modeMarkup("},
+		},
+		{
+			// 开关必须走 ConfigIntAllowZero：用 ConfigInt 读，"关"这一档会被读回默认 1，
+			// 回退路径按不下去（工单侧 text_ticket_per_line 同款坑，已有先例注释）。
+			anchor:  "func (s *Server) chatSegTiers",
+			banned:  []string{"s.Store.ConfigInt(cfgKeyPlaceholder)"},
+			mustRef: []string{"ConfigIntAllowZero(engine.CfgKeyChatPerParagraph", "engine.CfgKeyChatSegmentMaxPts"},
 		},
 	}
 	for _, sp := range specs {
@@ -350,11 +369,20 @@ func pminSentences(resp map[string]interface{}) float64 {
 // readEstimateSource 读被测接口源文件（静态腿的唯一事实来源）。
 func readEstimateSource(t *testing.T) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(".", "estimate.go"))
-	if err != nil {
-		t.Fatalf("读取 estimate.go 失败: %v", err)
+	// ★ 2026-11-01 DEF-P1-05 B2：预估链现在跨两个文件——estimate.go（报价与出参）＋
+	//   chat_seg_plan.go（分段判定，因为模式倍率那个口在这里）。
+	//   判定搬出去之后，"必须引用 engine 公式"这条判据的射程**也要跟着搬**，
+	//   否则它钉的是旧接线、新链上没人守（AGENTS §三 第四族「靶子搬家」的另一种形态）。
+	//   ⚠️ 只读这两份就够：再加文件要把锚点唯一性一起复核，别顺手扩成整包扫。
+	var parts []string
+	for _, name := range []string{"estimate.go", "chat_seg_plan.go"} {
+		b, err := os.ReadFile(filepath.Join(".", name))
+		if err != nil {
+			t.Fatalf("读取 %s 失败: %v", name, err)
+		}
+		parts = append(parts, string(b))
 	}
-	return string(b)
+	return strings.Join(parts, "\n")
 }
 
 // readBillingAPISource 读扣费源文件（markup 解析口的所在文件）。

@@ -58,9 +58,10 @@ func asrReason(err error) string {
 	if err == nil {
 		return ""
 	}
-	// 能力档判据只问 fileproc 自己给出的那一句开头（同一包内单源，别在前端猜字符串）
-	if msg := err.Error(); strings.HasPrefix(msg, "音频语音识别（ASR）不可用") ||
-		strings.Contains(msg, "ASR 模型资产缺失") || strings.Contains(msg, "库未安装") {
+	// 能力档判据**只问 fileproc 那一个谓词**（★ 2026-11-01 收口批下沉）：三条锚点都是 fileproc
+	// 自己产出的话术，在这里再抄一遍字面量＝生产者与消费者各持一份，话术改一个字档位会静默
+	// 从 capability_missing 退成 failed（前端把"这台没装"说成"这次没听清"，运维支错方向）。
+	if fileproc.IsAsrUnavailableMessage(err.Error()) {
 		return "capability_missing"
 	}
 	// ★ 静音/未授权档单列（2026-10-19 G11）：判据取自 fileproc 的同一个常量，
@@ -142,6 +143,17 @@ func (s *Server) handleChatASR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmp.Close()
+
+	// ★★ 2026-11-01（UAT 收口批）：**能力判定必须排在时长探测之前**，两条都不许换顺序。
+	//   旧顺序＝先 ffmpeg 探时长、再在 TranscribeAudio 里判"这台有没有 ASR"。于是这台没装 ASR 的
+	//   机器上，客户先撞上「无法读取这段录音的时长，请换一段录音」——把**平台缺能力**说成
+	//   **你的录音有问题**，方向反了（AGENTS §19 族一「交付面必须说清楚是哪一族」），
+	//   而且白拨一次 ffmpeg。能力判定是个本地布尔（healthcheck 缓存），比探测便宜，就该先问。
+	//   话术与档位都由 fileproc 那一份单源构造器给（asrReason 的前缀判据认的就是那句）。
+	if aerr := fileproc.AsrUnavailableErr(); aerr != nil {
+		writeJSON(w, 200, chatVoiceFailure{Error: aerr.Error(), Reason: asrReason(aerr)})
+		return
+	}
 
 	// ★ 2026-10-30 组4（C-3／G11）：免费档判定——时长先定档，再判身份。
 	//   ASR 是本地模型、没有 LLM 成本，所以「30 秒内」这一档不扣积分（只占免费额度/IP 次数）；

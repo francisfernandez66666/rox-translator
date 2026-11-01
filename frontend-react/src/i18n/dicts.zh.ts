@@ -301,6 +301,8 @@ export const baseZh: Record<string,string> = {
   'audit.action.apikey_rotate': '轮换 API Key',
   'audit.action.apikey_set_limit': '设置 API Key 限额',
   'audit.action.apikey_delete': '删除 API Key',
+  'audit.action.chat_seg_config_save': '保存即时翻译分段档位',
+  'audit.action.chat_seg_config_reset': '清空即时翻译分段档位',
   'audit.action.apikey_set_status': '启停 API Key',
   'audit.action.approve_edit': '审批并入终稿',
   'audit.action.approve_edit_skip': '审批跳过终稿',
@@ -645,6 +647,7 @@ export const baseZh: Record<string,string> = {
  'msg.copied': '已复制 ',
   // ★ 14.4（2026-10-10）：气泡底部 meta 行的积分展示（与反馈入口同排，不进 content）
   'msg.pointsUsed': '本次消耗 {n} 积分',
+  'msg.pointsFree': '等值 {n} 积分 · 本次免扣',
   'app.loading': '加载中…',
   'app.personalPlan': '个人版',
   'chat.customGroup': '更多语言',

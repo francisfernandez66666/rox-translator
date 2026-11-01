@@ -198,18 +198,55 @@ test.describe('文件工单两段式交付（产物分组 → md 预览 → 原�
       // 遍历滚动祖先逐层判：只问 documentElement 会漏「浮层把某个中间容器撑出横向滚动条」这一族
       // （AGENTS §一·5 通知中心那条实测事故就是这个形态，页面整体读数一动不动）。
       const overflow: { cls: string; scrollWidth: number; clientWidth: number }[] = [];
+      let firstBad: HTMLElement | null = null;
       let node: HTMLElement | null = el.parentElement;
       while (node) {
         if (node.scrollWidth > node.clientWidth + 1) {
           overflow.push({ cls: node.className || node.tagName, scrollWidth: node.scrollWidth, clientWidth: node.clientWidth });
+          if (!firstBad) firstBad = node;
         }
         node = node.parentElement;
       }
       const pre = el.querySelector('[data-testid="tk-preview"]') as HTMLElement | null;
       const cs = pre ? getComputedStyle(pre) : null;
+      // ★ 诊断腿（2026-11-01 收口批加，第二次改写）：这一族"页面整体没溢出"是不完整的话
+      //   （AGENTS §一·5 通知中心那条同族）——只报 scrollWidth/clientWidth 两个数说不出是谁撑的。
+      //   第一版取"最宽元素"是错的：本面板大量节点是**内联样式的无类名 DIV**，按 className 取标签
+      //   既取不到名字、"最宽"也不等于"溢出"（溢出＝右边界越出容器右边界）。
+      //   现在按**真正的溢出定义**扫：容器右边界之外还占着像素的那些后代，各带
+      //   tagName / data-testid / 前 40 字正文 / 左右边界，红的时候读数自己会说话。
+      //   ⚠️ 不参与判定（判据仍是下面两条 expect），摘掉它不影响闸门语义。
+      const spillersIn = (box: HTMLElement) => {
+        const br = box.getBoundingClientRect();
+        const out: { sel: string; text: string; left: number; right: number; w: number; sw: number }[] = [];
+        box.querySelectorAll<HTMLElement>('*').forEach((k) => {
+          const r = k.getBoundingClientRect();
+          if (r.right <= br.right + 1 && r.left >= br.left - 1) return;
+          const cls = k.className ? `.${String(k.className).split(' ')[0]}` : '';
+          const tid = k.getAttribute('data-testid');
+          out.push({
+            sel: `${k.tagName}${cls}${tid ? `[testid=${tid}]` : ''}`,
+            text: (k.textContent ?? '').trim().slice(0, 40),
+            left: Math.round(r.left), right: Math.round(r.right),
+            w: Math.round(r.width), sw: k.scrollWidth,
+          });
+        });
+        return out.sort((a, b) => b.right - a.right).slice(0, 5);
+      };
+      const spill = firstBad ? spillersIn(firstBad) : [];
+      const boxRight = firstBad ? Math.round(firstBad.getBoundingClientRect().right) : 0;
       return {
         docOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
         overflow,
+        spill,
+        boxRight,
+        // 产区自己的直接子节点（分组卡）——"谁越界"与"分区有几块"一起看得见
+        kids: Array.from(el.children).map((k) => {
+          const kk = k as HTMLElement;
+          const r = kk.getBoundingClientRect();
+          return { sel: kk.className ? `.${String(kk.className).split(' ')[0]}` : kk.tagName,
+                   w: Math.round(r.width), right: Math.round(r.right) };
+        }),
         preFound: !!pre,
         preOverflowX: cs ? cs.overflowX : '',
         preOverflowY: cs ? cs.overflowY : '',
@@ -217,7 +254,9 @@ test.describe('文件工单两段式交付（产物分组 → md 预览 → 原�
       };
     });
     expect(metrics.docOverflow, '320 档整页出现横向滚动（产物区把视口撑宽）').toBe(false);
-    expect(metrics.overflow, `320 档产物区的滚动祖先被撑出横向溢出：${JSON.stringify(metrics.overflow)}`).toEqual([]);
+    expect(metrics.overflow, `320 档产物区的滚动祖先被撑出横向溢出：${JSON.stringify(metrics.overflow)}`
+      + `｜容器右边界=${metrics.boxRight}｜越界后代=${JSON.stringify(metrics.spill)}`
+      + `｜产区直接子节点=${JSON.stringify(metrics.kids)}`).toEqual([]);
     if (metrics.preFound) {
       // 预览必须是**可滚容器**（正文可能很长）：横向不许 visible，纵向必须可滚，max-height 必须在位，
       // 否则长 md 会把整张详情顶出屏外（用户看到"产物区下面什么都没有"）。

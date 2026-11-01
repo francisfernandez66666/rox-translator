@@ -236,8 +236,16 @@ func (s *Server) openAlertOfKind(kind string) (bool, int64) {
 
 // handleOpsSLO GET /api/admin/ops/slo —— 当前 SLI/燃烧率/预算快照（超管可视化）。
 func (s *Server) handleOpsSLO(w http.ResponseWriter, r *http.Request) {
+	// ★ 2026-11-01 DEF-P3-05：旧写法 `if err != nil || !auth.IsSuperAdmin(u)` 把"未登录"短路并进
+	//   同一个 403 分支 ⇒ 匿名请求拿到 403 而全站其余后台路由回 401。语义不一致会误导客户端
+	//   （401 才触发重登录链路），也让"这条路由到底认不认身份"在读侧看不出区别。
+	//   分流复用现成出口 writeAuthzError（errNotLogin→401／其余→403），**不新写第二套分流**。
 	u, err := s.requireTenantAdmin(r)
-	if err != nil || !auth.IsSuperAdmin(u) {
+	if err != nil {
+		s.writeAuthzError(w, r, err)
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可查看 SLO 状态"))
 		return
 	}
@@ -270,8 +278,13 @@ func round1(v float64) float64 { return float64(int(v*10+0.5)) / 10 }
 // handleOpsRoutes ★ H7 GET /api/admin/ops/routes —— 路由实时统计
 // （P50/P95/错误率/单位 token 成本 + 动态权重开关状态），供后台可视化。
 func (s *Server) handleOpsRoutes(w http.ResponseWriter, r *http.Request) {
+	// ★ 同 handleOpsSLO：未登录先分流（401），角色不足才 403（DEF-P3-05 第二条）。
 	u, err := s.requireTenantAdmin(r)
-	if err != nil || !auth.IsSuperAdmin(u) {
+	if err != nil {
+		s.writeAuthzError(w, r, err)
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超管可查看路由统计"))
 		return
 	}

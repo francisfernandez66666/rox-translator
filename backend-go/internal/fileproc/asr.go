@@ -72,6 +72,41 @@ const AsrScriptEnv = "ASR_SCRIPT"
 // ★ D5 口径：Python 模块与模型资产两者齐备才为真（同 ocr.go，不重复论证）。
 func AsrAvailable() bool { return CheckHealth().AsrAvail }
 
+// asrUnavailableHead 是"这台没这项能力"那句人话的开头（api 侧的档位判据认的就是它）。
+const asrUnavailableHead = "音频语音识别（ASR）不可用"
+
+// IsAsrUnavailableMessage ASR 失败信息里"能力缺失"那一档的**唯一判据**（★ 2026-11-01 收口批下沉）。
+//
+// 为什么必须在 fileproc 而不是让调用方各写一遍前缀字符串：那三条锚点（本句开头／
+// 「ASR 模型资产缺失」／「库未安装」）都是**本包自己产出的话术**，写在调用方就等于
+// "生产者与消费者各持一份字面量"——话术改一个字，档位会**静默**从 capability_missing 退成 failed
+// （前端于是把"这台没装"说成"这次没听清"，运维支错方向）。同 AGENTS §一·14「清单只有一份」。
+func IsAsrUnavailableMessage(msg string) bool {
+	return strings.HasPrefix(msg, asrUnavailableHead) ||
+		strings.Contains(msg, "ASR 模型资产缺失") || strings.Contains(msg, "库未安装")
+}
+
+// AsrUnavailableErr 返回"这台机器没有 ASR 这项能力"那一条错误；**就绪时返回 nil**。
+//
+// ★★ 存在的唯一理由是**句子只有一份**：本条与 TranscribeAudio 的开场闸、api/asrReason 的判档
+//
+//	必须同源（AGENTS §一·14「清单只有一份」那一族）。如果调用方为了"把能力判定提到时长探测之前"
+//	再抄一遍那句中文，就会出现"health 说没装、屏幕上说的是另一句"的漂移，而 asrReason 的
+//	前缀判据（"音频语音识别（ASR）不可用"）也只在其中一份上成立——档位会静默退成 failed。
+//
+// ★ 为什么要有这个"提前判能力"的口（★ 2026-11-01 UAT 收口批立）：
+//
+//	/asr 原先**先**探时长（要拨 ffmpeg）**再**在 TranscribeAudio 里判能力。于是这台没装 ASR 的
+//	机器上，客户先撞上"无法读取这段录音的时长，请换一段录音"——把一个**平台缺能力**说成
+//	**客户的录音有问题**，方向反了（AGENTS §19 族一「交付面必须说清楚是哪一族」）。
+//	能力判定是一个本地布尔，比探测便宜，就该排在探测前面。
+func AsrUnavailableErr() error {
+	if AsrAvailable() {
+		return nil
+	}
+	return fmt.Errorf("%s：服务器未安装 sherpa-onnx 或未部署 ASR 模型资产（assets/asr/*.onnx），取权重步骤见 assets/asr/README.md", asrUnavailableHead)
+}
+
 // probeAsr 在指定 Python 解释器下探测 ASR 依赖。
 // 返回 (就绪, 不就绪时的 actionable 告警)——话术在此单源维护，healthcheck.go 只做两行转发。
 func probeAsr(pythonPath string) (bool, string) {
@@ -207,8 +242,8 @@ type asrResult struct {
 //
 //	由调用方决定降级或提示；识别出来为空也如实报出，不静默交空产物。
 func TranscribeAudio(ctx context.Context, path string) ([]AsrSegment, error) {
-	if !AsrAvailable() {
-		return nil, fmt.Errorf("音频语音识别（ASR）不可用：服务器未安装 sherpa-onnx 或未部署 ASR 模型资产（assets/asr/*.onnx），取权重步骤见 assets/asr/README.md")
+	if aerr := AsrUnavailableErr(); aerr != nil {
+		return nil, aerr
 	}
 	if _, err := os.Stat(asrScriptPath()); err != nil {
 		return nil, fmt.Errorf("ASR 脚本缺失：asr_transcribe.py 未随二进制部署到 %s", filepath.Dir(os.Args[0]))

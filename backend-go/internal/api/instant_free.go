@@ -172,7 +172,16 @@ func (s *Server) instantEstimatePoints(text string, langCount int, mode, srcLang
 	for i := 0; i < langCount; i++ {
 		langs = append(langs, uiLang)
 	}
-	tokens, _ := engine.EstimateChatTokens(text, langs, mode, srcLang, uiLang)
+	var tokens int64
+	// ★ DEF-P1-05 B2：分段执行会把固定指令开销按段数重发。这一档给的是"免费额度够不够"的顶，
+	//   报价形态必须与真正执行的形态一致——按整篇报价却分段执行＝长文能把免费额度**静默吃穿**
+	//   （AGENTS §一·11 那一族：额度墙形同虚设而一切读数正常）。取上限档＝保守方向（宁可多算）。
+	enabled, _ := s.chatSegTiers()
+	if enabled && len(engine.SplitParagraphs(text)) >= engine.ChatSegmentMinParagraphs {
+		_, tokens = engine.EstimateParagraphTokens(text, langs, mode, srcLang, uiLang)
+	} else {
+		tokens, _ = engine.EstimateChatTokens(text, langs, mode, srcLang, uiLang)
+	}
 	return s.Store.PointsFromTokens(tokens)
 }
 

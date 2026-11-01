@@ -29,29 +29,20 @@ func (w *Workflow) textPerLineEnabled() bool {
 	return w.Store.ConfigIntAllowZero("text_ticket_per_line", 1) != 0
 }
 
+// ============ 切分/拼回：薄委托到 engine（★ 2026-11-01 DEF-P1-05 批） ============
+// 这三个函数原来在本文件里各自实现一份，而即时链（engine/text.go）后来要用的正是同一对
+// "按分隔符切 / 拼回去"的判据。两份实现迟早分家（本仓「多把尺子」那一族），所以收进
+// engine/textlines.go 做唯一事实源；这里保留同名薄委托，**调用点一字不改**。
+// ⚠️ 反向 import 不许出现：engine 不 import orchestrator（会成环），所以方向只能是"工单委托引擎"。
+
 // composeLineOutput 把逐行译文拼回整篇（行数与源文一致；行内换行压成空格，防一段变多段）。
-func composeLineOutput(lines []string) string {
-	out := make([]string, len(lines))
-	for i, v := range lines {
-		out[i] = strings.ReplaceAll(strings.TrimSpace(v), "\n", " ")
-	}
-	return strings.Join(out, "\n")
-}
+func composeLineOutput(lines []string) string { return engine.ComposeLineOutput(lines) }
 
 // splitLines 按 \n 切行并保留空行占位（末尾空行也保留，保证行数与源文一致）。
-func splitLines(s string) []string { return strings.Split(s, "\n") }
+func splitLines(s string) []string { return engine.SplitLines(s) }
 
-// nonEmptyLines 统计非空行数（与 qa.nonEmptyLineCount 同口径；这里不 import qa 只为不把
-// 「是否多段」的判定与 QA 规则耦合，阈值只有「≥2」这一条）。
-func nonEmptyLines(s string) int {
-	n := 0
-	for _, l := range splitLines(s) {
-		if strings.TrimSpace(l) != "" {
-			n++
-		}
-	}
-	return n
-}
+// nonEmptyLines 统计非空行数（与 qa.nonEmptyLineCount 同口径；"≥2 才逐行折腾"的门限吃这个数）。
+func nonEmptyLines(s string) int { return engine.NonEmptyLines(s) }
 
 // translateTextPerLine 文本工单逐行翻译/增量补译。
 // 返回 true 表示本函数已接管（调用方保存 payload 后返回）；false 表示回退旧整篇路径。

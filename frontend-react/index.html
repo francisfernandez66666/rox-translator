@@ -135,6 +135,20 @@
         })()
         var DEADLINE_MS = SLOW_LINK ? 30000 : 8000
         var CEILING_MS = 60000
+        var TICK_MS_CFG = TICK_MS
+        // ★ 2026-11-01 测试注入口（e2e 靠它把 8s/60s 那套真实节奏压到秒级，见 e2e/boot_sentinel.spec.ts L3）：
+        //   只读 `window.__LC_BOOT_CFG`，**生产不写这个全局量** ⇒ 三档恒等于上面的默认值（源码锁按字面量钉）。
+        //   两条硬口径：① 注入值必须过 Number.isFinite ＋ clamp——不 clamp 的话一个 `ceiling: 0`
+        //      就退化成"每 tick 都判到期"，那是把哨兵变成刷屏；② 只接受数值，字符串/NaN 一律忽略。
+        ;(function () {
+          try {
+            var cfg = window.__LC_BOOT_CFG
+            if (!cfg) return
+            if (Number.isFinite(cfg.deadline)) DEADLINE_MS = Math.max(1000, Math.min(cfg.deadline, 600000))
+            if (Number.isFinite(cfg.ceiling)) CEILING_MS = Math.max(2000, Math.min(cfg.ceiling, 600000))
+            if (Number.isFinite(cfg.tick)) TICK_MS_CFG = Math.max(50, Math.min(cfg.tick, 5000))
+          } catch (err) { /* 注入口自己读不到＝按默认档跑，不猜 */ }
+        })()
         var lastResCount = -1
         // 「这一跳还在动吗」＝Resource Timing 里的资源条目数有没有再变（变了＝又落了东西，
         // 慢链路正是这个形态）。取不到 Performance API 时返回上一次读数（＝判不出"在动"，不猜）。
@@ -228,6 +242,16 @@
           var s = document.getElementById('__boot_skeleton')
           if (s && s.parentNode) s.parentNode.removeChild(s)
         }
+        // ★ 撤零 JS 静态留资表单（DEF-P0-03，2026-11-01）。**与上面两个撤销函数是三件事**：
+        //   骨架＝"界面还没起来时给人看的东西"、面板/横幅＝"出问题时说的话"、
+        //   留资＝"链路塌了之后唯一还能收客户线索的面"——最后一件只在**界面真起来了**才撤
+        //   （React 自己的 LeadForm 接管，两份不并存）。
+        //   ⚠️ 禁止把它并进 dismissBootNotice()：合并后要么留资跟着面板一起消失
+        //   （恰好删在它唯一有用的那一档），要么骨架跟着留资一起留着（黑底转圈盖住界面）。
+        function dismissBootLead() {
+          var f = document.getElementById('__boot_lead')
+          if (f && f.parentNode) f.parentNode.removeChild(f)
+        }
         function waitedLine() {
           var s = Math.round((Date.now() - startAt) / 1000)
           return '已等待约 ' + s + ' 秒' + (connType ? '（网络档 ' + connType + '）' : '')
@@ -242,13 +266,13 @@
         // kind='slow' ⇒ 只是慢（脚本还在下载）：只出**不挡界面的底部横幅**——这一档大概率自己会好，
         //   旧形态把它当失效盖满屏，用户看到的就是「页面没能加载起来」（2026-10-17 报障的真身）。
         // kind='panel'⇒ 确定失效（站点数据被拒／脚本真失败／执行抛异常／什么都没抓到）：盖全屏、信息给全。
+        // ★★ 2026-11-01 DEF-P0-01 的根因腿：旧写法只在"slow→slow"时摘旧节点，后面还留一句
+        //   `if (box) return`。慢链路上横幅已经在了 ⇒ 60s 封顶时 `show('panel')` **被这一句吞掉**：
+        //   全屏面板永不显示、骨架也不撤、而定时器恰好在前一行已被清 ⇒ 后来界面挂载也没人撤脸。
+        //   ⇒ 现在**一律先摘旧节点再按新形态建**，函数体内不存在任何"有旧节点就什么也不做"的分支。
         function show(kind) {
           var box = document.getElementById('__boot_fail')
-          if (box && kind === 'slow' && box.getAttribute('data-kind') === 'slow') {
-            box.parentNode.removeChild(box)
-            box = null
-          }
-          if (box) return
+          if (box && box.parentNode) box.parentNode.removeChild(box)
           var pending = pendingScripts()
           if (kind === 'slow') {
             var bar = document.createElement('div')
@@ -300,8 +324,42 @@
             'background:#FFFFFF;color:#0B0C0E;border-radius:8px;cursor:pointer'))
           ;(document.body || document.documentElement).appendChild(box)
         }
+        // 出面板后的兜底哨：只管"界面后来挂载了就把哨兵产物撤干净"这一件事（判调用形态，
+        // 不重复 show()/定时器里的逻辑，避免出现第二条撤销链——那玩意儿迟早两边不一致）。
+        function watchMountAfterPanel() {
+          var guard = setInterval(function () {
+            if (!rootEmpty()) { clearInterval(guard); dismissBootNotice(); dismissBootSkeleton(); dismissBootLead(); return }
+          }, 500)
+        }
+        // ★ A-2 自动恢复（用户拍板要做）。取向写死在四条刹车里，一条都不许省：
+        //   「DEADLINE_MS 到点」只代表"该给用户一句提示"，**不代表链路死了**——
+        //   慢链上自动 reload 等于把用户推进"从零再下一遍"的循环（越点越慢，2026-10-17 就是这件事的现网形态）。
+        //   所以只有"确定没救"那一档才重来：界面没起来 ∧ 链路已停止变化 ∧ 不是浏览器拒绝存数据 ∧ 次数没满。
+        var AUTO_RETRY_MAX = 2
+        var AUTO_RETRY_KEY = '__lc_boot_auto'
+        function autoRetryUsed() {
+          // 读不到存储（隐私模式／阻止所有 Cookie）⇒ 回 -1，调用方按"不许自动重试"处理：
+          // 那一档的成因本来就是存储被拒，重载一万次也不会变好（入口包顶层裸读存储抛 SecurityError 同族）。
+          try {
+            var v = parseInt(sessionStorage.getItem(AUTO_RETRY_KEY) || '0', 10)
+            return Number.isFinite(v) ? v : 0
+          } catch (err) { return -1 }
+        }
+        function autoRecover() {
+          var used = autoRetryUsed()
+          if (used < 0 || used >= AUTO_RETRY_MAX) return
+          var before = resCount()
+          setTimeout(function () {
+            if (!rootEmpty()) return // 刹车一：界面已经起来了
+            if (resCount() !== before) return // 刹车二：Resource Timing 又落了新条目 ⇒ 只是慢，别从零再下一遍
+            if (storageBlocked().length) return // 刹车三：浏览器拒绝本站数据，reload 不会变好
+            if (autoRetryUsed() >= AUTO_RETRY_MAX) return // 刹车四：并发/重复触发时别把次数刷爆
+            try { sessionStorage.setItem(AUTO_RETRY_KEY, String(autoRetryUsed() + 1)) } catch (err) { return }
+            location.reload()
+          }, 8000 + used * 8000) // 退避 8s、16s：给"其实还在爬的链路"留两次机会，然后收手
+        }
         var timer = setInterval(function () {
-          if (!rootEmpty()) { clearInterval(timer); dismissBootNotice(); dismissBootSkeleton(); return }
+          if (!rootEmpty()) { clearInterval(timer); dismissBootNotice(); dismissBootSkeleton(); dismissBootLead(); return }
           if (Date.now() - startAt < DEADLINE_MS) return
           // 到期了：先问「这一跳还在动吗」——还有脚本在下载时，**只要链路还在动就再等一拍**
           // （慢链路上 Resource Timing 条目数会陆续增加）；直到 CEILING_MS 上限。
@@ -323,7 +381,14 @@
           }
           clearInterval(timer)
           show('panel')
-        }, TICK_MS)
+          // ★ 2026-11-01 DEF-P0-01（三件后果里的②③）：出面板之后**撤销权不许跟着定时器一起作废**。
+          //   旧形态到这里 clearInterval 后再没人看 #root，于是"界面其实后来挂载了、脸上还盖着
+          //   错误面板 + 黑底转圈骨架"（骨架那条是复核也漏掉的一件）。这条低频兜底哨只管一件事：
+          //   界面起来了就把面板与骨架一起撤掉，然后自己收摊。
+          watchMountAfterPanel()
+          // ★ 2026-11-01 A-2（已拍板要做）：确定失效才自动重来一次；慢链一律不动（函数里四条刹车）。
+          autoRecover()
+        }, TICK_MS_CFG)
       })()
     </script>
   </head>
@@ -336,6 +401,29 @@
     </noscript>
     <div id="__boot_skeleton" class="lc-boot-cover" aria-hidden="true"><span class="lc-boot-spin"></span></div>
     <div id="root"></div>
+    <!-- ★ DEF-P0-03（2026-11-01）零 JS 静态留资：入口 JS 没跑起来／界面挂载失败时**唯一**的客户入口。
+         三条硬口径，改这块前逐条读：
+         ① 必须是 #root 的**兄弟节点**并自带 pointer-events:auto —— 首屏骨架容器是 pointer-events:none，
+            挂进里面就是一件点不动、读屏也读不到的摆设；
+         ② 只在「界面挂载成功」那一支撤（哨兵里的 dismissBootLead）；slow 横幅态与 panel 面板态**一律保留**——
+            留资存在的理由就是链路真死那一档，撤在它自己身上等于没做；
+         ③ 蜜罐（name="site"）用**位移隐藏**，不许 display:none / visibility:hidden / hidden 属性——
+            那样连 bot 也填不到，蜜罐当场失效；本表单不挂 onsubmit、不引用任何脚本，链路塌了它还得能用。
+         打的是 /api/lead/public（免验证降级通道：蜜罐 + IP 日配额 3 + 一次性邮箱黑名单 + 两条升级信号），
+         提交后由后端 303 回 /?lead=ok|err，首页读到那个 query 显示一次性提示。 -->
+    <form id="__boot_lead" action="/api/lead/public" method="post" autocomplete="off"
+          style="position:fixed;left:0;right:0;bottom:0;z-index:100000;pointer-events:auto;display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;background:#0E1014;border-top:1.2px solid #6E7683;font:15px/1.6 system-ui,-apple-system,'Segoe UI',sans-serif;color:#E7E9EA">
+      <span style="flex:1 0 100%;font-weight:600">页面没加载起来？留下公司名和邮箱，我们收到会尽快回复。</span>
+      <input type="text" name="company" required maxlength="100" placeholder="公司/团队名称" aria-label="公司/团队名称"
+             style="flex:1 1 200px;min-width:0;padding:10px 12px;background:#121417;color:#E7E9EA;border:1.2px solid #5A6270;border-radius:8px;font:inherit;box-sizing:border-box">
+      <input type="email" name="email" required maxlength="120" placeholder="联系邮箱" aria-label="联系邮箱"
+             style="flex:1 1 200px;min-width:0;padding:10px 12px;background:#121417;color:#E7E9EA;border:1.2px solid #5A6270;border-radius:8px;font:inherit;box-sizing:border-box">
+      <!-- 蜜罐：真人看不见但仍在布局流里（位移出屏 + 1px），bot 会照填 -->
+      <input type="text" name="site" value="" tabindex="-1" autocomplete="off" aria-hidden="true"
+             style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+      <input type="hidden" name="source" value="static_fallback">
+      <button type="submit" style="flex:0 0 auto;padding:10px 18px;font:inherit;background:#FFFFFF;color:#0B0C0E;border:0;border-radius:8px;cursor:pointer">获取方案</button>
+    </form>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

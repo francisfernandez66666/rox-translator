@@ -828,7 +828,13 @@ export default function TicketsPage() {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, flexWrap: 'wrap' }}>
           <label style={{ fontSize: 15, color: 'var(--lc-text-2)', whiteSpace: 'nowrap' }}>{t('tk.langsLabel')}</label>
-          <div style={{ minWidth: 300, flex: 1 }}>
+          {/* ★ 2026-11-02 收口 TD4（320 档横向溢出 21px 的真身）：这一格原来是 `minWidth: 300, flex: 1`
+              ——min-width 是**顶到底**的：容器只剩 279 时它不缩，于是把 `.app-main` 撑出 341 的滚动宽，
+              用户看到的是"整页能左右拖"（AGENTS §一·5「宽度不由视口决定的自适应件不许写死度量」同族）。
+              修法＝把 300 从**地板**改成**基准**：`flex: '1 1 300px'` ＋ `minWidth: 0`
+              ——宽容器里与改前逐字同形（basis 300 且可 grow），只有容器比 300 窄才收缩。
+              ⚠️ 别改回 min-width：e2e `ticket_delivery.spec.ts` TD4 会按"越界后代"点名这里。 */}
+          <div style={{ flex: '1 1 300px', minWidth: 0 }}>
             <LangMultiSelect value={langs} onChange={setLangs} />
           </div>
           <ModeToggle value={qualityMode as 'fast' | 'pro'} fastFirst

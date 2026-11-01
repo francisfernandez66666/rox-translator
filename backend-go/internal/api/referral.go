@@ -116,8 +116,15 @@ func sysReferralCfgInt64(get func(string) (string, error), key string, def int64
 // inviter_paid_reward_tokens。★ 2026-09-19 积分口径：接口出入参一律积分，
 // 服务端按汇率折算落库（配置键名保持 token 记账口径不变）。负值归零。
 func (s *Server) handleAdminReferralConfig(w http.ResponseWriter, r *http.Request) {
+	// ★ 2026-11-01 DEF-P3-05 第三条：这里取用户用的是 authUser（无 error 返回），所以"未登录"
+	//   显式喂 errNotLogin 走同一个分流出口（401），角色不足仍回 403——
+	//   语义与 ops/slo 两条对齐，也让"全路由 401/403 一致性锁"能一次守住三条。
 	u := s.authUser(r)
-	if u == nil || !auth.IsSuperAdmin(u) {
+	if u == nil {
+		s.writeAuthzError(w, r, errNotLogin)
+		return
+	}
+	if !auth.IsSuperAdmin(u) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrForbidden, "仅超级管理员可配置邀请参数"))
 		return
 	}

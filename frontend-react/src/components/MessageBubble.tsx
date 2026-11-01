@@ -684,9 +684,19 @@ function MessageBubble({ message, onFeedback, source }: Props & { source?: strin
                   {t('fb.entry')}
                 </button>
               )}
-              {hasTranslations && !!message.points_used && (
-                <span className="msg-meta" data-testid="msg-meta">
-                  {tpl('msg.pointsUsed', { n: fmtPoints(message.points_used) })}
+              {/* ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：这一行按**两条腿**出栈。
+                  实扣那一支一字未动（`points_used` 就是 F-49① 那句「出参＝实扣」的载体）；
+                  落在即时翻译免费档的一单实扣为 0，但「这一单本该收多少」仍要让客户看见，
+                  而且必须点名免扣——旧形态是后端把等值量兜成 points_used 一起报（报文说收了 N 分、
+                  余额一动不动），或整行消失（客户看不到这一单值多少），两种都是拿读数给事实背假的。
+                  ⚠️ 这一排**只许一枚 msg-meta**：两个分支共用同一个 span（尾部那一排按全集判，
+                  见 translateFlowE2eLock.test.ts 的派生式口径），再包一枚就是把同排拆成两排。 */}
+              {hasTranslations && (!!message.points_used || (message.points_free === true && !!message.points_equiv)) && (
+                <span className="msg-meta" data-testid="msg-meta"
+                      data-free={message.points_used ? undefined : '1'}>
+                  {message.points_used
+                    ? tpl('msg.pointsUsed', { n: fmtPoints(message.points_used) })
+                    : tpl('msg.pointsFree', { n: fmtPoints(message.points_equiv || 0) })}
                 </span>
               )}
             </div>

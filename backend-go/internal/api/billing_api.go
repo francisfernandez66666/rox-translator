@@ -209,15 +209,25 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 	//   task_type 落标签（kb_embed / pack_scrape…）供超管侧单列核算；
 	//   rate_card 未为该标签配行时 unitPrice 回退 (1, 1.0)，与 'translate' 同价，
 	//   所以留痕行的 cost 仍等于「本该收客户多少」，平台承担账才是可比金额。
-	// ★ 2026-10-30 组4（A-2／§5.5）：即时翻译免费档——**只留痕、不扣钱、不进收集器**。
+	// ★ 2026-10-30 组4（A-2／§5.5）：即时翻译免费档——**只留痕、不扣钱、不进实收桶**。
 	// 出口只有这一个：四个 handler 不许各自判"要不要扣"（N2）。
-	// · 不 AddBilled ⇒ 响应里的 points_used=0，与台账一致（客户看不到"免费还扣了分"）；
+	// · 不 AddBilled ⇒ 响应里的 points_used=0，与台账一致（客户看不到"免费还扣了分"）——
+	//   这条是 F-49① 的立约本体（出参＝实扣），2026-11-01 加「等值积分」显示时**一字未动**；
+	// · 等值量记进**另一只桶** AddFreeBilled（★ 2026-11-01 用户拍板「显示等值积分并注明免扣」）：
+	//   旧形态免费腿整条不出声 ⇒ 气泡上那一行「消耗 N 积分」直接消失，客户既看不到这一单值多少、
+	//   也无从核对「今天免扣了几次」。这里仍是全仓唯一拿得到真实 billed 的地方（handler 里只有预估），
+	//   所以「本该收多少」只有这一处可以说，出参侧只做透传（同 F-49① 的取向）。
 	// · 不撞预算墙、不累加 usage_daily（W16，由 LogUsage 的 countsTowardDailyUsage 保证）；
 	// · **积分暗额度在这里累加**：这是全仓唯一拿得到真实 billed 的地方（handler 里只有预估）。
 	if llm.FreeInstantFromCtx(ctx) {
 		pts := int64(0)
 		if s.Store != nil {
 			pts = s.Store.PointsFromTokens(billed)
+		}
+		// 等值桶的量与那一行留痕的 quantity **同一个变量**（不是重算一遍），
+		// 否则「等值」与客户后台看到的流水行迟早各说各话。
+		if uc := llm.CollectorFrom(ctx); uc != nil {
+			uc.AddFreeBilled(billed)
 		}
 		_ = s.Store.LogUsage(tid, uid, store.TaskTypeInstantFree, model, model, tenant.LangFromContext(ctx), billed, "text", mode)
 		if uid > 0 {

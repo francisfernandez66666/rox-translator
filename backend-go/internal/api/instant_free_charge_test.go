@@ -136,6 +136,19 @@ func TestInstantFree_G1FreeLeg(t *testing.T) {
 	if got := ifcBucket(t, p.s.Store, store.RateScopeFreeWall, uidKey); got != 0 {
 		t.Fatalf("G1：免费成功那一枪不该写 free_wall，实得 %d（画像与引导卡会因此把「用完了」念给正常用户）", got)
 	}
+	// ⑤ ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：等值桶必须在位，且与那一行留痕**同源**。
+	// 判据问的是"同一个变量"而不是"两个相近的数"：现场写的是 `AddFreeBilled(billed)`，
+	// 留痕写的也是 `billed`——两处若有一天分开算（一处乘 markup、一处不乘），这一条当场红。
+	if got := uc.FreeBilledTotal(); got != r.quantity {
+		t.Fatalf("G1：等值桶=%d 而 instant_free 留痕行 quantity=%d ⇒ 出参的「等值 N 积分」与客户后台那行流水不是同一笔账", got, r.quantity)
+	}
+	if uc.FreeBilledTotal() <= 0 {
+		t.Fatalf("G1：等值桶恒 0 ⇒ 免费档的气泡永远不报等值（回到「这一单值多少看不见」那一形态）")
+	}
+	// ⑥ 两桶互不串账（串了就是"报文说收了钱而余额一动不动"的第二次发作）
+	if got := uc.BilledTotal(); got != 0 {
+		t.Fatalf("G1：等值那一笔同时写进了实收桶（BilledTotal=%d）⇒ F-49① 的「出参＝实扣」当场破约", got)
+	}
 }
 
 // TestInstantFree_G7PaidLegStillCharges G7：同一租户同一人，未标记腿照旧扣、且不吃免费暗额度。
@@ -151,6 +164,11 @@ func TestInstantFree_G7PaidLegStillCharges(t *testing.T) {
 	billed := uc.BilledTotal()
 	if billed <= 0 {
 		t.Fatalf("G7：未标记腿没进扣费通道（收集器=%d）⇒ 免费档把收费面一起免掉了，这是本条要抓的形态", billed)
+	}
+	// ★ 2026-11-01 反向对照的另一半：收费腿**不许**写等值桶。
+	// 写了 ⇒ 正常扣费的一单也会显示「本次免扣」（把花了钱说成没花钱，与 G1 那条是同族两个方向）。
+	if got := uc.FreeBilledTotal(); got != 0 {
+		t.Fatalf("G7：收费腿写入了等值桶（%d）⇒ 出参会给扣了钱的单子标注「免扣」", got)
 	}
 	// 收费腿**不许**动两个暗额度桶（动了＝同一次真实消耗记两笔账，免费档会被自己提前烧光）
 	if got := ifcBucket(t, p.s.Store, store.RateScopeFreePointUser, uidKey); got != 0 {

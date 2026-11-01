@@ -452,19 +452,29 @@ func recordChatUsageObs(ctx context.Context, model string, prompt, cached int64)
 
 // UsageCollector 并发安全的 token 用量累计器：随 ctx 注入并自动传播到全部下游
 // LLM 调用（初翻/校对/Judge/文化闸门/embedding），任务结束时一次性读取汇总值计费。
-// 两类计数各管一件事，禁止混用：
+// 三类计数各管一件事，禁止混用：
 //   - prompt/completion：**真实**消耗（供应商回吐的裸 token 数），用于内部成本核算与观测；
-//   - billed：**对外计费口径**的 token 数（每次调用经 markup 均摊后的实收量，与 usage_ledger.quantity 逐笔同值）。
+//   - billed：**对外计费口径**的 token 数（每次调用经 markup 均摊后的实收量，与 usage_ledger.quantity 逐笔同值）；
+//   - freeBilled：**即时翻译免费档**本该收的对外计费口径量（与那一行 `usage_ledger.quantity` 逐笔同值，
+//     但**没有**扣钱）。它是「等值积分」那一维的唯一现场读数，与 billed 是**两只不同的桶**。
 //
 // ★ F-49（〇-U 批 I-4，2026-09-26 UAT）：对外出参 points_used 此前由展示侧**再乘一次 markup**
 // 折算，而 markup 的真实取值在租户策略/翻译模式里逐次解析（billing_api.ChargeUsageRealtime），
 // 展示侧那份公式一旦漂移（默认值不同、忘了读模式因子），客户拿报文就对不上账。
 // 现在把「实收多少」在扣费现场记进同一个收集器，出参只做透传——一条折算链，杜绝长期漂移。
+//
+// ★ 2026-11-01（用户拍板「显示等值积分并注明免扣」）：加第三只桶。判据本体是 F-49① 那句
+// **「出参 points_used ＝ 实扣」**——免费腿一分钱没扣，所以 `billed` 必须保持 0。
+// 旧形态只有这一只桶，于是免费腿的出参由展示侧那条「取不到实收就保守回退真实用量」兜底，
+// 兜成的是**报文写着「消耗 N 积分」而余额一动不动**（读数给"扣了钱"背书，正是 F-49① 立约要消灭的形态）；
+// 把等值量直接记进 `billed` 又会让那条承诺当场打破（同一个数既是实收又是等值，两者在免费档根本不同值）。
+// ⇒ 只能另开一只桶：等值量记 `freeBilled`，实收那一维一字不动。
 type UsageCollector struct {
 	mu         sync.Mutex // 保护并发累加（多语言并发翻译同时写）
 	prompt     int64      // 累计输入 token
 	completion int64      // 累计输出 token
 	billed     int64      // 累计对外计费 token（真实用量×均摊系数，逐笔等于台账 quantity）
+	freeBilled int64      // 累计「本该收但按免费档没扣」的对外计费口径 token（逐笔等于免费留痕行的 quantity）
 }
 
 // AddBilled 累加一次调用的**对外计费** token 量（由实时计量钩子调用，参数=即将落台账的 quantity）。
@@ -477,6 +487,19 @@ func (c *UsageCollector) AddBilled(n int64) {
 	c.mu.Unlock()
 }
 
+// AddFreeBilled 累加一次**即时翻译免费档**的等值 token 量（参数=那一行留痕的 quantity）。
+// ⚠️ 与 AddBilled 的分工是「钱」这一维：本函数**只记账面等值、不代表扣了钱**，
+// 调用点只许在 `ChargeUsageRealtime` 的免费分支里（全仓唯一拿得到真实 billed 的地方），
+// 任何别的分支调用它都会让「等值」与「本该收」脱钩。
+func (c *UsageCollector) AddFreeBilled(n int64) {
+	if c == nil || n <= 0 {
+		return
+	}
+	c.mu.Lock()
+	c.freeBilled += n
+	c.mu.Unlock()
+}
+
 // BilledTotal 返回累计的对外计费 token 量；收集器缺失（未注入）时返回 -1，
 // 调用方据此区分「确实一分没收」与「没有计量口径可用」，不得与 0 混同。
 func (c *UsageCollector) BilledTotal() int64 {
@@ -486,6 +509,16 @@ func (c *UsageCollector) BilledTotal() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.billed
+}
+
+// FreeBilledTotal 返回累计的「免费档等值」token 量；收集器缺失时返回 -1（口径同 BilledTotal）。
+func (c *UsageCollector) FreeBilledTotal() int64 {
+	if c == nil {
+		return -1
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.freeBilled
 }
 
 // Add 累加一次调用的 token 用量。

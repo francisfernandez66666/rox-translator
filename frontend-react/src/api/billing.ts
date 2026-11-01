@@ -399,3 +399,56 @@ export async function adminTextLineTiersSave(
     method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
   }))
 }
+
+// ============================================================================
+// ★ 2026-11-01 DEF-P1-05 B2：即时翻译「分段」两条档位的超管配置口。
+// 两键对应 system_config 的 text_chat_per_paragraph（走不走逐段：0＝整篇旧路径）与
+// chat_segment_max_points（分段形态的总积分上限；0＝不设上限）。
+// 为什么这两条必须能配：分段＝固定指令开销 × 段数，长文档分几十段时不是小数，
+// 而上限该取多少只能由运营按真实账单收口（施工方案 §B2-2 明写"默认值实测标定后定"）；
+// 写死在代码里等于让调档必须发版，而关掉这条能力又必须是一颗按得下去的闸。
+// 口径红线（与上面那族**相反**）：**这一族 0 是真实档位**——
+// per_paragraph=0＝关掉分段、max_points=0＝不设上限；区间 [0,1] 与 [0,100000]
+// 由后端 chatSegCfgFields、读侧钳位（api/chat_seg_plan.go 的 chatSegTiers）与
+// engine 的四个常量共同决定，前端只做同区间预拦、不写第二份判据
+// （三方等值＝src/lib/chatSegTiers.crossSide.lock.test.ts）。
+// tiers＝读侧现读的**生效值**；stored＝库内原值。两者不同必须在界面上看得出来，
+// 否则库里躺着 "abc" 而界面回显 "abc"，运营原样点保存＝把一个系统从没在用过的数钉成正式配置。
+// ============================================================================
+
+// 字段名与合法区间的唯一出处在 src/lib/chatSegTiers.ts（那里写了为什么要放纯模块）：
+// 管理台夹具按枚举 mock @/api，常量若也从这里走，加一档就得改 N 份 mock。
+import { type ChatSegTierField } from '@/lib/chatSegTiers'
+
+export {
+  CHAT_SEG_TIER_FIELDS,
+  CHAT_SEG_TIER_CONFIG_KEYS,
+  CHAT_SEG_TIER_RANGES,
+  CHAT_SEG_TIER_DEFAULTS,
+  type ChatSegTierField,
+} from '@/lib/chatSegTiers'
+
+/** 分段档位快照（生效值 / 库内原值 / 代码缺省 / 区间，四态都要有：界面据此区分"配了"与"走缺省"） */
+export interface ChatSegTiersCfg {
+  tiers?: Partial<Record<ChatSegTierField, number>>
+  stored?: Record<string, string>
+  defaults?: Partial<Record<ChatSegTierField, number>>
+  ranges?: Partial<Record<ChatSegTierField, [number, number]>>
+  // zero_semantics 由后端出栈（值＝zero_is_a_real_tier）：这一族 0 合法，
+  // 界面不许把 0 当"脏值"标红——判据方向由后端说，不由前端猜。
+  zero_semantics?: string
+}
+
+/** 管理台：回显两条分段档位的生效值（读侧现读）＋库内原值＋代码缺省＋区间 */
+export async function adminChatSegTiers(): Promise<AdminResp & ChatSegTiersCfg> {
+  return bizResp(() => request('/api/admin/config/chat-segments', { headers: authHeaders() }))
+}
+
+/** 管理台：保存两条分段档位（必须一次交齐）；传 { reset: true } 则清空回代码缺省 */
+export async function adminChatSegTiersSave(
+  data: Partial<Record<ChatSegTierField, number>> & { reset?: boolean },
+): Promise<AdminResp & ChatSegTiersCfg> {
+  return bizResp(() => request('/api/admin/config/chat-segments', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+  }))
+}
