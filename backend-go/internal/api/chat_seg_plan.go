@@ -7,7 +7,10 @@
 //	那个解析口只在 api 存在。引擎要是自己再算一遍倍率，就是本仓反复登记的「多把尺子」
 //	（AGENTS §一·5④／§一·11／§23）——最坏的形态不是报错，而是**横幅按分段报价、执行按整篇跑**，
 //	客户按预估备的钱不够花。
-//	⇒ 所以：预估侧与执行侧调的是**同一个** engine.DecideChatSegments，输入也一样（同一个 markup 口）。
+//	⇒ 所以：预估侧与执行侧调的是**同一个** chatEstimateAndPlan（本文件那一个函数，
+//	内部只经 engine.EstimateParagraphTokens 与 engine.ApplyMarkup 两处换算），
+//	算好的 engine.ChatSegPlan 由 WithChatSegPlan 挂进 ctx 给引擎读——
+//	引擎不自己判、也不再算一遍（AGENTS §一·5④ 那条"预估与实扣同尺"在分段这一维的落点）。
 //
 // ⚠️ 没有这个标记 ⇒ 引擎按整篇旧路径走（不分段）。这是刻意的 fail-closed：
 //

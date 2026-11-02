@@ -219,4 +219,27 @@ describe('admin 计费 Hub（PlansP）', () => {
     ).toEqual([])
   })
 
+  // ★ F-3 那条"更值钱的判据"的反证腿（施工方案 §F-3 实现要点原文）：
+  //   「捕获 console.error 后按消息计数」这种锁，**接线断了就恒绿**——
+  //   console.error 被换掉但没被调用、正则写错、或 React 换了措辞，三种坏法在上面那条里都表现为"零告警＝通过"。
+  //   所以必须有一条"故意制造一次切换 ⇒ 必须抓到 ≥1 次"的正向对照，与上面共用同一个过滤器函数形态。
+  it('正向对照：捕获器抓得到一次真实的受控→非受控切换（否则上面那条零告警是空转）', () => {
+    const seen: string[] = []
+    const real = console.error
+    const DRIFT = /controlled input to be uncontrolled|changing a controlled input/i
+    console.error = (...args: unknown[]) => { seen.push(args.map((a) => String(a)).join(' ')) }
+    const Probe = ({ v }: { v?: string }) => <input type="number" value={v} onChange={() => undefined} />
+    try {
+      const r = render(<Probe v="12" />)
+      // 第二次渲染把 value 抽成 undefined＝本仓 DEF-P3-08 的机制本体（有值 → 没值）
+      r.rerender(<Probe v={undefined} />)
+    } finally {
+      console.error = real
+    }
+    expect(
+      seen.filter((m) => DRIFT.test(m)).length,
+      `一次真实的受控→非受控切换没被抓到（捕获器或正则已失效）。console.error 摘录：${seen.slice(0, 3).join(' | ')}`,
+    ).toBeGreaterThan(0)
+  })
+
 })

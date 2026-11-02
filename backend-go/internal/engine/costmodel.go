@@ -282,7 +282,7 @@ func OcrFixAllowanceTokens(imageFiles int) int64 {
 }
 
 // ApplyMarkup 真实 token 口径 → 实收口径（唯一实现；api/estimate.go 的 applyMarkup 薄委托它）。
-// 为什么从 api 搬进 engine：分段判定（chat_paragraphs.DecideChatSegments）也要把上限积分折回
+// 为什么从 api 搬进 engine：分段判定（api.chatEstimateAndPlan 那**一处**）也要把上限积分折回
 // token 才能比"这次走不走分段"，而判定必须在**预估侧与执行侧同一次算**——
 // 换算留在 api 就只能让引擎自己抄一遍除法式（两把尺子的起点都是"抄一份"）。
 // 参数 tokens: 预估真实 token；markup: modeMarkup 解析出的生效系数。

@@ -107,8 +107,10 @@ func sseHeaders(w http.ResponseWriter) {
 	h := w.Header()
 	// charset 必须显式声明：浏览器侧 `new TextDecoder()` 默认按 UTF-8 解，终端用户看不出差；
 	// 但按 WHATWG 回退 latin1 的非浏览器客户端会把中文译文解成乱码（表现为"接口坏了"而服务端零报错）。
-	// 全站 SSE 响应头只有这一个出口、两个端点消费（本文件 handleChatStream / handleTranslateStream），
+	// 全站 SSE 响应头只有这一个出口、两个端点消费（本文件 handleChatStream / handleTranslateFileStream），
 	// 所以补这一处即全覆盖——**禁止**再去各端点里各设一遍（两把尺子的典型长法）。
+	// ⚠️ 端点名以这两个为准：新增第三个 SSE 端点时，判据是"sseHeaders 的调用点必须都挂在
+	//    写事件流那一个 handler 里"，不是"注释里多写一个名字"（注释点名的锚点必须是现存函数，AGENTS §一·14）。
 	h.Set("Content-Type", sseContentType)
 	h.Set("Cache-Control", "no-cache")
 	// 禁用 Nginx 等反向代理的缓冲，保证事件实时推送

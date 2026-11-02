@@ -254,7 +254,13 @@
         }
         function waitedLine() {
           var s = Math.round((Date.now() - startAt) / 1000)
-          return '已等待约 ' + s + ' 秒' + (connType ? '（网络档 ' + connType + '）' : '')
+          // ★ DEF-P0-02（2026-11-02 收口）：这一句里的秒数是**实测**（本地时钟差），
+          //   而 connType 是 `navigator.connection.effectiveType` 的**自报值**——
+          //   实测它把跨境慢链高估约 40 倍（现网那一跳 ≈325 B/s 却报 4g/dl9.8）。
+          //   旧写法把自报值当事实拼进客户可见文案，两个后果：访客以为"网络没问题那是站点坏了"，
+          //   技术支持被"4g"引去查服务器。⇒ 词面必须写明「浏览器自报」，
+          //   真正基于实测的判据只有 resCount()（链路还在动就再等一拍）那一条腿。
+          return '已等待约 ' + s + ' 秒' + (connType ? '（浏览器自报网络档 ' + connType + '，仅供参考）' : '')
         }
         function reloadBtn(css) {
           var b = document.createElement('button')
@@ -397,6 +403,7 @@
     <noscript>
       <div style="position:fixed;top:0;left:0;right:0;bottom:0;background:#0B0C0E;color:#E7E9EA;padding:32px;font:15px/1.7 system-ui,-apple-system,'Segoe UI',sans-serif;z-index:99998">
         本站需要浏览器启用 JavaScript 才能显示。请在 Edge/Chrome 的设置里允许本站点运行脚本后重新加载。
+        <div style="margin-top:12px">如果一时改不了设置，可以直接用页面底部的联系表单（填公司名与邮箱即可，提交不需要 JavaScript）。</div>
       </div>
     </noscript>
     <div id="__boot_skeleton" class="lc-boot-cover" aria-hidden="true"><span class="lc-boot-spin"></span></div>

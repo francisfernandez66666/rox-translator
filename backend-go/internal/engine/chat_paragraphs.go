@@ -11,7 +11,8 @@
 //
 // 三条口径，改这块前必读：
 //
-//	A. **判定只有一处**：DecideChatSegments（预估侧与执行侧共用同一个函数、同一份输入）。
+//	A. **判定只有一处**：api 包的 `chatEstimateAndPlan`（api/chat_seg_plan.go，预估侧与执行侧共用
+//	   同一次调用；引擎这一侧只经 ChatSegPlanFromCtx 读它算好的计划，自己**不判**）。
 //	   两处各判一次＝两把尺子（AGENTS §一·5④／§一·11／§23 那一族），而且会出现
 //	   "横幅按分段报价、执行按整篇跑"或反过来——客户按预估备的钱不够花，比报错更坏。
 //	B. **成本上限回落不是失败**：预估超上限 ⇒ 本次走整篇，不报错、不加钱、照常交付，
@@ -303,12 +304,23 @@ func (e *Engine) chatReviewByParagraph(ctx context.Context, segs []string, srcLa
 				}
 				// 审校内部：带 sink ⇒ 流式吐审校稿；被截断/脚本不纯 ⇒ 返回 ""（本段保留初翻）
 				revised := e.ReviewTranslation(ctx, seg, tr, lc, config.StageReview)
-				if strings.TrimSpace(revised) != "" {
-					res[i] = revised
+				if strings.TrimSpace(revised) == "" {
+					observability.Warn(ctx, "该段审校未采纳，保留初翻出货",
+						"lang", lc, "segment", i+1, "of", len(segs), "reason", "empty")
 					continue
 				}
-				observability.Warn(ctx, "该段审校未采纳，保留初翻出货",
-					"lang", lc, "segment", i+1, "of", len(segs))
+				// ★ 审校产物也必须过**同一把**可用性判据（AGENTS §19 族四「审校产物仍过同一把尺子」）。
+				//   这一腿不是装饰：审校模型完全可能把一段正常译文改成
+				//   ① 与源文同形（回声）、② 目标语脚本不纯、③ 退化成 "and" 那一类坏形态——
+				//   而初翻那一侧刚刚才是**通过**判据的。旧写法只判"非空即采纳"，
+				//   等于分段路径上一颗专门把闸门自己拦下来的东西放进成品（P0-01 从审校这一侧复发）。
+				//   ⚠️ 不许在这里改成"另写一套更宽的判据"：第二把尺子的坏法不是报错，是两档结论打架。
+				if issue := e.chatUsabilityIssue(ctx, seg, srcLang, lc, revised); issue != "" {
+					observability.Warn(ctx, "该段审校稿未过可用性判据，保留初翻出货",
+						"lang", lc, "segment", i+1, "of", len(segs), "reason", issue)
+					continue
+				}
+				res[i] = revised
 			}
 			mu.Lock()
 			out[lc] = res

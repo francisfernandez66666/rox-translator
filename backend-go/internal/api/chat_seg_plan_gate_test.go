@@ -309,3 +309,74 @@ func stripApiGoCommentsForSegGate(src string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// TestSegPlanCommentsNameOnlyLiveAnchors 注释点名的锚点必须是**现存**的东西（AGENTS §一·14）。
+//
+// 本案的三个名字都曾以"事实源"的身份写在注释里而函数根本不存在：
+//
+//	· engine.DecideChatSegments（分段判定的真实现场是 api 的 chatEstimateAndPlan，引擎只读 ctx）
+//	· handleTranslateStream（SSE 第二个端点的真名是 handleTranslateFileStream）
+//	· stream_contract_test.go（那份门禁的文件名是 stream_contract_gate_test.go）
+//
+// 危害不是难看，而是**下一个人照着不存在的路径去改判据**：他改不到任何东西，
+// 却会以为自己改到了（同 §一·12 那条「注释声称有锁而锁不存在」）。
+// 判据按**原始字节**扫（不剥注释——这里要抓的正是注释），名单之外不许长出第四个死锚点。
+func TestSegPlanCommentsNameOnlyLiveAnchors(t *testing.T) {
+	dead := []string{"DecideChatSegments", "handleTranslateStream", "stream_contract_test.go"}
+	roots := []string{".", "../engine"}
+	hits := map[string][]string{}
+	for _, root := range roots {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			t.Fatalf("扫描 %s 失败（本闸已失明）: %v", root, err)
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if e.IsDir() || !strings.HasSuffix(name, ".go") {
+				continue
+			}
+			// ★ 本文件按**文件名**豁免：它就是这份死锚点名单的登记处，注释里必须逐字写出那些名字
+			//   才说得出"为什么禁"。首跑就是被自己新写的注释判红（AGENTS §一·5 那条同族事故）。
+			//   ⚠️ 只许按名字豁免这一个文件，**不许**整类豁免 `*_test.go`——
+			//   那样将来任何一条同类门禁写进别的测试文件都会自动失效（豁免范围比缺陷还大＝闸门空转）。
+			//   替代形态是"给判据补剥注释的形"，但本闸要抓的正是**注释里的**死锚点，剥了就没射程。
+			if name == "chat_seg_plan_gate_test.go" {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(root, name))
+			if err != nil {
+				t.Fatalf("读取 %s 失败: %v", name, err)
+			}
+			for _, d := range dead {
+				// handleTranslateFileStream 里不含 handleTranslateStream 子串（中间隔着 File），
+				// 所以这条负向不会误伤真名字；真名字的在位性由下面那条对照腿负责。
+				if strings.Contains(string(b), d) {
+					hits[d] = append(hits[d], name)
+				}
+			}
+		}
+	}
+	if len(dead) != 3 {
+		t.Fatalf("死锚点名单形状变了（判据与名单必须一起改）")
+	}
+	// 正向对照 1：两个真名字必须**确实**被扫得到——否则说明扫描本身没读到那两个文件，
+	// 上面那条"零命中"就是空转（负向腿恒零命中必须补反证，AGENTS §三）。
+	if !strings.Contains(mustReadGoFileAt(t, "chat_seg_plan.go"), "chatEstimateAndPlan") {
+		t.Fatal("对照失效：本包读不到 chatEstimateAndPlan，扫描范围可疑")
+	}
+	if !strings.Contains(mustReadGoFileAt(t, "stream.go"), "handleTranslateFileStream") {
+		t.Fatal("对照失效：本包读不到 handleTranslateFileStream，扫描范围可疑")
+	}
+	if len(hits) != 0 {
+		var b strings.Builder
+		for d, fs := range hits {
+			fmt.Fprintf(&b, "%s → %v\n", d, fs)
+		}
+		t.Fatalf("注释/代码里点名的锚点不存在（会把人引去改一条不存在的路径）：\n%s", b.String())
+	}
+	// 反证：把死锚点塞进一份临时副本，判据必须能抓住（证明扫的是内容而不是恒零）
+	bad := "x := chatEstimateAndPlan // 见 engine.DecideChatSegments\n"
+	if !strings.Contains(bad, "DecideChatSegments") {
+		t.Fatal("反证自身失效：注入的死锚点没被识别")
+	}
+}

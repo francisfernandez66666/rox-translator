@@ -5125,7 +5125,7 @@ T79MARK=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -dc '0-9')
 T79CAP1=$(dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$T79TID AND expires_at>'$(date -u +%Y-%m-%dT%H:%M:%SZ)') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$T79TID)" | tr -d '[:space:]\r')
 
 T79TAG="t79$(date +%s)"
-T79A=$(post "$H79" "{\"message\":\"T79免扣两维回归 $T79TAG：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}" /api/chat)
+T79A=$(post "$H79" "{\"message\":\"T79免扣两维回归 ${T79TAG}：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}" /api/chat)
 ck T79-free-translated 'TranslatedEN' "$T79A"
 T79PU=$(printf '%s' "$T79A" | pv ".get('points_used',-1)")
 T79PF=$(printf '%s' "$T79A" | pv ".get('points_free',False)")
@@ -5151,7 +5151,7 @@ if [ "$T79PF" = "True" ]; then
   T79CAP2=$(dbq "SELECT (SELECT COALESCE(SUM(\"left\"),0) FROM quota_grants WHERE tenant_id=$T79TID AND expires_at>'$(date -u +%Y-%m-%dT%H:%M:%SZ)') + (SELECT COALESCE(balance,0) FROM balance_accounts WHERE tenant_id=$T79TID)" | tr -d '[:space:]\r')
   ckq T79-free-balance-untouched "$T79CAP2" "$T79CAP1"
   if [ "$T79FREEQTY" -gt 0 ]; then
-    PASS=$((PASS+1)); echo "PASS|T79-free-ledger-row-in-window(instant_free ∑quantity=$T79FREEQTY／窗口新增 $T79N 行)"
+    PASS=$((PASS+1)); echo "PASS|T79-free-ledger-row-in-window(instant_free ∑quantity=${T79FREEQTY}／窗口新增 $T79N 行)"
   else
     FAIL=$((FAIL+1)); echo "FAIL|T79-free-ledger-row-in-window(报文标了免扣，窗口内却没有 task_type=instant_free 的留痕行 ⇒ 等值那个数没有源)"
   fi
@@ -5164,7 +5164,7 @@ fi
 
 # —— 付费对照腿：两语种＋专业档 ——
 T79MARK2=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -dc '0-9')
-T79B=$(post "$H79" "{\"message\":\"T79付费对照回归 $T79TAG：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\",\"ja\"],\"mode\":\"pro\"}}" /api/chat)
+T79B=$(post "$H79" "{\"message\":\"T79付费对照回归 ${T79TAG}：设备需在傍晚前送达客户。\",\"options\":{\"target_langs\":[\"en\",\"ja\"],\"mode\":\"pro\"}}" /api/chat)
 ck T79-paid-translated 'TranslatedEN' "$T79B"
 T79BPU=$(printf '%s' "$T79B" | pv ".get('points_used',-1)")
 if [ "${T79BPU:-0}" -gt 0 ]; then PASS=$((PASS+1)); echo "PASS|T79-paid-points-used-positive($T79BPU)"; else FAIL=$((FAIL+1)); echo "FAIL|T79-paid-points-used-positive(实扣出参=$T79BPU ⇒ 对照腿没走到扣费那一支)"; fi

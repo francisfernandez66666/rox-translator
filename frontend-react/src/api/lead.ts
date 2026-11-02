@@ -17,6 +17,12 @@ export interface LeadPayload {
   source?: string // 来源页：landing | pricing | footer
   captcha_token?: string // Turnstile token（后台开启人机验证时必填）
   site?: string // ★ 蜜罐：真人恒为空，bot 全会填（后端静默吞掉）
+  // ★ DEF-P0-03 的第二半（2026-11-02 补齐）：浏览器设备号，与免登录试用／注册共用
+  //   lib/trialDevice.ts 那一份事实。后端两个端点（/api/lead 与 /api/lead/public）都读它，
+  //   用来记「同一出口上换了第二个登录身份」（升级信号 S1）。
+  //   ⚠️ 这条不是可选装饰：后端 leadEscalationFor 的 S1 那一支整条被 `device != ""` 门住，
+  //   前端不送 ⇒ S1 在产品上**结构上永不触发**（单测喂字符串能过，现网那条腿是空的）。
+  device_id?: string
 }
 
 // ★ bizResp 豁免登记（★ D-3 批 2026-09-29，设计而非疏漏，代码保持原样）：

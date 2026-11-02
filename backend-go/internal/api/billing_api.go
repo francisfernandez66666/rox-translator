@@ -190,6 +190,17 @@ func (s *Server) ChargeUsageRealtime(ctx context.Context, model string, prompt, 
 		return fmt.Errorf("翻译模式 %s 已停用", mode)
 	}
 	// ★ 2026-10-13（#31）：markup 的解析收进 modeMarkup 一处（预估腿共用，见那条评论）
+	// ★ 2026-11-02（DEF-P3-03 的裁决＝**只改口径不改算法**）：这一行是**下取整**（int64 截断），
+	// 每笔最多少收 <1 个内部计费 token；按现读汇率 store.DefaultPointsTokensRate=400 折算
+	// ≈0.000625 积分/笔（v1 方案里那句"≈0.00125"是按 200 汇率算的，放大了一倍，引用时按现读汇率算）。
+	// 之所以不动它：改动面横跨实扣、台账、退款与财务对账，收益是第六位小数——**风险与收益不成比例**。
+	// 三条配套口径，改这条链之前必读：
+	//  ① 下面 `billed < total ⇒ billed = total` 那道兜底保证**只少收、不多收**（系数配歪时按真实用量计）；
+	//  ② 展示侧 store.PointsFromTokens 是**四舍五入**不是截断（store/packages.go），
+	//     两把尺子各管各的层——把它们混成一个数，客户按报文算的账就永远对不平（F-49 那一族）；
+	//  ③ 全仓浮点截断点实测 10 处，**实扣侧只有这里一处**
+	//     （其余：预估侧 api/estimate.go 同算法同方向、发放侧 store/billing.go 两处、无关换算 fileproc/pptx.go），
+	//     想"统一取整"前先确认自己动的是哪一层。
 	markup := modeMarkup(eff, mode)
 	billed := int64(float64(total) * markup)
 	if billed < total {

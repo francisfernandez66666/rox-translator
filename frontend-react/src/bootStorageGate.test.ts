@@ -115,6 +115,21 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
   const stripHtmlComments = (src: string) => src.replace(/<!--[\s\S]*?-->/g, '')
   const code = stripHtmlComments(html)
 
+  // ★ 哨兵本体写在 <script> 里，HTML 注释剥离器**管不到 JS 的 // 注释**，而这类锁里有好几条
+  //   是"某句坏形态不许出现"的负向判据——说明注释里恰好引用那句坏形态是常态（本仓反复踩过）。
+  //   现网实据：index.html 的 show() 上方注释里逐字写着 `if (box) return`（那是 DEF-P0-01 的病文本体），
+  //   今天它落在函数体切片之外所以不假红，但只要那位作者把注释挪进函数里，
+  //   负向锁立刻变恒红，而红的信息指向"实现坏了"。⇒ 凡负向判据一律先剥 JS 行注释再判。
+  //   只做**整行**注释与行尾注释的剥离，不做跨行 /* */ 匹配（正则字面量里的 `/*` 会把真代码整段吃掉，
+  //   这一坑在 vitestScanLayout.lock.test.ts 的注释里也记过）。
+  function stripJsLineComments(src: string): string {
+    return src
+      .split('\n')
+      .filter((l) => !/^\s*\/\//.test(l))
+      .map((l) => l.replace(/(^|[^:'"`])\/\/[^\n]*$/g, '$1'))
+      .join('\n')
+  }
+
   // noscript 的落点判据：HTML5 的「in-head noscript」插入模式只认 link/style/meta，
   // 里面写 <div> 会让 vite build 的 parse5 **当场解析报错**（2026-10-12 首跑真踩：
   // 开发热更一切正常，一进 `npx vite build` 就报 startTagInHeadNoScript，根本出不了包）。
@@ -132,6 +147,19 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
 
   it('noscript 落在 <body> 内（放 head 会让 vite build 解析失败）', () => {
     expect(noscriptPlacementBad(code)).toBe(false)
+  })
+
+  // ★ C-2（2026-11-02）：禁 JS 那一页过去只说"去开脚本"，没给当下就能走的出路。
+  //   无脚本留资表单本来就在（ #__boot_lead，纯 POST），所以这里判的是**有没有把它点名**——
+  //   判据走 noscript 块内的正文，判"表单存在"是空转（它一直在，访客看不见就等于没有）。
+  it('noscript 必须给出一条不需要 JavaScript 的联络出路（指向静态留资表单）', () => {
+    const ns = code.slice(code.indexOf('<noscript>'), code.indexOf('</noscript>'))
+    expect(ns.length, '读不到 noscript 块（判据射程失效）').toBeGreaterThan(0)
+    expect(/表单|form/i.test(ns),
+      'noscript 只说"去开脚本"，没指出页面底部那张无需脚本的留资表单').toBe(true)
+    // 反证：把这句出路删掉必须红（同一份判据函数，喂删过的那一份）
+    expect(/表单|form/i.test(ns.replace(/<div style="margin-top:12px">[\s\S]*?<\/div>/, '')),
+      '判据被自己的靶子喂饱（删掉那句仍然"有表单"字样＝射程假）').toBe(false)
   })
 
   // 反证：三种形态各自必须被判不对（否则上面那条是空转）
@@ -246,6 +274,23 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     if (!/DEADLINE_MS = Math\.min\(Date\.now\(\) - startAt \+ 8000, CEILING_MS\)/.test(src)) {
       bad.push('到期后没有再等一拍（会把"还在下载"误报成"没下完"）')
     }
+    // ★ D-2.1（DEF-P0-02 收口，2026-11-02）：自报网络档不许当事实展示。
+    //   v1 那条 `if (!/resCount|getEntriesByType/…)` 已实测**对现状代码恒真**（resCount 本来就在）＝空锁，
+    //   所以这里只钉一条有判别力的：waitedLine() 里只要出现 connType，就必须同时出现"自报"字样
+    //   （或干脆不显示自报值）。先在未修代码上拨过 ⇒ 判的是"旧文案回来"，不是"文案不许变长"。
+    const wAt = src.indexOf('function waitedLine()')
+    const wEnd = src.indexOf('function reloadBtn')
+    if (wAt < 0 || wEnd < wAt) {
+      bad.push('读不到 waitedLine()（自报档判据射程失效）')
+    } else {
+      const waited = stripJsLineComments(src.slice(wAt, wEnd))
+      if (/connType/.test(waited) && !/自报/.test(waited)) {
+        bad.push('横幅把浏览器自报的网络档当事实展示（实测高估约 40 倍，还会误导技术支持）')
+      }
+    }
+    // ★ 节奏常量也要有主人：TICK_MS 是"多久拨一次判据"的地板，被随手改成 50ms 会把哨兵变成 CPU 噪音，
+    //   改成 5s 则首屏提示慢到没人相信页面还活着。三个档位常量此前只钉了 deadline/ceiling 两个。
+    if (!/var TICK_MS = 400/.test(src)) bad.push('哨兵节奏 TICK_MS 的默认档丢了（现默认 400ms）')
     return bad
   }
   function slowPathFailures(src: string): string[] {
@@ -281,12 +326,14 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     const end = src.indexOf('var timer = setInterval')
     if (at < 0 || end < at) { bad.push('读不到 show() 函数体（判据射程失效）'); return bad }
     const body = src.slice(at, end)
+    // 负向判据一律走**剥掉 JS 注释**的那一份（见上面 stripJsLineComments 的现网实据）
+    const bodyCode = stripJsLineComments(body)
     // ① 早退分支不许以任何形态存在（"有旧节点 ⇒ 直接 return"是本案的本体）
-    if (/if\s*\(\s*box\s*\)\s*return/.test(body)) {
+    if (/if\s*\(\s*box\s*\)\s*return/.test(bodyCode)) {
       bad.push('show() 仍有「旧节点存在就 return」的早退：slow 横幅会吞掉全屏面板（DEF-P0-01 本体）')
     }
     // ② 摘旧节点不许被 kind === 'slow' 绑住（绑住＝升级时不摘，早退就回来了）
-    if (!/if\s*\(\s*box\s*(&&|\))\s*box\.parentNode/.test(body) && !/if\s*\(\s*box\s*&&\s*box\.parentNode\s*\)/.test(body)) {
+    if (!/if\s*\(\s*box\s*(&&|\))\s*box\.parentNode/.test(bodyCode) && !/if\s*\(\s*box\s*&&\s*box\.parentNode\s*\)/.test(bodyCode)) {
       bad.push('摘旧节点仍带形态条件（slow→panel 升级不摘 ⇒ show(panel) 静默失效）')
     }
     // ③ 顺序：撤骨架必须排在把面板节点挂上去之前（否则错误文案背后有个转圈，像"还在加载"）
@@ -311,14 +358,22 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
       if (!/AUTO_RETRY_MAX\s*=\s*2/.test(src)) bad.push('自动恢复没有次数上限（无限刷新循环比白屏更坏）')
     }
     // ⑥ 测试注入口必须有 clamp 且生产默认值仍是那三个字面量（防"抽了配置就没人守默认档"）
-    if (/__LC_BOOT_CFG/.test(src)) {
+    // ★ 这条此前写成 `if (/__LC_BOOT_CFG/.test(src)) { … }`——**整条注入面被摘掉时判据射程为零**，
+    //   于是"摘掉注入面"这一枚变异在锁里是绿的（AGENTS §三「负向腿恒零命中必须补一枚反证」同族）。
+    //   现在先无条件要求注入面在位，再逐行判 clamp。
+    // ★ 在位性按**调用形态**判（`var cfg = window.__LC_BOOT_CFG`）而不是裸词：
+    //   index.html 那段说明注释里就写着 `window.__LC_BOOT_CFG`，裸词判会被注释喂饱（本仓反复踩的那类自伤）。
+    const srcCode = stripJsLineComments(src)
+    if (!/var cfg = window\.__LC_BOOT_CFG/.test(srcCode)) {
+      bad.push('哨兵的测试注入面被整条摘掉（三个档位只剩源码字面量，e2e 无法把窗口压到可测长度）')
+    } else {
       // 逐行判 clamp：只看"把注入值赋给那三个档位"的行。
       // （整串 contains Math.min 那种写法 M7 抓不到——另两行还带着 clamp，一放宽就全绿。）
-      const inject = src.split('\n').filter((l) => /cfg\./.test(l) && /(DEADLINE_MS|CEILING_MS|TICK_MS_CFG)\s*=/.test(l))
+      const inject = srcCode.split('\n').filter((l) => /cfg\./.test(l) && /(DEADLINE_MS|CEILING_MS|TICK_MS_CFG)\s*=/.test(l))
       if (inject.length < 3) bad.push('读不到三个注入档位赋值（判据射程失效）')
       for (const l of inject) if (!/Math\.max\(\d+, Math\.min\(/.test(l)) bad.push('注入赋值缺 clamp（一个 ceiling:0 就退化成每 tick 都判到期）: ' + l.trim())
-      if (!/Number\.isFinite/.test(src)) bad.push('注入值没走 Number.isFinite（NaN/字符串会被当成有效档）')
-      if (!/DEADLINE_MS = SLOW_LINK \? 30000 : 8000/.test(src)) bad.push('注入进去后默认档字面量丢了（生产节奏不再由源码定死）')
+      if (!/Number\.isFinite/.test(srcCode)) bad.push('注入值没走 Number.isFinite（NaN/字符串会被当成有效档）')
+      if (!/DEADLINE_MS = SLOW_LINK \? 30000 : 8000/.test(srcCode)) bad.push('注入进去后默认档字面量丢了（生产节奏不再由源码定死）')
     }
     return bad
   }
@@ -328,68 +383,108 @@ describe('启动链锁 B：index.html 的启动哨兵在位', () => {
     expect(bad, bad.join('\n')).toEqual([])
   })
 
-  // 反证 11：五枚各改一处（未修代码形态），每枚都必须让**对应那一条**判红
-  it('反证 11：六枚各改一处（未修代码形态），每枚都必须让**对应那一条**判红', () => {
+  // 反证 11：变异表逐枚各改一处（未修代码形态），每枚都必须让**对应那一条**判红。
+  // ★ 枚数写成**派生下界**而不是标题里的固定数字：本仓两次被"五枚/六枚/实际七枚"这种
+  //   标题与表体不一致绊到（AGENTS §三「写死件数的锁会被一枚合法的新控件顶红」同族）。
+  //   加一枚变异只需往表里加一行，标题不用动。
+  type BootMutant = { name: string; src: string; judge: (s: string) => string[]; hits: string }
+  it('反证 11：变异表每枚都被对应判据抓住（枚数按下界派生，不写死）', () => {
     // ★ 变异必须**限定在目标函数体内**做：`if (box && box.parentNode) box.parentNode.removeChild(box)`
     //   这一行在 dismissBootNotice() 与 show() 里**逐字相同**，全局 replace 会先替到 dismiss 那一份
     //   ——首跑真踩（"早退被装回"改在了 dismiss 上，锁当然不红，看起来像锁没射程）。
-    const inShow = (from: string, to: string): string => {
-      const at = code.indexOf('function show(kind)')
-      const end = code.indexOf('var timer = setInterval')
+    const inRange = (startAnchor: string, endAnchor: string, fnName: string, from: string, to: string): string => {
+      const at = code.indexOf(startAnchor)
+      const end = code.indexOf(endAnchor)
       const body = code.slice(at, end)
-      expect(body, '反证前置失效：show() 里找不到锚点').toContain(from)
+      expect(body, `反证前置失效：${fnName} 里找不到锚点`).toContain(from)
       const mutatedBody = body.replace(from, to)
       expect(mutatedBody, '变异没落地（空替换＝no-op 会伪装成锁有效）').not.toBe(body)
       return code.slice(0, at) + mutatedBody + code.slice(end)
     }
-    const inAutoRecover = (from: string, to: string): string => {
-      const at = code.indexOf('function autoRecover()')
-      const end = code.indexOf('var timer = setInterval')
-      const body = code.slice(at, end)
-      expect(body, '反证前置失效：autoRecover() 里找不到锚点').toContain(from)
-      const mutatedBody = body.replace(from, to)
-      expect(mutatedBody, '变异没落地（空替换＝no-op）').not.toBe(body)
-      return code.slice(0, at) + mutatedBody + code.slice(end)
+    const inShow = (from: string, to: string) =>
+      inRange('function show(kind)', 'var timer = setInterval', 'show()', from, to)
+    const inAutoRecover = (from: string, to: string) =>
+      inRange('function autoRecover()', 'var timer = setInterval', 'autoRecover()', from, to)
+    const inWaited = (from: string, to: string) =>
+      inRange('function waitedLine()', 'function reloadBtn', 'waitedLine()', from, to)
+
+    const mutants: BootMutant[] = [
+      // M1 把早退装回 show() 开头 ⇒ 锁①必须红
+      {
+        name: 'M1 早退装回', judge: upgradeFailures, hits: '早退',
+        src: inShow(
+          "          var box = document.getElementById('__boot_fail')\n",
+          "          var box = document.getElementById('__boot_fail')\n          if (box) return\n",
+        ),
+      },
+      // M2 摘旧节点重新被 kind === 'slow' 绑住（＝未修代码的形态）⇒ 锁②必须红
+      {
+        name: 'M2 升级不摘旧节点', judge: upgradeFailures, hits: '形态条件',
+        src: inShow(
+          "          if (box && box.parentNode) box.parentNode.removeChild(box)\n",
+          "          if (box && kind === 'slow' && box.getAttribute('data-kind') === 'slow') { box.parentNode.removeChild(box) }\n",
+        ),
+      },
+      // M3 撤骨架从"盖面板之前"挪走（未修代码里它在早退之后，等于面板出不来时不撤）⇒ 锁③必须红
+      {
+        name: 'M3 面板背后留转圈', judge: upgradeFailures, hits: '骨架还没撤',
+        src: inShow('          dismissBootSkeleton()\n', ''),
+      },
+      // M4 删掉出面板后的兜底哨 ⇒ 锁④必须红（未修代码就是这个形态：clearInterval 之后没人再撤）
+      {
+        name: 'M4 出面板后不撤销', judge: upgradeFailures, hits: '兜底撤销哨',
+        src: code.replace('          watchMountAfterPanel()\n', ''),
+      },
+      // M5 两条刹车改回 && 连（＝两条都不成立才刹车）⇒ 锁⑤必须红
+      {
+        name: 'M5 刹车被 && 连起来', judge: upgradeFailures, hits: '&&',
+        src: inAutoRecover(
+          '            if (!rootEmpty()) return',
+          '            if (!rootEmpty() && resCount() === before) { return }\n            if (false) return',
+        ),
+      },
+      // M6 自动恢复整条腿被摘 ⇒ 锁⑤必须红
+      {
+        name: 'M6 摘掉自动恢复', judge: upgradeFailures, hits: '自动恢复',
+        src: code.replace('function autoRecover() {', 'function autoRecoverDisabled() {'),
+      },
+      // M7 注入口去掉 clamp ⇒ 锁⑥必须红
+      {
+        name: 'M7 注入无 clamp', judge: upgradeFailures, hits: 'clamp',
+        src: code.replace(
+          '            if (Number.isFinite(cfg.ceiling)) CEILING_MS = Math.max(2000, Math.min(cfg.ceiling, 600000))',
+          '            if (cfg.ceiling) CEILING_MS = cfg.ceiling',
+        ),
+      },
+      // M8 注入面读点被整条摘掉 ⇒ 锁⑥必须红（旧写法这里恒绿：条件式判据射程为零＝"摘掉功能"没人抓）
+      {
+        name: 'M8 摘掉注入面', judge: upgradeFailures, hits: '测试注入面',
+        src: code.replace('var cfg = window.__LC_BOOT_CFG', 'var cfg = null /* 注入口已摘 */'),
+      },
+      // M9 把浏览器自报的网络档当事实展示（DEF-P0-02 的原文案回来）⇒ 自适应判据必须红
+      {
+        name: 'M9 自报档冒充事实', judge: adaptiveFailures, hits: '自报',
+        src: inWaited("'（浏览器自报网络档 ' + connType + '，仅供参考）'", "'（网络档 ' + connType + '）'"),
+      },
+      // M10 哨兵节奏被随手改小 ⇒ 自适应判据必须红（三个档位常量此前只钉了 deadline/ceiling 两个）
+      {
+        name: 'M10 TICK_MS 默认档丢失', judge: adaptiveFailures, hits: 'TICK_MS',
+        src: code.replace('var TICK_MS = 400', 'var TICK_MS = 50'),
+      },
+    ]
+
+    expect(mutants.length, '变异表枚数下界（低于此数＝有腿被删了没登记）').toBeGreaterThanOrEqual(10)
+    for (const m of mutants) {
+      expect(m.src, `${m.name}：变异没落地（与原码逐字相同＝no-op 会伪装成"锁抓住了破坏"）`).not.toBe(code)
+      const got = m.judge(m.src)
+      expect(got, `${m.name} 没被抓（判据射程失效）`).not.toEqual([])
+      expect(got.some((x) => x.includes(m.hits)),
+        `${m.name} 红在了别的判据上，不是点名那一条：${got.join(' / ')}`).toBe(true)
     }
 
-    // M1 把早退装回 show() 开头 ⇒ 锁①必须红
-    expect(upgradeFailures(inShow(
-      "          var box = document.getElementById('__boot_fail')\n",
-      "          var box = document.getElementById('__boot_fail')\n          if (box) return\n",
-    )).some((x) => x.includes('早退')), 'M1 早退装回没被抓').toBe(true)
-
-    // M2 摘旧节点重新被 kind === 'slow' 绑住（＝未修代码的形态）⇒ 锁②必须红
-    expect(upgradeFailures(inShow(
-      "          if (box && box.parentNode) box.parentNode.removeChild(box)\n",
-      "          if (box && kind === 'slow' && box.getAttribute('data-kind') === 'slow') { box.parentNode.removeChild(box) }\n",
-    )).some((x) => x.includes('形态条件')), 'M2 升级不摘旧节点没被抓').toBe(true)
-
-    // M3 撤骨架从"盖面板之前"挪走（未修代码里它在早退之后，等于面板出不来时不撤）⇒ 锁③必须红
-    expect(upgradeFailures(inShow("          dismissBootSkeleton()\n", "")).some((x) => x.includes('骨架还没撤')),
-      'M3 面板背后留转圈没被抓').toBe(true)
-
-    // M4 删掉出面板后的兜底哨 ⇒ 锁④必须红（未修代码就是这个形态：clearInterval 之后没人再撤）
-    expect(upgradeFailures(code.replace("          watchMountAfterPanel()\n", ""))
-      .some((x) => x.includes('兜底撤销哨')), 'M4 出面板后不撤销没被抓').toBe(true)
-
-    // M5 两条刹车改回 && 连（＝两条都不成立才刹车）⇒ 锁⑤必须红
-    expect(upgradeFailures(inAutoRecover(
-      "            if (!rootEmpty()) return",
-      "            if (!rootEmpty() && resCount() === before) { return }\n            if (false) return",
-    )).some((x) => x.includes('&&')), 'M5 刹车被 && 连起来没被抓').toBe(true)
-
-    // M6 自动恢复整条腿被摘 ⇒ 锁⑤必须红
-    expect(upgradeFailures(code.replace('function autoRecover() {', 'function autoRecoverDisabled() {'))
-      .some((x) => x.includes('自动恢复')), 'M6 摘掉自动恢复没被抓').toBe(true)
-
-    // M7 注入口去掉 clamp ⇒ 锁⑥必须红
-    expect(upgradeFailures(code.replace(
-      "            if (Number.isFinite(cfg.ceiling)) CEILING_MS = Math.max(2000, Math.min(cfg.ceiling, 600000))",
-      "            if (cfg.ceiling) CEILING_MS = cfg.ceiling",
-    )).some((x) => x.includes('clamp')), 'M7 注入无 clamp 没被抓').toBe(true)
-
-    // 对照组：真实源码必须干净（否则上面七枚"红"没有意义）
-    expect(upgradeFailures(code)).toEqual([])
+    // 对照组：真实源码必须干净（否则上面那些"红"没有意义）
+    expect(upgradeFailures(code), upgradeFailures(code).join('\n')).toEqual([])
+    expect(adaptiveFailures(code), adaptiveFailures(code).join('\n')).toEqual([])
   })
 
   // 反证 5：摘掉哨兵那一段 `<script>` 后，三段哨兵判据必须全部失效

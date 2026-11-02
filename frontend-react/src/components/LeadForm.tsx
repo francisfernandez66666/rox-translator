@@ -19,6 +19,9 @@ import { useT } from '@/i18n'
 //   组件不再各写 if/else（三家各写一遍＝迟早长出一处静默打旧家）。
 //   尺寸选档仍从 lib/turnstile 现读：normal/compact 是 CF 那一家固有的 300px 问题，极验 popup 档没有这一维。
 import { pickTurnstileSize, type TurnstileSize } from '@/lib/turnstile'
+// ★ 2026-11-02（DEF-P0-03 的第二半）：留资表单带上的设备号与试用／注册同源，
+//   所以只在提交那一刻取一次（不在模块顶层读存储——启动链黑屏批那条口径）。
+import { trialDeviceID } from '@/lib/trialDevice'
 import {
   loadCaptcha, mountCaptcha, revalidateCaptcha, removeCaptcha, retryCaptcha,
   captchaLoadState, parseCaptchaProvider,
@@ -159,6 +162,10 @@ export function LeadForm({ source = 'landing' }: LeadFormProps) {
         source,
         captcha_token: captchaTokenRef.current,
         site: honeypot, // 蜜罐原样送出：真人恒空串，后端见非空即静默假成功
+        // ★ DEF-P0-03 S1 的另一半：设备号必须随表单送出，否则后端那条「同一浏览器换了
+        //   第二个登录身份」的升级信号永远拿不到样本（S1 整条腿被 device 为空门住）。
+        //   取不到存储时 trialDeviceID() 回会话内存值，恒满足服务端格式，不会因此变成 400。
+        device_id: trialDeviceID(),
       })
       setPhase('ok')
     } catch (err) {

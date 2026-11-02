@@ -54,6 +54,7 @@ type paraFake struct {
 	mu         sync.Mutex
 	calls      []string     // 每次调用的档位标记（initial1/review2…），供调用次数与顺序判据
 	failReview map[int]bool // 指定段号的审校回空（模拟"坏产物不许覆盖初翻"）
+	badReview  map[int]bool // 指定段号的审校回**退化串 "and"**（用例 13 的靶子：过了长度/纯度、没过可用性）
 	badInitial map[int]bool // 指定段号的初翻回退化串 "and"（用例 12 的靶子）
 	stream     bool
 }
@@ -67,7 +68,7 @@ func (f *paraFake) record(tag string) {
 // newParaHarness 起假上游并构造引擎。参数 stream=true ⇒ 支持 SSE（流式腿真的能走通）。
 func newParaHarness(t *testing.T, stream bool) (*Engine, *paraFake) {
 	t.Helper()
-	fake := &paraFake{failReview: map[int]bool{}, badInitial: map[int]bool{}, stream: stream}
+	fake := &paraFake{failReview: map[int]bool{}, badReview: map[int]bool{}, badInitial: map[int]bool{}, stream: stream}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Stream   bool `json:"stream"`
@@ -88,9 +89,13 @@ func newParaHarness(t *testing.T, stream bool) (*Engine, *paraFake) {
 		//   recover 兜不住；这是 AGENTS §三「并发回写共享 map 必须先快照」的同族）。
 		fake.mu.Lock()
 		failReview := map[int]bool{}
+		badReview := map[int]bool{}
 		badInitial := map[int]bool{}
 		for k, v := range fake.failReview {
 			failReview[k] = v
+		}
+		for k, v := range fake.badReview {
+			badReview[k] = v
 		}
 		for k, v := range fake.badInitial {
 			badInitial[k] = v
@@ -113,9 +118,16 @@ func newParaHarness(t *testing.T, stream bool) (*Engine, *paraFake) {
 		reply := paraUnknownReply
 		switch {
 		case isReview && srcPara != "":
-			if failReview[idx] {
+			switch {
+			case failReview[idx]:
 				reply = "" // 该段审校没给出内容 ⇒ 必须保留初翻
-			} else {
+			case badReview[idx]:
+				// 该段审校给出**内容合法但退化**的一串：它能过 finish_reason 与目标语纯度两道内部判据
+				// （全 ASCII），但过不了可用性尺子（IsTranslationUsable 的 "and" 那一类）。
+				// 用例 13 要的就是这一档——只有这种"内部判据放行、可用性判据拒绝"的形态
+				// 才能证明采纳侧那道尺子真的在干活（回空那一档证不了：那是 ReviewTranslation 自己拦的）。
+				reply = "and"
+			default:
 				reply = paraRevised[srcPara]
 			}
 			fake.record(fmt.Sprintf("review%d", idx))
@@ -236,7 +248,13 @@ func TestParaStructureKeepsParagraphCount(t *testing.T) {
 func TestParaDeltaEqualsDoneBothModes(t *testing.T) {
 	e, fake := newParaHarness(t, true)
 	_ = fake
-	gotFast, deltasFast, _, _ := runPara(t, e, paraSrc, "fast", &ChatSegPlan{})
+	// ★ 2026-11-02 收口：这一腿此前喂的是 `&ChatSegPlan{}`（Use=false）⇒ 走的是**整篇旧路径**，
+	//   于是"fast 档逐字等值"这条判据结构性测不到分段那一档（用例 1/4/8 都用 planFor，只有这里没有）。
+	//   方案 B2-3.3 承诺的是"两档都钉逐字等值"，所以必须挂上分段计划才叫有落点。
+	gotFast, deltasFast, _, _ := runPara(t, e, paraSrc, "fast", planFor(paraSrc))
+	if NonEmptyParagraphs(gotFast) != 3 {
+		t.Fatalf("fast 档挂分段计划后译文不是三段（这条腿其实没走分段）：%q", gotFast)
+	}
 	if strings.TrimSpace(deltasFast) != strings.TrimSpace(gotFast) {
 		t.Fatalf("fast 档 delta 与 done 不是同一份：\ndelta=%q\ndone=%q", deltasFast, gotFast)
 	}
@@ -331,6 +349,49 @@ func TestParaBadReviewKeepsInitial(t *testing.T) {
 	//   ⚠️ 不许把这条写成"delta 永远等于 done"——那是会恒红的锁；也不许写成"永不分叉"——那是假话。
 	if strings.Contains(deltas, paraRevised["第二段：戊己庚辛。"]) {
 		t.Fatalf("被拒的审校稿不该出现在 delta 里（本例是回空档）：%q", deltas)
+	}
+}
+
+// 用例 13：★ 审校产物也必须过**同一把**可用性判据（AGENTS §19 族四），并把第二种分叉形态钉成方向断言。
+//
+// 靶子与用例 7 的区别是本案的全部意义：
+//
+//	· 用例 7 喂的是"审校回空"——那一档 ReviewTranslation 内部就拦了，采纳侧那道尺子**根本没被走到**，
+//	  所以它对"采纳前有没有再过一遍可用性判据"完全无感（摘掉那条判据照样全绿＝空锁）；
+//	· 本案喂"审校回退化串 and"：全 ASCII ⇒ 过 finish_reason 与纯度两道内部判据，
+//	  但过不了 IsTranslationUsable ⇒ 只有采纳侧那把尺子能拦住它。
+//
+// 两件事一起断（一条判成品、一条判分叉方向，**不许**混成"delta 永远等于 done"那种恒红的锁）：
+//  1. 成品里第二段仍是初翻，"and" 一个字都不许进交付（否则 P0-01 从审校这一侧复发）；
+//  2. delta 里**有** "and"——字已经吐出去收不回，这是设计内的分叉窗口（方向＝客户看到过一版被弃用的稿，
+//     比"成品停在坏稿上"轻）。把它钉成断言的理由：不钉的话，下一位为了"逐字等值"把静默窗口拉长到审校之后，
+//     就回到 DEF-P1-05 的原形态（用户读完一版、成品是另一版）。
+func TestParaReviewOutputPassesUsabilityRuler(t *testing.T) {
+	e, fake := newParaHarness(t, true)
+	fake.mu.Lock()
+	fake.badReview[2] = true
+	fake.mu.Unlock()
+	got, deltas, _, _ := runPara(t, e, paraSrc, "pro", planFor(paraSrc))
+
+	if NonEmptyParagraphs(got) != 3 {
+		t.Fatalf("成品段数被审校退化串打乱：%q", got)
+	}
+	if strings.Contains(got, "and") {
+		t.Fatalf("审校的退化串进了成品（采纳侧没可用性判据）：%q", got)
+	}
+	if !strings.Contains(got, paraInitials["第二段：戊己庚辛。"]) {
+		t.Fatalf("第二段没保留初翻，而是被别的东西覆盖：%q", got)
+	}
+	// 另外两段仍应拿到审校稿（一坏俱坏＝把逐段采纳写成了整批退回）
+	if !strings.Contains(got, paraRevised["第一段：甲乙丙丁。"]) || !strings.Contains(got, paraRevised["第三段：壬癸子丑。"]) {
+		t.Fatalf("其它段被连坐退回初翻：%q", got)
+	}
+	// 分叉方向断言：这一档 delta≠done，且差的就是那串被弃用的稿
+	if strings.Contains(deltas, "and") == false {
+		t.Fatalf("分叉表失效：退化审校稿按设计**已经流出去**（本例应当 delta≠done），实得 delta=%q", deltas)
+	}
+	if strings.TrimSpace(deltas) == strings.TrimSpace(got) {
+		t.Fatalf("分叉表失效：本例应当 delta≠done（字收不回），两串却逐字相同：\ndelta=%q\ndone=%q", deltas, got)
 	}
 }
 

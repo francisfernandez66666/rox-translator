@@ -83,6 +83,13 @@ describe('留资表单 · 提交链路', () => {
     expect(payload.langs).toBe('English,日本語')
     expect(payload.source).toBe('landing')
     expect(payload.site).toBe('')
+    // ★ DEF-P0-03 S1 的前端半边（2026-11-02 补）：设备号必须真的在载荷里、且格式过后端那道
+    //   trialDeviceIDRe。后端 S1 那一支整条被 `device != ""` 门住——这里出空串就等于
+    //   「升级信号只在单测里存在」，所以按**正则等值**判而不是只判"键存在"。
+    // ⚠️ 判之前不许 `String(payload.device_id)`：缺键时它会变成 "undefined"（9 个合法字符），
+    //   正则照样命中＝把"根本没上报"判成"上报了"（本条锁首跑就是这么假绿的，M0099 才抓住）。
+    expect(typeof payload.device_id, '设备号没随表单上送 ⇒ 后端 S1 那条腿结构上不触发').toBe('string')
+    expect(payload.device_id).toMatch(/^[A-Za-z0-9_-]{8,64}$/)
     await waitFor(() => expect(document.querySelector('.lc-lead')).toBeNull())
     expect(document.querySelector('.lc-lead-ok')?.textContent).toContain(t('land.leadSuccess'))
   })

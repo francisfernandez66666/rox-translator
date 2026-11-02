@@ -136,7 +136,7 @@ type tagDecision struct {
 // ★ 边界③：`<t` 会被拆在两个 chunk 里 ⇒ 判定必须跨 chunk；
 // ★ 边界（首字延迟）：判定只吃标签本身的字节，正文一个字都不许因为"等标签收口"而积压
 //
-//	（extract 会丢掉 <t> 之前的前置正文，而流式吐出去收不回——这是设计内的分叉，见 stream_contract_test.go 的分叉表）。
+//	（extract 会丢掉 <t> 之前的前置正文，而流式吐出去收不回——这是设计内的分叉，见 stream_contract_gate_test.go 的分叉表）。
 func (f *ContractFilter) classify(cand string, final bool) (tagDecision, bool) {
 	slash := false
 	i := 1
