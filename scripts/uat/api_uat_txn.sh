@@ -5069,12 +5069,15 @@ ckq T78-leadpublic-second-not-persisted 0 "$(dbq "SELECT COUNT(*) FROM feedbacks
 req3 GET "" "/api/lead/public"
 ck3 T78-leadpublic-method-guard 405 METHOD_NOT_ALLOWED '.'
 
-# ★ 诚实边界（写在这里，别让下一位以为这条链在矩阵里证全了）：§G-7 那两条**升级信号**
-#   （S1 同 IP＋同设备 ≥2 个登录身份／S2 同 IP 近 5 分钟 ≥2 次登录失败）在本段**没有 HTTP 级判据**：
-#   命中信号后的动作是"当场要求人机验证"，而 UAT 实例默认没配 captcha ⇒ `verifyCaptcha` 未启用即放行，
-#   响应面与不升级**完全同形**（只有服务端一行 WARN 分得开）。所以这两条的判据在
-#   `backend-go/internal/api/lead_public_gate_test.go`（18 例，含两枚信号各自翻档）；
-#   要在矩阵里证它，前提是先给 UAT 实例配一个能用的 captcha provider——那是一次**配置动作**，不是缺判据。
+# ★ 边界已闭合（★ 2026-11-03 T80；本段此前写的是"没有 HTTP 级判据"，那句**当时是真的**）：
+#   §G-7 那两条升级信号（S1 同 IP＋同设备 ≥2 个登录身份／S2 同 IP 近 5 分钟 ≥2 次登录失败）
+#   在这一段确实测不出来——命中后的动作是"当场要求人机验证"，而 UAT 实例默认没启用人机验证
+#   ⇒ `verifyCaptcha` 未启用即放行，响应面与不升级**完全同形**（只有服务端一行 WARN 分得开）。
+#   ⇒ 现在的判据分两层，两层都要有，不许互相顶替：
+#     · 矩阵层＝**本文件末尾的 T80**（段内把 `captcha_provider` 开起来再还原，含三条反向对照）；
+#     · 单测层＝`backend-go/internal/api/lead_public_gate_test.go`（计数现读 `grep -c '^func Test'` 回 19，
+#       含两枚信号各自翻档）。
+#   ⚠️ 本段的九条腿**一字未动**：T80 是在段外新加的，不是把这里的判据放宽或搬走。
 #
 # ⑪ 收尾清账：只按本段自己的显式标记摘，绝不按前缀或时间批量删。
 dbq "DELETE FROM feedbacks WHERE content LIKE '%T78免验证留资%'" >/dev/null
