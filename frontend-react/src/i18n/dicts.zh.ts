@@ -861,6 +861,10 @@ export const baseZh: Record<string,string> = {
   'audit.action.assist_token_read': "读取 AI 助手管理凭据",
   'audit.action.assist_token_rotate': '轮换 AI 助手管理凭据',
   'audit.action.assist_token_clear': '清除 AI 助手管理凭据',
+  'audit.action.cf_cache_read': '读取 Cloudflare 边缘缓存凭据状态',
+  'audit.action.cf_cache_save': '保存或轮换 Cloudflare 边缘缓存凭据',
+  'audit.action.cf_cache_purge': '清理 Cloudflare 边缘缓存',
+  'audit.action.cf_cache_clear': '清除 Cloudflare 边缘缓存凭据',
   // ★ #41 收银台免费包领取（plans_api.go LogAudit）：审计页动作码补译，闸门要求 12 语种同步
   'audit.action.package_free_claim': "领取免费套餐",
   'tr.streamIdle': "连接空闲超时，请重试",

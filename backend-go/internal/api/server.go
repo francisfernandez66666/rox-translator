@@ -240,6 +240,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/admin/openapi-docs/preview", s.handleAdminOpenAPIDocsPreview)
 	// ★ 改造 1A（2026-09-17）：AI 助手管理台 Token 下发/轮换（仅超管；前端 AssistP 免手填）
 	s.mux.HandleFunc("/api/admin/assist/token", s.handleAdminAssistToken)
+	// ★ 2026-11-02：Cloudflare 边缘缓存凭据的后台托管面（密文存库＋0600 导出给换源执行体＋手动清一次）。
+	s.mux.HandleFunc("/api/admin/ops/cf-cache", s.handleAdminCFCache)
+	s.mux.HandleFunc("/api/admin/ops/cf-cache/purge", s.handleAdminCFCachePurge)
 	// ★ #34（2026-09-21）：AI 助手管理面改为原生 React 面板 + 主后台受管代理（仅超管）。
 	//   管理 Token 由服务端注入 X-Assist-Admin，浏览器不再持有；白名单见 admin_assist_proxy.go。
 	s.mux.HandleFunc("/api/admin/assist/status", s.handleAdminAssistStatus)

@@ -458,13 +458,57 @@ expect "T8f_出未配行" "$(grep -c 'CF_PURGE=skipped' "$W8F")" "1"
 expect "T8f_不出显式关行" "$(grep -c 'CF_PURGE=off' "$W8F")" "0"
 expect "T8f_没配不影响发版判定" "$(grep -c 'SWAP_ALL_OK=1' "$W8F")" "1"
 
+# T8j 文件源正测（★ 2026-11-02「每次发版都真清」）：只有 0600 的凭据文件、**没有 env**
+#       ⇒ purge 必须真跑，并且读数里点名来源是文件；屏幕上**一个字都不许出现 token 本体**。
+build_trees
+printf '%s\n' 'stubtok-from-file' > "$H/cf_token"; chmod 600 "$H/cf_token"
+W8J=$H/t8j.log
+env -u CLOUDFLARE_API_TOKEN CF_TOKEN_FILE="$H/cf_token" WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8J" 2>&1
+T8J=$?
+expect_zero "$T8J" "T8j 文件源正测"
+expect "T8j_受理行在位" "$(grep -c 'CF purge 已受理' "$W8J")" "1"
+expect "T8j_来源标成文件" "$(grep -c 'CF purge 已受理.*from=file:' "$W8J")" "1"
+expect "T8j_尾随也走文件源" "$(grep -c 'CF_PURGE_TAIL=ok（zone=.*from=file:' "$W8J")" "1"
+expect "T8j_token本体不进日志" "$(grep -c 'stubtok-from-file' "$W8J")" "0"
+expect "T8j_确实落位了" "$([ "$(cat "$H/opt/translator/web/index.html")" != "old-entry" ] && echo yes || echo NO)" "yes"
+
+# T8k 反证（权限不合格 ⇒ 判死且**树一个字节未动**）：644 的凭据＝挂在磁盘上给所有进程看，
+#       把它读成功才是缺陷；这一档必须与"根本没有这个文件"（T8f skipped）在屏幕上不同形。
+build_trees
+printf '%s\n' 'stubtok-from-file' > "$H/cf_token"; chmod 644 "$H/cf_token"
+W8K=$H/t8k.log
+env -u CLOUDFLARE_API_TOKEN CF_TOKEN_FILE="$H/cf_token" WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8K" 2>&1
+T8K=$?
+expect_nonzero "$T8K" "T8k 644 凭据文件"
+expect "T8k_出拒读行" "$(grep -c '拒读凭据文件' "$W8K")" "1"
+expect "T8k_不出skipped行（两态必须不同形）" "$(grep -c 'CF_PURGE=skipped' "$W8K")" "0"
+expect "T8k_不出受理行" "$(grep -c 'CF purge 已受理' "$W8K")" "0"
+expect "T8k_web仍为老一代" "$([ "$(cat "$H/opt/translator/web/index.html")" = "old-entry" ] && echo yes || echo NO)" "yes"
+expect "T8k_二进制未被换" "$([ "$(sha256sum < "$H/opt/translator/bin/translator-server" | cut -d' ' -f1)" = "$BIN_SHA" ] && echo NO || echo yes)" "yes"
+expect "T8k_不许出现SWAP_ALL_OK" "$(grep -c 'SWAP_ALL_OK=1' "$W8K")" "0"
+expect "T8k_尾随不跑（abort 在落位之前）" "$(grep -c 'CF_PURGE_TAIL=' "$W8K")" "0"
+
+# T8l env 压过文件（优先级必须被真判一次）：两处都有 ⇒ 读数写 from=env，
+#       而**不是**"两个都读了一遍"或"文件把标签覆盖成 file"（§一·3「派生态冒充来源」同族）。
+build_trees
+printf '%s\n' 'stubtok-from-file' > "$H/cf_token"; chmod 600 "$H/cf_token"
+W8L=$H/t8l.log
+CLOUDFLARE_API_TOKEN=stubtok CF_TOKEN_FILE="$H/cf_token" WINDOW_PROBE_OFF=1 DEPLOY_DIRS="$DD" \
+  bash "$SRC" "$H/dist.tar.gz" "$TAR_SHA" "$H/fakebin" "$BIN_SHA" > "$W8L" 2>&1
+T8L=$?
+expect_zero "$T8L" "T8l env 优先"
+expect "T8l_来源标成env" "$(grep -c 'CF purge 已受理.*from=env' "$W8L")" "1"
+expect "T8l_不许把标签写成文件" "$(grep -c 'from=file:' "$W8L")" "0"
+
 echo
 # 末行枚数**现读现算**（不写死"六腿/七腿"）：写死的数字在加腿那晚就过时，而"过时却全绿"比红更坏。
 # 同时留一条**下界**断言：窗口段的腿被误删时，派生读数会掉到 7 以下并当场点名，不会让末行跟着缩水。
 T7_LEGS=$(grep -c '^# T7[a-g] ' "$0" 2>/dev/null || echo 0)
 expect "T7_窗口腿枚数下界(≥7)" "$([ "${T7_LEGS:-0}" -ge 7 ] && echo yes || echo NO)" "yes"
-T8_LEGS=$(grep -c '^# T8[a-i] ' "$0" 2>/dev/null || echo 0)
-expect "T8_purge腿枚数下界(≥8)" "$([ "${T8_LEGS:-0}" -ge 8 ] && echo yes || echo NO)" "yes"
+T8_LEGS=$(grep -c '^# T8[a-l] ' "$0" 2>/dev/null || echo 0)
+expect "T8_purge腿枚数下界(≥11)" "$([ "${T8_LEGS:-0}" -ge 11 ] && echo yes || echo NO)" "yes"
 if [ "$BAD_EXPECT" -eq 0 ]; then
   echo "SWAPTEST_ALL_OK=1 八段（T1 正测＋T2–T6 五枚反证＋T7 窗口探针 ${T7_LEGS} 腿＋T8 purge ${T8_LEGS} 腿）全部命中期望；夹具树在 $H"
   exit 0

@@ -256,11 +256,20 @@ func (f *fetchBase) getJSON(ctx context.Context, rawURL string) ([]byte, error) 
 // 所以联系方式不能挂在可选配置上，缺省也要落到产品站（同 §12「有自动降级的链路，
 // 产物能打开不算验收」——这里连"产物"都没有，只有一张空词表）。
 func crawlerUserAgent() string {
+	return ContactUserAgent("TranslatorKBPackCrawler/1.0")
+}
+
+// ContactUserAgent 全仓**唯一**的"带可联系产品地址的 UA"构造函数（★ 2026-11-02 收口）。
+//
+// 任何新增的第三方出站腿（CF／其它开放 API）都用它，**不许**再拼一份产品地址与邮箱：
+// 联系方式挂在可选配置上、缺省落到"只有程序名"那一档，正是 2026-10-30 那条 403/429 零症状的根因。
+// product 只描述"这一腿是谁"，产品址与邮箱由这一个函数给。
+func ContactUserAgent(product string) string {
 	d := strings.TrimSpace(os.Getenv("BRAND_DOMAIN_SUFFIX"))
 	if d == "" {
 		d = "langcross.lexicorn.cn"
 	}
-	return "TranslatorKBPackCrawler/1.0 (+https://" + d + "; ops@lexicorn.cn)"
+	return product + " (+https://" + d + "; ops@lexicorn.cn)"
 }
 
 // sleepCtx ★ D9（2026-09-12）：ctx 感知的重试退避——旧裸 Sleep 在客户端

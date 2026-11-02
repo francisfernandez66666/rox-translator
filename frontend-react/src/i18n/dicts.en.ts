@@ -855,6 +855,10 @@ export const baseEn: Record<string,string> = {
   'audit.action.assist_token_read': "Read AI assistant admin token",
   'audit.action.assist_token_rotate': 'Rotate AI assistant admin token',
   'audit.action.assist_token_clear': 'Clear AI assistant admin token',
+  'audit.action.cf_cache_read': 'Read Cloudflare edge-cache credential state',
+  'audit.action.cf_cache_save': 'Save or rotate Cloudflare edge-cache credential',
+  'audit.action.cf_cache_purge': 'Purge Cloudflare edge cache',
+  'audit.action.cf_cache_clear': 'Clear Cloudflare edge-cache credential',
   // ★ #41 free plan claim (plans_api.go LogAudit), needs all 12 locales
   'audit.action.package_free_claim': "Claim free plan",
   'tr.streamIdle': "Connection idle timeout, please retry",

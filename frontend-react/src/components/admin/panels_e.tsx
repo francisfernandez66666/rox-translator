@@ -11,8 +11,9 @@ import { Badge, Button, Dialog, StatusPill, Switch } from '@/ui/langcross/src'
 import { Panel, Field, toastResp } from './parts'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
-import { opsPolicy, opsSlo, opsRoutes, opsPolicySave, opsWindowSave, opsPackageReset } from '@/api/ops'
+import { opsPolicy, opsSlo, opsRoutes, opsPolicySave, opsWindowSave, opsPackageReset, cfCacheState, cfCacheSave, cfCachePurge } from '@/api/ops'
 import { toastSuccess, toastError } from '@/lib/toastBus'
+import { confirmDialog } from '@/components/uiDialogs'
 
 // 数字输入小件：原生 <input> 的 onChange 事件值恒为字符串，这里统一转成 number
 //   （非数值输入回落 0），对外只暴露数值回调，省去每个调用点手写 Number() 转换。
@@ -66,6 +67,22 @@ export function OpsP() {
   // ★ H11 SLO 状态卡片数据
   const [slo, setSlo] = useState<any[]>([])
   const [routes, setRoutes] = useState<any | null>(null)
+  // ★ 2026-11-02 用户令「CF 的 token 配置放在管理后台，平台管理员配置并可热更新」：
+  //   这里只做**读写同源**——出栈只有掩码与状态，浏览器从来拿不到明文（后端 admin_cf_cache.go 是唯一判据面）。
+  const [cf, setCf] = useState<any | null>(null)
+  const [cfTok, setCfTok] = useState('')
+  const [cfZone, setCfZone] = useState('')
+  const [cfFile, setCfFile] = useState('')
+  const loadCf = useCallback(async () => {
+    try {
+      const r = await cfCacheState() as any
+      if (!r?.success) return
+      setCf(r)
+      setCfZone(String(r.zone || ''))
+      setCfFile(String(r.token_file || ''))
+    } catch { /* 读不到就保持 null：卡片出空态，不拿猜测当现值 */ }
+  }, [])
+  useEffect(() => { if (isSuper) void loadCf() }, [isSuper, loadCf])
 
   // load 拉取运营策略：生效值与草稿分层回填，缺项回落代码默认
   const load = useCallback(async () => {
@@ -255,6 +272,65 @@ export function OpsP() {
           })}
         </div>
       )}
+      {isSuper && (
+        <Panel title={t('ops.cfTitle')} extra={<span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('ops.cfHint')}</span>}>
+          <Field label={t('ops.cfToken')}>
+            {/* type=password：掩码是后端口径，这里绝不回填真值；留空＝不修改（与后端 IsSecretMasked 同语义） */}
+            <input type="password" autoComplete="off" value={cfTok} onChange={(e) => setCfTok(e.target.value)}
+              data-testid="ops-cf-token"
+              placeholder={cf?.set ? String(cf.masked || '****') : t('ops.cfUnset')}
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', background: 'var(--adm-input-bg)', color: 'var(--lc-text-1)', border: '1.2px solid var(--adm-input-bd)', borderRadius: 6, font: 'inherit' }} />
+          </Field>
+          <Field label={t('ops.cfZone')}>
+            <input value={cfZone} onChange={(e) => setCfZone(e.target.value)} placeholder="lexicorn.cn"
+              data-testid="ops-cf-zone"
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', background: 'var(--adm-input-bg)', color: 'var(--lc-text-1)', border: '1.2px solid var(--adm-input-bd)', borderRadius: 6, font: 'inherit' }} />
+          </Field>
+          <Field label={t('ops.cfFile')}>
+            <input value={cfFile} onChange={(e) => setCfFile(e.target.value)} placeholder="/opt/translator/data/cf_token"
+              data-testid="ops-cf-file"
+              style={{ flex: 1, minWidth: 0, padding: '6px 8px', background: 'var(--adm-input-bg)', color: 'var(--lc-text-1)', border: '1.2px solid var(--adm-input-bd)', borderRadius: 6, font: 'inherit' }} />
+          </Field>
+          {/* ★ 这一行不是装饰：路径改对了、部署侧没同步 CF_TOKEN_FILE 时，执行体仍读默认路径，
+              而界面一切正常（保存成功、徽标在场）⇒ 下次发版静默 skipped。这种"双份配置各说各话"必须写在脸上。 */}
+          <p style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '-2px 0 10px' }}>{t('ops.cfFileHint')}</p>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <Button variant="primary" data-testid="ops-cf-save" onClick={async () => {
+              const r = await cfCacheSave({ token: cfTok.trim(), zone: cfZone.trim(), token_file: cfFile.trim() }) as any
+              // ★ file_note 非空就一定要让客户看见：它既可能是"投影没写成"（下一次发版仍不会真清），
+              //   也可能是"旧投影删不掉/导出被关闭"（磁盘上还留着一把可用密钥）——
+              //   旧形态只在 file_written=false 时提示，于是"新文件写成了、旧的没删掉"这一档全程无声。
+              if (r?.success) {
+                if (String(r.file_note || '')) void toastError(t('ops.cfNote').replace('{note}', String(r.file_note)))
+                else void toastSuccess(t('ops.save'))
+                setCfTok(''); void loadCf()
+              } else toastResp(r)
+            }}>{t('ops.save')}</Button>
+            <Button variant="secondary" data-testid="ops-cf-purge" disabled={!cf?.set} onClick={async () => {
+              const r = await cfCachePurge() as any
+              if (r?.success) void toastSuccess(t('ops.cfPurge') + ' · ' + String(r.zone || ''))
+              else void toastError(r?.message || t('ops.cfPurge'))
+              void loadCf()
+            }}>{t('ops.cfPurge')}</Button>
+            <Button variant="secondary" data-testid="ops-cf-clear" disabled={!cf?.set} onClick={async () => {
+              if (!(await confirmDialog({ body: t('ops.cfConfirm'), danger: true }))) return
+              const r = await cfCacheSave({ clear: true }) as any
+              if (toastResp(r)) { setCfTok(''); void loadCf() }
+            }}>{t('ops.cfClear')}</Button>
+            <div style={{ flex: 1 }} />
+            <StatusPill tone={cf?.set ? 'success' : 'warn'}>
+              {cf?.set ? tpl('ops.cfState', { masked: String(cf.masked || '****'), source: String(cf.source || '') }) : t('ops.cfUnset')}
+            </StatusPill>
+            {/* ★ badge 文案走词典（旧形态写死英文 `file ✓/—`：12 语种界面里独一份英文，读屏也照念）；
+                title 给那条路径，鼠标悬停即可核对"投影到底落在哪"（不占卡片宽度）。 */}
+            <span data-testid="ops-cf-file-badge" title={String(cf?.token_file || '')}>
+              <Badge>{cf?.file_present ? t('ops.cfFileOn') : t('ops.cfFileOff')}</Badge>
+            </span>
+          </div>
+          {cf?.purge_last ? <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '8px 0 0' }}>{tpl('ops.cfLast', { raw: String(cf.purge_last) })}</p> : null}
+        </Panel>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <Badge>{t('ops.platformScope')}</Badge>
         {windows.filter((w) => w.active).map((w) => (

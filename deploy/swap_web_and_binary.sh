@@ -118,8 +118,10 @@ commit_site() {
 }
 
 # ---- 1a5. CF 边缘缓存 purge（★ 2026-10-28 慢链缓解批；位置理由见文件头第 ⑥ 条）----
-# 三态：ok（真清成功）／skipped（未配 token，出一行可见 NOTICE 后照常发版）／off（CF_PURGE_OFF=1 显式关）。
-# ⚠️ token 只经 env `CLOUDFLARE_API_TOKEN` 传入，**绝不写进脚本/文档/git**；zone id 现查不写死。
+# 四态：ok（真清成功，读数带 from=env／from=file:<路径>）／skipped（两处都没凭据）／
+#       off（CF_PURGE_OFF=1 显式关）／**rejected（凭据文件在但权限或属主不合格 ⇒ 判死，在任何落位动作之前 ABORT）**。
+# ⚠️ token 一律**只进环境变量**（来源见 1a4b 那个唯一解析口），绝不写进脚本/文档/git/命令行参数；
+#    zone id 现查不写死（写死＝换 zone 后静默打错地方，屏幕上什么都看不出）。
 CF_ZONE_NAME=${CF_ZONE_NAME:-lexicorn.cn}
 
 # cf_api <URL> <METHOD> <payload 可空> <响应落盘文件> [额外 curl 参数]：统一构造并回吐 http_code；
@@ -143,14 +145,111 @@ cf_api() {
   esac
 }
 
+# ---- 1a4b. purge 凭据的唯一解析口（★ 2026-11-02 用户令「每次发版都真清」）----
+# 为什么要新增这一层：原先只认 env `CLOUDFLARE_API_TOKEN`，于是"真清"永远取决于
+# **跑发版的那个人这次有没有记得带 env**——不带就静默走 skipped（2026-10-28 立这条腿时的原话是
+# "未配只出一行 skipped，不阻塞发版"，这条纪律本身没错；错的是把"每次都清"寄托在记忆上）。
+# 现在两条合法来源，按优先级在**跑执行体的那一台机器**上现读现判：
+#   ① env CLOUDFLARE_API_TOKEN（临时/一次性凭据，本机显式带上时压过文件）；
+#   ② 文件 CF_TOKEN_FILE（默认 /opt/translator/data/cf_token）——放在部署机上，
+#      "每次发版都真清"从此不依赖任何人记得传参。
+#      ★ 为什么默认档不在 `/etc/translator/` 下（2026-11-02 现网实测改档）：那个目录是 `root:root 0750`，
+#        而写这份投影的是**服务进程**（unit 以 translator 跑、ProtectSystem=full）⇒ 服务穿不过目录、
+#        也写不进去，导出恒失败；`/opt/translator/data` 是 `translator:translator 0755` 且在 ReadWritePaths 里。
+# 四条硬口径，一条都不许放宽：
+#   · **来源必须被如实登记**（读数里出 from=env／from=file:<路径>，绝不出 token 本体、也不出长度）。
+#     把两种来源混成一行，"带 token"与"从文件读到"在屏幕上就无法区分（AGENTS §一·3 那条同源教训）。
+#   · 权限不合格 ⇒ **不读它、并判死**（644 的凭据＝挂在 /etc 里给所有进程看，
+#     把它读成功才是缺陷）。这一档的读数写成 rejected，与"根本没有这个文件"的 skipped 必须不同形；
+#     rejected 与 401 同档＝在任何落位动作之前 ABORT，现网停在完整上一代（那是设计，别改成"继续"）。
+#   · token 只进环境变量，**不进命令行参数、不进日志、不落第二份**；
+#     已知残余：curl 的那几秒里 `-H Authorization` 对本机 root 可见（单机 root 环境，
+#     要连这一档都消掉得改 --config 喂法，本批刻意不动已证过的传输腿）。
+#   · 属主判据取**三档**：uid 为 0（root 跑发版）／等于当前进程 uid（运维账号跑）／
+#     等于各部署根 `data/` 目录的属主（常规形态：root 跑发版，而 0600 投影是**服务进程**写的、归 translator）。
+#     只认 root 会让常规形态永远 rejected，那不是安全而是把这条腿做成摆设。
+#     ⚠️ 第三档的锚点**不能**用 `bin/translator-server` 的属主：换件是 root 用 `cp + mv` 落的，
+#       现网实测它就是 `root:root 0755`（两站都一样）⇒ 拿它当锚＝这一档**静默空转**（读数看起来
+#       "已经放宽了"，实际仍只有 root 能用）。锚 `data/` 才是"谁在写这份投影"的那个账号。
+CF_TOKEN_FILE=${CF_TOKEN_FILE:-/opt/translator/data/cf_token}
+CF_PURGE_FROM=""
+
+# cf_service_uids ⇒ 各部署根 data/ 目录的属主 uid（空格分隔，可能为空）。见上面第三档的口径。
+cf_service_uids() {
+  local d mo u out=""
+  for d in $DEPLOY_DIRS; do
+    [ -d "$d/data" ] || continue
+    mo=$(file_mode_owner "$d/data")
+    u="${mo##* }"
+    [ "$u" = "?" ] && continue
+    out="$out $u"
+  done
+  echo "$out"
+}
+
+# file_mode_owner <路径> ⇒ "<八进制模式> <uid>"；GNU 与 BSD 两种 stat 都试，取不到回 "? ?"（调用方按不合格处理）。
+file_mode_owner() {
+  local m="" u=""
+  m=$(stat -c '%a' "$1" 2>/dev/null) || m=""
+  [ -z "$m" ] && m=$(stat -f '%Lp' "$1" 2>/dev/null) || true
+  u=$(stat -c '%u' "$1" 2>/dev/null) || u=""
+  [ -z "$u" ] && u=$(stat -f '%u' "$1" 2>/dev/null) || true
+  echo "${m:-?} ${u:-?}"
+}
+
+# resolve_cf_token ⇒ 0＝拿到了（并 set CLOUDFLARE_API_TOKEN／CF_PURGE_FROM）；1＝没有或拒读（CF_PURGE_FROM 说清是哪一档）。
+resolve_cf_token() {
+  CF_PURGE_FROM=""
+  if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then CF_PURGE_FROM="env"; return 0; fi
+  if [ ! -e "$CF_TOKEN_FILE" ]; then CF_PURGE_FROM="absent"; return 1; fi
+  local mo mode uid
+  mo=$(file_mode_owner "$CF_TOKEN_FILE")
+  mode="${mo%% *}"; uid="${mo##* }"
+  if [ "$mode" = "?" ] || [ "$uid" = "?" ]; then
+    CF_PURGE_FROM="rejected:mode/uid 取不到（stat 两种形态都失败）"
+    return 1
+  fi
+  # 组/其他**一个位都不许有**（600／400 合格，644／640／604 一律拒）
+  case "$mode" in
+    *00) : ;;
+    *) CF_PURGE_FROM="rejected:权限=${mode}（组/其他有可读位）"; return 1 ;;
+  esac
+  local suids="" u2 found=0
+  suids=$(cf_service_uids)
+  for u2 in $suids; do
+    if [ "$u2" = "$uid" ]; then found=1; fi
+  done
+  if [ "$uid" != "0" ] && [ "$uid" != "$(id -u)" ] && [ "$found" != "1" ]; then
+    CF_PURGE_FROM="rejected:属主 uid=${uid} 既非 root、非本进程、也非部署 data 目录的属主（服务账号）"
+    return 1
+  fi
+  local t=""
+  t=$(head -n 1 "$CF_TOKEN_FILE" 2>/dev/null | tr -d ' \t\r\n')
+  if [ -z "$t" ]; then CF_PURGE_FROM="rejected:文件为空或读不到首行"; return 1; fi
+  CLOUDFLARE_API_TOKEN="$t"
+  export CLOUDFLARE_API_TOKEN
+  CF_PURGE_FROM="file:${CF_TOKEN_FILE}"
+  return 0
+}
+
 cf_purge() {
   if [ "${CF_PURGE_OFF:-0}" = "1" ]; then
     echo "CF_PURGE=off（CF_PURGE_OFF=1 显式下令 ⇒ 边缘可能残留旧 HTML ≤2h，白屏窗口自负）"
     return 0
   fi
-  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-    echo "CF_PURGE=skipped（未配 CLOUDFLARE_API_TOKEN ⇒ 边缘可能残留旧 HTML ≤2h；要消窗口就带 token 重跑）"
-    return 0
+  # ★ 凭据来源只有一个解析口（resolve_cf_token）：env 优先，其次执行体所在那台机器上的 600 文件。
+  #   三种"没清"在屏幕上必须不同形：off（显式关）／skipped（两处都没凭据）／rejected（文件在但权限不合格）。
+  if ! resolve_cf_token; then
+    case "$CF_PURGE_FROM" in
+      rejected*)
+        bad "CF purge 拒读凭据文件（${CF_PURGE_FROM#rejected:}，文件=${CF_TOKEN_FILE}）⇒ 落位不会开始"
+        return 1
+        ;;
+      *)
+        echo "CF_PURGE=skipped（既无 env CLOUDFLARE_API_TOKEN，也无 ${CF_TOKEN_FILE} ⇒ 边缘可能残留旧 HTML ≤2h；要消窗口就带 token 重跑）"
+        return 0
+        ;;
+    esac
   fi
   local tmp code zone
   tmp=$(mktemp)
@@ -168,7 +267,7 @@ cf_purge() {
   code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp")
   [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp" --http1.1)
   if grep -q '"success":true' "$tmp" 2>/dev/null; then
-    ok "CF purge 已受理（zone=${zone}，HTTP=${code}）⇒ 边缘 HTML 缓存已清"
+    ok "CF purge 已受理（zone=${zone}，HTTP=${code}，from=${CF_PURGE_FROM}）⇒ 边缘 HTML 缓存已清"
     rm -f "$tmp"
     return 0
   fi
@@ -191,8 +290,18 @@ cf_purge_tail() {
   if [ "${CF_PURGE_TAIL:-on}" = "off" ]; then
     echo "CF_PURGE_TAIL=off（显式关 ⇒ 落位窗口内被重新缓存的旧 HTML 可能留 ≤2h）"; return 0
   fi
-  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
-    echo "CF_PURGE_TAIL=skipped（未配 token）"; return 0
+  # ★ 尾随这一枪复用同一个解析口；**已经在上一枪解出来的来源标签不许被覆盖**
+  #   （否则"文件读到的"在屏幕上变成"env 带的"，正是 §一·3 那条「派生态冒充来源」的形状）。
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ] && ! resolve_cf_token; then
+    case "$CF_PURGE_FROM" in
+      rejected*)
+        echo "CF_PURGE_TAIL=failed（凭据文件被拒读：${CF_PURGE_FROM#rejected:}，文件=${CF_TOKEN_FILE}）⇒ 落位窗口内被重新缓存的旧 HTML 可能留 ≤2h"
+        return 0
+        ;;
+      *)
+        echo "CF_PURGE_TAIL=skipped（两处都没有凭据）"; return 0
+        ;;
+    esac
   fi
   local tmp code zone="${CF_ZONE_ID:-}"
   tmp=$(mktemp)
@@ -209,7 +318,7 @@ cf_purge_tail() {
   code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp")
   [ "$code" = "000" ] && code=$(cf_api "https://api.cloudflare.com/client/v4/zones/${zone}/purge_cache" POST '{"purge_everything":true}' "$tmp" --http1.1)
   if grep -q '"success":true' "$tmp" 2>/dev/null; then
-    echo "CF_PURGE_TAIL=ok（zone=${zone}）"
+    echo "CF_PURGE_TAIL=ok（zone=${zone}，from=${CF_PURGE_FROM}）"
   else
     echo "CF_PURGE_TAIL=failed（HTTP=${code}）⇒ 边缘可能残留旧 HTML ≤2h；重跑一次 purge 即可"
   fi
