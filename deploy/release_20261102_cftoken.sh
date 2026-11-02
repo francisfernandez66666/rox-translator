@@ -143,12 +143,25 @@ else
 fi
 
 # ---- 6. 交付面读数（不是判据，是给下一位的坐标）----
+#   ⚠️ 这一段原先把整份远端脚本写进 ssh 的**单引号字符串**里，第一次真跑就在 line 6 崩
+#   （`bash: -c: line 6: syntax error near unexpected token )`），屏幕上只剩一行英文语法错、
+#   六项读数一项没出，而发版判据仍然全绿——**坏的是读数腿，不是现网**。
+#   两条教训一起写在这儿：① 嵌套引号里的 `$(… || echo <未配置>)` 会被当重定向／语法错，
+#   未命中档一律用带引号的 ASCII 词（NOT_SET）；② 跨机多点读数只有 heredoc + `bash -s` 这一种形态：
+#   脚本正文不再和引号打架，远端解析失败也会整段暴露而不是吞掉一半。
 log "6/6 交付面读数"
-ssh -p "$PORT" "$HOST" 'echo "  bin  sha=$(sha256sum /opt/translator/bin/translator-server | cut -d" " -f1 | cut -c1-16)"
-  echo "  entry=$(grep -oE "assets/index-[A-Za-z0-9_-]{8,}\.js" /opt/translator/web/index.html | head -1)"
-  echo "  sidecar br=$(ls /opt/translator/web/assets/*.br 2>/dev/null | wc -l | tr -d " ")"
-  echo "  cf_token_file=$(ls -l /etc/translator/cf_token 2>/dev/null || echo <未配置>)"
-  for u in translator translator-demo; do echo "  $u=$(systemctl is-active $u 2>/dev/null)"; done' </dev/null 2>&1 | tail -8
+ssh -p "$PORT" "$HOST" 'bash -s' <<'REMOTE_READINGS' 2>&1 | tail -10
+for r in /opt/translator /opt/translator-demo; do
+  printf "  %s entry=%s br=%s dirty=%s\n" "$r" \
+    "$(grep -oE 'assets/index-[A-Za-z0-9_-]{8,}\.js' "$r/web/index.html" | head -1)" \
+    "$(ls "$r"/web/assets/*.br 2>/dev/null | wc -l | tr -d ' ')" \
+    "$(find "$r/web" \( -name '._*' -o -name '.DS_Store' \) 2>/dev/null | wc -l | tr -d ' ')"
+done
+printf "  bin=%s\n" "$(sha256sum /opt/translator/bin/translator-server | cut -c1-16)"
+printf "  units=%s/%s\n" "$(systemctl is-active translator)" "$(systemctl is-active translator-demo)"
+# 投影文件在不在＝后台那次保存有没有真落到执行体读得到的地方（NOT_SET 是「没配」，不是「配了读不到」）
+printf "  cf_token_file=%s\n" "$(ls -l /opt/translator/data/cf_token 2>/dev/null || echo NOT_SET)"
+REMOTE_READINGS
 
 echo
 if [ "$FAIL" = 0 ]; then
