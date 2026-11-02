@@ -5185,6 +5185,107 @@ if [ -n "$T79UID" ]; then
 fi
 ckq T79-cleanup-user-counter-gone "$(dbq "SELECT COUNT(1) FROM rate_limits WHERE scope='free_pt_user' AND key='$T79UID'" | tr -dc '0-9')" "0"
 
+# ---------- T80 2026-11-03：§G-7 那两条**升级信号**第一次有 HTTP 级判据 ----------
+# T78 收尾那段"诚实边界"当时是真的：命中升级信号后的动作＝"当场要求人机验证"，而 UAT 实例默认
+# 没启用人机验证 ⇒ `verifyCaptcha` 未启用即放行 ⇒ 响应面与不升级**完全同形**（只有服务端一行 WARN 分得开）。
+# 本段把开关**在段内**开起来（token 为空那一支在读密钥之前就拒，所以不需要配任何密钥），
+# "命中"与"未命中"于是成为两种可观测出路；段尾按 T64 那套现读现还原，并**用一发真提交证明还原真生效**
+# （接口答应不算——AGENTS §三 那条"由那一个消费方自己读出值"）。
+# ★ 档位键名一律从 `internal/api/captcha.go` 抄：生效判据是 `captcha_provider` ∈ {turnstile, geetest}，
+#   **没有** `captcha_enabled` 这一把键（按字段直觉拼会得到一个恒不放也不恒拒的假形态）。
+# ⚠️ 两本账不许混：S1 读 `lead_ident_uid`（24h 窗口、按 IP+设备 分组数**不同登录身份**），
+#   S2 读现成的 `login_fail`（近 5 分钟）。夹具只往**保留测试网段** 203.0.113.0/24 的三个专用地址记账，
+#   绝不动 127.0.0.1 那一份——全站登录腿共用同一个 IP 预算，多两次失败就可能把后面所有登录打成锁定。
+T80IP1="203.0.113.80"
+T80IP2="203.0.113.81"
+T80IP3="203.0.113.82"
+# 设备号必须合 ^[A-Za-z0-9_-]{8,64}$：不合式后端"当没上报"（不返 400，AGENTS §一·10 那条），
+# 于是 S1 结构上不触发——那正是 DEF-P0-03 的缺陷形态，本段要证的恰恰是"送上去的真被用上"。
+T80DEV="t80probeDEVICE01"
+T80H1="Authorization: Bearer $(tok uatuser_a uatpass123)"
+T80H2="Authorization: Bearer $(tok "$ADMIN_USER" "$ADMIN_PASS")"
+# 段首清账：三个探针地址在四种 scope 上一律摘干净（上一轮残留会把第一发读成"过于频繁"＝wrong-reason 红）。
+dbq "DELETE FROM rate_limits WHERE key LIKE 'lead-public:203.0.113.8%' OR key LIKE '203.0.113.8%' OR key LIKE '203.0.113.8%:%'" >/dev/null 2>&1 || true
+dbq "DELETE FROM feedbacks WHERE content LIKE '%T80升级信号%'" >/dev/null 2>&1 || true
+# 进段前那一档长什么样，先现读存下来（正常形态是"库里没有这一行"，那才是运维默认）。
+T80PROV0=$(sq "SELECT value FROM system_config WHERE key='captcha_provider'" | tr -d '[:space:]\r')
+T80PROVCNT0=$(dbq "SELECT COUNT(1) FROM system_config WHERE key='captcha_provider'" | tr -dc '0-9')
+dbq "DELETE FROM system_config WHERE key='captcha_provider'" >/dev/null
+dbq "INSERT INTO system_config(key,value) VALUES('captcha_provider','turnstile')" >/dev/null
+T80PROV1=$(sq "SELECT value FROM system_config WHERE key='captcha_provider'" | tr -d '[:space:]\r')
+ckq T80-premise-provider-switch-on turnstile "$T80PROV1"
+
+# t80send <IP> <认证头（空串＝匿名）> <公司名> <设备号（空串＝不送）>
+#   出：T80CODE（HTTP 码）／T80BODY（响应体）。JSON 档失败走 writeError ⇒ 可按 code 断言。
+#   ⚠️ 一律带 `CF-Connecting-IP`：`httpx.ClientIP` 只在回环来源时才看这一档（第 1 优先级），
+#      UAT 打的就是 127.0.0.1 ⇒ 三个探针地址各拿一格配额，互不扣格子（两本账不许互相扣）。
+T80CODE=""; T80BODY=""
+t80send(){
+  local ip="$1" authh="$2" comp="$3" dev="$4" payload=""
+  payload="{\"company\":\"${comp}\",\"email\":\"t80@uat-corp.example\",\"langs\":\"英\",\"source\":\"uat_t80\""
+  if [ -n "$dev" ]; then payload="${payload},\"device_id\":\"${dev}\""; fi
+  payload="${payload}}"
+  local -a hdr=(-H "$J" -H "CF-Connecting-IP: ${ip}")
+  if [ -n "$authh" ]; then hdr=(-H "$J" -H "CF-Connecting-IP: ${ip}" -H "${authh}"); fi
+  T80CODE=$(curl "${hdr[@]}" -o /tmp/t80_body.json -w '%{http_code}' --max-time 60 -X POST "$B/api/lead/public" -d "$payload" 2>/dev/null)
+  T80CODE=${T80CODE:-000}
+  T80BODY=$(cat /tmp/t80_body.json 2>/dev/null)
+}
+
+# ① S1 正对照（这一发必须**成功**）：开关已开，但分组里身份数＝0 ⇒ 不命中 ⇒ 免验证通道照旧放行。
+#    这条是整个 T80 的射程地基：它一红，后面所有"被要求人机验证"的红都分不清是升级命中还是通道坏了。
+t80send "$T80IP1" "$T80H1" "T80升级信号甲一" "$T80DEV"
+ckq T80-s1-first-identity-passes 200 "$T80CODE"
+sleep 11 # 同 IP 的配额间隔＝10s（产品自己的闸，不放宽判据、只把等待做实）
+t80send "$T80IP1" "$T80H2" "T80升级信号甲二" "$T80DEV"
+ckq T80-s1-second-identity-passes 200 "$T80CODE"
+# ② 记账证据（DEF-P0-03 收口的 HTTP 级那半边）：**前端送上来的 device_id 真被后端收到并按身份分组**。
+#    数的是 `lead_ident_uid` 里 `IP:设备:` 前缀下的**不同 key 数**＝2；取到 0 就是那条链没接线。
+T80IDS=$(dbq "SELECT COUNT(DISTINCT key) FROM rate_limits WHERE scope='lead_ident_uid' AND key LIKE '${T80IP1}:${T80DEV}:%'" | tr -dc '0-9')
+ckq T80-s1-two-identities-recorded 2 "$T80IDS"
+# ③ 第三发（同 IP＋同设备，身份数已达 2）⇒ 命中 S1 ⇒ 必须被当场要求人机验证，且**一条都不许多落库**。
+sleep 11
+t80send "$T80IP1" "" "T80升级信号甲三" "$T80DEV"
+ck  T80-s1-escalation-rejected '"success":false|VALIDATION' "$T80BODY"
+ckF T80-s1-escalation-asks-captcha '人机验证' "$T80BODY"
+ckq T80-s1-escalation-not-persisted 0 "$(dbq "SELECT COUNT(1) FROM feedbacks WHERE content LIKE '%T80升级信号甲三%'" | tr -dc '0-9')"
+# ④ 反向对照（**这条才是"红来自那本账"而不是"这档一律拒"**）：摘掉身份账本后同一发必须回到成功。
+#    位置必须在还原开关**之前**——还原之后再测，测的是开关不是账本。
+dbq "DELETE FROM rate_limits WHERE scope='lead_ident_uid' AND key LIKE '${T80IP1}:${T80DEV}:%'" >/dev/null 2>&1 || true
+sleep 11
+t80send "$T80IP1" "" "T80升级信号甲四" "$T80DEV"
+ckq T80-s1-counterfactual-passes 200 "$T80CODE"
+
+# ⑤ S2（另一本账、另一个探针 IP）：直接把 `login_fail` 那一行种成 2 次／窗口内。
+#    为什么不打两次真·失败登录：全站登录腿与 127.0.0.1 共用同一格锁定预算（5 次／300s），
+#    为了这一条判据去烧那格会把**后面所有登录**打成锁定——那属"打死上游档跨链路连坐"那一族。
+#    种进去的只是账本里的数，产品仍自己读、自己判、自己拒（判据路径一字没绕）。
+T80NOW=$(date +%s)
+dbq "INSERT INTO rate_limits(scope,key,count,window_start,lock_until) VALUES('login_fail','${T80IP2}',2,${T80NOW},0)" >/dev/null 2>&1 || true
+t80send "$T80IP2" "" "T80升级信号乙一" ""
+ck  T80-s2-escalation-rejected '"success":false|VALIDATION' "$T80BODY"
+ckF T80-s2-escalation-asks-captcha '人机验证' "$T80BODY"
+ckq T80-s2-escalation-not-persisted 0 "$(dbq "SELECT COUNT(1) FROM feedbacks WHERE content LIKE '%T80升级信号乙一%'" | tr -dc '0-9')"
+# ⑥ S2 反向对照：摘掉那一行 ⇒ 同一发必须放行（第一发是失败出路、不坐实格子，所以这里不必等间隔）。
+dbq "DELETE FROM rate_limits WHERE scope='login_fail' AND key='${T80IP2}'" >/dev/null 2>&1 || true
+t80send "$T80IP2" "" "T80升级信号乙二" ""
+ckq T80-s2-counterfactual-passes 200 "$T80CODE"
+
+# ⑦ 还原：把 `captcha_provider` 恢复成进段之前的样子（原本没这一行就删干净，有就把原值写回去）。
+dbq "DELETE FROM system_config WHERE key='captcha_provider'" >/dev/null
+if [ -n "$T80PROV0" ]; then dbq "INSERT INTO system_config(key,value) VALUES('captcha_provider','${T80PROV0}')" >/dev/null; fi
+T80PROVCNT1=$(dbq "SELECT COUNT(1) FROM system_config WHERE key='captcha_provider'" | tr -dc '0-9')
+ckq T80-restore-rowcount "${T80PROVCNT0:-0}" "${T80PROVCNT1:-0}"
+ckq T80-restore-value-as-before "$T80PROV0" "$(sq "SELECT value FROM system_config WHERE key='captcha_provider'" | tr -d '[:space:]\r')"
+# ⑧ 还原真生效由**消费方自己读出值**：换一个干净探针 IP 匿名发一发，必须回到"不要求人机验证"的 200。
+t80send "$T80IP3" "" "T80升级信号丙一" ""
+ckq T80-restore-dialed-live 200 "$T80CODE"
+
+# 收尾：本段的线索行与三本账全部摘掉（线索内容是客户可见事实，只删本段自己的标记行）。
+dbq "DELETE FROM feedbacks WHERE content LIKE '%T80升级信号%'" >/dev/null 2>&1 || true
+dbq "DELETE FROM rate_limits WHERE key LIKE 'lead-public:203.0.113.8%' OR key LIKE '203.0.113.8%' OR key LIKE '203.0.113.8%:%'" >/dev/null 2>&1 || true
+ckq T80-cleanup-rows-gone 0 "$(dbq "SELECT COUNT(1) FROM feedbacks WHERE content LIKE '%T80升级信号%'" | tr -dc '0-9')"
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0
