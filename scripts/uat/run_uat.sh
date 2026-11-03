@@ -277,7 +277,14 @@ mkdir -p frontend-react/artifacts
 #   指到唯一目录后既不累积、也不需要清理；不设时 playwright.config.ts 保持 ./test-results，
 #   不影响开发者本地跑（本地没有这层体积闸）。
 PW_OUT_DIR="$WORK/pw-results-$(date +%s)-$$"
-(cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line) | tee "$WORK/pixel_uat.log"
+# ★ 2026-11-03 补一条观测腿：跳过**必须点名**。旧形态只报"1 skipped"，
+#   把"这条测不了（探针没到／配额间隔挡着）"与"根本没这条用例"读成同一件事
+#   ——AGENTS §三 那条「没测到不等于通过」在 E2E 层的同款盲区：
+#   本轮就出现过"102 passed / 1 skipped"却没人说得出被跳的是哪一条。
+#   json 报告落进本次唯一目录（不设 PLAYWRIGHT_JSON_OUTPUT_NAME 时 json reporter 会把报告打到 stdout，
+#   那会污染 pixel_uat.log 的行解析——所以这里必须设）。
+PW_JSON="$WORK/pw_results.json"
+(cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 PLAYWRIGHT_JSON_OUTPUT_NAME="$PW_JSON" BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test "${PW_TARGET:-e2e/}" --reporter=line,json) | tee "$WORK/pixel_uat.log"
 # ★ P1-1 闸门补防（2026-09-15）：Playwright 失败必须进退出码——旧实现只 tee 日志不采码，
 #   「发布闸门」对前端 E2E 不设防（HEAD 曾带 2 条红用例合入并被声明全绿）。
 PW_EXIT=${PIPESTATUS[0]}
@@ -285,6 +292,8 @@ PW_FAIL=0
 if [ "${PW_EXIT:-1}" -ne 0 ]; then
   log "首轮 E2E 非零（exit=${PW_EXIT}），复跑失败用例甄别 flaky..."
   # 复跑沿用同一个 PW_OUTPUT_DIR：--last-failed 只会往里追加本次重试的产物，不读历史目录
+  # ⚠️ 这里**刻意不再收 json**：--last-failed 的报告只含被重试的那几条，覆写 PW_JSON 会把
+  #    首轮报告里的"跳过名单"整段抹掉——那正是本腿要防的"没测到读成没这条"。点名一律取首轮那份。
   (cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" npx playwright test --last-failed --reporter=line) | tee "$WORK/pixel_uat_retry.log"
   PW_RETRY_EXIT=${PIPESTATUS[0]}
   if [ "${PW_RETRY_EXIT:-1}" -eq 0 ]; then
@@ -296,13 +305,55 @@ if [ "${PW_EXIT:-1}" -ne 0 ]; then
 fi
 [ "$PW_FAIL" = "1" ] && echo "❌ 前端 E2E 失败（exit=${PW_EXIT}），发布闸门拦截"
 
+# 跳过点名（★ 2026-11-03 新腿）：从本次 json 报告里把 status=skipped 的用例与它自己的理由摘出来。
+# 判"跳过"不算闸门失败（可达探针挡着就是设计，硬跑只会造出假红），但**必须能被点名**——
+# 否则"这一条今天没测到"这件事只存在于改代码的人脑子里。
+PW_SKIP_LIST=""
+if [ -f "$PW_JSON" ]; then
+  PW_SKIP_LIST=$(python3 - "$PW_JSON" <<'PY'
+import json, sys
+
+
+def walk(suites, file_name=''):
+    """递归 Playwright 的 suites 树，回 (文件, 标题, 理由) 三元的跳过项。"""
+    out = []
+    for s in suites or []:
+        fn = s.get('file') or file_name
+        for sp in s.get('specs') or []:
+            for t in sp.get('tests') or []:
+                for r in t.get('results') or []:
+                    if r.get('status') == 'skipped':
+                        ann = t.get('annotations') or []
+                        why = next((a.get('description') or '' for a in ann
+                                    if a.get('type') == 'skip'), '')
+                        out.append((fn, sp.get('title') or '', why[:150]))
+        out += walk(s.get('suites'), fn)
+    return out
+
+
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception as exc:                      # 报告读不到＝点名腿失明，明说而不是回空串
+    print('<解析失败:%s>' % exc)
+    raise SystemExit(0)
+rows = walk(d.get('suites'))
+print('; '.join('%s › %s%s' % (f, t, (' ⇒ ' + w if w else '')) for f, t, w in rows))
+PY
+)
+fi
+PW_SKIP_CNT=0
+if [ -n "$PW_SKIP_LIST" ]; then
+  PW_SKIP_CNT=$(printf '%s' "$PW_SKIP_LIST" | tr ';' '\n' | grep -cE '.' || true)
+  log "⏳ 前端 E2E 跳过 ${PW_SKIP_CNT} 条（点名＋各自理由）：${PW_SKIP_LIST}"
+fi
+
 # ---------- 7. 汇总 ----------
 DUR=$(( $(date +%s) - T0 ))
 log "=============================="
 log "方言：${DB_DRIVER}"
 log "后端 API UAT（A/B 主链路）：PASS=${API_PASS:-0} FAIL=${API_FAIL:-0}"
 log "后端交易专项 UAT（T 套件）：PASS=${TXN_PASS:-0} FAIL=${TXN_FAIL:-0}"
-log "前端 E2E UAT：exit=${PW_EXIT:-?}（FAIL=${PW_FAIL:-1}）；明细见 pixel_uat.log（截图：frontend-react/artifacts/）"
+log "前端 E2E UAT：exit=${PW_EXIT:-?}（FAIL=${PW_FAIL:-1}，跳过=${PW_SKIP_CNT:-?}）；明细见 pixel_uat.log（截图：frontend-react/artifacts/）"
 log "日志目录：$WORK"
 log "=============================="
 [ "${KEEP:-0}" != "1" ] && { kill $SERVER_PID $MOCK_PID $CHAIN_PID $ASSIST_PID 2>/dev/null || true; }

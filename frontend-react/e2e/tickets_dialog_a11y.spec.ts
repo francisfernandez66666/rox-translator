@@ -78,15 +78,43 @@ test.describe('工单页进度弹窗无障碍（§4.2 缺口收口）', () => {
   });
 
   test('TK-A2 反馈弹窗：模态语义与焦点圈定（含表单控件）', async ({ page }) => {
-    test.setTimeout(120_000);
+    // 预算按**本条在闸门里的位置**给，不是照抄邻居那条：a11y 排在 T 段刚把工单队列灌满之后
+    // （首轮实测读数＝停在「排队中」90s 还没被 worker 取走，而同环境里 ticket_delivery 用 150s
+    //  等到了同一张表的完成件——差的是排队深度，不是链路）。
+    // 判红文案必须带**行内状态读数**，否则下一位只能看见"超时"两个字重新猜一遍病因。
+    test.setTimeout(330_000);
+    // ★ 2026-11-03 改掉一处"静默不执行"：旧形态是从列表里 `getByRole('row').filter(/已完成/).first()`
+    //   找**别人留下的**已完成工单，找不到就 `test.skip` ⇒ 这条腿到底今天跑没跑过，
+    //   取决于前序 spec 有没有碰巧留一张完成件；2026-11-03 给闸门补"跳过点名"腿之后才发现
+    //   它**连续多轮都是被跳过的那一条**，而汇总仍写 "102 passed"（AGENTS §三「有脚本无调度要问到第二层」
+    //   在 e2e 层的同款：用例在、调度在、就是没走到）。
+    //   改法＝自己建一张并等**它自己**到已完成（反馈入口只对 completed 渲染 ⇒ 等到入口＝等到终态），
+    //   顺带把 `.first()` 换成按本行标题定位（同名行若因路由切换遗留在 DOM 里，first 会取到隐藏节点）。
+    //   等不到就用**读到的状态文本**判红，不再 skip：那是链路/产品的事，不该被记成"这条本来就没有"。
+    const title = 'e2e_a11y_fb_' + Date.now();
     await login(page, USER, PASS);
     await page.goto('/tickets');
-    // 找一个「已完成」工单（反馈入口只对 completed 渲染）；没有就说明本次闸门里无完成件，跳过而非假红
-    const doneRow = page.getByRole('row').filter({ hasText: /已完成/ }).first();
-    const hasDone = await doneRow.isVisible().catch(() => false);
-    test.skip(!hasDone, '列表内无已完成工单（反馈入口不渲染），跳过反馈弹窗断言');
+    await page.getByTestId('tk-title').fill(title);
+    await page.getByTestId('tk-source').fill('反馈弹窗无障碍回归：请在收件箱中确认订单号 600912.SH。');
+    await page.getByRole('button', { name: /创建并入队/ }).click();
+    const row = page.getByRole('row').filter({ hasText: title });
+    await expect(row, '新建工单未出现在列表').toHaveCount(1, { timeout: 20_000 });
 
-    const trigger = doneRow.getByRole('button', { name: '反馈' });
+    const trigger = row.getByRole('button', { name: '反馈' });
+    // ★ 等待必须走 `expect(...).toBeVisible({timeout})` 这一个调用形态：**`locator.isVisible()` 的
+    //   `timeout` 选项是 no-op（该 API 立即返回）**。第一版写的是 `isVisible({timeout: 90_000})`，
+    //   实测整段 e2e 只跑了 1.7 分钟、这条腿两次"等 90 秒"都没等满——
+    //   症状是"工单没完成"，真身是"根本没等"。同仓那条「撤销腿的判据问调用形态」是同一族：
+    //   问"这个 API 到底会不会等"，不能问"我有没有写一个毫秒数"。
+    //   红的时候仍要把**行内状态读数**带进文案，否则下一位只能看见"超时"两个字重新猜病因。
+    try {
+      await expect(trigger, '反馈入口未渲染（工单未到已完成）').toBeVisible({ timeout: 270_000 });
+    } catch {
+      const statusText = (await row.textContent().catch(() => '')) || '<读不到行文本>';
+      expect(false, `工单 ${title} 在 270s 内没到已完成（反馈入口不渲染）⇒ 行读数=${statusText.slice(0, 160)}` +
+        `；这一档不是"跳过"：本闸门里 A/T 两段与 ticket_delivery 都证明翻译链活着`).toBe(true);
+    }
+
     await expect(trigger).toBeVisible({ timeout: 10_000 });
     await trigger.click();
 
