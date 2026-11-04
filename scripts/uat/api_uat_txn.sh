@@ -5479,7 +5479,13 @@ T82NOW=$(curl -s "$B/api/system/audit?limit=5" -H "$AH")
 ck T82-counterfactual-today-visible "\"created_at\":\"$(date +%F)" "$T82NOW"
 # 显式给 from ⇒ 调用方的界优先，缺省界不得覆盖
 T82FROM=$(python3 -c 'import datetime;print((datetime.date.today()-datetime.timedelta(days=90)).isoformat())')
-T82WIDE=$(curl -s "$B/api/system/audit?limit=200&from=${T82FROM}" -H "$AH")
+# ★ 2026-11-04 主矩阵首跑红的修法：列表按 created_at 倒序且单页上限 200，UAT 前 60 多段
+#   已写出大量今天的审计行 ⇒ 只给 from 时，60 天前的探针行会被 200 条上限挤出去（假红，
+#   读到的是"页面没翻到"而不是"显式 from 没生效"）。把窗口上界 to 夹到 50 天前并按
+#   action=uat_probe 过滤，窗口内就只剩这一枚探针，判据才真正在问"调用方的界优先"。
+#   后端参数现读自 admin_evals.go：from / to / action 都进 ListAuditFilter。
+T82TO=$(python3 -c 'import datetime;print((datetime.date.today()-datetime.timedelta(days=50)).isoformat())')
+T82WIDE=$(curl -s "$B/api/system/audit?limit=200&from=${T82FROM}&to=${T82TO}&action=uat_probe" -H "$AH")
 ck T82-explicit-from-wins "\"detail\":\"${T82MARK}\"" "$T82WIDE"
 ckq T82-explicit-from-silent '{"window_days":0' "$(printf '%s' "$T82WIDE" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("{\"window_days\":0" if int(d.get("window_days",0))==0 else "no")' 2>/dev/null || echo no)"
 # 导出腿：不套界 + 仍带 before_val/after_val 两列（列表瘦不瘦是性能问题，导出砍列是契约问题）
@@ -5502,7 +5508,10 @@ T83D=$(curl -s "$B/api/tickets" -H "$T83H")
 ck T83-default-is-200 '"limit":200' "$T83D"
 ck T83-has-total '"total":' "$T83D"
 ck T83-row-has-summary '"artifact_summary":{' "$T83D"
-ckq T83-summary-both-keys '{"md":' "$(printf '%s' "$T83D" | python3 -c '
+# ★ 2026-11-04 主矩阵首跑红：ckq 的第二个参数是**期望值**，原写法把 `'{"md":'`
+#   写在期望位、而 python 在合规时输出 `OK` ⇒ 合规反而恒红（want/got 反了）。
+#   改回 `OK` 期望，python 那段仍逐行钉 md/original 两键恒在，判据方向一字未松。
+ckq T83-summary-both-keys 'OK' "$(printf '%s' "$T83D" | python3 -c '
 import sys,json
 d=json.load(sys.stdin)
 rows=d.get("tickets") or []
@@ -5515,7 +5524,10 @@ ckq T83-page1-one-row 1 "$T83N"
 T83DIRTY=$(curl -s "$B/api/tickets?limit=abc" -H "$T83H")
 ck T83-dirty-folds-to-default '"limit":200' "$T83DIRTY"
 T83OVER=$(curl -s "$B/api/tickets?limit=2&offset=999998" -H "$T83H")
-ck T83-overrange-is-array '"tickets":[]' "$T83OVER"
+# ★ 2026-11-04 主矩阵首跑红：ck 走 grep -E，`"tickets":[]` 里的 `[]` 是空字符类，
+#   BSD grep 直接报 `brackets not balanced` ⇒ 判据自身失效而不是产品错。改成解析出数组长度
+#   再等值（与 T84 同形态），空页归一 `[]` 这条语义一字不动。
+ckq T83-overrange-is-array 0 "$(printf '%s' "$T83OVER" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("tickets") or []))' 2>/dev/null || echo ERR)"
 ckn T83-overrange-null '"tickets":null' "$T83OVER"
 
 # ============================================================================
@@ -5538,6 +5550,9 @@ ck T84-empty-page-is-array '"total":' "$T84P"
 #   ⚠️ 金额断言先过 mny_norm（同一列 SQLite 回 5.0、PG 回 5，直接字符串比两种方言各红一次）。
 # ============================================================================
 T85ID=$(dbq "SELECT id FROM tenants WHERE id>1 ORDER BY id LIMIT 1" | tr -dc '0-9')
+# 留痕判据用**前后增量**：后端 LogAudit 记的是 s.effTenant(r,u)（超管代客置付时是生效租户），
+# 未必等于目标租户 $T85ID，按 tenant_id 等值查会假红。增量才真在问"这一跳有没有留痕"。
+T85AUD0=$(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='order_pay'" | tr -dc '0-9')
 T85CRE=$(post "$AH" "{\"tenant_id\":$T85ID,\"points\":1000,\"money\":0}" /api/admin/orders/create)
 T85OID=$(printf '%s' "$T85CRE" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("order") or {}).get("id",""))' 2>/dev/null || echo "")
 ckq T85-order-created-nonempty 1 "$( [ -n "$T85OID" ] && echo 1 || echo 0 )"
@@ -5554,7 +5569,8 @@ T85FAIL=$(post "$AH" "{\"id\":99999999,\"tenant_id\":$T85ID}" /api/admin/orders/
 ckn T85-failure-omits-balance '"balance_points"' "$T85FAIL"
 ckn T85-failure-omits-order-points '"order_points"' "$T85FAIL"
 # 留痕那一半：order_pay 必须真写进 audit_logs（接口答应＋库侧事实，两样都齐才算到账）
-ckq T85-audit-trail-exists 1 "$(dbq "SELECT CASE WHEN COUNT(1)>0 THEN 1 ELSE 0 END FROM audit_logs WHERE action='order_pay' AND tenant_id=$T85ID" | tr -dc '0-9')"
+T85AUD1=$(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='order_pay'" | tr -dc '0-9')
+ckq T85-audit-trail-exists 1 "$([ "${T85AUD1:-0}" -gt "${T85AUD0:-0}" ] && echo 1 || echo 0)"
 
 # ============================================================================
 # T85 清场（★ 2026-11-04 收口：本段过去只造单不清，复跑会一直攒行）
