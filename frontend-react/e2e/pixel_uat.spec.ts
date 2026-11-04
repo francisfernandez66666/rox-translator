@@ -418,13 +418,19 @@ test.describe('像素级 UAT', () => {
     // ★ 09-27 复跑红账（批 I-10 收尾）：外壳文案到位 ≠ 面板件已挂载——冷启动载入闸门撤下后
     //   统计卡/表单件仍是异步数据回来才渲染，一次性快照会撞进「只剩壳的 3 件」窗口
     //   （本轮首跑实扫 3、retry 即过＝典型时序红）。改成轮询到件数稳定再量，
-    //   「>3 防空转」的锁语义一字不动，只把取值时机钉稳；超时后失败信息仍带类名清单。
+    //   只把取值时机钉稳；超时后失败信息仍带类名清单。
+    // ★ 2026-11-04 体验批 A2：概览「最近审计」改为**默认收起**（收起时一个请求都不发、也不渲染
+    //   那块带框件），后台首屏的带框件由原来的 >3 稳定降为 3。两轮 PG 主矩阵复跑＋retry1
+    //   20s 轮询都停在 3 件且不再增长 ⇒ 这是产品形态变化，不是加载时序。
+    //   因此防空转下限按新形态校准为 >=3：探针仍需实扫到 3 件带框面才算采得到，
+    //   后续「纯白框线清零」与「面色台阶等值」两条**实质判据一字不动**；
+    //   真退化到 0~2 件（面板没渲染/选择器改名）照样判红，射程没有缩水。
     let ad = await probeAdminFrames();
     await expect
       .poll(async () => { ad = await probeAdminFrames(); return ad.sampled; },
-        { message: `后台带框件迟迟没载入齐（等 20s 仍 ≤3 即产品问题）：\n${ad.sample.join('\n')}`, timeout: 20000 })
-      .toBeGreaterThan(3);
-    expect(ad.sampled, `后台一个带框的卡片/输入件都没扫到 ⇒ 本锁已空转（选择器或类名口径变了）。实扫 ${ad.sampled} 件：\n${ad.sample.join('\n')}`).toBeGreaterThan(3);
+        { message: `后台带框件迟迟没载入齐（等 20s 仍 <3 即产品问题）：\n${ad.sample.join('\n')}`, timeout: 20000 })
+      .toBeGreaterThanOrEqual(3);
+    expect(ad.sampled, `后台带框的卡片/输入件没扫够 3 件 ⇒ 本锁已空转（选择器或类名口径变了）。实扫 ${ad.sampled} 件：\n${ad.sample.join('\n')}`).toBeGreaterThanOrEqual(3);
     expect(ad.stillWhite, `后台仍有 〇-O 遗留的纯白框线：\n${ad.stillWhite.join('\n')}`).toEqual([]);
     expect(FACE_STEPS, `后台首个带框件的面 ${ad.cardBg} 不在交付面色台阶档上`).toContain(ad.cardBg);
     await shot(page, 'p2d_gray_frames');
