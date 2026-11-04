@@ -223,11 +223,20 @@ test('移动端工作台：顶栏＋汉堡抽屉形态锁＋折叠页脚＋浮�
       .toBe(false);
 });
 
-// 移动端全站巡检：登录后依次访问自服务/工单/对照编辑各页 + 公开定价页，逐页断言无水平溢出
+// ★ 2026-11-04 体验批 §8 挂账闭合（第四波只改了注释、没动配置，这次真落地）：
+//   这一条过去靠全局 retries=1 兜住「首轮偶发超时」，而 passed with retries 正是"慢"伸出来的
+//   手指（AGENTS §三）。§2 的后台超时与慢列表治完后，本用例单独关掉重试 ⇒ 慢必须首轮现形。
+//   全局 playwright.config.ts 的 retries:1 仍留着兜**其余 103 条**的环境抖动（后端冷启、
+//   mock LLM 首请求慢、异步工单排队），与本用例无关；本用例的 90s 是显式预算，不是"再跑一次"。
+//   ⚠️ 内部用例刻意保持原缩进：把 28 行整体重排只会让 diff 淹没真实改动。
+test.describe('移动端全站巡检（本用例禁用重试，慢必须首轮现形）', () => {
+  test.describe.configure({ retries: 0 })
 test('移动端全站页面无横向溢出巡检', async ({ page }) => {
-  // ★ flaky 根治（2026-09-16 D4）：本用例需登录 + 逐条 networkidle 访问 6 个受保护路由
-  //   + 公开定价页，累计真实耗时贴近默认 30s 上限，故首轮偶发超时（靠 retries=1 兜过）。
-  //   显式抬高本用例超时到 90s，消除边界性 flaky（非产品缺陷，纯测试稳定性）。
+  // ★ 2026-11-04 体验批 §8 挂账：本用例需登录 + 逐条 networkidle 访问 6 个受保护路由
+  //   + 公开定价页，累计真实耗时贴近默认 30s 上限。§2 把后台超时与慢列表治完后，
+  //   不再靠 retries=1 重试掩盖慢（passed with retries 是真缺陷伸出的手指）：
+  //   本文件不再保留任何重试配置，慢必须在首轮现形、按真实耗时判。
+  //   显式抬高本用例超时到 90s 只放宽预算、不放宽判据（与重试是两件事）。
   test.setTimeout(90000);
   await login(page, 'home');
   // ★ 批3（2026-10-10）：S 档（≤640）桌面顶栏 .app-header 整块不渲染（与移动壳互斥），
@@ -249,6 +258,7 @@ test('移动端全站页面无横向溢出巡检', async ({ page }) => {
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 2),
       { message: '/pricing 不应横向溢出', timeout: 8000 })
     .toBe(false);
+});
 });
 
 // 未登录门面移动壳（PublicShell）：★ 2026-10-17 用户令「未登录的移动端也做一下适配，

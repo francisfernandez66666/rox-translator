@@ -33,6 +33,11 @@ export const SCAN_TESTS = [
   'src/i18n/noManualPromise.lock.test.ts',
   'src/i18n/hardcodedCjkGate.test.ts',
   'src/api/bizRespGate.test.ts',
+  // ★ 2026-11-03 合规闸批：本锁跨语言现读（前端渲染 vs 后端 engine 常量的措辞等值、
+  //   载荷两键与出栈键逐字核），是遍历型 ⇒ 必须吃 180s 预算而不是 30s。
+  //   由 vitestScanLayout.lock.test.ts 当场抓出来（首跑就红在这里，属"新锁没进调度名单"，
+  //   不是产品缺陷；这正是那条自指锁存在的理由）。
+  'src/api/ticketsComplianceLock.test.ts',
   'src/components/admin/doubleConfirmGate.test.ts',
   'src/vitestScanLayout.lock.test.ts', // 本锁自己就是遍历型的（自指腿：不在名单里就会拿 30s 预算去扫全仓）
 ]

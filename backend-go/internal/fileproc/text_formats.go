@@ -224,3 +224,59 @@ func AppendUntranslatedNotes(outPath string, items []UntranslatedItem) error {
 	}
 	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
 }
+
+// ComplianceItem 交付文档「合规跳过」那一节的一条记录（★ 2026-11-03 用户裁决②）。
+//
+// 与 UntranslatedItem 的区别是**成因不同**，所以必须分两节、不许合并：
+// 那一节答"想翻但没翻出来"（要等上游／抬预算／改判据），
+// 这一节答"平台按内容合规要求决定不翻"（处置是改措辞重提或核词包，完全不同）。
+// 混成一节＝把设计给客户看成缺陷，也是 §19「三档混成一味就无从对账」的同一条病。
+type ComplianceItem struct {
+	Line  int      // 1 起的行号（与「未译出内容」那一节同一口径）
+	Terms []string // 命中的词面（用户令：写明跳过的是哪个词）
+	Lead  string   // 处置说明那句话，**由调用方传入**（见下面那条 import 方向纪律）
+}
+
+// AppendComplianceNotes 在已写好的 .md 末尾追加「合规跳过」一节。
+//
+// ★ 措辞为什么由调用方传、本包一个字都不硬编码：
+//
+//	本包的 import 方向是 fileproc ← engine（AGENTS §21 那条"占位符常量都住 engine、
+//	禁止在 fileproc 或调用方抄字面量"）。处置话术的真值同样住在 engine，
+//	在这里再写一份就是第二个事实源——下一批改措辞只会改到其中一处。
+//
+// 空清单 ⇒ 什么都不写（连标题都不出），与 AppendUntranslatedNotes 同一条不变式。
+func AppendComplianceNotes(outPath string, items []ComplianceItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	b, err := os.ReadFile(outPath)
+	if err != nil {
+		return err
+	}
+	var sb strings.Builder
+	sb.Write(b)
+	if len(b) > 0 && b[len(b)-1] != '\n' {
+		sb.WriteString("\n") // 同上一条理由：粘在最后一句译文后面就不再是标题
+	}
+	fmt.Fprintf(&sb, "\n## 合规跳过（共 %d 处）\n", len(items))
+	for _, it := range items {
+		terms := "（词项未能取到，处置见审计留痕）"
+		if len(it.Terms) > 0 {
+			terms = "「" + strings.Join(it.Terms, "、") + "」"
+		}
+		// ★ 2026-11-03 复核批：旧形态在这里写了一句 `lead = "内容合规审核：该处未翻译"`
+		// 当兜底——那与上面那段注释直接矛盾（"本包一个字都不硬编码"），而且它是**第二份措辞**：
+		// 与 engine.SensitiveBlockedLeadForFile 只差"交付位已标记为已拦截"那半句。
+		// 两份措辞的坏法不是难看，而是下一批改话术只改到其中一处，于是同一节里出现两种说法
+		// （本仓页脚/手册入口反复漂移过的那一族）。
+		// ⇒ 空 Lead 就**不造句**：只留命中词项那一半，处置说明由调用方负责（它漏传 = 它那边有 bug，
+		// 交付物仍然完整、不因为一句附注把整份 md 打成不完整）。
+		if lead := strings.TrimSpace(it.Lead); lead != "" {
+			fmt.Fprintf(&sb, "- 第 %d 行：命中词项 %s，%s\n", it.Line, terms, lead)
+		} else {
+			fmt.Fprintf(&sb, "- 第 %d 行：命中词项 %s\n", it.Line, terms)
+		}
+	}
+	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
+}

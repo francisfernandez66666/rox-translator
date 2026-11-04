@@ -157,6 +157,53 @@ func (s *Store) TenantRemainTotal(tid int64) (grants, permanent int64, err error
 	return grants, permanent, nil
 }
 
+// TenantsRemainTotalMap 批量版「双部分可用余额」（★ 2026-11-04 体验批 A12）。
+// 返回 map[租户]⇒(未过期台账合计, 永久余额)；两把尺子与 TenantRemainTotal **同一条 SQL**
+// （只是把 `WHERE b.tenant_id=?` 换成 `IN (…)`），所以不存在"批量口径与单条口径分叉"。
+// 为什么值得单独一个口：增长扫描（api/watchdog.go runGrowthScan）每轮都要对**全部付费租户**
+// 各打一次 TenantRemainTotal——N 个租户＝N 次往返，而它跑在同一个进程里，
+// 客户那头的表现就是"扫描时段列表变慢"。
+// ⚠️ EnsureBalance 仍逐租户调用：那是"缺行才补一行"的自愈写，不是读；
+//
+//	把它折进一条批量 INSERT 要按方言分叉且会绕过既有失效钩，收益不值当。
+func (s *Store) TenantsRemainTotalMap(tids []int64) (grantsByTID, permanentByTID map[int64]int64, err error) {
+	grantsByTID = map[int64]int64{}
+	permanentByTID = map[int64]int64{}
+	if len(tids) == 0 {
+		return grantsByTID, permanentByTID, nil
+	}
+	for _, tid := range tids {
+		if e := s.EnsureBalance(tid); e != nil {
+			// 单个租户补行失败不拖垮整轮（与改造前"逐租户 err 就 continue"同方向）
+			continue
+		}
+	}
+	ph := placeholders(len(tids))
+	args := make([]interface{}, 0, len(tids)+1)
+	args = append(args, time.Now().UTC().Format(time.RFC3339))
+	for _, tid := range tids {
+		args = append(args, tid)
+	}
+	rows, err := db.Query(s.db, db.CurrentDialect(), `
+		SELECT b.tenant_id, b.balance,
+		       COALESCE((SELECT SUM(g."left") FROM quota_grants g
+		                 WHERE g.tenant_id=b.tenant_id AND g."left">0 AND g.expires_at>?),0)
+		FROM balance_accounts b WHERE b.tenant_id IN (`+ph+`)`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var tid, perm, grants int64
+		if err := rows.Scan(&tid, &perm, &grants); err != nil {
+			continue // 单行坏数据跳过（与 TenantRemainTotal 逐条口径同方向）
+		}
+		permanentByTID[tid] = perm
+		grantsByTID[tid] = grants
+	}
+	return grantsByTID, permanentByTID, nil
+}
+
 // EarliestActiveTrialExpiry 返回租户最早到期的未过期试用台账到期时间（任务2.5 到期提醒用）。
 // 返回 (expiresAt RFC3339, found)。仅统计 kind='trial' 且 left>0 且未过期；无则 found=false。
 func (s *Store) EarliestActiveTrialExpiry(tid int64) (string, bool) {

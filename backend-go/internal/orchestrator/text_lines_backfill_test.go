@@ -390,19 +390,25 @@ func TestKBLaneKeepsItsSourceLabel(t *testing.T) {
 }
 
 // TestSourceRosterIsClosed 名单锁：来源列是**对外契约**（管理台来源列、按来源统计、CSV 导出、
-// 开放 API 的 `sources` 字段、客户工单详情都读它），名单之外不许长出第五种值，
+// 开放 API 的 `sources` 字段、客户工单详情都读它），名单之外不许多出一个值，
 // 也不许再有裸字面量写点（裸字面量＝下一位改它时这条锁看不见）。
+//
+// ★ 2026-11-03 用户裁决①：名单加入第六档 `compliance_skipped`（整语种按内容合规要求未翻译）。
+// 加档的理由与"为什么不复用既有档"写在 workflow.go 那条常量注释上；
+// 这里同步登记是**这条锁的用途本身**——它就是为了保证"加一档的人必须同批把消费面跟齐"：
+// 12 语种来源列文案、开放 API 规范、内置文档中英两段、SDK 类型，一处没跟齐就是客户代码在 switch 一个没登记过的值。
 //
 // 射程只到 **orchestrator 包内**：`internal/engine` 那份 `"model"`/`"kb"` 是它自己的 map
 // （engine/text.go 的 allSrc、TranslateLangsInto 的回填），与工单载荷那一列不是同一个事实。
 func TestSourceRosterIsClosed(t *testing.T) {
-	// ① 四个值逐字钉住（改名式破坏＝改了常量却同步改了消费方的期望，这里当场红）。
+	// ① 六个值逐字钉住（改名式破坏＝改了常量却同步改了消费方的期望，这里当场红）。
 	want := map[string]string{
 		"SourceKB":                SourceKB,
 		"SourceModel":             SourceModel,
 		"SourceModelWithFallback": SourceModelWithFallback,
 		"SourceUpstreamFailed":    SourceUpstreamFailed,
 		"SourceApproved":          SourceApproved,
+		"SourceComplianceSkipped": SourceComplianceSkipped,
 	}
 	got := map[string]string{
 		"SourceKB":                "kb",
@@ -410,6 +416,7 @@ func TestSourceRosterIsClosed(t *testing.T) {
 		"SourceModelWithFallback": "model_with_source_fallback",
 		"SourceUpstreamFailed":    "upstream_failed",
 		"SourceApproved":          "approved",
+		"SourceComplianceSkipped": "compliance_skipped",
 	}
 	for name, v := range want {
 		if v != got[name] {

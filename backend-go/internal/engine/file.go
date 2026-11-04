@@ -146,14 +146,14 @@ type FileTranslateData struct {
 // ⚠️ 旧档 `"xlsx"`（srt/vtt/json/yaml/yml 以双语对照表为唯一交付形态）**已于 2026-10-30 退役**：
 // 这五种纯文本容器同时撤出准入（fileproc.TranslateFormatOrder），所以这里不再有那一档，
 // `isComparisonTableFormat`／`fileproc.WriteComparisonXlsx` 一起退役。
-// 等价锁＝writeback_delivery_test.go / file_gate_test.go 拿 TranslateFormatOrder **全量**逐条比对——
+// 等价锁＝file_gate_test.go 拿 TranslateFormatOrder **全量**逐条比对——
 // 清单里还剩一个格式而这里判不出对应档，那条锁就红（两份列表再漂一次当场抓到）。
 func writebackDelivery(ext string) string {
 	switch {
 	// ★ 媒体两档**委托** fileproc 的集合判定，不在这里再抄一份扩展名列表
 	//   （2026-10-16：这两份列表漂过——engine 那份加了 .heic/opus，fileproc 那份没加，
 	//   表现是"上传口放行、这里判 inplace"，客户拿到一个走了 Office 回写分支的图片）。
-	//   等价性由 writeback_delivery_test.go 拿 TranslateFormatOrder 全量逐条钉住。
+	//   等价性由 file_gate_test.go 拿 TranslateFormatOrder 全量逐条钉住。
 	case fileproc.IsImageFormat(ext):
 		return "image"
 	case fileproc.IsAudioFormat(ext):
@@ -920,7 +920,27 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 	// ★ S8 敏感词兑底闸（输入侧·段级）：命中段不送 KB/模型（上游零暴露），
 	// 各语言直接预填占位交付；其余段照常翻译。
-	blockedSeg := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
+	blockedSeg, blockedTerms := e.sensitiveBlockedSegments(ctx, texts, append(append([]string{}, kbLangs...), directOther...), addTrans)
+
+	// ★★ 2026-11-03 用户裁决②「md 文件里写明跳过的禁词」：被拦的段连同**命中词面**一起记下来，
+	// 等 .md 落盘后追加「合规跳过」一节逐段点名。
+	// 行号口径与「未译出内容」那一节**同源**（按 texts 顺序 1 起，见 untranslatedNotesFromSegments）——
+	// 两节各数一次行号，客户就会拿到两份互相指不到同一行的清单。
+	// ⚠️ 词面**取自闸门同一次判定**（blockedTerms），这里绝不 re-跑 `Hits`：
+	//    重复判定是第二把尺子（除白烧之外，它还会给 blockedSeg 添一个引用点，
+	//    而那个引用数正是 file_writepoints_guard_test.go 抓「数字段重新进上游」的判据本体）。
+	// Lead 用的是**文件通道那一句**（交付位＝占位符），不是工单通道那句"原文已按原样保留"——
+	// 两通道交付形态不同，共用一句会让文档里出现一句与成品不符的话。
+	var complianceSegs []fileproc.ComplianceItem
+	for i, t := range texts {
+		terms := blockedTerms[t]
+		if len(terms) == 0 {
+			continue
+		}
+		complianceSegs = append(complianceSegs, fileproc.ComplianceItem{
+			Line: i + 1, Terms: terms, Lead: SensitiveBlockedLeadForFile,
+		})
+	}
 
 	// ★ 2026-10-17 第二批：**无需翻译**段（数字/货币/日期/时间/符号）预填原文交付。
 	// 与 blockedSeg 同属「已预填、不进上游、不进补漏」，但交付值是原文本身而不是占位符
@@ -1492,12 +1512,27 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	// writeLangMD 写纯文案 .md（含未译出点名）并立刻发 kind=md 事件——「md 先行」的唯一写点。
 	// 任何格式分支都必须先调它、再产出 original；重写同一语言会重复追加「未译出」那一节，
 	// 所以调用方一律先看 mdPaths[lc]。
+	appendComplianceNotes := func(lc, p string) {
+		if len(complianceSegs) == 0 {
+			return
+		}
+		// ★ 2026-11-03 用户裁决②：交付文档必须逐段点名"哪些词被合规跳过"。
+		// 与「未译出内容」并列而**不合并**：那一节答"想翻没翻出来"，这一节答"平台按合规决定不翻"，
+		// 两族的处置动作不同（等上游/抬预算 vs 改措辞重提/核词包），混在一起就无从对账（§19 同条）。
+		if cerr := fileproc.AppendComplianceNotes(p, complianceSegs); cerr != nil {
+			observability.Warn(ctx, "交付文档「合规跳过」一节追加失败", "lang", lc, "error", cerr.Error())
+			gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「合规跳过」一节没能写入（%s）；本次未能点名具体哪几段按合规跳过", config.LangNames[lc], cerr.Error()))
+			return
+		}
+		gateWarnings = append(gateWarnings, fmt.Sprintf("%s 有 %d 段按内容合规要求未翻译，已在交付文档文末逐段点名词项", config.LangNames[lc], len(complianceSegs)))
+	}
 	writeLangMD := func(lc string, tr map[string]string, notes []fileproc.UntranslatedItem) (string, error) {
 		p, perr := writeTextMd(lc, tr)
 		if perr != nil {
 			return "", perr
 		}
 		appendUntranslatedNotes(lc, p, notes)
+		appendComplianceNotes(lc, p)
 		mdPaths[lc] = p
 		artStage.emitOne(ArtifactKindMD, lc, p, false, false)
 		return p, nil
@@ -1529,6 +1564,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			//   纯文案 .md 就是这一语言的主交付物，未译出的段必须在文末点名。
 			//   ★ 2026-10-30 组5：改用统一助手（口径与图片/Office 各口一致）。
 			appendUntranslatedNotes(lc, outPath, untranslatedNotesFromSegments(texts, tr))
+			appendComplianceNotes(lc, outPath) // ★ 2026-11-03 裁决②：纯文案主交付物同样必须点名词项
 			filesOut = append(filesOut, outPath)
 			langArtifact[lc] = outPath // 纯文案产物即该语言主交付物（.md 可直读比对指纹）
 			// ★ 两段式：纯文案模式没有「原格式」这一件，md 就是主产物 ⇒ primary=1，
@@ -1671,6 +1707,8 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					//   只留一行日志就等于把交付面缺东西写成"一切正常"。
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付文档的「未译出内容」一节没能写入（%s）；本次未能点名具体哪几行没译出", config.LangNames[lc], uerr.Error()))
 				}
+				// ★ 2026-11-03 裁决②：图片链的译文文档同样是主阅读面，被合规跳过的词项必须点名。
+				appendComplianceNotes(lc, imgPath)
 				// ★ 两段式阶段①：图片的 md 必须在这里发——它的内容依赖**补译之后**的 tr（R-5：
 				//   图片链的未译出清单走 retryImageSegments 的未译段，不填 UntranslatedSegments），
 				//   但顺序仍在译后图（阶段②）之前，md 先行的语义不变。
@@ -1739,6 +1777,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				// ★ 两段式阶段①：md 先行（配音可能要等 TTS 子进程几十秒，那段时间客户先拿到可读的译文）。
 				//   未译出的行同样点名（B18）：音频链的 md 也是主阅读面。
 				appendUntranslatedNotes(lc, audPath, untranslatedNotesFromSegments(texts, tr))
+				appendComplianceNotes(lc, audPath) // ★ 2026-11-03 裁决②：音频链的 md 也是主阅读面
 				mdPaths[lc] = audPath
 				artStage.emitOne(ArtifactKindMD, lc, audPath, false, false)
 				filesOut = append(filesOut, audPath)
@@ -1794,6 +1833,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if ext == ".md" {
 				if werr := fileproc.ApplyAlignedText(".md", filePath, outPath, tr); werr == nil {
 					appendUntranslatedNotes(lc, outPath, notes)
+					appendComplianceNotes(lc, outPath) // ★ 2026-11-03 裁决②：源文件即 .md 的交付口同样要点名
 					mdPaths[lc] = outPath
 					mdIsOriginal = true
 					artStage.emitOne(ArtifactKindMD, lc, outPath, false, false)
@@ -1911,6 +1951,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if mdPaths[lc] == "" && ext == ".md" {
 				// 阶段① 的先行写回失败过、这里重试成功：补发 md（同一路径 ⇒ 服务层收敛成一行）。
 				appendUntranslatedNotes(lc, outPath, notes)
+				appendComplianceNotes(lc, outPath) // ★ 2026-11-03 裁决②：补发口与先行口同一把尺子
 				mdPaths[lc] = outPath
 				artStage.emitOne(ArtifactKindMD, lc, outPath, false, false)
 			}

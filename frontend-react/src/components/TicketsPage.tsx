@@ -264,6 +264,57 @@ function UpstreamNoticeBlock({ q, lang }: { q?: TicketQuality; lang: string }) {
   )
 }
 
+// ============ ★ 2026-11-03 合规闸批：详情面「内容合规跳过」诚实块 ============
+// 背景：工单通道接入内容合规闸之后，命中禁词的那**处**按用户裁决**跳过翻译**（不是整单拒、
+//   不是留白），交付位＝原文。过去这件事只活在审计与日志里，客户在详情页看到的是"完成了"，
+//   拿到文档才发现某一句没翻——那是把设计给客户看成缺陷（AGENTS §19 族二那条
+//   「把不是缺陷的事给客户看」的反面：**该说的话一个字都不许省**）。
+// 四条渲染纪律：
+//   ① **空值口径与上游块同源**：两个键没跳过时整条不出现（Go 侧 omitempty）⇒ 整块不渲染，
+//      **禁止**凭空造一句"0 处跳过"的空态话（那会让每张干净工单都长出一节噪音）；
+//   ② **处置说明只渲染接口下发的 `lead`**，前端**一个字都不抄**：服务端 `.md` 尾节与这里
+//      是同一句话的两个渲染面，措辞的真值住在 `engine.SensitiveSkippedLead`，
+//      在 TS 里再写一份＝第二个事实源（§一·5 那条"两处面是同一句话"的裁决手法）。
+//      负向锁：本文件不许出现那句中文（配正向对照＝`item.lead` 真被渲染出来）；
+//   ③ **词面必须点名**（用户裁决②）：输入侧带 `terms` 就逐条列出来，输出侧刻意不回显
+//      （`terms` 缺省），此时只报行号——不为凑格式去猜一个词出来；
+//   ④ **只报事实、零承诺**：本仓无人工复核环节（§19 用户明令），措辞一律取词典真值。
+// 视觉零新增：复用上游块同款标题/行内样式与 Icon n="alert"。
+function ComplianceNoticeBlock({ q, lang }: { q?: TicketQuality; lang: string }) {
+  const skippedMap = q?.compliance_skipped || {}
+  const items = q?.compliance_items || []
+  const langs = Object.keys(skippedMap).filter((lc) => (skippedMap[lc] || 0) > 0)
+  // 两半任一非空即渲染：`compliance_skipped` 是计数真值，`compliance_items` 是逐条素材。
+  // 只读计数会在"计数有而明细缺"的历史单上整块消失（那正是最该说清的一单）。
+  if (!(langs.length > 0) && !(items.length > 0)) return null
+  return (
+    <div data-testid="tk-compliance" style={{ marginTop: 12, borderTop: '1px solid var(--npz-line)', paddingTop: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>{t('tk.complianceTitle')}</div>
+      {langs.map((lc) => (
+        <div key={lc} style={{ fontSize: 13.5, color: 'var(--lc-text-2)', lineHeight: 1.5 }}>
+          {tpl('tk.complianceLangFmt', { lang: langLabel(lc, lang), n: skippedMap[lc] || 0 })}
+        </div>
+      ))}
+      {items.map((it, i) => (
+        <div key={`${it.lang}-${it.line}-${it.side}-${i}`} data-testid="tk-compliance-item" style={{ marginTop: 4 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 600, color: 'var(--lc-text-1)' }}>
+            {tpl('tk.complianceItemLine', { lang: langLabel(it.lang, lang), line: it.line })}
+            {it.terms && it.terms.length > 0
+              ? ' · ' + tpl('tk.complianceItemTerms', { terms: it.terms.join('、') })
+              : ''}
+          </div>
+          {/* 处置说明＝接口原文（唯一事实源），前端不许改写、不许补承诺句 */}
+          {it.lead ? (
+            <div style={{ fontSize: 13.5, color: 'var(--lc-warn, #D29922)', lineHeight: 1.5 }}>
+              <Icon n="alert" /> {it.lead}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ============ ★ 任务 #43（2026-09-22）：自绘弹窗无障碍收口 ============
 // 背景：全量 UAT §4.2 实测「a11y 仅剩 1 处真缺口」即本页两处 tk-overlay 自绘弹窗——
 //   既没有 role/aria-modal（读屏不知道进入模态），也不能 Esc 关闭、Tab 会跑到弹窗背后的列表按钮上、
@@ -417,6 +468,9 @@ export default function TicketsPage() {
   }, [cap.ocr, cap.asr, delivery])
 
   const [tickets, setTickets] = useState<Ticket[]>([])
+  // ★ 2026-11-04 体验批 A5：取数失败时不许只留上一轮数据或通用空表——
+  //   这里存一句「为什么空」的原因，配合 data-testid="tk-list-load-error" 出声。
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [detail, setDetail] = useState<TicketResp | null>(null)
   const [downloadingId, setDownloadingId] = useState<number | null>(null)
   // ★ 2026-10-19 §五#2：下载字节进度（null＝不在下载）。total=0 表示服务端没给 Content-Length。
@@ -432,12 +486,33 @@ export default function TicketsPage() {
   // 回退项：LangChips 允许把已选语言删到 0 个，这里兜住，建单不至于带一个空目标语言串
   const langsJoined = langs.length ? langs.join(',') : 'en'
 
+  // 列表是否已被档位封顶（★ A5：has_more 由后端按"本页打满生效档"给，前端不拿 total 自己算）
+  const [listCapped, setListCapped] = useState<{ more: boolean; limit: number; total: number }>({ more: false, limit: 0, total: 0 })
+
   // 拉取我的工单列表
+  // ★ 2026-11-04 体验批 A5：旧写法 `try { ... } catch { /* 忽略 */ }` 把失败吞成
+  //   "一张没有提示的空列表"——工单页最常用的就是这一屏，用户分不清"我还没建单"与"后端没答上来"
+  //   （后端 F-64② 已把失败改成 500，前端这半边必须接住，否则那条诚实化只到 HTTP 层为止）。
+  //   现走 runGuarded：失败弹后端原文，成功才覆盖列表与封顶读数。
   const load = useCallback(async () => {
-    try {
-      const r = await myTickets()
-      if (r.success) setTickets(r.tickets || [])
-    } catch { /* 忽略 */ }
+    const r = await runGuarded(() => myTickets(), {
+      // ★ A5：runGuarded 默认那声 toast **不许吞**——onError 里原样复刻一次（同一句原文），
+      //   同时把列表清空并落到「带原因的空态」；成功路径再清掉空态。
+      onError: (msg) => {
+        toastError(msg)
+        setTickets([])
+        setLoadError(msg)
+      },
+    })
+    if (r?.success) {
+      setTickets(r.tickets || [])
+      setListCapped({ more: !!r.has_more, limit: Number(r.limit ?? 0), total: Number(r.total ?? 0) })
+      setLoadError(null)
+    } else if (r && !r.success) {
+      // 业务失败信封（HTTP 200 + success:false）同样不许留上一轮数据
+      setTickets([])
+      setLoadError((r as { message?: string }).message || t('tk.edLoadFail'))
+    }
   }, [])
 
   // ★ 保持最新 tickets 供定时器读取（不随 load 重建，避免 effect 循环触发高频请求）
@@ -661,6 +736,19 @@ export default function TicketsPage() {
     finally { setDownloadingId(null); setDlProgress(null) }
   }
 
+  // ★ 2026-11-04 §5.2/§5.4-B2：行内取**单件产物**（原格式那一颗钮走这里，产物 id 来自列表的 artifact_summary）。
+  // 与 download / downloadText 共用 downloadingId 那把全局单飞锁——三条下载路径互斥，
+  // 不会同时拉两份 blob，也不会出现"整包还在流、行内单件又开一路"的并发下载。
+  async function rowArtifactDl(row: Ticket, aid: number) {
+    if (downloadingId !== null || !aid) return
+    setDownloadingId(row.id)
+    setDlProgress(null)
+    try {
+      await ticketArtifactDownload(row.id, aid)
+    } catch (e: any) { toastError(downloadErrMsg(e)) }
+    finally { setDownloadingId(null); setDlProgress(null) }
+  }
+
   // 展开/收起步骤进度气泡
   // 点击行展开详情并启动轮询，再次点击或同一条已展开则收起
   async function toggleDetail(row: Ticket) {
@@ -864,6 +952,21 @@ export default function TicketsPage() {
           <h3 style={{ margin: 0 }}>{t('tk.myTickets')}</h3>
           <Button size="sm" variant="secondary" onClick={load} aria-label={t('common.refresh')}><Icon n="refresh" /></Button>
         </div>
+        {/* ★ A5（2026-11-04）封顶必须出声：档位是服务端给的（缺省 200），
+            不说就等于把"还有更早的单"画成"这就是全部"（AGENTS「空态不许伪装成检查过」同族）。
+            has_more 为假时这一行不出现——不给正常情况加噪音。 */}
+        {listCapped.more && (
+          <div data-testid="tk-list-capped" style={{ fontSize: 13, color: 'var(--lc-text-2)', marginBottom: 8 }}>
+            {tpl('tk.listCapped', { limit: listCapped.limit, total: listCapped.total })}
+          </div>
+        )}
+        {/* ★ A5（2026-11-04）取数失败不许伪装成「你还没有工单」：清空列表 + 一行原因空态。
+            runGuarded 的 toast 仍在（load 的 onError 里复刻），这里只补界面那一半。 */}
+        {loadError && (
+          <div data-testid="tk-list-load-error" style={{ fontSize: 13, color: 'var(--lc-danger, #c5221f)', marginBottom: 8 }}>
+            {tpl('tk.edLoadFailErr', { err: loadError })}
+          </div>
+        )}
         <DataTable<Ticket>
           className="tk-table" /* ★ 批3：S 档表格转卡片的钩子类（CSS_TK 的 @media 分支消费） */
           rowKey={(row) => String(row.id)}
@@ -900,6 +1003,43 @@ export default function TicketsPage() {
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                   {row.status === 'draft' && (
                     <Link onClick={() => run(row)}>{t('tk.run')}</Link>
+                  )}
+                  {/* ★ 2026-11-04 §5.2 行内两颗下载钮（用户报的第 5 条：别把 md 藏在「进度」里）。
+                      顺序即判据：**译文 md 在前、原格式在后**——md 是唯一"全链必产"的一件，
+                      先看文字再看排版件是用户要的那个提醒。这条顺序由
+                      TicketsPage.rowArtifacts.lock.test.ts 机械守，不靠 review 记着。
+                      ⚠️ 这里**有意破一次**上面注释写的"该状态才露这个钮"纪律：
+                      进行中态不是"没有这个功能"，而是"时机未到"——所以给**带原因的灰态**而不是缺席，
+                      也不给一颗点了必回 409 的钮（服务端那道"未完成不给取产物"的 409 保留，用户已拍板完成态才可下）。 */}
+                  {row.status === 'completed' && (
+                    <span style={{ opacity: downloadingId === row.id ? 0.5 : undefined }}>
+                      <Link data-testid="tk-row-dl-md" onClick={() => downloadText(row)}>
+                        {downloadingId === row.id ? t('tk.submitting') : t('tk.downloadMdRow')}
+                      </Link>
+                    </span>
+                  )}
+                  {row.status === 'completed' && (
+                    row.artifact_summary?.original?.id
+                      ? (
+                        <span style={{ opacity: downloadingId === row.id ? 0.5 : undefined }}>
+                          <Link data-testid="tk-row-dl-original"
+                            onClick={() => rowArtifactDl(row, Number(row.artifact_summary?.original?.id))}>
+                            {t('tk.downloadOriginalRow')}
+                          </Link>
+                        </span>
+                      ) : (
+                        // 缺席必须点名："原格式没生成"与"这个界面没有这颗钮"要分得开
+                        // （AGENTS §19「回落原文＋点名」的交付面版本）。不删钮、不静默留白。
+                        <span data-testid="tk-row-original-missing" style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>
+                          {t('tk.originalRowMissing')}
+                        </span>
+                      )
+                  )}
+                  {['queued', 'in_progress'].includes(row.status) && (
+                    // 灰态那一档**不含任何可点形状**（锁 L3 判这一条：灰态分支里不许出现 dl 调用）
+                    <span data-testid="tk-row-dl-waiting" style={{ fontSize: 13, color: 'var(--lc-text-3)' }}>
+                      {t('tk.mdAfterDone')}
+                    </span>
                   )}
                   {row.status === 'completed' && (
                     <span style={{ opacity: downloadingId === row.id ? 0.5 : undefined }}>
@@ -1042,6 +1182,8 @@ export default function TicketsPage() {
         )}
         {/* ★ 2026-10-26 九-1：上游那一族的客户面诚实块（逐语种、三档各一句；读不到键＝整块不渲染） */}
         <UpstreamNoticeBlock q={detail?.quality} lang={lang} />
+        {/* ★ 2026-11-03 合规闸批：命中禁词被跳过的那几处（处置说明取接口原文；读不到键＝整块不渲染） */}
+        <ComplianceNoticeBlock q={detail?.quality} lang={lang} />
         {/* ★ 改造 5：详情抽屉「质检报告」区块（确定性 QA 汇总 + Issues 明细 + 各语言评估分） */}
         <QualityBlock q={detail?.quality} lang={lang} flagged={detail?.ticket?.quality_flagged === 1} />
         {/* ★ 工单双模式（2026-09-13）：还原模式已完成文件工单提供「仅下载译文文案(.md)」次级入口

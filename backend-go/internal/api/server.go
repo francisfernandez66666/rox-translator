@@ -1004,6 +1004,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   绝不出路径、权重文件名或体积。识别/合并不就绪时产品行为是「友好降级」而非故障：
 		//   图片/扫描件/音频返回「节点未启用识别」，TTS 缺位只少语音不少译文（译文第一）。
 		"ocr_ready": fileproc.OcrAvailable(),
+		// ★ 2026-11-03 报告翻案批：第三个读数＝常驻服务的**预热态**（off/cold/loaded/busy/unknown）。
+		//   它答的是"这一单会不会慢"，与 ocr_ready 答的"这台能不能干 OCR 这活"是**两个问题**；
+		//   把两者合成一个词是本轮复核里那条**危险修法**（把 loaded 当就绪位 ⇒ 冷启动当天
+		//   OCR 入口在客户界面上整颗消失，而能力完全可用）。
+		//   ⇒ 本词**不许**被入口渲染消费（判据＝api/health_ocr_warm_gate_test.go）。
+		//   同 #42 口径：只出状态词，绝不出 socket 路径、权重文件名或主机名。
+		"ocr_warm": fileproc.OcrWarmState(),
 		// ★ 2026-10-28 主方案 §8.8：OCR AI 判定补偿的**状态词**（off/degraded/ok）。
 		//   off＝env 主动关（正常态）；degraded＝配了但取不到模型（该有人去修）；两者不许合成一个词。
 		//   同 #42 口径：只出状态词，不出 base/model/Key。

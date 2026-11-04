@@ -46,6 +46,61 @@ function shortDiffJSON(s: string): string {
   }
 }
 
+// ==================== 三处 CSV 导出的唯一入口（★ 2026-11-04 体验批 A2） ====================
+// 背景：exportAuditCSV / AuditP.exportCsv / exportUsageCSV 原先各自裸 XHR / 裸 fetch，
+//   三条通道零超时保护、失败各弹各的，任一挂死都静默（#42「失败必须有可见出口」被架空）。
+//   现收成一个入口：统一鉴权头、401 收口、blob 下载触发，并给 XHR 挂 timeout 看门狗 +
+//   全程 runGuarded 出声。§2.10「导出类不设硬闸」指不套 request() 的 30/45s 档
+//   （导出走浏览器下载、可能几分钟），下面 5 分钟看门狗只防「连接挂死永不回包」，不是请求硬闸。
+
+/** 导出看门狗时长（5 分钟）：只防无限挂起，不是 §2.10 的 30/45s 请求硬闸 */
+const CSV_EXPORT_TIMEOUT_MS = 300_000
+
+/** 共用导出入参：完整下载地址、落盘文件名、按状态码取词的失败提示语 */
+interface CsvExportOpts {
+  url: string
+  filename: string
+  failMsg: (status: number | null) => string
+}
+
+/** 触发浏览器下载：用临时 <a> 把 blob 落盘并回收 objectURL（三处原先各抄一遍） */
+function triggerCsvDownload(blob: Blob, filename: string) {
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(a.href)
+}
+
+/** 三处 CSV 导出的唯一入口：XHR 取 blob → 触发下载；401/非 200/超时/网络错一律经 runGuarded 出声，
+ *  绝不静默（保住 #42）。不设 30/45s 硬闸，只留上面的看门狗与可取消的 XHR 形态。 */
+function exportCsvFile(opts: CsvExportOpts) {
+  void runGuarded(() => new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', opts.url, true)
+    const tk = getAuthToken()
+    if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
+    const tid = getActiveTenantId()
+    if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
+    xhr.responseType = 'blob'
+    xhr.timeout = CSV_EXPORT_TIMEOUT_MS
+    // 失败造一句可读 Error 交给 runGuarded 弹（带状态码便于排查；超时/网络错没有状态码）。
+    const fail = (status: number | null) => reject(new Error(opts.failMsg(status)))
+    xhr.onload = () => {
+      // ★ #42：裸 XHR 不经 request()，401 必须显式交 core 清登录态；此后 resolve 不再弹二次。
+      if (xhr.status === 401) { handleUnauthorized(opts.url); resolve(); return }
+      if (xhr.status !== 200) { fail(xhr.status); return }
+      triggerCsvDownload(xhr.response as Blob, opts.filename)
+      resolve()
+    }
+    xhr.ontimeout = () => fail(null)
+    xhr.onerror = () => fail(null)
+    xhr.send()
+  }))
+}
+
 // ==================== 总览面板（Vue Dashboard/Overview.vue） ====================
 
 /** 指标卡片组件：仅做展示，value 可直接为 React 节点 */
@@ -66,51 +121,55 @@ export default function Overview() {
   const [health, setHealth] = useState<Any | null>(null)
   // 审计日志列表
   const [audit, setAudit] = useState<Any[]>([])
+  // ★ 2026-11-04 超时批 A2：审计区**默认收起、展开才取数**。
+  // 理由：概览首屏真正要回答的是"系统活着吗、余额还剩多少"，而"最近谁改过配置"是第二屏问题；
+  // 它在改造前是首屏必发的一条**无租户限定、按时间全表排序**的查询（平台全量视图），
+  // 与健康指标串在一起时就是把"进后台老超时"推过 30 秒线的那半条腿。
+  const [auditOpen, setAuditOpen] = useState(false)
   // 总览内部分屏：系统看板（运行状态+审计日志）/ 用量看板（个人+系统用量）
   const [ovTab, setOvTab] = useState<'system' | 'usage'>('system')
 
-  /** 拉取 health 与 audit 数据；非超管清空 audit
+  /** 拉取 health（以及**已展开时**的 audit）；非超管清空 audit
    *  ★ #42（前端坏味道：数据加载的空 catch）：两处 catch 吞错后，概览页把「后端挂了」渲染成
    *  「健康指标全空 + 审计日志零条」，超管会误判成系统无事发生；改走 runGuarded 弹后端原文
-   *  （不新增 i18n 键），成功路径与旧实现一致。 */
+   *  （不新增 i18n 键），成功路径与旧实现一致。**A2 之后这一条不许回退成静默**——懒取只是把
+   *  请求推到展开那一刻，失败仍然必须出声。
+   *  ★★ A1：多条请求**并发**发。旧写法是 await health 再 await audit，两条共用同一段时间预算——
+   *  慢的那条把另一条也拖过 30 秒，屏幕上就成了"进后台老报超时"，而实际只有一条腿慢。 */
   const loadDash = useCallback(async () => {
-    const h = await runGuarded(() => systemHealth())
-    if (h?.success) setHealth(((h as unknown as Any).health as Any) ?? null)
-    if (isSuper || myLevel >= 3) {
-      const a = await runGuarded(() => systemAudit())
-      if (a?.success) setAudit(((a as unknown as Any).logs as Any[]) || [])
-    } else {
+    const jobs: Promise<unknown>[] = [
+      runGuarded(() => systemHealth()).then((h) => {
+        if (h?.success) setHealth(((h as unknown as Any).health as Any) ?? null)
+      }),
+    ]
+    if (auditOpen && (isSuper || myLevel >= 3)) {
+      jobs.push(runGuarded(() => systemAudit()).then((a) => {
+        if (a?.success) setAudit(((a as unknown as Any).logs as Any[]) || [])
+      }))
+    } else if (!auditOpen) {
+      // 收起态：把上一租户/上一轮的读数清掉，别让"展开后先看到旧数据再变新"变成两种读数同屏
       setAudit([])
     }
-  }, [isSuper])
+    await Promise.all(jobs)
+    // ★ 依赖补 myLevel / activeTenantId / auditOpen：旧写法 deps 只有 [isSuper]，而函数体读了 myLevel
+    //  ⇒ closure 里是旧值；"切租户要重发"过去是靠**第二个 useEffect**凑出来的（见下）。
+  }, [isSuper, myLevel, activeTenantId, auditOpen])
 
   // 初始化加载与租户切换时重新加载
+  // ★★ 2026-11-04 超时批 A1：**只留一个 useEffect**。旧形态这里有两个（deps 分别是
+  //  [loadDash] 与 [activeTenantId, loadDash]），挂载那一刻**两个都会各跑一次**
+  //  ⇒ 系统健康与全平台审计各发两遍。审计那条是"不带租户限定＋按时间全表排序＋拖前后值大字段"
+  //  的查询（病灶见 store/audit.go 与 indexperf 迁移），翻倍直接把首屏推过 30 秒超时线——
+  //  用户报的"进后台老超时"的放大系数就在这一步。切租户仍需重发，语义由上面 deps 承担。
   useEffect(() => { void loadDash() }, [loadDash])
-  useEffect(() => { void loadDash() }, [activeTenantId, loadDash])
 
-  /** 导出审计 CSV：XHR 下载 blob，手动带 token 与 tenant header */
+  /** 导出审计 CSV：改走共用入口 exportCsvFile（鉴权/401 收口/超时兜底/失败出声都在那里） */
   function exportAuditCSV() {
-    const url = `${API_BASE}/api/system/audit?export=csv`
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', url, true)
-    const tk = getAuthToken()
-    if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
-    const tid = getActiveTenantId()
-    if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
-    xhr.responseType = 'blob'
-    xhr.onload = () => {
-      // ★ #42（§4.2-2 组件侧补漏）：裸 XHR 不经 request()，401 必须显式交给 core 收口，
-      //   否则登录过期时只弹一句「导出失败」，人还留在后台（同 AuditP.exportCsv 的口径）。
-      if (xhr.status === 401) { handleUnauthorized(url); return }
-      if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
-      // 创建临时链接触发下载
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(xhr.response)
-      a.download = `audit_${new Date().toISOString().slice(0, 10)}.csv`
-      a.click()
-      URL.revokeObjectURL(a.href)
-    }
-    xhr.send()
+    exportCsvFile({
+      url: `${API_BASE}/api/system/audit?export=csv`,
+      filename: `audit_${new Date().toISOString().slice(0, 10)}.csv`,
+      failMsg: () => t('overview.exportFailed'),
+    })
   }
 
   // ★ F-20/F-39（2026-09-25 UAT 修复批G）：原 openMetrics()（window.open(`${API_BASE}/metrics`)）
@@ -154,23 +213,43 @@ export default function Overview() {
       )}
 
       {/* 审计日志表格：超管看全平台，企业租户管理员看本租户（后端按 X-Tenant-ID 自动隔离） */}
-      {audit.length > 0 && (
+      {/* ★ A2（2026-11-04）审计区改成「点开设」：收起时**一个请求都不发**（见 loadDash 的 auditOpen 分支）。
+          非超管/等级<3 这一族仍然整块不出现（判据没放宽，只是把取数时机挪到展开那一刻）。 */}
+      {(isSuper || myLevel >= 3) && (
         <div style={{ marginTop: 16 }}>
-          <h3 style={{ fontSize: 16 }}>{t('overview.recentAudit')}</h3>
-          <DataTable<any> rowKey={(row) => String(row.id)} rows={audit as never}
-            columns={[
-              { key: 'created_at', title: t('overview.colTime'), width: 165, render: (row) => fmtTime(row.created_at) },
-              { key: 'tenant', title: t('audit.tenant'), width: 130, render: (row) => (
-                <>{row.tenant_name || '—'}{row.username && <span style={{ color: 'var(--adm-faint)' }}> @{row.username}</span>}</>
-              ) },
-              { key: 'action', title: t('overview.colAction'), width: 150, render: (row) => auditActionLabel(row.action) },
-              { key: 'resource', title: t('overview.colResource'), width: 110 },
-              { key: 'detail', title: t('overview.colDetail'), dim: true, render: (row) => String(row.detail ?? '—') },
-              { key: 'change', title: t('overview.colChange'), dim: true, render: (row) =>
-                (row.before_val && row.after_val)
-                  ? tpl('overview.diffOldNew', { old: shortDiffJSON(row.before_val), new: shortDiffJSON(row.after_val) })
-                  : '—' },
-            ]}  />
+          <button
+            type="button"
+            className="lc-btn"
+            data-testid="overview-audit-toggle"
+            aria-expanded={auditOpen}
+            onClick={() => setAuditOpen((v) => !v)}
+          >
+            {t('overview.recentAudit')}
+          </button>
+          {auditOpen && (
+            audit.length > 0 ? (
+              <DataTable<any> rowKey={(row) => String(row.id)} rows={audit as never}
+                columns={[
+                  { key: 'created_at', title: t('overview.colTime'), width: 165, render: (row) => fmtTime(row.created_at) },
+                  { key: 'tenant', title: t('audit.tenant'), width: 130, render: (row) => (
+                    <>{row.tenant_name || '—'}{row.username && <span style={{ color: 'var(--adm-faint)' }}> @{row.username}</span>}</>
+                  ) },
+                  { key: 'action', title: t('overview.colAction'), width: 150, render: (row) => auditActionLabel(row.action) },
+                  { key: 'resource', title: t('overview.colResource'), width: 110 },
+                  { key: 'detail', title: t('overview.colDetail'), dim: true, render: (row) => String(row.detail ?? '—') },
+                  { key: 'change', title: t('overview.colChange'), dim: true, render: (row) =>
+                    (row.before_val && row.after_val)
+                      ? tpl('overview.diffOldNew', { old: shortDiffJSON(row.before_val), new: shortDiffJSON(row.after_val) })
+                      : '—' },
+                ]}  />
+            ) : (
+              // 展开后零条：给一句空态而不是"什么都没有"——
+              // 「没有留痕」与「取数失败」必须不同形（#42 那条在这里的另一半）。
+              <div data-testid="overview-audit-empty" style={{ padding: 12, color: 'var(--adm-faint)', fontSize: 14 }}>
+                {t('audit.empty')}
+              </div>
+            )
+          )}
         </div>
       )}
         </Panel>
@@ -621,34 +700,35 @@ export function AuditP() {
     'org_create', 'org_rename', 'org_delete', 'kb_package_create', 'kb_package_status',
     'kb_entries_import', 'model_save', 'stage_models_save', 'package_subscribe']
 
-  /** 拉取全部审计日志并在前端按条件过滤 */
+  // 后端列表腿此刻套的是哪一档缺省时间界（0＝没套，即调用方显式给了 from）
+  // ★ 2026-11-04 体验批 A3：这一维必须上屏幕。界是服务端加的，本地筛看不见它——
+  //   不报出来，「30 天前没有留痕」与「留痕被界挡住了」在用户脸上完全同形（AGENTS「空态不许伪装成检查过」）。
+  const [windowDays, setWindowDays] = useState(0)
+
+  /** 拉取审计日志（★ A3：动作/日期一律交服务端判，前端不再本地二次过滤）
+   *  旧写法 `systemAudit()` 不带参数 ＋ 拿回 100 条在浏览器里 filter，
+   *  两个后果：① 筛的其实是"最新 100 条里的命中"，用户以为筛到了全部；② 服务端加缺省界后
+   *  会把更早的记录直接挡在请求之外，而本地 filter 给不出任何解释。 */
   const load = useCallback(async () => {
-    const r = await systemAudit()
-    if (r.success) {
-      let list = ((r as unknown as { logs?: Any[] }).logs) || []
-      if (fAction) list = list.filter((l: any) => l.action === fAction)
-      if (fFrom) list = list.filter((l: any) => l.created_at >= fFrom)
-      if (fTo) list = list.filter((l: any) => l.created_at <= fTo + 'T23:59:59')
-      setRows(list)
+    const r = await runGuarded(() => systemAudit({
+      action: fAction || undefined,
+      from: fFrom || undefined,
+      to: fTo || undefined,
+    }))
+    if (r?.success) {
+      setRows(((r as unknown as Any).logs as Any[]) || [])
+      setWindowDays(Number((r as unknown as Any).window_days ?? 0) || 0)
     }
   }, [fAction, fFrom, fTo])
   useEffect(() => { void load() }, [load])
 
-  /** 导出 CSV：fetch blob 并触发下载 */
-  async function exportCsv() {
-    const csvUrl = `${API_BASE}/api/system/audit?export=csv`
-    const resp = await fetch(csvUrl, { headers: authHeaders() })
-    // ★ #42：裸 fetch 的 401 必须走统一收口。旧写法只弹「导出失败 (401)」——会话已过期还停在
-    //   后台空面板上，用户反复点导出也回不到登录页（走 request() 的通道不会这样，故此处补齐口径）。
-    if (resp.status === 401) { handleUnauthorized(csvUrl); return }
-    if (!resp.ok) { void MessagePluginError(tplFn('common.exportFailCode', { code: resp.status })); return }
-    const blob = await resp.blob()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `audit_${new Date().toISOString().slice(0, 10)}.csv`
-    document.body.appendChild(a); a.click(); a.remove()
-    URL.revokeObjectURL(url)
+  /** 导出 CSV：改走共用入口 exportCsvFile（原裸 fetch 无超时保护且失败各弹各的，现与另两处合并） */
+  function exportCsv() {
+    exportCsvFile({
+      url: `${API_BASE}/api/system/audit?export=csv`,
+      filename: `audit_${new Date().toISOString().slice(0, 10)}.csv`,
+      failMsg: (code) => code ? tplFn('common.exportFailCode', { code }) : t('common.exportFail'),
+    })
   }
 
   return (
@@ -667,6 +747,14 @@ export function AuditP() {
         <Button variant="secondary" onClick={load}>{t('common.refresh')}</Button>
       </div>
 
+      {/* ★ A3（2026-11-04）缺省时间界必须出声：界是服务端加的，没有这一行，
+          "这一档没有留痕"与"留痕被 30 天界挡住"在用户脸上完全同形。
+          显式设了开始日期（或走导出）时 window_days 回 0 ⇒ 这一行不出现，不制造噪音。 */}
+      {windowDays > 0 && (
+        <div data-testid="audit-window-hint" style={{ fontSize: 13, color: 'var(--adm-faint)', margin: '0 0 8px' }}>
+          {tpl('audit.windowHint', { days: windowDays })}
+        </div>
+      )}
       {/* 审计日志表格 */}
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
         columns={[
@@ -684,9 +772,6 @@ export function AuditP() {
     </Panel>
   )
 }
-
-/** 错误提示封装：走 toastBus（非组件调用点也可用），规避循环依赖 */
-function MessagePluginError(m: string) { toastError(m) }
 
 // ==================== 用量看板面板（Vue Usage.vue） ====================
 
@@ -807,26 +892,11 @@ export function UsageP() {
     const qs = new URLSearchParams({ export: 'csv' })
     if (usageFrom) qs.set('from', usageFrom)
     if (usageTo) qs.set('to', usageTo)
-    const url = `${API_BASE}/api/billing/usage?${qs.toString()}`
-    const xhr = new XMLHttpRequest()
-    xhr.open('GET', url, true)
-    const tk = getAuthToken()
-    if (tk) xhr.setRequestHeader('Authorization', `Bearer ${tk}`)
-    const tid = getActiveTenantId()
-    if (tid > 0) xhr.setRequestHeader('X-Tenant-ID', String(tid))
-    xhr.responseType = 'blob'
-    xhr.onload = () => {
-      // ★ #42（§4.2-2 组件侧补漏）：与同文件 exportAuditCSV / AuditP.exportCsv 同一口径——
-      //   XHR 不经 request()，401 必须显式交给 core 清登录态，否则会话过期只弹「导出失败」、人留在假登录页。
-      if (xhr.status === 401) { handleUnauthorized(url); return }
-      if (xhr.status !== 200) { toastError(t('overview.exportFailed')); return }
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(xhr.response)
-      a.download = `usage_${usageFrom || 'all'}_${usageTo || 'now'}.csv`
-      a.click()
-      URL.revokeObjectURL(a.href)
-    }
-    xhr.send()
+    exportCsvFile({
+      url: `${API_BASE}/api/billing/usage?${qs.toString()}`,
+      filename: `usage_${usageFrom || 'all'}_${usageTo || 'now'}.csv`,
+      failMsg: () => t('overview.exportFailed'),
+    })
   }
 
   return (

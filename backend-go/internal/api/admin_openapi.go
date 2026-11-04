@@ -379,8 +379,8 @@ curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization
 
 ### 译文来源与未译出行（文本任务）
 
-完成响应里除 translations 外还带 sources：语言码 → **该语种译文的来源档**。取值名单固定五种，
-不会长出第六种；请按枚举分支处理，不要按"字符串里有没有 model"判断：
+完成响应里除 translations 外还带 sources：语言码 → **该语种译文的来源档**。取值名单固定六种，
+请按枚举分支处理，不要按"字符串里有没有 model"判断：
 
 | 取值 | 含义 |
 | --- | --- |
@@ -388,6 +388,7 @@ curl 'https://{{OPENAPI_HOST}}/openapi/v1/tasks/status?id=123' -H 'Authorization
 | model | 模型译文，全部行都拿到了可用译文 |
 | model_with_source_fallback | 模型译文，但**有若干行没译出来、已按原文交付** |
 | upstream_failed | 该语种判上游服务不可用，未译出的行**全部按原文交付** |
+| compliance_skipped | 该语种**按内容合规要求未翻译**：该语种所有可译行都命中了平台的合规规则，交付位保留原文（零模型调用） |
 | approved | 审批终稿覆盖后的那一语种 |
 
 有未译出行时同层另出三个计数（按语言码，键缺席＝这一语种没有未译出行；不会出现 0 或 null）：
@@ -396,6 +397,21 @@ unresolved_lines（总数）、upstream_dead_lines（其中因上游不可用）
 
 > 这三档是**事实陈述**：系统不会为未译出的行发起人工复核，也不会自动重试到您的余额耗尽。
 > 拿到 upstream_failed 时建议按您的业务重要性重新发起该单。
+
+#### 合规跳过（不是漏译，不计入上面的三档）
+
+平台的合规规则命中时，**该处文字不送出翻译、原文按原样保留**（不整单驳回、不留空行）。
+这类处置**不**计入 unresolved_lines / upstream_dead_lines / truncated_lines——它不是"没译出来"，
+而是平台按合规要求决定不翻；把它混进未译出计数会让您按一个不存在的缺口去补单。
+同层按语言码另出两个键（键缺席＝该语种没有合规跳过，不会下发 0 或 null）：
+
+- compliance_skipped：语言码 → 该语种的跳过处数；
+- compliance_items：逐条点名数组，每条含 lang（语言码）、line（源文行号）、
+  terms（命中的词项）、side（input／output：命中的是源文还是模型产出）、
+  lead（给终端读者看的一句处置说明，可直接展示）。
+
+交付的 .md 文档末尾同一份事实会写成「合规跳过」一节，逐行点名行号与词项。
+如果整语种所有可译行都被跳过，sources 会是 compliance_skipped（见上表）。
 
 ## 支持的语言与计费规则
 
@@ -593,7 +609,7 @@ failed     -> {'status':'failed','error_code':'insufficient_balance'}
 ### Translation source & untranslated lines (text tasks)
 
 Besides translations, a completed text response carries sources: language code → **where that
-language's text came from**. The value list is closed at five entries; branch on the exact enum
+language's text came from**. The value list is closed at six entries; branch on the exact enum
 value rather than substring checks:
 
 | Value | Meaning |
@@ -602,6 +618,7 @@ value rather than substring checks:
 | model | model output, every line produced a usable translation |
 | model_with_source_fallback | model output, but **some lines could not be translated and are delivered as source text** |
 | upstream_failed | the upstream translation service was judged unavailable; the untranslated lines for this language are **all delivered as source text** |
+| compliance_skipped | this language was **not translated because of the platform's content-compliance rules**: every translatable line hit a compliance rule and the source text is delivered as is (no model call) |
 | approved | the language whose text was replaced by an approved final version |
 
 When lines are untranslated, three per-language counters are present at the same level
@@ -611,6 +628,23 @@ sends 0 or null for these. The delivered .md lists the same facts line by line.
 
 > These counters are statements of fact: the platform does not route such lines to manual review,
 > and it will not keep retrying them against your balance. Re-submit the task for business-critical content.
+
+#### Compliance skips (deliberate, not missing translations)
+
+When a compliance rule matches, **that piece of text is not sent for translation and the source is
+kept verbatim** (the task is not rejected and no blank lines are produced). Such items are **not**
+counted in unresolved_lines / upstream_dead_lines / truncated_lines: they are not a translation
+gap, and mixing them in would send you chasing a gap that does not exist. Two per-language keys
+appear at the same level (an absent key means that language has no compliance skips — the API never
+sends 0 or null):
+
+- compliance_skipped: language code → number of skipped spots;
+- compliance_items: an array naming every spot, each item carrying lang, line (source line number),
+  terms (the matched terms), side (input or output: whether the match was in your source text or in
+  the model output) and lead (one sentence describing the action, safe to show to end readers).
+
+The delivered .md carries the same facts as a "compliance skips" section with line numbers and terms.
+If every translatable line of a language was skipped, its sources value is compliance_skipped.
 
 ## Supported languages & billing rules
 

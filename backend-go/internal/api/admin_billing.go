@@ -20,6 +20,7 @@ import (
 	"translator/internal/auth"
 	"translator/internal/billing"
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/payment"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -131,32 +132,58 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		if limit > 100000 {
 			limit = 100000
 		}
-		recs, uerr := s.Store.UsageLedgerForExport(tid, from, to, limit, !super) // ★ 〇-AD 补丁二：非超管只导实扣行
+		name := fmt.Sprintf("usage_%d_%s_%s.csv", tid, strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", ""))
+		headersOut := false
+		// 表头只在**第一批真要落笔时**写一次（零行的空导出也要有表头——
+		// "没有满足条件的行"与"取数失败"在财务侧必须是两种形状，见下面那两支）。
+		ensureHeaders := func() {
+			if headersOut {
+				return
+			}
+			headersOut = true
+			w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+			w.Header().Set("Content-Disposition", contentDisposition(name))
+			// UTF-8 BOM：Excel 直开不乱码（与审计导出同口径）
+			w.Write([]byte{0xEF, 0xBB, 0xBF})
+			fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,cost_points,biz_kind,biz_mode,charge_kind,created_at\n")
+		}
+		// ★ 2026-11-04 体验批 A8：整段取数（最多 10 万行进内存）改成分批回调直写。
+		//   13 列 × 10 万行 materialize 成一个切片发生在**别的请求也在跑的进程里**，
+		//   分批后峰值内存只有一页（store.UsageLedgerExportPageSize）。
+		//   错误分两支，这是本批改法唯一新增的语义（必须写清）：
+		//     · 第一批就失败 ⇒ 还没落任何头，照旧回 500（F-64① 那条"头未出可安全回状态码"的前提保住了）；
+		//     · 写到中途失败 ⇒ 头已出、状态码物理不可达 ⇒ 在**体里**出声一行 `# EXPORT_TRUNCATED`，
+		//       绝不静默交出一份看起来完整的半截 CSV（半截财务件比失败更坏）。
+		exported, uerr := s.Store.WalkUsageLedgerForExport(tid, from, to, limit, !super, func(b []*store.UsageLedger) error { // 〇-AD 补丁二：非超管只导实扣行
+			ensureHeaders()
+			for _, row := range b {
+				p, m := row.Provider, row.Model
+				qty, cost := row.Quantity, row.Cost
+				if !super {
+					p, m = "*", "*" // 供应商/模型脱敏（与 JSON 口径一致）
+					qty, cost = scale(qty), scale(cost)
+				}
+				// ★ 2026-09-19 积分口径：费用列折积分出参，内部单价（token/单位）不再外发
+				fmt.Fprintf(w, "%d,%d,%d,%s,%s,%s,%d,%d,%s,%s,%s,%s\n",
+					row.ID, row.TenantID, row.UserID, csvEscape(row.TaskType), csvEscape(p), csvEscape(m),
+					qty, s.Store.PointsFromTokens(cost), csvEscape(row.BizKind), csvEscape(row.BizMode), csvEscape(row.ChargeKind), csvEscape(row.CreatedAt))
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush() // 分批的意义之一是"首屏字节早到"，不 flush 就还是整段缓冲
+			}
+			return nil
+		})
 		if uerr != nil {
-			// ★ F-64①（批 I-7）：原 200 承载失败 → 500：CSV 取数失败是存储层故障。
-			//   此处仍在写任何响应头之前（Content-Type/BOM 都在下面），可安全回错误状态码；
-			//   若将来把取数挪到 Header().Set 之后，就必须退回「流已开始、只能记日志」的口径。
-			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, uerr.Error()))
+			if !headersOut {
+				s.writeError(w, r, apierrors.New(apierrors.ErrInternal, uerr.Error()))
+				return
+			}
+			fmt.Fprintf(w, "# EXPORT_TRUNCATED rows=%d reason=storage_error\n", exported)
+			observability.Error(r.Context(), "用量 CSV 导出中途失败（已在体里出声，交给人复跑而不是静默交半截件）",
+				"tenant_id", tid, "rows", exported, "err", uerr.Error())
 			return
 		}
-		name := fmt.Sprintf("usage_%d_%s_%s.csv", tid, strings.ReplaceAll(from, "-", ""), strings.ReplaceAll(to, "-", ""))
-		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-		w.Header().Set("Content-Disposition", contentDisposition(name))
-		// UTF-8 BOM：Excel 直开不乱码（与审计导出同口径）
-		w.Write([]byte{0xEF, 0xBB, 0xBF})
-		fmt.Fprintf(w, "id,tenant_id,user_id,task_type,provider,model,quantity,cost_points,biz_kind,biz_mode,charge_kind,created_at\n")
-		for _, row := range recs {
-			p, m := row.Provider, row.Model
-			qty, cost := row.Quantity, row.Cost
-			if !super {
-				p, m = "*", "*" // 供应商/模型脱敏（与 JSON 口径一致）
-				qty, cost = scale(qty), scale(cost)
-			}
-			// ★ 2026-09-19 积分口径：费用列折积分出参，内部单价（token/单位）不再外发
-			fmt.Fprintf(w, "%d,%d,%d,%s,%s,%s,%d,%d,%s,%s,%s,%s\n",
-				row.ID, row.TenantID, row.UserID, csvEscape(row.TaskType), csvEscape(p), csvEscape(m),
-				qty, s.Store.PointsFromTokens(cost), csvEscape(row.BizKind), csvEscape(row.BizMode), csvEscape(row.ChargeKind), csvEscape(row.CreatedAt))
-		}
+		ensureHeaders() // 零行也要有表头
 		return
 	}
 	// 用量趋势（最近 7 天）
@@ -378,7 +405,27 @@ func (s *Server) handleOrderPay(w http.ResponseWriter, r *http.Request) {
 		//   o 可能为 nil（GetOrder 失败时不阻断确认，历史行为保留），auditOrder 内部已兜「单号未知」。
 		s.Store.LogAudit(s.effTenant(r, u), u.ID, "order_pay", "orders", auditOrder(o, ""))
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true})
+	// ★ 2026-11-04 体验批 §4.2「到账回验」：置付成功的响应里带**库侧现读余额**与本单积分数。
+	//   AGENTS §一·8 那条已立：接口说成功不算验收，库侧事实＋新路径留痕才算。
+	//   留痕那一半本来就在（上面两支 LogAudit 都写 order_pay）；缺的是"钱真进账了"这一维——
+	//   旧形态这里只回 {"success":true}，前端于是只能"信"，而超管代客充值的现网表现恰好是
+	//   "toast 说充好了、租户余额一动不动"。
+	//   ⚠️ 命名刻意不叫 credited_points（方案 §4.2 的原名）：那两个字读起来像"本次到账多少"，
+	//     而这个数其实是"到账之后总余额还剩多少"。名字骗人的一次代价是前端把两个数当同一个用。
+	//     ⇒ 出 `balance_points`（现读总额）＋ `order_points`（本单积分），
+	//       前端判 `点之前的余额 + order_points <= balance_points`，两条数各自只答一件事
+	//       （§25-b 那只"实扣/本该收分两桶"的同一条纪律）。
+	//   ⚠️ 读失败 ⇒ **两个键整条缺席**（不出 0）。出 0 会被读成"这一单到账后余额是 0"，
+	//     那是给失败背书的读数（AGENTS §25-b 那条 points_free 的教训照搬）。
+	//   折算只走 PointsFromTokens 那**唯一**换算口（AGENTS §一·5④）。
+	payResp := map[string]interface{}{"success": true}
+	if oerr == nil && o != nil {
+		payResp["order_points"] = s.Store.PointsFromTokens(o.AmountTokens)
+	}
+	if grants, permanent, terr := s.Store.TenantRemainTotal(req.TenantID); terr == nil {
+		payResp["balance_points"] = s.Store.PointsFromTokens(grants + permanent)
+	}
+	writeJSON(w, 200, payResp)
 }
 
 // handleOrderRefund 退款（super_admin）

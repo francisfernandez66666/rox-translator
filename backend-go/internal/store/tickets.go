@@ -209,50 +209,25 @@ func rejectRemoteArtifactPath(path string) error {
 // ListTickets 工单列表（租户隔离；onlyMine=true 时只返回当前用户创建的）。
 // 参数：tid=租户 ID，userID=用户 ID，onlyMine=是否仅我的工单。
 // 返回：工单列表（最多 200 条，按 ID 倒序）。
-// 固定 200 条上限：工单列表页无分页，靠倒序保证「最近的可操作单」一定在结果里，
-// 同时给租户隔离查询一个天然的响应体上界。
-// 单行 Scan 失败只跳过该行（整表不因一行坏数据而查询失败），但错误也不上报。
+// ★ 2026-11-04 体验批 A5：本体已搬进 ListTicketsPage（分页＋同谓词 count），这里保持
+//
+//	**薄委托＋零改动调用点**：缺省档、offset=0，与改造前那条写死的 `LIMIT 200` 逐字等值，
+//	所以现有调用方（含三个单测）看到的行集一字不变。
+//	要分页请直接用 ListTicketsPage；不要再在本函数上加参数（那会把"档位只有一份"打散）。
 func (s *Store) ListTickets(tid, userID int64, onlyMine bool) ([]*Ticket, error) {
-	q := "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE tenant_id=?"
-	args := []interface{}{tid}
-	if onlyMine {
-		q += " AND created_by=?" // 只看自己创建的
-		args = append(args, userID)
-	}
-	q += " ORDER BY id DESC LIMIT 200"
-	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Ticket
-	for rows.Next() {
-		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			continue // 单行解析失败跳过
-		}
-		out = append(out, &t)
-	}
-	return out, nil
+	list, _, err := s.ListTicketsPage(tid, userID, onlyMine, TicketPageDefault, 0)
+	return list, err
 }
 
 // ListPendingApproval 待审批工单列表（供 approver/admin 审批台使用）。
 // 参数：tid=租户 ID；返回状态为 pending_approval/approved/rejected 的工单。
+// ★ 2026-11-04 体验批 A5：与 ListTickets 同一手法薄委托到 ListPendingApprovalPage
+//
+//	（缺省档逐字等值）。审批台那条"同型 LIMIT 200"历史上单独漂移过一次，所以两处的列清单
+//	与档位尺子现在**共用同一份常量**，不再各抄一遍。
 func (s *Store) ListPendingApproval(tid int64) ([]*Ticket, error) {
-	rows, err := db.Query(s.db, db.CurrentDialect(), "SELECT id, tenant_id, ticket_no, title, status, source_text, file_path, target_langs, created_by, approver_id, reviewer_id, reject_reason, COALESCE(reject_source,'') AS reject_source, final_result, COALESCE(result_path,''), COALESCE(mode,'') AS mode, COALESCE(tokens_billed,0) AS tokens_billed, COALESCE(api_user_id,0), COALESCE(max_length,0), COALESCE(delivery,'restore') AS delivery, COALESCE(text_result_path,'') AS text_result_path, COALESCE(quality_flagged,0) AS quality_flagged, COALESCE(qa_errors,0) AS qa_errors, COALESCE(qa_warnings,0) AS qa_warnings, COALESCE(degraded_langs,'') AS degraded_langs, COALESCE(gate_warnings,'') AS gate_warnings, created_at, updated_at FROM tickets WHERE tenant_id=? AND status IN ('pending_approval','approved','rejected') ORDER BY id DESC LIMIT 200", tid)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*Ticket
-	for rows.Next() {
-		var t Ticket
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.TicketNo, &t.Title, &t.Status, &t.SourceText, &t.FilePath, &t.TargetLangs, &t.CreatedBy, &t.ApproverID, &t.ReviewerID, &t.RejectReason, &t.RejectSource, &t.FinalResult, &t.ResultPath, &t.Mode, &t.TokensBilled, &t.APIUserID, &t.MaxLength, &t.Delivery, &t.TextResultPath, &t.QualityFlagged, &t.QAErrors, &t.QAWarnings, &t.DegradedLangsJSON, &t.GateWarningsJSON, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			continue // 单行解析失败跳过
-		}
-		out = append(out, &t)
-	}
-	return out, nil
+	list, _, err := s.ListPendingApprovalPage(tid, TicketPageDefault, 0)
+	return list, err
 }
 
 // UpdateTicket 更新工单状态与字段。

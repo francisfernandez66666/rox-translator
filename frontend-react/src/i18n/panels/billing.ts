@@ -13,6 +13,12 @@ export const zh: Record<string, string> = {
   'billing.quotaQps': 'QPS',
   'billing.quotaConcurrent': '并发',
   'billing.quotaDailyChars': '每日字符上限',
+  // ★ 2026-11-03 复核批 D-1：日限额**生效口径**三档（后端 daily_wall_unit 原样转述）。
+  //   文案键与后端三档字面量的等值由 src/lib/dailyWallUnit.lock.test.ts 从 Go 源码现读钉住。
+  'billing.quotaUnitLabel': '日限额生效口径',
+  'billing.quotaUnitCost': '当前按「每日成本上限」拦截',
+  'billing.quotaUnitLegacy': '当前只配了「每日字符上限」：与日用量计数器不同量纲，本档暂不拦截（请补配每日成本上限）',
+  'billing.quotaUnitUnlimited': '当前未配置每日上限（不拦截）',
   'billing.saveQuota': '保存配额',
   'billing.currentQuota': '当前：QPS {qps}，并发 {concurrent}，每日上限 {daily} 字符',
   'billing.topUpMgmt': '充值管理',
@@ -217,6 +223,11 @@ export const en: Record<string, string> = {
   'billing.quotaQps': 'QPS',
   'billing.quotaConcurrent': 'Concurrent',
   'billing.quotaDailyChars': 'Daily char cap',
+  // ★ 2026-11-03 复核批 D-1（与 zh 段同键一一对应）
+  'billing.quotaUnitLabel': 'Daily cap enforcement',
+  'billing.quotaUnitCost': 'Enforced against the daily cost cap',
+  'billing.quotaUnitLegacy': 'Only the legacy daily character cap is set: its unit differs from the daily usage counter, so no daily block is applied right now (set a daily cost cap to enable it)',
+  'billing.quotaUnitUnlimited': 'No daily cap configured (no daily blocking)',
   'billing.saveQuota': 'Save quota',
   'billing.currentQuota': 'Current: QPS {qps}, concurrent {concurrent}, daily cap {daily} chars',
   'billing.topUpMgmt': 'Top-up management',

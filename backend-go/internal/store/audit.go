@@ -79,14 +79,52 @@ func noteAuditWriteFailure(action string, err error) {
 		action, atomic.LoadInt64(&auditWriteFailures), err)
 }
 
+// 审计取数档位（★ 2026-11-04 体验批 A3 收成常量；此前 100/1000 是函数体里的裸数字，
+// api 层与导出腿各抄一份迟早打架——同 §一·5「档位数字只有一份尺子」那一族）。
+//   - AuditPageDefault：列表缺省档（也是脏参折回来的那一档）；
+//   - AuditPageMax：单页上限，同时是 **CSV 导出腿**的取数档（导出不设默认时间界，见 api 层注释）；
+//   - AuditListWindowDays：**列表腿**在调用方没给 from 时的缺省时间界（天）。
+//     射程只有列表，导出与 GDPR 不受它影响——「后台看不到 30 天前的留痕」与
+//     「合规导出少了 30 天前的留痕」是两个完全不同的代价，只有后者不可接受。
+const (
+	AuditPageDefault    = 100
+	AuditPageMax        = 1000
+	AuditListWindowDays = 30
+)
+
+// EffectiveAuditLimit 把脏 limit（非数字／0／负数／超上限）折回档位而不是报错，
+// 口径与 notifications 那对分页常量一致（api 层薄委托，档位只在这里判一次）。
+func EffectiveAuditLimit(limit int) int {
+	if limit <= 0 || limit > AuditPageMax {
+		return AuditPageDefault
+	}
+	return limit
+}
+
+// AuditListDefaultFrom 算列表腿缺省时间界。**用 time.Now() 而不是 UTC now**：
+// 写入侧 created_at 正是 time.Now().Format(RFC3339)（本进程本地时区），
+// 界与值必须同一把时钟——按 UTC 算界在 +08 机器上会把边界整体推 8 小时（AGENTS 记忆里
+// 「TEXT 时间戳的窗口边界：边界必与写入口径同区」那条）。返回日期档（不含时刻），
+// 与 RFC3339 字符串按字典序比较时日期前缀主导，跨时区偏移段不会把比较打歪。
+func AuditListDefaultFrom() string {
+	return time.Now().AddDate(0, 0, -AuditListWindowDays).Format("2006-01-02")
+}
+
 // ListAuditFilter 查询审计日志（租户隔离；可按动作/资源/用户/时间范围过滤）。
 // 参数：tid=租户 ID（必填），action/resource=过滤条件（空=不过滤），userID=操作者（<=0 不过滤），
 // from/to=时间范围（RFC3339，to 自动补到当日 23:59:59），limit=条数上限（默认 100，最大 1000）。
 // 返回：审计日志列表，按 ID 倒序。
+// ⚠️ 本函数**不**自己加缺省时间界：界由调用方决定（列表腿加、导出腿不加）。
+// ★ 施工方案 A3-2「列表不取 before_val/after_val」经实读后**本批不做**，理由登记在此（不是漏做）：
+//
+//	全仓只有这一个写点（LogAuditDiff）＋ 8 个调用方，逐个看过都是紧凑值——
+//	最大的一条是 openapi_docs_save 的 `{"bytes":N,"note":"…"}`（刻意不整篇入库，见
+//	o1_mock_audit_test 那条"其余键只记键名不记值"），而审计面板两处都渲染「变更」列。
+//	摘列＝新增详情口＋行内展开＋12 语种补译，换的是零点几 KB；本批真正的慢来自**全表排序**
+//	（已由 idx_audit_created_id 治）与**无界扫描**（由缺省 30 天界治）。
+//	要重做这条，先量现网 audit_logs 的 p50/p95 行宽再定。
 func (s *Store) ListAuditFilter(tid int64, action, resource string, userID int64, from, to string, limit int) ([]*AuditLog, error) {
-	if limit <= 0 || limit > 1000 {
-		limit = 100 // 非法 limit 收敛到默认 100
-	}
+	limit = EffectiveAuditLimit(limit) // 脏档折回，不报错
 	var query string
 	var args []interface{}
 	if tid <= 0 {

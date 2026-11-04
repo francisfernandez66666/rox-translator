@@ -230,6 +230,11 @@ ck(){ if echo "$3" | grep -qE "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else 
 ckF(){ if printf '%s' "$3" | grep -qF "$2"; then PASS=$((PASS+1)); echo "PASS|$1"; else FAIL=$((FAIL+1)); echo "FAIL|$1|want[$2]|got[${3:0:220}]"; fi; }
 tok(){ curl -s $B/api/auth/login -H "$J" -d "{\"username\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))'; }
 pv(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(d$1)"; }
+# pvj — 同 pv，但**按 JSON 序列化**输出（★ 2026-11-03 T81 真踩）。
+# 为什么必须有它：`pv` 走的是 `print(dict)` ⇒ 打出来是 **Python repr**（`{'line': 2}`，单引号、
+#   中文不转义），拿它去喂 `ck '"line":2'` 恒不命中——判据红而产品完全正确，且红字读起来像
+#   "接口没给这个字段"。凡判据吃的是**对象/数组**（而不是裸标量），一律用 pvj。
+pvj(){ python3 -c "import sys,json;d=json.load(sys.stdin);print(json.dumps(d$1,ensure_ascii=False,separators=(',',':')))"; }
 sq(){ dbq "$1"; }
 post(){ local h="$1" body="$2" path="$3"; curl -s $B"$path" -H "$h" -H "$J" -d "$body"; }
 get(){ local h="$1" path="$2"; curl -s $B"$path" -H "$h"; }
@@ -4688,7 +4693,15 @@ ckF T73-src-notes-appended 'if uerr := fileproc.AppendUntranslatedNotes(imgPath,
 ckF T73-src-strip-reuses-ruler 'if !refusalResidue(src, out) {' "$T73GUARD"
 ckF T73-src-empty-strip-falls-back-source 'return strings.TrimSpace(src)' "$T73GUARD"
 ckF T73-src-ladder-delegates-engine 'return w.Engine.RetryLineUntilUsable(ctx, src, lc)' "$T73LINES"
-ckF T73-src-feedback-skips-backfilled 'if p.UnresolvedLines[lc] > 0 {' "$T73FLOW"
+# ★ 2026-11-03 合规闸批：靶子搬家（判据本体不变，只改形态——同 2026-10-30 那批的处理手法）。
+#   这道门的语义是「交付位上是**原文**的语种，一条都不许沉淀进正式 TM」。2026-11-03 起
+#   合规跳过的那一族交付位同样是原文（用户裁决①：跳过翻译、原文按原样保留），所以门长成了
+#   `if p.UnresolvedLines[lc] > 0 || p.ComplianceSkipped[lc] > 0 {`，旧写法只钉前半 ⇒ 恒红。
+#   两半各一条腿（缺哪半指向的病因完全不同，一条锁判两半就分不出是谁被摘掉）：
+#     · 缺回填腿 ⇒ 上游抖动固化成客户记忆里长期复发的「原文→原文」对子；
+#     · 缺合规腿 ⇒ 违禁源文对子被沉淀，此后再命中直接直出违禁内容。
+ckF T73-src-feedback-skips-backfilled 'if p.UnresolvedLines[lc] > 0 ||' "$T73FLOW"
+ckF T73-src-feedback-skips-compliance '|| p.ComplianceSkipped[lc] > 0 {' "$T73FLOW"
 ckF T73-src-alert-says-quality-flagged '已标记「质检存疑」' "$T73FLOW"
 # ★ 2026-10-30 修三处判据自伤（都属「锁看得见、但从来没判过」那一族）：
 #   ① 函数名写成 cknF（本文件只有 ckF/ckn）⇒ 三处 cknF 里唯一这一条根本没执行；
@@ -4929,7 +4942,15 @@ ckF T77-wallet-legacy-field '"points_grants_left"' "$T77PKG"
 ckF T77-wallet-total-field '"points_balance"' "$T77PKG"
 ckn T77-wallet-no-free-tier '"tier":"free"' "$T77PKG"
 # ③ 扣档明细表与幂等标记列必须已随启动幂等升级落库（数据层面判据，不判"列在不在文档里"）
-ckq T77-debit-table-exists 1 "$(dbq "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='usage_debit_lines'" 2>/dev/null | tr -dc '0-9' || echo 1)"
+#   ★ 2026-11-03：两条原先只问 information_schema ⇒ sqlite 快跑档（DB_DRIVER=sqlite）结构性无表、
+#     读回空串、恒红（假红会钝化对真回归的敏感度，同 T51/T54/T72/T74 那族）。按方言各问一次；
+#     **PG 那一支口径一字未改**（发布闸门仍走 PG，sqlite 只是本地快跑）。
+T77DEBIT(){ if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "SELECT COUNT(*) FROM information_schema.tables WHERE table_name='usage_debit_lines'"
+  else
+    dbq "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='usage_debit_lines'"
+  fi; }
+ckq T77-debit-table-exists 1 "$(T77DEBIT 2>/dev/null | tr -dc '0-9')"
 ckq T77-debit-refunded-col 1 "$(dbq "SELECT COUNT(*) FROM usage_debit_lines WHERE 1=0" >/dev/null 2>&1 && echo 1 || echo 0)"
 # ④ 健康面免费档状态词（H-2，2026-10-31 补）：只出 on/off/unknown 三档词，
 #    **不许带任何额度数字**（匿名可达；数字出栈＝把暗额度直接交出去）。
@@ -4937,7 +4958,13 @@ T77H=$(curl -s "$T77B/api/health" --max-time 30)
 ckF T77-health-free-word '"instant_free":"' "$T77H"
 ckn T77-health-free-no-digits '"instant_free":"[^"]*[0-9]' "$T77H"
 # ⑤ 套餐档位列随启动幂等补列落库（W10 的写路径前提：没有列则新建套餐永远落 legacy）。
-ckq T77-packages-tier-col 1 "$(dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='packages' AND column_name='tier'" 2>/dev/null | tr -dc '0-9' || echo 1)"
+#   同 ③：按方言各问一次（PG 支口径一字未改）。
+T77TIER(){ if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='packages' AND column_name='tier'"
+  else
+    dbq "SELECT COUNT(*) FROM pragma_table_info('packages') WHERE name='tier'"
+  fi; }
+ckq T77-packages-tier-col 1 "$(T77TIER 2>/dev/null | tr -dc '0-9')"
 
 # ---------- T78 2026-11-01 批：即时翻译分段档位「运营面」＋ 免验证留资通道 ----------
 # 为什么这两件必须进 HTTP 级矩阵（Go 单测已经锁了判据，但它们在单测里"永远成立"）：
@@ -5288,6 +5315,279 @@ ckq T80-restore-dialed-live 200 "$T80CODE"
 dbq "DELETE FROM feedbacks WHERE content LIKE '%T80升级信号%'" >/dev/null 2>&1 || true
 dbq "DELETE FROM rate_limits WHERE key LIKE 'lead-public:203.0.113.8%' OR key LIKE '203.0.113.8%' OR key LIKE '203.0.113.8%:%'" >/dev/null 2>&1 || true
 ckq T80-cleanup-rows-gone 0 "$(dbq "SELECT COUNT(1) FROM feedbacks WHERE content LIKE '%T80升级信号%'" | tr -dc '0-9')"
+
+# ---------- T81 2026-11-03：内容合规闸第一次接进**工单通道**（用户裁决①②③） ----------
+# 裁决原文：① 工单命中禁词 ⇒ **跳过该处翻译**（不是整单拒、不是留白）；
+#           ② 交付面必须**写明跳过的是哪个词**；
+#           ③ 留痕每单每族**至多一条**（不许按行/按语种刷成 N 条）。
+# 本段三条各配判据，另配三条负向对照：
+#   · 没有禁词的单，`compliance_skipped`/`compliance_items` **键整条缺席**（不是 0、不是 null——
+#     出 0 会被读成"这一单本该跳 0 处"，与"没跳过"合起来就是一句给失败背书的话，§25-b 同型）；
+#   · 只有**部分**行被跳过时，来源列**不许**写 `compliance_skipped`（那一档只答"整语种都按合规跳过"）；
+#   · 命中过的那一单**状态必须是 completed**（把设计记成 rejected 就是把"平台按合规不翻"
+#     说成"这一单失败了"，§19 族二明令禁止）。
+# ⚠️ 词面唯一事实源＝run_uat.sh 注入的词包（`紫火核弹T36`）：本段不新增词、不改词包，
+#    只问"产品自己读同一份词包时做了什么"。
+# ⚠️ 闸开关现读现还原（沿用 T80 那套）：本来没有这一行就删干净，有就写回原值——
+#    且还原后要**由消费方自己读出值**证明真生效（接口答应不算，AGENTS §三）。
+T81W="紫火核弹T36"
+T81PROV0=$(sq "SELECT value FROM system_config WHERE key='sensitive_gate_enabled'" | tr -d '[:space:]\r')
+T81PROVCNT0=$(dbq "SELECT COUNT(1) FROM system_config WHERE key='sensitive_gate_enabled'" | tr -dc '0-9')
+dbq "DELETE FROM system_config WHERE key='sensitive_gate_enabled'" >/dev/null
+dbq "INSERT INTO system_config(key,value) VALUES('sensitive_gate_enabled','1')" >/dev/null
+T81PROV1=$(sq "SELECT value FROM system_config WHERE key='sensitive_gate_enabled'" | tr -d '[:space:]\r')
+ckq T81-premise-gate-on 1 "$T81PROV1"
+# 段首行为前提：闸**真的开着**才谈得上判工单通道。这一发同时是"词包真装上了"的探针——
+# 它一红，后面所有"没跳过"的红都分不清是闸没开还是这条腿没接线（同 T80 那条射程地基）。
+T81H="Authorization: Bearer $(tok uatuser_a uatpass123)"
+T81CHATBODY="{\"message\":\"T81闸门前提 ${T81W}\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}"
+R=$(post "$T81H" "$T81CHATBODY" /api/chat)
+# ★ 2026-11-03 判据自伤修正：`/api/chat`（非流式对话面）的稳定契约是 **HTTP 200 + `error` 字段**
+#   承载 `engine.CodeSensitiveBlocked`（值 `sensitive_blocked`，F-53 定的码/文案分流：码进 `error`、
+#   人话进 `reply`），而不是 `/api/translate` 那条老面的 `error_code:"rejected"`（T36/T37 打的是那条面）。
+#   旧写法照抄 T36 的期望 ⇒ 结构性恒红，而产品行为完全正确（本条首跑真踩）。
+ck  T81-premise-chat-blocked '"error":"sensitive_blocked"' "$R"
+# 正向对照：拦下来时客户看到的必须是**人话**而不是裸码（F-53 的反面形态），且零积分实扣。
+ck  T81-premise-chat-copy '内容合规审核|不予受理' "$R"
+ck  T81-premise-chat-no-charge '"points_used":0' "$R"
+# 留痕基线：本段只判**增量**（全站其它段也会命中，绝对值没有判别力）。
+T81AUD_IN0=$(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='sensitive_block' AND resource='ticket_input'" | tr -dc '0-9')
+T81AUD_FI0=$(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='sensitive_block' AND resource='file_input'" | tr -dc '0-9')
+
+# ① 文本工单（逐行腿）：三行、中间那行命中 ⇒ 该行跳过，另两行照常译，整单 completed。
+T81SRC="T81常规第一行业务说明\n本行含${T81W}字样\nT81常规第三行业务说明"
+R=$(post "$T81H" "{\"title\":\"T81合规跳过文本\",\"source_text\":\"$T81SRC\",\"target_langs\":\"en\",\"mode\":\"fast\"}" /api/tickets/create)
+ck  T81-text-create '"success":true' "$R"
+T81TID=$(echo "$R" | pv "['ticket']['id']")
+T81DET=$(waittk "$T81H" "$T81TID")
+# ①-a 整单不许被打成 rejected：合规跳过是**设计**，不是失败（判失败＝把设计给客户看成缺陷）。
+ck  T81-text-completed '"status":"completed"' "$T81DET"
+# ①-b 跳过处数（按语种）＋逐条点名素材。
+ckq T81-text-skip-count-en 1 "$(printf '%s' "$T81DET" | pv "['quality'].get('compliance_skipped',{}).get('en','')")"
+T81ITEM0=$(printf '%s' "$T81DET" | pvj "['quality'].get('compliance_items',[{}])[0]")
+ck  T81-text-item-line '"line":2' "$T81ITEM0"
+ck  T81-text-item-side '"side":"input"' "$T81ITEM0"
+ckF T81-text-item-term "$T81W" "$T81ITEM0"
+# ①-c 处置说明必须是**工单通道那一句**（交付位＝原文），并逐字钉住它不含任何"人工复核/客服"承诺
+#     （AGENTS §19 用户明令：本仓没有人工复核环节）。
+ckF T81-text-item-lead '内容合规审核：该处未翻译，原文已按原样保留' "$T81ITEM0"
+ckn T81-text-lead-no-manual-promise '人工复核|请联系客服|我们会跟进|稍后重试|等待审核' "$T81ITEM0"
+# ①-d 交付实质：被跳过的那一行**等于原文**（不留白、不丢行、不写占位符），另两行仍是译文。
+#     读库里的 final_result 而不是只看计数——计数对而正文没落位是本仓最典型的一族
+#     （「接口说跳过而库里那一行是空串」）。
+T81EN=$(dbq "SELECT final_result FROM tickets WHERE id=$T81TID" | tr -d '\r' | pv "['translations']['en']" 2>/dev/null)
+ckq T81-text-line2-is-source "本行含${T81W}字样" "$(printf '%s' "$T81EN" | sed -n '2p')"
+ck  T81-text-line1-translated 'TranslatedEN' "$(printf '%s' "$T81EN" | sed -n '1p')"
+ck  T81-text-line3-translated 'TranslatedEN' "$(printf '%s' "$T81EN" | sed -n '3p')"
+ckn T81-text-no-placeholder '已拦截·REDACTED' "$T81EN"
+# ①-e 来源列：部分行被跳过**不算**整语种合规跳过（那一档只服务"整语种都按合规跳过"，
+#     写成它会让管理台把半份译文的单算成"零成本单"）。
+ck  T81-text-source-not-whole-lang '"en":"model"' "$(printf '%s' "$T81DET" | pvj "['quality'].get('sources',{})")"
+# ①-f 留痕**恰增 1 条**（每单每族一条；逐行/逐语种各刷一条就是把一次命中刷成 N 条告警）。
+ckq T81-text-audit-once 1 \
+  "$(( $(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='sensitive_block' AND resource='ticket_input'" | tr -dc '0-9') - ${T81AUD_IN0:-0} ))"
+
+# ② 文件工单（.txt）：交付文档末尾必须追加「合规跳过」一节并写明词面与处置。
+#    文件通道的交付位**不是原文而是占位符**（命中段不进模型、该位写 SensitivePlaceholderText），
+#    所以这一节用的引导语与 ① 刻意不同（两通道共用一句会写出与成品不符的话）。
+T81FD=$(mktemp -d)
+printf 'T81常规第一行业务说明\n本行含%s字样\nT81常规第三行业务说明\n' "$T81W" > "$T81FD/t81.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$T81H" -F "files=@$T81FD/t81.txt" -F "target_langs=en" -F "mode=fast")
+ck  T81-file-create '"success":true' "$R"
+T81FID=$(echo "$R" | pv "['ticket']['id']")
+T81FDET=$(waittk "$T81H" "$T81FID")
+ck  T81-file-completed '"status":"completed"' "$T81FDET"
+T81MD=$(curl -s "$B/api/tickets/download?id=$T81FID&fmt=text" -H "$T81H" --max-time 60)
+ck  T81-file-md-section-header '## 合规跳过（共 1 处）' "$T81MD"
+ckF T81-file-md-term "$T81W" "$T81MD"
+ckF T81-file-md-lead '内容合规审核：该处未翻译，交付位已标记为已拦截' "$T81MD"
+ckn T81-file-md-lead-no-manual-promise '人工复核|请联系客服|我们会跟进|稍后重试|等待审核' "$T81MD"
+ckF T81-file-md-placeholder '[已拦截·REDACTED]' "$T81MD"
+ck  T81-file-md-others-translated 'TranslatedEN item ' "$T81MD"
+# ②-b 文件通道留痕同样恰增 1 条（与工单通道是**两族成因**，各记一条，不合并）。
+ckq T81-file-audit-once 1 \
+  "$(( $(dbq "SELECT COUNT(1) FROM audit_logs WHERE action='sensitive_block' AND resource='file_input'" | tr -dc '0-9') - ${T81AUD_FI0:-0} ))"
+
+# ③ 负向对照（文本）：没有禁词的单，两个键**整条缺席**、整单照常完成。
+R=$(post "$T81H" '{"title":"T81合规负向文本","source_text":"T81负向对照第一行\nT81负向对照第二行","target_langs":"en","mode":"fast"}' /api/tickets/create)
+ck  T81-neg-create '"success":true' "$R"
+T81NID=$(echo "$R" | pv "['ticket']['id']")
+T81NDET=$(waittk "$T81H" "$T81NID")
+ck  T81-neg-completed '"status":"completed"' "$T81NDET"
+ckn T81-neg-no-skipped-key '"compliance_skipped"' "$T81NDET"
+ckn T81-neg-no-items-key '"compliance_items"' "$T81NDET"
+# 正向对照（否则上面两条在"整个 quality 段都没渲染"时也会绿——那是空转锁）。
+ck  T81-neg-quality-rendered '"sources"' "$T81NDET"
+# ③-b 负向对照（文件）：同样的干净文本，交付文档里**连标题都不许出现**。
+: > "$T81FD/t81clean.txt"
+printf 'T81负向对照第一行\nT81负向对照第二行\n' > "$T81FD/t81clean.txt"
+R=$(curl -s $B/api/tickets/create-file -H "$T81H" -F "files=@$T81FD/t81clean.txt" -F "target_langs=en" -F "mode=fast")
+ck  T81-neg-file-create '"success":true' "$R"
+T81NFID=$(echo "$R" | pv "['ticket']['id']")
+T81NFDET=$(waittk "$T81H" "$T81NFID")
+ck  T81-neg-file-completed '"status":"completed"' "$T81NFDET"
+T81NMD=$(curl -s "$B/api/tickets/download?id=$T81NFID&fmt=text" -H "$T81H" --max-time 60)
+ckn T81-neg-file-md-no-section '合规跳过' "$T81NMD"
+ck  T81-neg-file-md-translated 'TranslatedEN item ' "$T81NMD"
+
+# ④ 还原闸开关（原本没这一行就删干净，有就写回原值），并由**消费方自己读出值**证明生效。
+dbq "DELETE FROM system_config WHERE key='sensitive_gate_enabled'" >/dev/null
+if [ -n "$T81PROV0" ]; then dbq "INSERT INTO system_config(key,value) VALUES('sensitive_gate_enabled','${T81PROV0}')" >/dev/null; fi
+ckq T81-restore-rowcount "${T81PROVCNT0:-0}" "$(dbq "SELECT COUNT(1) FROM system_config WHERE key='sensitive_gate_enabled'" | tr -dc '0-9')"
+ckq T81-restore-value-as-before "$T81PROV0" "$(sq "SELECT value FROM system_config WHERE key='sensitive_gate_enabled'" | tr -d '[:space:]\r')"
+# ⚠️ 期望行为**现读现推**，不许在脚本里写死"还原＝放行"：进段前那一档在本矩阵里通常是 "1"
+#    （T36 段尾写回的值），那还原后命中词**应该继续被拒**。写死一支就会把"配置真还原了"
+#    判成红（或反过来，把没还原判成绿）——同 §一·3 那条「期望值现读现推，禁止写死」。
+if [ "${T81PROVCNT0:-0}" = "0" ] || [ "$T81PROV0" != "0" ]; then
+  T81CHATBODY="{\"message\":\"T81还原后仍按原档处置 ${T81W}\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}"
+  R=$(post "$T81H" "$T81CHATBODY" /api/chat)
+  # 同段首那条：/api/chat 的稳定码在 `error` 字段（不是 error_code/rejected）。
+  ck T81-restore-dialed-live '"error":"sensitive_blocked"' "$R"
+else
+  T81CHATBODY="{\"message\":\"T81还原后不再拦截 ${T81W}\",\"options\":{\"target_langs\":[\"en\"],\"mode\":\"fast\"}}"
+  R=$(post "$T81H" "$T81CHATBODY" /api/chat)
+  # 这一支同样不许照抄别面的形状：`/api/chat` 的正常回包**没有 `success` 字段**
+  # （结构是 skill/reply/data/files/error/points_used），判 success 恒假。
+  # 正解＝稳定码那格是空串（闸关掉了）＋译文真出来（否则"没拦"也可能是整条腿坏了）。
+  ckq T81-restore-dialed-live-error-empty "" "$(printf '%s' "$R" | pv "['error']")"
+  ckF T81-restore-dialed-live-translated '"translations":{"en":"' "$R"
+fi
+rm -rf "$T81FD"
+
+# ============================================================================
+# T82（2026-11-04 体验批 A3）：审计列表缺省时间界与「导出不套界」的 HTTP 级判据。
+#   裁决：列表在调用方没给 from 时套缺省 30 天界，但**界必须出声**（出参 window_days），
+#         且 CSV 导出永远全时间（合规留痕少一天＝缺件）。
+#   三条各自判 + 两条反向对照（旧行读不到也可能是"根本没写进去"，新行必须在位才算数）。
+#   夹具：直接按写入侧同一格式（RFC3339 本地时钟）插一条 60 天前的行，跑完删干净并回验计数。
+#   ⚠️ 负向断言一律用 ckn（三态：rc=0 判红／rc=2 判"判据自身失效"／rc=1 才 PASS）。
+#      ckF 是**字面量在位**的正向助手——拿它做"不许出现"会把判据方向写反且永不红（AGENTS §七 那条）。
+# ============================================================================
+T82MARK="T82audit-window-probe"
+T82OLD=$(python3 -c 'import time;print(time.strftime("%Y-%m-%dT%H:%M:%S+08:00", time.localtime(time.time()-60*86400)))' 2>/dev/null \
+      || python3 -c 'import datetime;print((datetime.datetime.now()-datetime.timedelta(days=60)).strftime("%Y-%m-%dT%H:%M:%S+08:00"))')
+dbq "DELETE FROM audit_logs WHERE detail='${T82MARK}'" >/dev/null 2>&1 || true
+dbq "INSERT INTO audit_logs (tenant_id, user_id, action, resource, detail, before_val, after_val, created_at) VALUES (0, 0, 'uat_probe', 'system', '${T82MARK}', '{\"k\":1}', '{\"k\":2}', '${T82OLD}')" >/dev/null
+T82CNT=$(dbq "SELECT COUNT(1) FROM audit_logs WHERE detail='${T82MARK}'" | tr -dc '0-9')
+ckq T82-premise-row-in-db 1 "$T82CNT"
+T82LIST=$(curl -s "$B/api/system/audit?limit=200" -H "$AH")
+ckF T82-list-window-days '"window_days":30' "$T82LIST"
+ckn T82-list-hides-old-row "\"detail\":\"${T82MARK}\"" "$T82LIST"
+# 反向对照：今天刚触发的那条审计必须在列表里（否则"读不到旧行"可能只是读点断了）
+SSAVE '{"disposable_email_domains":""}' >/dev/null
+T82NOW=$(curl -s "$B/api/system/audit?limit=5" -H "$AH")
+ck T82-counterfactual-today-visible "\"created_at\":\"$(date +%F)" "$T82NOW"
+# 显式给 from ⇒ 调用方的界优先，缺省界不得覆盖
+T82FROM=$(python3 -c 'import datetime;print((datetime.date.today()-datetime.timedelta(days=90)).isoformat())')
+T82WIDE=$(curl -s "$B/api/system/audit?limit=200&from=${T82FROM}" -H "$AH")
+ck T82-explicit-from-wins "\"detail\":\"${T82MARK}\"" "$T82WIDE"
+ckq T82-explicit-from-silent '{"window_days":0' "$(printf '%s' "$T82WIDE" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("{\"window_days\":0" if int(d.get("window_days",0))==0 else "no")' 2>/dev/null || echo no)"
+# 导出腿：不套界 + 仍带 before_val/after_val 两列（列表瘦不瘦是性能问题，导出砍列是契约问题）
+T82CSV=$(curl -s "$B/api/system/audit?export=csv" -H "$AH")
+ck T82-csv-keeps-old-row "$T82MARK" "$T82CSV"
+ck T82-csv-has-diff-columns "before_val,after_val" "$T82CSV"
+dbq "DELETE FROM audit_logs WHERE detail='${T82MARK}'" >/dev/null
+ckq T82-cleanup-gone 0 "$(dbq "SELECT COUNT(1) FROM audit_logs WHERE detail='${T82MARK}'" | tr -dc '0-9')"
+
+# ============================================================================
+# T83（2026-11-04 体验批 A5＋§5.4-B2）：工单列表分页出参与行内产物摘要。
+#   三条判据都是"新字段可忽略＝放宽"方向，数组元素原有字段一字不许动：
+#     · 缺省档逐字等于改造前那条写死的 200；
+#     · 出栈的 limit 是**生效那一档**（回显入参＝客户端对不上账）；
+#     · 每行带 artifact_summary，且 md/original **两个键恒在**（没有产物时各出 null，
+#       不是整块缺席、也不是整块 null——那是 §一·5「空值形态必须归一」在这一行的落点）。
+# ============================================================================
+T83T=$(tok uatuser_a uatpass123); T83H="Authorization: Bearer $T83T"
+T83D=$(curl -s "$B/api/tickets" -H "$T83H")
+ck T83-default-is-200 '"limit":200' "$T83D"
+ck T83-has-total '"total":' "$T83D"
+ck T83-row-has-summary '"artifact_summary":{' "$T83D"
+ckq T83-summary-both-keys '{"md":' "$(printf '%s' "$T83D" | python3 -c '
+import sys,json
+d=json.load(sys.stdin)
+rows=d.get("tickets") or []
+bad=[r for r in rows if set((r.get("artifact_summary") or {}).keys())!={"md","original"}]
+print("OK" if rows and not bad else "BAD:%d/%d"%(len(bad),len(rows)))' 2>/dev/null || echo ERR)"
+T83P1=$(curl -s "$B/api/tickets?limit=1&offset=0" -H "$T83H")
+ck T83-page1-echoes-effective '"limit":1' "$T83P1"
+T83N=$(printf '%s' "$T83P1" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("tickets") or []))' 2>/dev/null || echo 0)
+ckq T83-page1-one-row 1 "$T83N"
+T83DIRTY=$(curl -s "$B/api/tickets?limit=abc" -H "$T83H")
+ck T83-dirty-folds-to-default '"limit":200' "$T83DIRTY"
+T83OVER=$(curl -s "$B/api/tickets?limit=2&offset=999998" -H "$T83H")
+ck T83-overrange-is-array '"tickets":[]' "$T83OVER"
+ckn T83-overrange-null '"tickets":null' "$T83OVER"
+
+# ============================================================================
+# T84（2026-11-04 体验批 A6）：平台视图用户列表——缺省**不限**（零回归那一档）＋分页档。
+#   为什么缺省不封顶：同一份数据还被"算已签署数"这类全量统计消费，把默认档调小＝把统计算窄。
+# ============================================================================
+T84U=$(curl -s "$B/api/admin/users" -H "$AH")
+ck T84-default-unlimited '"limit":0' "$T84U"
+ckq T84-rows-equal-total "$(printf '%s' "$T84U" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(len(d.get("users") or []))' 2>/dev/null || echo ERR)" \
+  "$(printf '%s' "$T84U" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("total",""))' 2>/dev/null || echo ERR)"
+T84P=$(curl -s "$B/api/admin/users?limit=1" -H "$AH")
+ck T84-page-echoes-effective '"limit":1' "$T84P"
+ckq T84-page-one-row 1 "$(printf '%s' "$T84P" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("users") or []))' 2>/dev/null || echo 0)"
+ck T84-empty-page-is-array '"total":' "$T84P"
+
+# ============================================================================
+# T85（2026-11-04 体验批 §4.2）：给租户注入资金的**到账回验**出栈。
+#   接口说成功不算验收（AGENTS §一·8）：置付成功体必须带库侧现读余额与本单积分，
+#   失败分支（订单不存在）必须**两个键整条缺席**——出 0 会被读成"到账后余额是 0"。
+#   ⚠️ 金额断言先过 mny_norm（同一列 SQLite 回 5.0、PG 回 5，直接字符串比两种方言各红一次）。
+# ============================================================================
+T85ID=$(dbq "SELECT id FROM tenants WHERE id>1 ORDER BY id LIMIT 1" | tr -dc '0-9')
+T85CRE=$(post "$AH" "{\"tenant_id\":$T85ID,\"points\":1000,\"money\":0}" /api/admin/orders/create)
+T85OID=$(printf '%s' "$T85CRE" | python3 -c 'import sys,json;print((json.load(sys.stdin).get("order") or {}).get("id",""))' 2>/dev/null || echo "")
+ckq T85-order-created-nonempty 1 "$( [ -n "$T85OID" ] && echo 1 || echo 0 )"
+T85PAY=$(post "$AH" "{\"id\":$T85OID,\"tenant_id\":$T85ID}" /api/admin/orders/pay)
+ck T85-pay-success '"success":true' "$T85PAY"
+ck T85-pay-carries-balance '"balance_points":' "$T85PAY"
+ck T85-pay-carries-order-points '"order_points":' "$T85PAY"
+ckq T85-balance-covers-order 1 "$(printf '%s' "$T85PAY" | python3 -c '
+import sys,json
+d=json.load(sys.stdin)
+b=d.get("balance_points"); o=d.get("order_points")
+print("1" if isinstance(b,(int,float)) and isinstance(o,(int,float)) and b>=o else "0")' 2>/dev/null || echo 0)"
+T85FAIL=$(post "$AH" "{\"id\":99999999,\"tenant_id\":$T85ID}" /api/admin/orders/pay)
+ckn T85-failure-omits-balance '"balance_points"' "$T85FAIL"
+ckn T85-failure-omits-order-points '"order_points"' "$T85FAIL"
+# 留痕那一半：order_pay 必须真写进 audit_logs（接口答应＋库侧事实，两样都齐才算到账）
+ckq T85-audit-trail-exists 1 "$(dbq "SELECT CASE WHEN COUNT(1)>0 THEN 1 ELSE 0 END FROM audit_logs WHERE action='order_pay' AND tenant_id=$T85ID" | tr -dc '0-9')"
+
+# ============================================================================
+# T85 清场（★ 2026-11-04 收口：本段过去只造单不清，复跑会一直攒行）
+#   按**显式订单 id** 摘，禁用"整家租户蒸发"那种按 tenant_id 横扫的清理语义
+#   （2026-10-27 那次就是横扫把别人的租户连套餐抹了）。额度行按 ref_id 点名，
+#   摘不到也无害（置付未必写 ref_id）；两条都回验计数为 0 才算清干净。
+#   审计留痕刻意保留：它是 T85 的判据物，且留痕属合规件，不是测试夹具。
+# ============================================================================
+dbq "DELETE FROM quota_grants WHERE ref_id=$T85OID" >/dev/null 2>&1 || true
+dbq "DELETE FROM orders WHERE id=$T85OID" >/dev/null 2>&1 || true
+ckq T85-cleanup-order-gone 0 "$(dbq "SELECT COUNT(1) FROM orders WHERE id=$T85OID" | tr -dc '0-9')"
+ckq T85-cleanup-grant-gone 0 "$(dbq "SELECT COUNT(1) FROM quota_grants WHERE ref_id=$T85OID" | tr -dc '0-9')"
+
+# ============================================================================
+# T86（★ 2026-11-04 第四波）：三处 CSV 导出合并入口后的 HTTP 级回归哨兵。
+#   第四波把 exportAuditCSV／AuditP.exportCsv／exportUsageCSV 三条裸 XHR/fetch
+#   收成 panels_a.tsx 的 exportCsvFile 唯一入口（含 401 收口与 5 分钟看门狗），
+#   并把 systemHealth()／notifications() 从 45s 列表档复核回 30s 默认档。
+#   ⇒ 前端形态靠 dom 锁，但"背后的两个导出 URL 还在、未被 401 收口挡死、
+#     通知列表口没被改坏"必须由 HTTP 级判据再确认一次，否则前端改对了、
+#     后端路径一变，界面只会静默下载失败。全段只读、零写库、无需清场。
+#   ⚠️ curl 只取 http_code 一格：content_type 自带空格，多格词分割会读到错列
+#      （AGENTS §25-c 那条现网实证）；未授权档只判"不是 200"，不写死 401/403，
+#      因为不同鉴权中间件回哪一档不是本批要钉的契约。
+# ============================================================================
+T86AUD=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/system/audit?export=csv" -H "$AH")
+ckq T86-audit-csv-200 200 "$T86AUD"
+T86USG=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/billing/usage?export=csv" -H "$AH")
+ckq T86-usage-csv-200 200 "$T86USG"
+T86ANON=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/system/audit?export=csv")
+ckq T86-anon-csv-not-200 1 "$( [ "$T86ANON" != 200 ] && echo 1 || echo 0 )"
+T86NOT=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/notifications" -H "$AH")
+ckq T86-notifications-200 200 "$T86NOT"
 
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="

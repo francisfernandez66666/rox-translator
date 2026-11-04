@@ -25,7 +25,6 @@ package api
 
 import (
 	"context"
-	"log"
 
 	"translator/internal/auth"
 	"translator/internal/observability"
@@ -79,20 +78,27 @@ func (s *Server) notifySuperAdmins(title, body, refType string, refID int64) int
 		observability.Warn(context.Background(), "站内信 ref_type 不在名单 ⇒ 前端落点表可能缺这一类",
 			"ref_type", refType, "title", title)
 	}
-	n := 0
-	for _, u := range s.superAdminRecipients() {
-		if err := s.Store.CreateNotification(u.ID, title, body, refType, refID); err != nil {
-			// 逐个收件人失败只出声不中断：一个账号写不进去不该让其余超管也收不到
-			logNotifyFail(u.ID, err)
-			continue
-		}
-		n++
+	// ★ 2026-11-04 体验批 §2.12 A12：这一圈原本是逐收件人各打一次 CreateNotification
+	//   （N 个超管＝N 次写往返）。现收成一次批量 INSERT。**判定口径一字不动**：
+	//   收件人名单仍只由 superAdminRecipients() 现读现算，谁该收、ref_type、n（成功送达人数）
+	//   的算法全在下面这几行里，与改造前逐条版逐字同形；空名单直接退 0、一次 SQL 都不发。
+	recipients := s.superAdminRecipients()
+	if len(recipients) == 0 {
+		return 0
+	}
+	items := make([]store.NotificationDraft, 0, len(recipients))
+	for _, u := range recipients {
+		items = append(items, store.NotificationDraft{
+			UserID: u.ID, Title: title, Body: body, RefType: refType, RefID: refID,
+		})
+	}
+	n, err := s.Store.CreateNotificationsBatch(items)
+	if err != nil {
+		// 批量写失败只出声不中断调用方（与改造前「逐个收件人失败只出声不中断」同方向）。
+		// 日志走 observability slog，不新增 log.Printf（棘轮只减不增）。
+		observability.Warn(context.Background(), "超管站内信批量投递失败 ⇒ 本轮不发",
+			"err", err.Error(), "recipients", len(items))
+		return 0
 	}
 	return n
-}
-
-// logNotifyFail 站内信写入失败的留痕（独立成函数：log.Printf 存量受棘轮基线约束，
-// 口径与迁移前 pay.go 里那一行等价，只是从"每个调用方各写一份"收成这里的一份）。
-func logNotifyFail(uid int64, err error) {
-	log.Printf("[notify] 站内信投递失败 uid=%d: %v", uid, err)
 }

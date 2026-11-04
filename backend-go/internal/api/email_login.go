@@ -202,7 +202,7 @@ func (s *Server) createPersonalByEmail(w http.ResponseWriter, r *http.Request, r
 	if uname == "" {
 		uname = "user"
 	}
-	t, terr := s.Ten.Create("p_"+time.Now().Format("20060102150405.000000000"), uname, "", "{}")
+	t, terr := s.createTenantWithRoot("p_"+time.Now().Format("20060102150405.000000000"), uname, "", "{}")
 	if terr != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "创建个人租户失败"))
 		return nil

@@ -226,6 +226,14 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 	return s.iam.ListAllUsers()
 }
 
+// ListAllUsersPage 分页版全量用户列举（返回本页与总条数）。委托 iam.Store。
+// ★ 2026-11-04 体验批 A6：limit<=0 那一档＝**不限**（与 ListAllUsers 逐字等值），
+//
+//	默认档为什么不给小封顶的理由写在 iam.ListAllUsersPage 的注释上（那边是唯一实现）。
+func (s *Store) ListAllUsersPage(limit, offset int) ([]*User, int, error) {
+	return s.iam.ListAllUsersPage(limit, offset)
+}
+
 // OrgNameMap 全部组织 ID→名称映射。委托 iam.Store。
 func (s *Store) OrgNameMap() (map[int64]string, error) {
 	return s.iam.OrgNameMap()

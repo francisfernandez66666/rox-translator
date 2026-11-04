@@ -106,14 +106,35 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
+	from := q.Get("from")
+	exporting := q.Get("export") == "csv"
+	// ★ 2026-11-04 体验批 A3：列表腿在调用方没给 from 时套**缺省 30 天界**，导出腿不套。
+	//   为什么只有列表这一侧需要：审计面板原先一次拉 100 条再在前端本地按日期筛（已随本批改成
+	//   服务端过滤），平台全量视图的排序在没有索引时是全表排序；加了界之后扫描范围由「整张表」
+	//   收到「近 30 天」，与新建的 idx_audit_created_id 配合才真正走得动。
+	//   为什么导出不套：导出是 ISO 17100 留痕取数，少一天＝合规面缺件；
+	//   而列表少 30 天前的行是**会出声的**（响应带 window_days，前端显式提示「仅近 N 天」）。
+	//   ⚠️ 「静默收窄」是这个改法唯一不可接受的形态，所以出栈必须把这一维**报出来**：
+	//   window_days 为 0 ＝没套界（导出/显式 from），非 0 ＝套了；面板据此出提示。
+	windowDays := 0
+	if !exporting && from == "" {
+		from = store.AuditListDefaultFrom()
+		windowDays = store.AuditListWindowDays
+	}
+	limit := atoiDef(q.Get("limit"), store.AuditPageDefault)
+	if exporting {
+		// 导出档＝单页上限（原先隐性沿用列表的 100 条档：一份"审计导出"其实最多 100 行，
+		// 与它自己的名字相反。这里明确抬到 AuditPageMax，并把档位与不套界一起写进上面的注释）。
+		limit = store.AuditPageMax
+	}
 	logs, err := s.Store.ListAuditFilter(
 		s.effTenant(r, u),
 		q.Get("action"),
 		q.Get("resource"),
 		atol(q.Get("user_id")),
-		q.Get("from"),
+		from,
 		q.Get("to"),
-		atoiDef(q.Get("limit"), 100),
+		limit,
 	)
 	if err != nil {
 		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：审计清单读的是本进程存储层。
@@ -128,7 +149,7 @@ func (s *Server) handleSystemAudit(w http.ResponseWriter, r *http.Request) {
 		s.exportAuditCSV(w, logs)
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "logs": logs})
+	writeJSON(w, 200, map[string]interface{}{"success": true, "logs": logs, "window_days": windowDays})
 }
 
 // handleAlerts 告警列表（仅超管，看全平台）

@@ -16,7 +16,23 @@
 // ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
 //   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
 //   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
-import { bizResp, request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, ApiError, apiMsg, type AdminResp } from './core'
+import { bizResp, request, authHeaders, API_BASE, handleUnauthorized, handleForbidden, ApiError, apiMsg, type AdminResp, LIST_TIMEOUT_MS } from './core'
+
+/** ★ 2026-11-04 §5.4-B2：列表行的「行内两颗下载钮」摘要。
+ *  两个键**恒在**（后端保证：没有产物时各出 null，而不是整块缺席），
+ *  所以前端可以直接读 `sum.md?.id` 而不必先判 sum 是否存在。
+ *  选组规则与详情面同源：primary 那件所在的 (file_id, lang) 一组。 */
+export interface TicketArtifactRow {
+  id: number
+  name: string
+  lang: string
+  size: number
+}
+// TicketArtifactSummary 行内两颗下载钮的摘要容器：两个键恒在（详见上方那段出栈形状纪律）。
+export interface TicketArtifactSummary {
+  md: TicketArtifactRow | null
+  original: TicketArtifactRow | null
+}
 
 /** 翻译工单信息结构：含编号/标题/状态/原文/目标语言/审批人等 */
 export interface Ticket {
@@ -38,6 +54,8 @@ export interface Ticket {
   delivery?: string
   /** ★ 纯文案 .md 产物路径（还原模式兜底附加物 / 纯文案模式主产物） */
   text_result_path?: string
+  /** ★ 2026-11-04 §5.4-B2：行内两颗下载钮的产物摘要（列表接口新增，旧客户端可忽略） */
+  artifact_summary?: TicketArtifactSummary
   /** ★ 改造 4（2026-09-17）：质检存疑标记 1=有语言评估总分低于阈值，需人工复核（列表徽标数据源） */
   quality_flagged?: number
   /** ★ 改造 5：确定性质检 error 级问题数（列表徽标数据源，由 runQA 落列） */
@@ -135,8 +153,35 @@ export interface TicketQuality {
   unresolved_lines?: Record<string, number>
   /** 语言 → 其中判「上游整条不通」那一部分 */
   upstream_dead_lines?: Record<string, number>
-  /** 语言 → 其中被 max_tokens 截断那一部分 */
   truncated_lines?: Record<string, number>
+  /**
+   * ★ 2026-11-03 合规闸批：工单通道「内容合规跳过」的两件（Go 侧 `api/tickets.go` 的
+   * ticketQualityView，同样 omitempty）。
+   * 与上面四件**刻意分开**：那四件答"想翻但没翻出来"（要等上游/抬预算），这两件答
+   * "平台按内容合规要求决定不翻"（处置是改措辞重提或核词包）——混成一节＝把设计给客户看成缺陷
+   * （AGENTS §19 族一那条「三档混成一味，读的人无从对账」）。
+   * 空值口径相同：没跳过时**键整个不出现**（不是 0、不是 null），前端整块不渲染。
+   * `compliance_items` 的 `lead` 是**服务端下发的处置说明原文**，前端只渲染不再造措辞
+   * （跨面等值靠"只有一个事实源"，锁见 `src/api/ticketsComplianceLock.test.ts`）。
+   */
+  /** 语言 → 跳过处数 */
+  compliance_skipped?: Record<string, number>
+  /** 逐条点名（行号 + 命中词面 + 处置说明） */
+  compliance_items?: TicketComplianceItem[]
+}
+
+/** 一条「合规跳过」记录（形状与 Go 侧 `orchestrator.ComplianceItem` 逐字等值，锁同上） */
+export interface TicketComplianceItem {
+  /** 语种码 */
+  lang: string
+  /** 1 起的行号（与「未译出内容」那一节同口径） */
+  line: number
+  /** 命中词面（仅输入侧有；输出侧刻意不回显，故可缺） */
+  terms?: string[]
+  /** 成因档：`input`（源文命中）| `output`（模型产出命中） */
+  side: string
+  /** 处置说明（服务端原文，**前端一个字都不许抄**） */
+  lead?: string
 }
 
 /** 工单接口统一响应结构：tickets 列表/ticket 单对象/states 流程状态/ files 结果文件 */
@@ -162,6 +207,13 @@ export interface TicketResp {
   success: boolean
   message?: string
   tickets?: Ticket[]
+  /** ★ 2026-11-04 体验批 A5：列表/审批台分页出参（新字段可忽略＝对外放宽，元素字段一字未动）。
+   *  total＝同谓词下的总行数；has_more＝**本页打满生效档位**才为真（刻意不用 total 算，
+   *  理由见后端 handleTickets 那段注释）；limit/offset 是生效档，不是回显入参。 */
+  total?: number
+  has_more?: boolean
+  limit?: number
+  offset?: number
   ticket?: Ticket
   states?: unknown[]
   files?: { id: number; file_name: string; result_path: string; text_result_path?: string; error: string }[]
@@ -197,7 +249,7 @@ export async function approveAction(id: number, action: 'approve' | 'reject', re
 
 /** 我的工单列表（隐私隔离：非超管仅返回自己创建的） */
 export async function myTickets(): Promise<TicketResp> {
-  return bizResp(() => request('/api/tickets', { headers: authHeaders() }))
+  return bizResp(() => request('/api/tickets', { headers: authHeaders(), timeoutMs: LIST_TIMEOUT_MS }))
 }
 
 /** 创建文本翻译工单（入队即返回 ticket_no） */
@@ -393,6 +445,8 @@ export async function notifications(limit?: number, offset?: number): Promise<Ad
   if (limit && limit > 0) qs.set('limit', String(limit))
   if (offset && offset > 0) qs.set('offset', String(offset))
   const tail = qs.toString() ? `?${qs.toString()}` : ''
+  // ★ 2026-11-04 §2.10：通知列表（铃铛 30s 轮询同源）是轻量档，走 request() 默认 30s，
+  //   不套 LIST_TIMEOUT_MS(45s)；/api/tickets 列表仍是列表类，保持 45s 不动。
   return bizResp(() => request(`/api/notifications${tail}`, { headers: authHeaders() }))
 }
 

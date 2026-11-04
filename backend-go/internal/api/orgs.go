@@ -148,20 +148,15 @@ func (s *Server) handleOrgList(w http.ResponseWriter, r *http.Request) {
 		// ★ 2026-10-23 F4：个人租户默认不进平台树（个人注册会持续建租户，平铺即无限增长）。
 		//   include_personal=1 时才展开，并由 ListPlatformOrgs 回传个人租户计数。
 		includePersonal := r.URL.Query().Get("include_personal") == "1" || strings.EqualFold(r.URL.Query().Get("include_personal"), "true")
-		// 确保所有租户都有根组织行（首次或迁移后）；个人租户在默认档不必补——它们本就被排除，
-		// 等用户真的打开「显示个人租户」时再补，免得每次进平台视图都替一批不可见的租户做写操作。
-		if s.Ten != nil {
-			if tenants, e := s.Ten.List(); e == nil {
-				for _, t := range tenants {
-					if t.IsPersonal && !includePersonal {
-						continue
-					}
-					if _, e2 := s.Store.GetRootOrg(t.ID); e2 != nil {
-						_, _ = s.Store.EnsureRootOrg(t.ID, t.Name)
-					}
-				}
-			}
-		}
+		// ★ 2026-11-04 体验批 A4：**这一跳原来的形态是**「s.Ten.List() 全量列租户 → 逐个 GetRootOrg →
+		//   查不到就 EnsureRootOrg 写一条」。N 个租户＝1＋2N 次往返，而且写发生在读路径上
+		//   （SQLite 下是写锁竞争源；现网表现就是"一进平台视图就慢/超时"）。
+		//   补根组织这件事已由 store.RootOrgMigrate()（启动一次性回填）＋ createTenantWithRoot（建租户时补）
+		//   两处承担，读路径只查不写。
+		//   ⚠️ 上面那句 EnsurePlatformRootOrg 与下面 tid>0 分支里的 EnsureRootOrg **刻意保留**：
+		//   两者都是"缺了才补一行"的 O(1) 自愈，不是每请求遍历；
+		//   把它们一起摘掉会把"自愈"换成"缺行就 500/树少一根柱子"，那是把性能问题改成可用性问题。
+		//   判据按这条写：orgs_readpath_no_write_gate_test.go 锁的是**循环不位**＋回填迁移在位。
 		orgs, personalCount, err := s.Store.ListPlatformOrgs(root.ID, includePersonal)
 		if err != nil {
 			// F-64②：平台全量组织视图（INNER JOIN tenants）读取失败＝存储侧故障（500）。

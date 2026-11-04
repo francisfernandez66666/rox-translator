@@ -366,6 +366,48 @@ type CapsvcHealth struct {
 	Caps       map[string]CapsvcCapHealth `json:"caps"`
 }
 
+// OcrWarmState OCR 常驻服务的**预热态**（★ 2026-11-03 报告翻案批立的第三个读数）。
+//
+// 为什么要有它，而**不是**把 `ocr_ready` 改成等于 `caps.ocr.loaded`：
+//
+//	`ocr_ready` 答的是「这台机器能不能干 OCR 这活」（Python 模块可导入＋权重落盘，
+//	AGENTS §一·17 明定的就绪判据），而它同时是**前端入口可见性的唯一判据**——
+//	`false` ⇒ 那颗按钮整颗不渲染。把"没预热"报成 `false`，客户看到的不是看板读数不准，
+//	而是**冷启动当天与闲置卸载之后那段时间里 OCR 入口整颗消失**，而能力完全可用。
+//	那是把一个"看板读数不够细"换成一个"功能对客户不可见"，严重度反升。
+//	⇒ 所以这里只**新增一个读数**，`ocr_ready` 的判据一字不动。
+//
+// 取值域（四个词，各自的动作不同；同 dispatch/ocr_fix 那一族的写法）：
+//
+//	off     没部署常驻服务（**正常态**，能力照常走子进程，不是缺陷、不必去看）
+//	cold    部署了、OCR 模型此刻没在内存里（第一单会慢一点，动作是"知道就好"）
+//	loaded  模型已在内存（不慢）
+//	busy    模型在内存且有活在跑
+//	unknown 服务连着但回里没有 OCR 这一档（**探针自己不够格说话**，动作是去看 capsvc 段）
+//
+// ★ 本词**禁止**被任何入口渲染判据消费（锁＝api/health_ocr_warm_gate_test.go W2，
+// 反证＝在 voiceCapability 那类取用点引用它必须红）。能力布尔才是入口的唯一判据。
+func OcrWarmState() string {
+	snap := CapsvcHealthSnapshot()
+	switch snap.State {
+	case "off":
+		return "off"
+	case "down":
+		return "unknown"
+	}
+	c, ok := snap.Caps["ocr"]
+	if !ok {
+		return "unknown" // 回里没有这一档＝读数不足以说话，不许猜成 cold
+	}
+	if !c.Loaded {
+		return "cold"
+	}
+	if c.Busy > 0 {
+		return "busy"
+	}
+	return "loaded"
+}
+
 // capsvcHealthCache 健康探测缓存：避免每次 /api/health 都拨一次 socket（抖动时只留状态词）。
 var capsvcHealthCache = struct {
 	mu   sync.Mutex

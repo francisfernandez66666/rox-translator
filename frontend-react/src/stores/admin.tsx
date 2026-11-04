@@ -52,6 +52,12 @@ interface AdminCtx {
   isDeptAdmin: boolean
   isTenantAdmin: boolean
   isSuper: boolean
+  /** ★ 2026-11-04 体验批 §3.2 路线②：等级够 4 但账号行**不在平台根**（tenant_id≠0）。
+   *  这一族后端按 3 级处理（iam/auth.go 的 IsSuperAdmin 判 `level>=4 && tenant_id==0`），
+   *  前端同步钳级是纵深防御；但钳级过去是**静默**的——切换器直接不出现，
+   *  于是当事人以为"这个功能没了"，实际是"这个账号挂错了位置"。
+   *  这个布尔就是为了把那一句区别说出口（渲染点见 AdminDashboard 的身份格）。 */
+  platformBlocked: boolean
   roleOptions: string[]
   tenants: TenantInfo[]
   inviteEnabled: boolean
@@ -234,13 +240,15 @@ export function useAdmin(): AdminCtx {
     //   避免展示后端会 403 的超管菜单/退款按钮（纵深防御）。
     const myLevel = roleLevel(user?.role) >= 4 && (user?.tenant_id ?? 0) !== 0 ? 3 : roleLevel(user?.role)
     const isSuper = myLevel >= 4
+    // §3.2 路线②：钳级照旧，但"为什么被钳"要能出声——判据与上面那行同源，不留第二把尺子
+    const platformBlocked = roleLevel(user?.role) >= 4 && (user?.tenant_id ?? 0) !== 0
     const isTenantAdmin = myLevel >= 3
     const isDeptAdmin = myLevel >= 2
     const roleOptions = isSuper ? ['user', 'dept_admin', 'tenant_admin', 'admin']
       : isTenantAdmin ? ['user', 'dept_admin', 'tenant_admin']
         : isDeptAdmin ? ['user'] : []
     return {
-      myLevel, isAdmin: myLevel >= 2, isDeptAdmin, isTenantAdmin, isSuper, roleOptions,
+      myLevel, isAdmin: myLevel >= 2, isDeptAdmin, isTenantAdmin, isSuper, platformBlocked, roleOptions,
       tenants: s.tenants, activeTenantId: s.activeTenantId, myTenantId: user?.tenant_id ?? 0,
       switchTenant: s.switchTenant, loadTenants: s.loadTenants, clearAuth: s.clearAuth,
       orgs: s.orgs, orgMap: s.orgMap, loadOrgs: s.loadOrgs,

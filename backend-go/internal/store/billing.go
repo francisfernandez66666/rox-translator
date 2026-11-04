@@ -832,51 +832,6 @@ func (s *Store) UsageLedgerList(tid int64, limit, offset int, chargedOnly bool) 
 	return out, nil
 }
 
-// UsageLedgerForExport 用量明细导出查询（★ P2 报表导出 2026-09-15）：
-// 按时间范围（含边界，空串=不限）过滤，供 CSV 报表使用；单查询最大 limit 行（上限 10 万，
-// 超出部分按 id 倒序截断最新段——报表面向「近期用量导出」场景，历史全量走 GDPR 导出）。
-// 时间口径：usage_ledger.created_at 统一 UTC RFC3339（★ C22 写点约定），
-// 故 from/to 按前缀字典序比较即可（from=YYYY-MM-DD 补 00:00:00，to 补 23:59:59）。
-// 参数：tid=租户；from/to=日期字符串（可空）；limit=最大行数；
-//
-//	chargedOnly=只导**客户自己的用量**行（★ 〇-AD 补丁二，与 UsageLedgerList 同判据）。
-//	这份 CSV 是「财务/对账取数」，混进平台承担的留痕行就是让客户对着
-//	自己没消耗过的行做账，且与面板数字对不上（面板已收进同一谓词）。
-func (s *Store) UsageLedgerForExport(tid int64, from, to string, limit int, chargedOnly bool) ([]*UsageLedger, error) {
-	if limit <= 0 || limit > 100000 {
-		limit = 100000 // 导出行数硬上限（防拖库式全量拉取放大内存/IO）
-	}
-	q := "SELECT id, tenant_id, user_id, task_type, provider, model, quantity, unit_price, cost, COALESCE(biz_kind,''), COALESCE(biz_mode,''), COALESCE(charge_kind,''), created_at FROM usage_ledger WHERE tenant_id=?"
-	args := []interface{}{tid}
-	if chargedOnly {
-		q += " AND " + CustomerUsagePred
-	}
-	if from != "" {
-		q += " AND created_at>=?"
-		args = append(args, from+"T00:00:00")
-	}
-	if to != "" {
-		q += " AND created_at<=?"
-		args = append(args, to+"T23:59:59Z")
-	}
-	q += " ORDER BY id DESC LIMIT ?"
-	args = append(args, limit)
-	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []*UsageLedger
-	for rows.Next() {
-		var u UsageLedger
-		if err := rows.Scan(&u.ID, &u.TenantID, &u.UserID, &u.TaskType, &u.Provider, &u.Model, &u.Quantity, &u.UnitPrice, &u.Cost, &u.BizKind, &u.BizMode, &u.ChargeKind, &u.CreatedAt); err != nil {
-			continue // 单行解析失败跳过（与列表查询同口径）
-		}
-		out = append(out, &u)
-	}
-	return out, nil
-}
-
 // DailyUsage 租户当日用量总费用。
 // 参数：tid=租户 ID；返回今天累计扣费 token 数。
 func (s *Store) DailyUsage(tid int64) (int64, error) {

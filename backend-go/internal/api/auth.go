@@ -644,14 +644,33 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	// 超管平台根上下文（tid=0）：跨租户列出全部账号（与 handleOrgUsers 平台根视图一致）
 	if auth.IsSuperAdmin(u) && tid <= 0 {
-		users, err := s.Store.ListAllUsers()
+		// ★ 2026-11-04 体验批 A6：分页参数（**缺省不限**＝与改造前逐字等值，老面板一字不变）。
+		//   为什么这里不像工单列表那样给 200 封顶：/api/admin/users 这一份数据还被"算已签署数"
+		//   这类全量统计消费，把默认档调小＝把统计悄悄算窄（实读消费面的结论，见 iam.ListAllUsersPage）。
+		//   出栈补 total/limit/offset/has_more（新字段可忽略＝放宽）；数组元素字段一字未动。
+		limit := atoiDef(r.URL.Query().Get("limit"), 0)
+		offset := int(atol(r.URL.Query().Get("offset")))
+		if offset < 0 {
+			offset = 0
+		}
+		if limit < 0 {
+			limit = 0
+		}
+		users, total, err := s.Store.ListAllUsersPage(limit, offset)
 		if err != nil {
 			// F-64②：平台级全量账号列举失败＝存储层出错 → 500（读接口没有「业务失败」这一说，
 			// 除了权限已经在上游拦掉；把 DB 故障伪装成 200 会让超管看到一张空表而以为平台没人）
 			s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 			return
 		}
-		writeJSON(w, 200, map[string]interface{}{"success": true, "users": users})
+		if users == nil {
+			users = []*store.User{} // 空页在 HTTP 层归一成 []（Go nil slice 会出 null，AGENTS §一·5）
+		}
+		writeJSON(w, 200, map[string]interface{}{
+			"success": true, "users": users, "total": total, "limit": limit, "offset": offset,
+			// has_more 按「本页打满请求档位」判；limit=0（不限）时恒 false——一次就取完了。
+			"has_more": limit > 0 && len(users) >= limit,
+		})
 		return
 	}
 	// 租户隔离：仅列出生效租户（超管可切换）下的用户

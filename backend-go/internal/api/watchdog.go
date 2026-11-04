@@ -430,15 +430,31 @@ func (s *Server) runGrowthScan() {
 	// 先独立跑一遍把全部租户的「余额清零起点」刷新到位，再取候选集合：
 	// 候选判据是「清零起点距今已满 48h」，所以本轮刚清零的租户一定不会被当成候选，
 	// 分成两遍只是为了让起点数据先与当前余额对齐。
+	// ★ 2026-11-04 体验批 A12：这一圈原本是**逐租户各打一次 TenantRemainTotal**（N 个付费租户
+	//   ＝N 次往返，跑在与客户请求同一个进程里）。现改一次批量取，口径由
+	//   store.TenantsRemainTotalMap 与 TenantRemainTotal 共用同一条 SQL 保证（等值锁见
+	//   store/tenants_remain_total_map_test.go）。
+	paid := make([]int64, 0, len(tenants))
 	for _, t := range tenants {
 		if t.ID <= 1 {
 			continue
 		}
-		grants, permanent, e := s.Store.TenantRemainTotal(t.ID)
-		if e != nil {
+		paid = append(paid, t.ID)
+	}
+	grantsByTID, permanentByTID, e := s.Store.TenantsRemainTotalMap(paid)
+	if e != nil {
+		return
+	}
+	for _, tid := range paid {
+		// ⚠️ 必须"读数在位才判"：改造前那一圈是 err ⇒ continue（跳过这个租户），
+		//   批量版对应的形态是**这个租户不在读数里**（补行失败或行缺失）。
+		//   拿"缺席"当"余额 0"来 MarkZero＝把一次读失败打成"该发挽回礼包"，
+		//   下一轮客户会莫名收到"体验用尽"的站内信——那是把故障写进客户视野。
+		perm, okP := permanentByTID[tid]
+		if !okP {
 			continue
 		}
-		s.Store.S7MarkZero(t.ID, grants+permanent <= 0)
+		s.Store.S7MarkZero(tid, grantsByTID[tid]+perm <= 0)
 	}
 	// ① 挽回礼包（每租户终身一次）
 	for _, tid := range s.Store.S7RescueCandidates(48 * time.Hour) {
@@ -580,19 +596,40 @@ func (s *Server) runWatchdogCheck() {
 	if s.Store != nil && s.Ten != nil {
 		tenants, err := s.Ten.List()
 		if err == nil {
+			// ★ 2026-11-04 体验批 §2.12 A12：这一圈原本是逐租户各打一次 TenantRemainTotal
+			//   （N 个启用租户＝N 次往返，跑在与客户请求同一个进程里）。现改一次批量取，
+			//   口径由 store.TenantsRemainTotalMap 与 TenantRemainTotal 共用同一条 SQL 保证
+			//   （等值锁见 store/tenants_remain_total_map_test.go），与 runGrowthScan 那圈同一口。
+			active := make([]int64, 0, len(tenants))
+			for _, t := range tenants {
+				if t.Status != tenant.StatusActive {
+					continue
+				}
+				active = append(active, t.ID)
+			}
+			grantsByTID, permanentByTID, e := s.Store.TenantsRemainTotalMap(active)
+			if e != nil {
+				// 批量读数整体失败 ⇒ 两把尺子置空，下面逐个租户按「读数缺席」跳过，
+				// 与改造前「逐租户 err ⇒ continue」同方向，绝不把读失败当余额 0。
+				grantsByTID, permanentByTID = nil, nil
+			}
 			for _, t := range tenants {
 				// 仅巡检启用状态的租户（禁用租户不产生余额告警）
 				if t.Status != tenant.StatusActive {
 					continue
 				}
-				// ★ C13（2026-09-12）：口径统一 TenantRemainTotal（未过期台账 + 永久余额），
-				//   旧实现只看 balance_accounts 永久桶，与预检/SettleExhausted 已整改的
-				//   口径分裂：租户明明有 30 万体验 token 却被告"余额耗尽"。
-				g, perm, err := s.Store.TenantRemainTotal(t.ID)
-				if err != nil {
+				// ★ C13（2026-09-12）：口径仍是「未过期台账 + 永久余额」两桶之和，
+				//   旧实现只看 balance_accounts 永久桶，与预检/SettleExhausted 口径分裂：
+				//   租户明明有 30 万体验 token 却被告"余额耗尽"。
+				// ⚠️ 必须「读数在位才判」：改造前是 err ⇒ continue（读失败跳过这个租户），
+				//   批量版对应形态是这个租户不在读数里（补行失败/行缺失）。把"缺席"当
+				//   "余额 0" ⇒ 把一次读失败打成"客户余额耗尽"告警并群发邮件/站内信，
+				//   那是把故障写进客户视野（与 runGrowthScan 那圈「缺席才跳过」同族）。
+				perm, okP := permanentByTID[t.ID]
+				if !okP {
 					continue
 				}
-				remain := g + perm
+				remain := grantsByTID[t.ID] + perm
 				// 余额耗尽 → critical 级告警；低于阈值 → warning 级告警
 				if remain <= 0 {
 					msg := "租户余额已耗尽，翻译服务将被暂停"

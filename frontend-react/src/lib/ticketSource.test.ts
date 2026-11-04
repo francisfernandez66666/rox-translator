@@ -3,10 +3,10 @@
 //
 // 三件事：
 //   L1 **名单等值**：TICKET_SOURCE_VALUES 与 Go 侧 backend-go/internal/orchestrator/workflow.go
-//      的 Source* 常量值逐字相同（名单从 Go 现读派生，不是把五个值再抄第二份）；
-//   L2 **每个值都有 12 语种文案**：五个值映射的词典键在 zh/en 底典与十份 locales 全量词典里
-//      逐键非空（漏一份语种即红——locales.core.test.ts 管 ALL_KEYS 全集，这里管这五键点名）；
-//   L3 **名单外值不吞**：第六档出现时原样回显档位名（不渲染空白、不判错）；
+//      的 Source* 常量值逐字相同（名单从 Go 现读派生，不是把六个值再抄第二份）；
+//   L2 **每个值都有 12 语种文案**：六个值映射的词典键在 zh/en 底典与十份 locales 全量词典里
+//      逐键非空（漏一份语种即红——locales.core.test.ts 管 ALL_KEYS 全集，这里管这六键点名）；
+//   L3 **名单外值不吞**：名单外的档位出现时原样回显档位名（不渲染空白、不判错）；
 //   L4 **不许长出第二份表**：全仓非测试源码里，`model_with_source_fallback` 这个档位字面量
 //      **只许出现在 lib/ticketSource.ts 一处**（映射表唯一性）；其余任何文件内联这份名单
 //      ＝第二把尺子，当场判红。正/负两侧同判（射程自证）。
@@ -56,7 +56,7 @@ describe('工单来源档取词锁（九-2）', () => {
     expect(TICKET_SOURCE_VALUES.length).toBeGreaterThanOrEqual(5) // 下限：名单缩水＝锁失明
   })
 
-  it('L2 五个值各映射到五个互不相同的 tk.src* 键（取词点唯一、一档一键）', () => {
+  it('L2 六个值各映射到六个互不相同的 tk.src* 键（取词点唯一、一档一键）', () => {
     setLang('en')
     const labels = TICKET_SOURCE_VALUES.map((v) => ticketSourceLabel(v))
     for (const [i, v] of TICKET_SOURCE_VALUES.entries()) {
@@ -66,12 +66,12 @@ describe('工单来源档取词锁（九-2）', () => {
       expect(Object.entries(baseEn).some(([k, val]) => k.startsWith('tk.src') && val === labels[i]),
         `档位 ${v} 的文案不在 tk.src* 键集里`).toBe(true)
     }
-    expect(new Set(labels).size).toBe(TICKET_SOURCE_VALUES.length) // 五档五案，不许两档共用一句
+    expect(new Set(labels).size).toBe(TICKET_SOURCE_VALUES.length) // 每档一案，不许两档共用一句
     setLang('zh')
   })
 
-  it('L2b 五个键在 12 份词典里全部存在且非空（键名字面量点名）', () => {
-    const keys = ['tk.srcKb', 'tk.srcModel', 'tk.srcModelFallback', 'tk.srcUpstreamFailed', 'tk.srcApproved']
+  it('L2b 六个键在 12 份词典里全部存在且非空（键名字面量点名）', () => {
+    const keys = ['tk.srcKb', 'tk.srcModel', 'tk.srcModelFallback', 'tk.srcUpstreamFailed', 'tk.srcApproved', 'tk.srcComplianceSkipped']
     for (const k of keys) {
       expect(baseZh[k], `zh 缺键 ${k}`).toBeTruthy()
       expect(baseEn[k], `en 缺键 ${k}`).toBeTruthy()

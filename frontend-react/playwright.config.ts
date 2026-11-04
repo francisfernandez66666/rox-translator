@@ -24,6 +24,11 @@ export default defineConfig({
   fullyParallel: true,
   // 重试 1 次兜的是环境抖动（后端刚起未预热、mock LLM 首请求慢、异步工单排队），
   // 不是用来掩盖产品缺陷：真正的回归由断言口径本身保证（失败即留 trace，见下方 trace 选项）。
+  // ★ 2026-11-04 体验批 §8 挂账：这条**全局档位仍然生效**，但不再覆盖
+  //   e2e/mobile_uat.spec.ts 的「移动端全站页面无横向溢出巡检」——该用例在文件内用
+  //   test.describe.configure({ retries: 0 }) 单独关掉重试，让慢在首轮现形。
+  //   旧注释自认那条用例靠本档位兜过超时，若不给它单开例外，§2 的提速成果会被重试重新盖住。
+  //   这个例外由 src/e2eRetryGuard.lock.test.ts 机械钉住，删掉即判红。
   retries: 1,
   // ★ P2（2026-09-16）：动作/导航显式超时收敛——旧版仅靠全局 30s，慢响应时
   // 单条 expect 可占满超时；显式 actionTimeout 让失败更快暴露、减少 worker 拖尾。

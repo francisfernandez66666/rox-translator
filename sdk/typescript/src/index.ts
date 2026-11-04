@@ -43,6 +43,38 @@ export interface TaskCreated {
   file_count?: number; // 文件数量（仅文件任务）
 }
 
+/**
+ * 文本任务译文来源档（`sources[语言码]`）。
+ *
+ * ★ 2026-11-03 合规批新增第六档 `compliance_skipped`：该语种整段命中内容合规禁词，
+ *   平台按合规要求**不翻译**、交付位保留原文（零模型调用）。
+ *   它与 `unresolved_lines` / `upstream_dead_lines` / `truncated_lines` 三档互斥——
+ *   那三档答「想翻却没翻出来」，这一档答「按合规要求决定不翻」，**不计入未译出**。
+ *   名单与后端 `orchestrator.Source*` 常量同源，请按等值分支，不要做子串判断。
+ */
+export type SourceKind =
+  | "kb"
+  | "model"
+  | "model_with_source_fallback"
+  | "upstream_failed"
+  | "approved"
+  | "compliance_skipped";
+
+/**
+ * 合规跳过的一条素材（`compliance_items[]`）。
+ *
+ * `side` 是**对外契约**，只有两个值：
+ * - `input`：源文命中禁词 ⇒ 该行不进模型、不交付译文、按原文保留（`terms` 回显命中的词面，最多 5 项）；
+ * - `output`：模型自产违禁译文 ⇒ 该行译文被丢弃、按原文保留（**不回显词面**，只报行号）。
+ */
+export interface ComplianceItem {
+  lang: string;       // 语言码
+  line: number;       // 1 起的行号（与「未译出内容」一节同一口径）
+  terms?: string[];   // 命中词面（仅 input 侧有）
+  side: "input" | "output";
+  lead?: string;      // 处置说明（平台统一下发，可直接展示）
+}
+
 /** 任务状态响应 */
 export interface TaskStatus {
   task_id: number;
@@ -51,6 +83,20 @@ export interface TaskStatus {
   error_code?: string;  // 错误码（如 insufficient_balance）
   message?: string;     // 错误信息
   files?: { file_id: number; name: string; url: string }[]; // 文件列表（仅文件任务完成时）
+  // ===== 文本任务完成时内联返回（未完成态不出现这些键）=====
+  translations?: Record<string, string>;      // 语言码 → 译文
+  sources?: Record<string, SourceKind>;       // 语言码 → 译文来源档（六种，见 SourceKind）
+  unresolved_lines?: Record<string, number>;  // 语言码 → 按原文交付的行数（键缺席＝没有未译出行）
+  upstream_dead_lines?: Record<string, number>; // 其中判上游不可用的行数
+  truncated_lines?: Record<string, number>;     // 其中被模型输出截断的行数
+  /**
+   * 语言码 → 按合规要求跳过翻译的处数。
+   * ★ **键缺席＝该语种没有合规跳过**（接口不会下发 0 或 null）；
+   *   与上面三档互斥，**不要**把它加进「未译出」统计。
+   */
+  compliance_skipped?: Record<string, number>;
+  /** 合规跳过的逐条素材（同源：交付 .md 末尾「合规跳过」一节）。 */
+  compliance_items?: ComplianceItem[];
 }
 
 /** 余额查询响应 */

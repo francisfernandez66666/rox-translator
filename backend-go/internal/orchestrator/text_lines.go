@@ -13,6 +13,7 @@ package orchestrator
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"translator/internal/engine"
@@ -54,6 +55,18 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 	if nonEmptyLines(p.SourceText) < 2 {
 		return false // 单段不折腾（与旧路径等价，少两次模型调用）
 	}
+	// ★★ 2026-11-03 用户裁决①：工单通道接入内容合规闸，处置＝跳过。
+	// 判定**每单一次、语种循环之外**（理由与"不许按语种重复判"同 §23 那条领域词表的现网教训：
+	// 判定只吃源文，放进语种循环＝同一份源文重复判 N 次，而留痕会跟着变成每语种一条）。
+	// 闸门未开时这里回 nil，下面所有分支逐字等价于改造前（关档＝没有这个特性）。
+	pl := w.planTicketCompliance(p)
+	skippedByLang := map[string]int{}
+	var skipItems []ComplianceItem
+	// nonEmptySrc 是"这一单到底有几行可译内容"的唯一计数，给来源分派用：
+	// 只有**全部可译行都被合规跳过**才允许把该语种写成 compliance_skipped。
+	// 不这么收就会在"部分复用旧译文＋部分被跳"的语种上谎称整语种是合规跳过的
+	// （而客户手里那半段确实是译文）。
+	nonEmptySrc := nonEmptyLines(p.SourceText)
 	// 载荷里的 Translations 可能是 nil（FinalResult 是一段没带 translations 键的 JSON，
 	// loadPayload 只保证反序列化成功）。与下面 Sources 的守卫同一形态——缺这一句会在写入点
 	// panic「assignment to entry in nil map」，把整条流水线打挂。
@@ -84,6 +97,21 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 		for i, src := range srcLines {
 			if strings.TrimSpace(src) == "" {
 				outLines[i] = ""
+				continue
+			}
+			// ★ 2026-11-03 裁决①：命中禁词的行**不进模型**（保住"上游零暴露"这条收益），
+			//   该位按原文出货（不留白不丢行——留空会让交付行数比源文少，而 qa 的 structure/
+			//   数字规则正是按行数与数字差判整单驳回的，BUG-01/06 的病文本体）。
+			// ⚠️ 这一支排在"旧译文可用则复用"**之前**：合规判定不因上一轮已经翻出来过而让路，
+			//   否则闸上线当天，历史载荷里那一行的旧译文会继续投给客户（§一·13 那条「换件没修」
+			//   在交付面一侧的形态），而"这单已合规"的读数却说拦住了。
+			if pl.blocked(i + 1) {
+				outLines[i] = src
+				skippedByLang[lc]++
+				skipItems = append(skipItems, ComplianceItem{
+					Lang: lc, Line: i + 1, Terms: pl.hitsByLine[i+1], Side: ComplianceSideInput,
+					Lead: engine.SensitiveSkippedLead,
+				})
 				continue
 			}
 			if i < len(existing) && strings.TrimSpace(existing[i]) != "" &&
@@ -218,6 +246,11 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 			}
 		}
 		p.Translations[lc] = composeLineOutput(outLines)
+		// ★ 2026-11-03 裁决①的输出侧：撤下"整行没译"之后还要撤下"翻出来了但翻出了违禁内容"。
+		// 排在来源分派**之前**——它可能把某一行的译文换成原文，来源那一列答的是
+		// "这个语种的译文哪来的"，必须按撤完的最终形态写。
+		// 返回值＝被撤下的行数，来源分派要把它算进"交付位有多少行是原文"（见下 switch 首支）。
+		sweptOut := w.sweepComplianceOnOutput(ctx, p, srcLines, lc, pl)
 		if p.Sources == nil {
 			p.Sources = map[string]string{}
 		}
@@ -234,11 +267,22 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 		//    同一句还把**知识库直配命中**的语种也刷成了 model（本函数一行模型都没为它打）：
 		//    那是旧形态就存在的第二处背书，本轮顺手按"是否真打过模型"分开。
 		switch {
+		case nonEmptySrc > 0 && skippedByLang[lc]+sweptOut >= nonEmptySrc:
+			// ★ 2026-11-03 裁决①：**交付位全是原文** ⇒ 落第六档。
+			//   两个来源合起来数这一条：输入侧跳过的行（skippedByLang）与输出侧撤下的行
+			//   （sweptOut）。只看前者会漏掉"模型翻出来了、但翻出了违禁内容被整篇撤下"
+			//   那一形态——那时这一语种交付给客户的每一行同样是原文。
+			//   这里**不许**写 model（那是 §19 那条"回填过原文不许再写 model"的同一族读数背书），
+			//   也不许写 upstream_failed（上游完全正常，写了会把值班支去查一条好腿）。
+			//   排在 KB 那一支**之前**：全部可译行都已回落原文时，这一轮一行复用都没交付，
+			//   载荷里残留的历史 `kb` 不能替本轮的合规跳过说话（同一条「读数为失败背书」）。
+			p.Sources[lc] = SourceComplianceSkipped
 		case len(needSrc) == 0 && p.Sources[lc] == SourceKB:
 			// KB 命中且整语种复用 ⇒ 来源保持 kb（这一语种零模型调用，管理台按它算"本单零成本"）
 		case langDead:
 			p.Sources[lc] = SourceUpstreamFailed
-		case unresolvedByLang[lc] > 0:
+		case unresolvedByLang[lc] > 0 || sweptOut > 0:
+			// 有按原文回落的行（上游没译出 / 合规撤下）⇒ 这一档，不许写 model。
 			p.Sources[lc] = SourceModelWithFallback
 		default:
 			p.Sources[lc] = SourceModel
@@ -268,12 +312,48 @@ func (w *Workflow) translateTextPerLine(ctx context.Context, p *ticketPayload) b
 			p.UpstreamDeadLines[lc] = n
 		}
 	}
+	// ★★ 2026-11-03 用户裁决①/②：把输入侧跳过的计数与点名素材并进载荷。
+	// 输出侧（`sweepComplianceOnOutput`）已经**边跑边写**进 p 的两个键，所以这里必须 `+=` 而不是赋值——
+	// 直接赋值会把输出侧那一族撤下的行数抹掉，两个数加起来对不上交付面点名的条数。
+	if len(skippedByLang) > 0 {
+		if p.ComplianceSkipped == nil {
+			p.ComplianceSkipped = map[string]int{}
+		}
+		for lc, n := range skippedByLang {
+			p.ComplianceSkipped[lc] += n
+		}
+	}
+	if len(skipItems) > 0 {
+		p.ComplianceItems = append(p.ComplianceItems, skipItems...)
+		sortComplianceItems(p.ComplianceItems) // 交付面按语种内行号顺序点名，不靠 append 顺序
+		// 留痕一次（**每一族成因各一条**，不是每一行/每一语种一条）：
+		// 逐语种刷一条审计＝把一次命中刷成 N 条告警（告警中心＋群机器人＋站内信一起灌脏）。
+		w.recordOnce(ctx, pl, "ticket_input", pl.sampleTerms(), "工单逐行腿按合规跳过")
+	}
 	observability.Info(ctx, "文本工单逐行翻译/增量补译完成",
 		"reused_lines", reused, "retranslated_lines", retranslated,
 		"fallback_source_lines", unresolved, "upstream_dead_langs", deadLangs,
 		"truncated_lines", sumMapCounts(truncByLang),
+		"compliance_skipped", sumMapCounts(skippedByLang),
 		"langs", len(p.TargetLangs))
 	return true
+}
+
+// sortComplianceItems 把点名素材排成**稳定序**（语种码 → 行号 → 成因档）。
+//
+// 为什么要显式排：素材是两个地方追加的（输出侧在语种循环内、输入侧在循环外），
+// 而交付面那一节是逐条列给客户看的。顺序不稳 ⇒ 同一份载荷两次渲染出两种顺序，
+// 客户会读成"内容变了"；跨端等值锁（服务端 .md 尾节 vs 前端详情区）也会随机红。
+func sortComplianceItems(items []ComplianceItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Lang != items[j].Lang {
+			return items[i].Lang < items[j].Lang
+		}
+		if items[i].Line != items[j].Line {
+			return items[i].Line < items[j].Line
+		}
+		return items[i].Side < items[j].Side
+	})
 }
 
 // sumMapCounts 把一个 map[string]int 的计数加总（只给 INFO 日志出一行总数，不进载荷）。

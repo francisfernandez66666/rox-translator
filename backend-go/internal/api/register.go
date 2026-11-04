@@ -404,7 +404,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		perms.SentenceBalance = trialSentences
 		perms.PackageCode = "trial"
 		pb, _ := json.Marshal(perms)
-		t, err := s.Ten.Create(req.Code, req.Name, "", string(pb))
+		t, err := s.createTenantWithRoot(req.Code, req.Name, "", string(pb))
 		if err != nil {
 			// ★ 脱敏（2026-09-12）：驱动错误不透吐（PG/sqlite 文案不同且含约束名）
 			if store.IsUniqueViolation(err) {

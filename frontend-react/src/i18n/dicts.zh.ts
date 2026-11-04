@@ -32,7 +32,8 @@ export const baseZh: Record<string,string> = {
   'common.forbidden': "无权限访问该资源",
   'common.reqFail': "请求失败 ({status})",
   'common.reqFailDetail': "请求失败 ({status}): {text}",
-  'common.timeout': "请求超时，请检查后端服务是否正常",
+  'common.timeout': "这一跳没能走完，可以再试一次；连续几次都这样才需要查后端",
+  'common.serverFail': '服务异常（{status}）',
   'common.netFail': "无法连接后端服务",
   'common.notLogged': "未登录",
   'common.chunkFail': "分片上传失败",
@@ -44,6 +45,7 @@ export const baseZh: Record<string,string> = {
   'common.exportFailCode': '导出失败 ({code})',
   'common.unset': '（未设置）',
   'common.retry': '重试',
+  'common.retryRequest': '重试该请求',
   'common.pageError': '页面出现异常',
   'common.unknownError': '未知错误，请尝试刷新页面',
   // ★ 2026-10-13 链路批④（#29）：懒加载分片取不到时的专用文案（现网表现＝切工单整页翻
@@ -253,6 +255,7 @@ export const baseZh: Record<string,string> = {
   'audit.operator': '操作者',
   'audit.empty': '暂无审计记录',
   'audit.tenant': '租户',
+  'audit.windowHint': '未指定开始日期时仅显示近 {days} 天；更早的记录请设置日期范围或导出 CSV',
   // 审计动作映射（操作列/筛选下拉按语言展示）
   // ★ #38/#33（2026-09-21）：补齐本两轮新增的动作码——未登记的动作在前端回退显示原始 code，
   //   审计页读得出但无法筛选定位，故新增可审计动作时必须同步补这张表（12 语种）。
@@ -380,6 +383,10 @@ export const baseZh: Record<string,string> = {
   'tk.deliveryTextTip': '仅输出译文内容（Markdown 文档），速度更快、成功率更高，并额外支持 doc / xls / ppt / odt / ods / odp / rtf / epub 等老格式；不还原原版式',
   'tk.fileHintText': '点击选择文件：常见 Office/文本格式，另支持 doc / xls / ppt / odt / ods / odp / rtf / epub（≤40MB）',
   'tk.downloadMd': '仅下载译文文案（.md）',
+  'tk.downloadMdRow': '下载译文',
+  'tk.downloadOriginalRow': '下载原格式',
+  'tk.originalRowMissing': '原格式未生成',
+  'tk.mdAfterDone': '译文完成后这里可下载',
   'tk.filesCount': '已选 {n} 个文件',
   // ★ 2026-10-30（D-5）：即时翻译带文件跳工单时，文件太大只带了元数据——请客户在本页重选一次
   'tk.instantReselect': '文件较大，请在下方重新选择「{name}」后建单',
@@ -412,6 +419,7 @@ export const baseZh: Record<string,string> = {
   'tk.qaRulePlaceholder': '占位符不一致', 'tk.qaRuleLength': '长度异常', 'tk.qaRulePunctuation': '标点异常',
   'tk.createHint': '创建后进入异步队列，完成后站内信通知下载；大文件翻译请使用此模式',
   'tk.myTickets': '我的工单',
+  'tk.listCapped': '本页显示最近 {limit} 条（共 {total} 条）',
   'tk.colNo': '工单号',
   'tk.colCreatedAt': '创建时间',
   'tk.colLangs': '目标语言', 'tk.run': '运行', 'tk.download': '下载', 'tk.detail': '进度',
@@ -704,6 +712,7 @@ export const baseZh: Record<string,string> = {
   'admin.tagPlatformAdmin': '平台管理员',
   'admin.tagCompany': '企业管理',
   'admin.tagDept': '部门管理',
+  'admin.notOnPlatformRoot': '此账号未挂在平台根，无法跨租户操作；要跨租户管理请把该账号归位到平台根',
 'admin.tenantRoot':'平台根（全局）',
   'admin.tenantSwitchPlaceholder': '切换生效租户',
 
@@ -896,6 +905,12 @@ export const baseZh: Record<string,string> = {
   'tk.srcModelFallback': '模型译文（含按原文回落的行）',
   'tk.srcUpstreamFailed': '上游失败（整语种按原文交付）',
   'tk.srcApproved': '审批终稿',
+  // ★ 2026-11-03 合规闸批：来源第六档 + 详情面「内容合规跳过」诚实块（只报事实、零承诺）
+  'tk.srcComplianceSkipped': '合规跳过（按原文交付）',
+  'tk.complianceTitle': '内容合规跳过',
+  'tk.complianceLangFmt': '{lang}：{n} 处按内容合规要求未翻译',
+  'tk.complianceItemLine': '{lang} 第 {line} 行',
+  'tk.complianceItemTerms': '命中词：{terms}',
   'ss.walletTiers': '分档明细',
   'ss.walletOrderHint': '消费顺序：免费赠送 → 有时效套餐 → 长期积分；同一组内先到期的先用',
   'ss.tierRegister': '注册赠送',

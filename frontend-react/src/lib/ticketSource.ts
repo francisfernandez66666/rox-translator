@@ -10,8 +10,13 @@
 //   · 值 → 词典键的映射表**只有这一份**（TICKET_SOURCE_KEYS），界面一律经 ticketSourceLabel() 取词；
 //     在任何调用方再内联一份 `x === 'model' ? '模型译文' : …` ＝第二把尺子，
 //     由 src/lib/ticketSource.test.ts 的「名单外不许长出第二份表」腿当场判红。
-//   · 名单外的值（后端将来加第六档）→ 原样回显档位名并照常渲染，**不吞、不判错**
+//   · 名单外的值（后端将来加第七档）→ 原样回显档位名并照常渲染，**不吞、不判错**
 //     （同 qaRuleLabel 的既有回退口径；新档补译是下一批 i18n 的活，不是把界面打 blank）。
+//   · ★ 2026-11-03 合规闸批：第六档 `compliance_skipped`（整语种按内容合规跳过、零模型调用、
+//     交付位＝原文）**必须有自己的文案**——它与 `upstream_failed`（上游断了）成因完全不同，
+//     共用一句会把值班支去查一条好腿（AGENTS §19「三档混成一味就无从对账」）。
+//     这一段**不参与** `UpstreamNoticeBlock` 的判据：那一块的 `unresolved` 语义是"想翻但没翻出来"，
+//     而合规跳过是"平台按合规要求不翻"（设计，不是缺陷）——混进去＝把设计报成缺陷。
 //   · 词典键 12 语种逐键补译由 locales.core.test.ts 保证（ALL_KEYS 全量覆盖）。
 // ============================================================================
 import { t } from '@/i18n'
@@ -23,6 +28,7 @@ export const TICKET_SOURCE_VALUES = [
   'model_with_source_fallback',
   'upstream_failed',
   'approved',
+  'compliance_skipped',
 ] as const
 
 /** 档位值 → 界面文案词典键（唯一映射表，禁止在别处再写一份） */
@@ -32,6 +38,7 @@ const TICKET_SOURCE_KEYS: Record<string, string> = {
   model_with_source_fallback: 'tk.srcModelFallback',
   upstream_failed: 'tk.srcUpstreamFailed',
   approved: 'tk.srcApproved',
+  compliance_skipped: 'tk.srcComplianceSkipped',
 }
 
 /**

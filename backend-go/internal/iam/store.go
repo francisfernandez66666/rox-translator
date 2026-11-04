@@ -379,8 +379,17 @@ func (s *Store) SetUserEmail(id, tid int64, email string) error {
 }
 
 // GetSuperAdminByUsername 按用户名查平台级管理员（role IN admin/super_admin）。
+// ★ 2026-11-04 体验批 A12：补 **确定序**（`ORDER BY is_home DESC, id`）。
+//
+//	自增号「用户名已可重名」之后，users.username 不再唯一，而这条原本是无 ORDER BY 的 LIMIT 1——
+//	PG 对无 ORDER BY 的 LIMIT 返回哪一行是**任意**的（AGENTS §18 那条「按用户名取身份行必须钉
+//	is_home=1」在 iam 侧的漏网面，UAT 侧 59 条腿同根因踩过一次）。
+//	⚠️ 本批只做"取哪一行变得确定"，**没有**把过滤改成 `is_home=1`：
+//	调用方 EnsureAdmin 的语义是"这个平台管理员已经存在就别再建"，
+//	加了硬过滤会让"唯一那一行是非家行"的库走进建号分支＝造出第二个同名管理员。
+//	收紧到 is_home=1 要与 §1 现网 R1 读数一起做（登记在方案 §8 挂账）。
 func (s *Store) GetSuperAdminByUsername(username string) (*User, error) {
-	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE username=? AND role IN ('admin','super_admin') LIMIT 1", username))
+	return scanUser(db.QueryRow(s.db, db.CurrentDialect(), "SELECT "+userCols+" FROM users WHERE username=? AND role IN ('admin','super_admin') ORDER BY is_home DESC, id LIMIT 1", username))
 }
 
 // GetUserByUsernameGlobal 跨全部租户按用户名查询（登录时多租户重名判定用）。
@@ -991,6 +1000,59 @@ func (s *Store) ListAllUsers() ([]*User, error) {
 		out = append(out, u)
 	}
 	return out, nil
+}
+
+// ListAllUsersPage 分页版「跨全部租户列出用户」（★ 2026-11-04 体验批 A6）。
+// 返回 (本页行, 全量总条数, 错误)。
+// ⚠️ 缺省档**刻意是「不限」**（limit<=0 ⇒ 与改造前那条无 LIMIT 的 SELECT 逐字等值），
+//
+//	而不是像工单列表那样给 200 封顶。这是实读消费面之后的结论：
+//	同一份 ListAllUsers 还被 5 处**内部计算**消费（按用户名找人、算已签署数、算平台账号数…），
+//	给一个小的默认档＝把那些统计悄悄算窄（AGENTS「新增防护不拿可用性交押金」同族）。
+//	分页由调用方**显式点档**；出栈带 total，前端才能如实说「这是第几页、共 N 人」。
+//
+// 排序与改造前同形：`ORDER BY tenant_id, id`（slice 1 补的 idx_users_tenant_id 罩得住这个序）。
+func (s *Store) ListAllUsersPage(limit, offset int) ([]*User, int, error) {
+	if offset < 0 {
+		offset = 0
+	}
+	var total int
+	if err := db.QueryRow(s.db, db.CurrentDialect(), "SELECT COUNT(*) FROM users").Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	d := db.CurrentDialect()
+	q := "SELECT " + userCols + " FROM users ORDER BY tenant_id, id"
+	args := []interface{}{}
+	switch {
+	case limit > 0:
+		q += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	case offset > 0:
+		// 只要了 offset、没要 limit：必须给一个「到末尾」的窗口，**不许静默吞掉 offset**
+		// （吞掉的表现为「第二页与第一页一模一样」——分页参数在位却什么都不做，最难归因的假绿）。
+		// 方言差异在这里显式分派（AGENTS §一·4）：SQLite 认 LIMIT -1，PG 只认 LIMIT ALL。
+		if d == db.DialectPostgres {
+			q += " LIMIT ALL OFFSET ?"
+		} else {
+			q += " LIMIT -1 OFFSET ?"
+		}
+		args = append(args, offset)
+	}
+	rows, err := db.Query(s.db, d, q, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*User
+	for rows.Next() {
+		u, err := scanUserRow(rows)
+		if err != nil {
+			continue // 单行坏数据跳过（与 ListAllUsers 同口径）
+		}
+		u.PasswordHash = ""
+		out = append(out, u)
+	}
+	return out, total, nil
 }
 
 // OrgNameMap 全部组织 ID→名称映射（跨租户展示所属组织用）。

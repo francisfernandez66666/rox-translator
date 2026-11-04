@@ -22,7 +22,7 @@
 //	  重取该行真实余额继续核销而非误报欠费；SQLite IMMEDIATE 下守卫恒真，PG 多实例才是它的战场）。
 //
 // ⚠️ 写点纪律（W22）：除本文件与 `wallet_refund.go` 之外，任何地方直改 `quota_grants."left"` 都算第二把尺子，
-// 由 `wallet_writepoint_gate_test.go` 按写点全集扫（AGENTS §一·13 缓存写点闸同一手法）。
+// 由 `wallet_order_gate_test.go` 按写点全集扫（AGENTS §一·13 缓存写点闸同一手法）。
 // =============================================
 package store
 

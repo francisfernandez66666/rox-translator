@@ -111,17 +111,63 @@ type ticketPayload struct {
 	// ★ 2026-10-26 用户追加裁决八-3c＋九-3（W8 与本批一起上）：只数**被 max_tokens 截断**那一档。
 	// 它与 upstream_dead 是两族——截断抬高预算单独重拨能救，上游断重拨一万次也不会好。
 	// 交付面那句"哪一语种、哪一档、几行"要的就是这一维；三档各记各的，不许混成一味。
-	TruncatedLines map[string]int         `json:"truncated_lines,omitempty"`
-	EvalNotified   map[string]bool        `json:"eval_notified,omitempty"` // 提醒幂等标记（key=阶段:语言）
-	Gate           *gate.GateResult       `json:"gate"`                    // Gate 校验结果
-	Culture        *culture.CultureResult `json:"culture,omitempty"`       // 语言文化闸门结果
-	QAReport       *qa.Report             `json:"qa_report,omitempty"`     // 确定性 QA 质检报告
-	RetryCount     map[string]int         `json:"retry_count,omitempty"`   // 语言 → 硬闸自动重译次数
-	GateHints      map[string]string      `json:"gate_hints,omitempty"`    // 语言 → 最近一次硬闸打回原因（供审批参考）
+	TruncatedLines map[string]int `json:"truncated_lines,omitempty"`
+	// ★★ 2026-11-03 用户裁决①「文本命中禁词后跳过禁词翻译」＋裁决②「md 里写明跳过的禁词」：
+	// 工单通道按合规要求**决定不翻**的处数（按语种）。
+	// 它与上面三档**不同族且互斥**：那三档答"想翻但没翻出来"（上游断／被截断／补译仍不合格），
+	// 这一档答"平台按合规要求不翻"。把设计记进失败计数＝§19 族二明令禁止的
+	// 「把不是缺陷的事给客户看」，而混记之后 `quality_flagged` 会被抬起、
+	// 客户收到一条指向不存在问题的「质检存疑」徽标（§14 音频那批已翻过一次这个案）。
+	ComplianceSkipped map[string]int `json:"compliance_skipped,omitempty"`
+	// ComplianceItems 逐条点名素材（交付面「合规跳过」那一节读它）。
+	// ⚠️ 词面**只在输入侧回显**（用户令：写明跳过的是哪个词）；输出侧（模型自产违禁译文）
+	//    只报"第几行被丢弃"、不回显词面——回显等于把违禁译文写进客户成品，比不点名更坏。
+	// 缺席优先：没有跳过时两个键都不出（出 0 会被读成"本该收 0"，§25-b 那条 points_free 同型）。
+	ComplianceItems []ComplianceItem       `json:"compliance_items,omitempty"`
+	EvalNotified    map[string]bool        `json:"eval_notified,omitempty"` // 提醒幂等标记（key=阶段:语言）
+	Gate            *gate.GateResult       `json:"gate"`                    // Gate 校验结果
+	Culture         *culture.CultureResult `json:"culture,omitempty"`       // 语言文化闸门结果
+	QAReport        *qa.Report             `json:"qa_report,omitempty"`     // 确定性 QA 质检报告
+	RetryCount      map[string]int         `json:"retry_count,omitempty"`   // 语言 → 硬闸自动重译次数
+	GateHints       map[string]string      `json:"gate_hints,omitempty"`    // 语言 → 最近一次硬闸打回原因（供审批参考）
 	// ★ 2026-10-24 DEF-02 的整单重发计数**不在这里**：它落 `tickets.repair_attempts` 列
 	//   （§10.1.2；判据见 Workflow.StructureRetryNeeded）。原先写成载荷字段会被任何一次
 	//   「整段重写载荷」的路径抹回 0，于是上限变软、坏单无限重发并每轮真扣费。
 }
+
+// ComplianceItem 交付面「合规跳过」那一节的一条素材。
+//
+// 行号口径与 engine 侧「未译出内容」那一节**完全一致**（按交付文档里的段落顺序、1 起，
+// 见 engine/file.go 的 untranslatedNotesFromSegments）——两处各数一次行号，
+// 客户就会拿到两节互相指不到同一行的点名（本仓「多把尺子」那一族）。
+//
+// Side 只有两个值，且它是**对外排障契约**（同 §13 那些分档名，逐字钉在测试里）：
+//   - ComplianceSideInput  源文命中 ⇒ 该行不进模型（上游零暴露）、不交付译文、按原文保留；
+//   - ComplianceSideOutput 模型自产违禁译文 ⇒ 该行的译文被丢弃、按原文保留，**不回显词面**。
+//
+// ★ 2026-11-03 补 `Lead`（**这一条是"注释点名了、实现却没人用"的现场**）：
+// 措辞的唯一事实源是 `engine.SensitiveSkippedLead`（两个渲染面——服务端 .md 尾节与前端详情区——
+// 共用同一句，AGENTS §一·5「那两处面是同一句话」的裁决手法）。文本工单**不产 .md**，
+// 所以它那一面读的就是这个字段；不带出去的话前端只能自己再写一句，
+// 而两处各写一份措辞正是「改一处留一处」的温床（本仓页脚/手册入口反复漂移过的那一族）。
+// 文件通道用的是另一句 `engine.SensitiveBlockedLeadForFile`（它的交付位是占位符，不是原文）——
+// 两通道共用一句会写出与成品不符的话。
+type ComplianceItem struct {
+	Lang string `json:"lang"` // 语种码
+	// Line＝1 起的行号；**0 表示"整篇"**（整篇型腿的译文行数对不齐源文时，
+	// 输出侧只能整篇撤下——见 sweepComplianceOnOutputWhole。渲染面读到 0 要出「整篇」，
+	// **不许**出「第 0 行」：那是一个客户无法定位到任何内容的行号）。
+	Line  int      `json:"line"`
+	Terms []string `json:"terms,omitempty"` // 命中词面（仅输入侧有；词包侧最多回显 5 项）
+	Side  string   `json:"side"`            // input | output
+	Lead  string   `json:"lead,omitempty"`  // 处置说明（唯一来源 engine.SensitiveSkippedLead）
+}
+
+// 合规跳过的两个成因档（对外排障契约，逐字钉住）。
+const (
+	ComplianceSideInput  = "input"
+	ComplianceSideOutput = "output"
+)
 
 // 工单载荷 Sources[lang] 的**唯一合法值名单**（★ 2026-10-26 用户追加裁决八-1）。
 // ⚠️ 这一档含 `approved`：它由审批面（internal/api/tickets.go）写，不在本包，但仍进同一张名单——
@@ -137,6 +183,13 @@ const (
 	SourceModelWithFallback = "model_with_source_fallback" // 模型译文，但含按原文回落的行
 	SourceUpstreamFailed    = "upstream_failed"            // 该语种判上游断，未译行全部按原文回填
 	SourceApproved          = "approved"                   // 审批终稿覆盖（人工改稿后落的那一语种；api 侧写入）
+	// ★ 2026-11-03 用户裁决①新增的第六档。**为什么必须加档而不是复用**：
+	// 这一列答的是"这一语种的译文哪来的"，而合规跳过的那一语种**一次模型都没拨**、
+	// 交付位是原文。写 `model`＝给失败背书（AGENTS §一·3 那条 `from` 档位同族、
+	// §19 那条「回填过原文就不许再写 model」的同一条判据）；写 `upstream_failed`＝谎报上游断了，
+	// 会把值班支去查一条完全正常的上游。⇒ 名单加一档，并**同批**把对外契约面全部跟上
+	// （名单等值锁／管理台来源列 12 语种文案／openapi.v1.json／内置文档中英两段／SDK 类型）。
+	SourceComplianceSkipped = "compliance_skipped" // 该语种按内容合规要求未交付模型译文（交付位一律是原文）
 )
 
 // parseTicketLang 从 target_langs 逗号分隔字符串解析语言列表。
@@ -353,6 +406,15 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 	//   return nil，流水线后半段照常把工单刷成 completed —— 生产任务 90 的假 completed 即此环。
 	//   非 human 来源或空载荷一律落回下方正常流程（对缺失语言全量翻译），绝不空转返回成功。
 	if strings.TrimSpace(t.RejectReason) != "" && t.RejectSource == store.RejectSourceHuman && payloadHasTranslation(p) {
+		// ★ 2026-11-03 合规优先于重翻：这一腿是**整篇一次调用**（把整段源文＋驳回意见一起喂模型），
+		// 源文里只要有一行命中，违禁原文就会随整篇进入上游。整篇形态物理上排不掉那一行，
+		// 所以取向＝整语种跳过、不拨模型（宁可少翻，也不把违禁内容送出去）。
+		// 不接这一句的后果是"被驳回的单反而绕过了合规闸"——驳回重翻正好是命中内容最常走的路。
+		pl := w.planTicketCompliance(p)
+		if w.skipLangsWholeTextByCompliance(ctx, p, p.TargetLangs, pl) {
+			w.savePayload(t, p)
+			return nil
+		}
 		for _, lc := range p.TargetLangs {
 			if strings.TrimSpace(p.Translations[lc]) == "" {
 				continue
@@ -362,7 +424,14 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 				p.Translations[lc] = rev
 				p.Sources[lc] = SourceModel // 来源标记为模型
 			}
+			// ★ 2026-11-03 输出侧兑底：输入侧只管"别把违禁原文送出去"，管不了"模型自己
+			//   写出违禁词"。这一腿是整篇调用，行数对得齐就按行撤、对不齐整篇撤（见函数头）。
+			// 来源档必须跟着改（上面刚写过 model，撤完还写 model 就是拿读数为失败背书）。
+			if n := w.sweepComplianceOnOutputWhole(ctx, p, p.SourceText, lc, pl); n > 0 {
+				markComplianceOutputSource(p, lc, n, nonEmptyLines(p.SourceText))
+			}
 		}
+		sortComplianceItems(p.ComplianceItems)
 		w.savePayload(t, p)
 		return nil
 	}
@@ -395,7 +464,26 @@ func (w *Workflow) runAIInitial(ctx context.Context, t *store.Ticket) error {
 		}
 	}
 	if len(need) > 0 {
+		// ★ 2026-11-03 整篇腿的合规跳（单段工单，或应急档 text_ticket_per_line=0 的多行工单）：
+		// 整篇一次调用的输入必然含命中那一行 ⇒ 这些语种整语种跳过、一次模型都不拨。
+		// ⚠️ 这条决定让**应急档让位给合规**：运营把逐行档关成 0 是为了省模型调用/排障，
+		//   不是为了让违禁原文进上游。锁＝orchestrator/ticket_compliance_gate_test.go C3。
+		pl := w.planTicketCompliance(p)
+		if w.skipLangsWholeTextByCompliance(ctx, p, need, pl) {
+			w.savePayload(t, p)
+			return nil
+		}
 		w.Engine.TranslateLangsInto(ctx, t.SourceText, need, p.Examples, p.Translations, p.Sources, srcLang, config.StageAIInitial)
+		// ★ 2026-11-03 输出侧兑底（同驳回重翻腿）：整篇调用的输入干净，不代表输出干净。
+		//   ⚠️ 位置必须在 TranslateLangsInto **之后**、savePayload **之前**——
+		//   放到之前那一侧撤下的是空串，等于这条腿一次都不会生效（"挂了但没在干活的锁"）。
+		srcTotal := nonEmptyLines(t.SourceText)
+		for _, lc := range need {
+			if n := w.sweepComplianceOnOutputWhole(ctx, p, t.SourceText, lc, pl); n > 0 {
+				markComplianceOutputSource(p, lc, n, srcTotal)
+			}
+		}
+		sortComplianceItems(p.ComplianceItems)
 	}
 	w.savePayload(t, p)
 	return nil
@@ -917,7 +1005,11 @@ func (w *Workflow) runFeedback(ctx context.Context, t *store.Ticket) error {
 		//   旧形态这里没有回填行所以走不到；本轮"绝不留空行"落地后回填成为常态，这条路就从没被走到变成常走。
 		// 粒度＝**整语种跳过**：这一对是整篇配对的，个别行混原文也不构成干净对子，
 		// 宁可少沉淀 11 行好译文，不许沉淀 1 行原文冒充译文（沉淀的代价是复发，少沉淀的代价只是一次没学到）。
-		if p.UnresolvedLines[lc] > 0 {
+		//
+		// ★ 2026-11-03 用户裁决①的副产品：合规跳过的行同样把**原文**留在交付位上，
+		// 所以这一族必须与回填同档处理——否则沉淀下去的是"违禁源文→违禁源文"这类对子，
+		// 以后每次命中都直出（§19 那条「回填行不许进正式 TM」的同一条判据，不是新规矩）。
+		if p.UnresolvedLines[lc] > 0 || p.ComplianceSkipped[lc] > 0 {
 			skipped++
 			continue
 		}

@@ -69,6 +69,10 @@ export async function billingConfigSave(data: { billing_enforced: boolean }): Pr
 // ==================== 租户配额（QPS/并发/每日上限） ====================
 
 /** 读取当前租户配额（QPS/并发/每日上限） */
+// ★ 2026-11-03 复核批 D-1：出参新增 `daily_wall_unit`（cost／legacy_chars_ignored／unlimited），
+//   它是**日限额当前真正生效的那把尺子**；`max_daily_chars` 只是「配了什么」，两者可以不一致
+//   （量纲不同，见 backend-go/internal/api/daily_budget.go 文件头）。前端唯一的码→文案映射在
+//   `@/lib/dailyWallUnit`，**不要在调用方各写一份 if**。
 export async function billingQuota(): Promise<AdminResp> {
   return request('/api/billing/quota', { headers: authHeaders() })
 }

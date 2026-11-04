@@ -26,6 +26,14 @@ func TestOrgSiblingUniqueMigrate(t *testing.T) {
 	if _, err := s.db.Exec(`DROP INDEX IF EXISTS idx_orgs_sibling_unique`); err != nil {
 		t.Fatalf("模拟老库（摘唯一索引）失败: %v", err)
 	}
+	// ★ 2026-11-04 体验批 A4：迁移链里新增的 RootOrgMigrate 会占掉 orgs 的头几行
+	//   （平台根组织 tenant_id=0 一定有一行）。旧写法从 id=1 硬铺，撞的是 orgs.id 主键冲突——
+	//   那是**夹具与迁移抢号**，不是去重语义坏了。改法＝现读 MAX(id) 往后铺，
+	//   "保留 id 最小行"那条断言的相对顺序一字未动（判据方向没翻）。
+	var base int64
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(id), 0) FROM orgs`).Scan(&base); err != nil {
+		t.Fatalf("读 orgs 现有最大 id 失败: %v", err)
+	}
 	ids := []struct {
 		parent int64
 		name   string
@@ -34,7 +42,7 @@ func TestOrgSiblingUniqueMigrate(t *testing.T) {
 	}
 	for i, x := range ids {
 		if _, err := s.db.Exec(`INSERT INTO orgs (id, tenant_id, parent_id, name, type) VALUES (?,?,?,?, 'dept')`,
-			i+1, 1, x.parent, x.name); err != nil {
+			base+int64(i)+1, 1, x.parent, x.name); err != nil {
 			t.Fatalf("铺设组织行 %d 失败: %v", i+1, err)
 		}
 	}

@@ -497,6 +497,14 @@ func ensureTables(conn *sql.DB) error {
 	if _, err := db.Exec(conn, d, `CREATE INDEX IF NOT EXISTS idx_tm_zh ON tm_segments(zh)`); err != nil {
 		return err
 	}
+	// ★ 2026-11-04 慢查询批：租户维度的计数/过滤索引。
+	// ⚠️ 它**只能建在这里**，不能放进 store 的 IndexPerfMigrate——`tm_segments` 是 KB 层建的表，
+	// store 迁移链跑它的时候表还不存在，那条 CREATE INDEX 会"失败但不中断启动"，
+	// 于是得到一条永远建不上、界面上毫无症状的装饰性索引
+	// （store/indexperf_gate_test.go 的 P2 首跑就是这么抓红的，属真缺陷不是测试写错）。
+	if _, err := db.Exec(conn, d, `CREATE INDEX IF NOT EXISTS idx_tm_tenant ON tm_segments(tenant_id)`); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1012,33 +1020,57 @@ func (k *KBDatabase) SegmentsForEmbedding(limit, offset int) ([]EmbedSeg, error)
 	return out, rows.Err()
 }
 
+// kbTrimCharsSQL 各家方言里「与 Go strings.TrimSpace 同集合」的剥除字符表。
+// Go 的 TrimSpace 走 unicode.IsSpace：\t \n \v \f \r 空格 U+0085 U+00A0（不换行空格）。
+// ⚠️ 这一条是 A9 的关键：SQL 侧的 TRIM/BTRIM **默认只剥空格**，照默认写就会把
+//
+//	"整格只有一个换行"的行在库侧算非空、在 Go 侧算空——两个读数不一致，
+//	而它是首屏那个"各语种覆盖数"的口径（等值锁 stats_agg_equals_test.go 逐字符各判一次）。
+func kbTrimCharsSQL() string {
+	if db.CurrentDialect() == db.DialectPostgres {
+		return "btrim(%s, chr(9)||chr(10)||chr(11)||chr(12)||chr(13)||chr(32)||chr(133)||chr(160))"
+	}
+	return "trim(%s, char(9,10,11,12,13,32,133,160))"
+}
+
 // Stats 知识库统计（指定租户）。
 // 参数：tenantID=租户 ID；返回总条数、各语言非空条数、段数（segCount 当前恒为 0）。
+// ★ 2026-11-04 体验批 A9：逐语言非空计数从「把 34 列整行拉进 Go 再按语言数」改为**库侧聚合**。
+//
+//	改造前是 O(行数 × 34) 的跨进程搬运（首屏另一半慢就在这），签名与出参形状一字未动 ⇒
+//	四个消费面（metrics.go / admin_openapi.go / server.go / 概览）零改动即整体提速。
+//	语义逐字保持：`非空 = 不是 NULL 且剥完空白后长度 > 0`（空白集合见 kbTrimCharsSQL 那段），
+//	且**某语种一条都没有时该键整条缺席**（不是出 0）——改造前那个 map 也是这么长的，
+//	出 0 会让前端把"没覆盖"与"覆盖了 0 条"读成两件事。
 func (k *KBDatabase) Stats(tenantID int64) (total int64, perLang map[string]int, segCount int64, err error) {
-	// 总条数
 	if err = db.QueryRow(k.db, db.CurrentDialect(), "SELECT COUNT(*) FROM tm_segments WHERE tenant_id=?", tenantID).Scan(&total); err != nil {
 		return
 	}
 	perLang = map[string]int{}
-	rows, err := db.Query(k.db, db.CurrentDialect(), "SELECT "+langCols+" FROM tm_segments WHERE tenant_id=?", tenantID)
-	if err != nil {
-		return
+	cols := strings.Split(langCols, ",")
+	if len(cols) != len(AllLangs) {
+		// 列清单与语种清单漂了（加语种只改一处就会撞这条）——宁可报错也不静默少算一个语种
+		return 0, nil, 0, fmt.Errorf("kb.Stats: 语种列清单与 AllLangs 长度不等（%d vs %d），请同步 langCols", len(cols), len(AllLangs))
 	}
-	defer rows.Close()
-	var vals [34]sql.NullString
-	for rows.Next() {
-		ptr := make([]interface{}, len(AllLangs))
-		for i := range ptr {
-			ptr[i] = &vals[i]
-		}
-		if err := rows.Scan(ptr...); err != nil {
-			continue
-		}
-		// 逐语言统计非空条数
-		for i, lc := range AllLangs {
-			if vals[i].Valid && strings.TrimSpace(vals[i].String) != "" {
-				perLang[lc]++
-			}
+	tf := kbTrimCharsSQL()
+	parts := make([]string, len(cols))
+	for i, raw := range cols {
+		col := strings.TrimSpace(raw)
+		parts[i] = "SUM(CASE WHEN " + col + " IS NOT NULL AND LENGTH(" + fmt.Sprintf(tf, col) + ") > 0 THEN 1 ELSE 0 END)"
+	}
+	q := "SELECT " + strings.Join(parts, ", ") + " FROM tm_segments WHERE tenant_id=?"
+	row := db.QueryRow(k.db, db.CurrentDialect(), q, tenantID)
+	vals := make([]sql.NullInt64, len(cols))
+	ptrs := make([]interface{}, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err = row.Scan(ptrs...); err != nil {
+		return 0, nil, 0, err
+	}
+	for i, lc := range AllLangs {
+		if vals[i].Valid && vals[i].Int64 > 0 {
+			perLang[lc] = int(vals[i].Int64)
 		}
 	}
 	return total, perLang, 0, nil

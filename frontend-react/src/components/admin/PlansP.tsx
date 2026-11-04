@@ -27,6 +27,9 @@ import {
   TEXT_LINE_TIER_RANGES,
   type TextLineTierField,
 } from '@/lib/textLineTiers'
+// ★ 2026-11-03 复核批 D-1：日限额「生效口径」三档的唯一映射（纯模块，不碰接口层，
+//   与 textLineTiers 同一条取向：加一档只改一处，夹具不必跟着改）。
+import { dailyWallUnitLabelKey } from '@/lib/dailyWallUnit'
 // ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两档的字段名/键名/区间/缺省同样只走纯模块
 //   （与上面同一族纪律；⚠️ 这一族**下界是 0**——0 是真实档位，别照抄那族的"0 拒收"）。
 import {
@@ -201,15 +204,22 @@ export function PlansP() {
   const [payModeCfg, setPayModeCfg] = useState('mock')
   const payModeLabel = ({ mock: t('billing.chMock'), sdk: t('billing.chSdk'), static_qr: t('billing.chStaticQR') } as Record<string, string>)[payMode] || payMode
   const [quotaForm, setQuotaForm] = useState<Any>({ qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_points: 0 })
+  // ★ 2026-11-03 复核批 D-1：日限额**生效口径**（后端 daily_wall_unit 原样承载）。
+  //   为什么必须显式出这一行：日计数器累加的是**成本**，而 `max_daily_chars` 是字符量纲，
+  //   两者之间隔着计价系数与 rate_card 单价×倍率 ⇒ 只配字符上限的租户这一档**当前不拦**
+  //   （取向与理由见 backend-go/internal/api/daily_budget.go 文件头）。此前界面上两行输入框
+  //   长得一模一样，运营读成"我配了日墙"，实际闸门根本没吃这个数——那正是本仓反复出过的
+  //   「保存成功却不生效」假配置形态。这里只**转述后端结论**（dailyWallUnitLabelKey），
+  //   **不许**按输入框里的数字自己推断拦不拦（量纲判定只在后端成立，AGENTS §一·11）。
+  const [quotaMeta, setQuotaMeta] = useState<{ ready: boolean; tenantSelected: boolean; unit: string; unlimited: { chars: boolean; points: boolean } }>({
+    ready: false, tenantSelected: true, unit: '', unlimited: { chars: false, points: false },
+  })
   // ★ F-55（2026-09-26 批 I-3）：配额表单的「可信度元数据」，三态各自拦一类误操作——
   //   ready=false：GET 没成功过。旧行为是空表单也能保存，等于拿默认值覆盖线上配额；
   //   tenantSelected=false：超管停在平台上下文（切换器没选具体租户）。此时读写的是「租户 0」
   //     这条不存在的路，屏上任何数字都不代表任何真实租户（F-55 的读侧根因）；
   //   unlimited：后端逐字段回带的「0＝不限」语义位。运行时判据是 maxDaily<=0 即放行
   //     （billing/quota.go），所以 0 不是「空值」而是「拆墙」，必须显式标出来而不是留在输入框里。
-  const [quotaMeta, setQuotaMeta] = useState<{ ready: boolean; tenantSelected: boolean; unlimited: { chars: boolean; points: boolean } }>({
-    ready: false, tenantSelected: true, unlimited: { chars: false, points: false },
-  })
   const [pkgs, setPkgs] = useState<Any[]>([])
   const [billingEnforced, setBillingEnforced] = useState(false)
   const [sensitiveGate, setSensitiveGate] = useState(true) // ★ S8 敏感词兑底闸开关
@@ -369,6 +379,8 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
     setQuotaMeta({
       ready: true,
       tenantSelected: r.tenant_selected !== false, // 老后端没这个键 → 视为已选中，行为不回退
+      // 老后端不带 daily_wall_unit ⇒ '' ⇒ 整行不渲染（不猜任何一档，见 lib/dailyWallUnit.ts 口径①）
+      unit: dailyWallUnitLabelKey(r.daily_wall_unit),
       unlimited: { chars: unl.max_daily_chars === true, points: unl.max_daily_points === true },
     })
   }, [guardRead])
@@ -1291,6 +1303,15 @@ async function savePayChannels() {
 
       <Panel title={t('plans.nav.quota')}>
         <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('billing.quotaHint')}</div>
+        {/* ★ 2026-11-03 复核批 D-1：**生效口径**单独一行（后端 daily_wall_unit 原样转述）。
+            与下面两个输入框的关系是「配了什么」vs「此刻按哪把尺子拦」——两者可以不一致，
+            而 operator 只能看见前者时一定会误判（见 lib/dailyWallUnit.ts 与 daily_budget.go 文件头）。
+            未知/缺失 ⇒ quotaMeta.unit 为空 ⇒ 这一行整行不出现（不给一句猜出来的读数）。 */}
+        {quotaMeta.unit !== '' && (
+          <div data-testid="quota-wall-unit" style={{ marginBottom: 10, fontSize: 15, color: 'var(--adm-hint)', lineHeight: 1.7 }}>
+            {t('billing.quotaUnitLabel')}：{t(quotaMeta.unit)}
+          </div>
+        )}
         {/* ★ F-55（2026-09-26 批 I-3）：把三种「屏上的数不可信」显式写在表单上方——
             没读回真值 / 超管没选租户 / 日墙取 0（0 的运行时语义是「不限」不是「空」）。
             提示条沿用本页 warn 令牌口径（--adm-warn-*，不写字面色值）。 */}

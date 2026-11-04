@@ -269,7 +269,7 @@ func legacyCycleOf(taskType string) string {
 //   - grant_mode=auto：事件发放只读 period（taskDedupKey + user_task_period_cnt 计数器），
 //     task_type 只是 #33 之前遗留的别名 ⇒ period 为真值，task_type := period。
 //     「每周发起翻译」的 cap_per_day=1 / cap_per_week=5 因此完全不受影响，
-//     不可能被这次订正变成「每天 5 次」（周任务领取回归＝task_rewards_cycle_test.go）。
+//     不可能被这次订正变成「每天 5 次」（周任务领取回归＝task_rewards_test.go）。
 //     period 非法（老库/老表单没下发）时先由 task_type 反推一次，避免把 auto 任务误降成 daily。
 //   - grant_mode=manual：人工领取的幂等键 claimDateKey 只认 task_type ⇒ task_type 为真值，
 //     period := task_type。**顺序绝不能反过来**：若用 period 覆写 task_type，

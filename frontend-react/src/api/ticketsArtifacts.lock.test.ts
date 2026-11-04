@@ -58,4 +58,20 @@ describe('两段式交付三面等值（B13）', () => {
     expect(page).toContain('artifactGroups.length > 0 && detail?.ticket')
     expect(page).toContain('artifactGroups.length === 0 && deliverables.length > 0')
   })
+
+  // ★ 2026-11-04 §5.4-B2 加的一腿：**行内**那颗钮也是一条分派路径，必须收进同一把尺子的射程。
+  // 本锁原先只判"详情弹窗里的分派与出栈同源"；行内加了 md／原格式两颗钮之后多出一条**新的**分派
+  // （从列表行的 artifact_summary 取 id）。不收进来＝新分派裸奔：后端把摘要改名或换形状，
+  // 弹窗那条照样绿（AGENTS §三「家族级锁要按全集判」的同一形态）。
+  it('行内两颗钮的取数与后端摘要出栈同源（§5.4-B2 新增分派）', () => {
+    // ① TS 类型侧：Ticket 上必须声明了 artifact_summary（不许靠 any 蒙过去）
+    expect(tsAPI).toContain('artifact_summary')
+    expect(tsAPI).toContain('TicketArtifactSummary')
+    // ② 渲染侧：原格式那颗钮的 id 只能来自这份摘要
+    expect(page).toContain('row.artifact_summary?.original?.id')
+    // ③ 后端出栈侧：handleTickets 必须真挂了这个键（两头都点名，才算"同源"而不是"两边各写各的"）
+    const goTickets = fs.readFileSync(path.join(repo, 'backend-go/internal/api/tickets.go'), 'utf8')
+    expect(goTickets).toContain('"artifact_summary"')
+    expect(goTickets).toContain('ticketArtifactSummary(artMap[t.ID])')
+  })
 })

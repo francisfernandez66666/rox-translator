@@ -106,6 +106,15 @@ func New(db *sql.DB) (*Store, error) {
 	// 回填的 task 归属要现读 user_task_rewards，注册归属要现读 user_trial_grants；
 	// 排在它们之前不是报错，而是"每条都判取不到、整批静默落 legacy"（那种坏法没有症状）。
 	s.WalletMigrate()
+	// ★ 2026-11-04 体验批 A4：租户/平台根组织行一次性回填（幂等）。挂在链尾、IndexPerfMigrate **之前**——
+	// 它是写数据的迁移，必须早于"只建索引"那一步，更要早于同一次启动里的读路径：
+	// 读路径（api/orgs.go 平台分支）本批已改成只查不写，回填没跑完＝平台树少一批租户。
+	s.RootOrgMigrate()
+	// ★ 2026-11-04 超时与慢查询批：只建索引、不改查询语义。挂在链尾是因为它**只读列、不搬数据**，
+	// 排前后都不影响别人；但必须排在补列迁移之后——idx_ul_tenant_created 吃的 created_at、
+	// idx_users_tenant_id 吃的 tenant_id 在极老库里都是后补的列，排在补列之前会"索引建失败并被记一条 WARN"。
+	//（那种失败不中断启动，所以清单式闸门锁 indexperf_gate_test.go 才是"到底建没建上"的唯一答案。）
+	s.IndexPerfMigrate()
 	s.RepairAutoincrementSeqs() // ★ 2026-09-03 通知串号根因：sqlite_sequence 与 max(id) 失步修复（幂等）
 	return s, nil
 }

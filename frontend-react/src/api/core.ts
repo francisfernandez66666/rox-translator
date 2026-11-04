@@ -244,6 +244,56 @@ export function errTraceId(e: unknown): string {
 }
 
 /**
+ * 列表类后台接口的显式超时档（★ 2026-11-04 体验批 A10）。
+ * 为什么要有这一个常量而不是在每个调用点写 45000：默认 30s 是"一次点击"的档，
+ * 管理台那几个列表（用户/用量/工单/通知/审计）在现网是**跨租户聚合＋分页前的大结果集**，
+ * 30s 把"慢但会好"打成"报错"，屏幕上就是用户报的那句超时。
+ * 只有这一个数字，五个调用点共用一把尺子（AGENTS §一·5「档位只有一份」同一口径）；
+ * 轻量档（未读数、健康探针）保持 request() 默认 30s，**不**跟着抬——
+ * 那些接口慢就是真有问题，给它 45s 只是把用户多按一次刷新。
+ * ★ 2026-11-04 本批收口：system.ts 的 systemHealth() 与 tickets.ts 的 notifications()
+ *   两处曾误挂 LIST_TIMEOUT_MS(45s)，已按 §2.10 复核回默认 30s 档（见两处调用点注释），
+ *   本注释自此与实现一致；/api/tickets 列表仍是列表类，保持 45s 不动。
+ */
+export const LIST_TIMEOUT_MS = 45_000
+
+// ============================================================================
+// 超时错误的「一键重试」出口（★ 2026-11-04 体验批 A10 · §2.10 Q-M1 默认「要」）
+// 背景：request() 超时那一档过去只抛普通 Error，界面红条只剩一句「没走完」，
+//   用户除了干等/整页刷新没有自救动作。AGENTS §一·5「慢与坏必须分开报」的完整形态
+//   是「慢」要给出口：这里把「重发同一个请求」的闭包挂在错误对象上，UI 红条
+//   （runGuarded → toastBus）把它渲染成一颗按钮即可，core 不反向依赖组件层。
+// ============================================================================
+
+/** 超时错误携带的一键重试出口（与 5xx「服务异常」档分开，只有这一档可重发） */
+export class TimeoutError extends Error {
+  /** 稳定标记：判定「这一跳没走完」而非后端 5xx，UI 据此决定是否渲染重试按钮 */
+  readonly isTimeout = true
+  /** 重发同一个请求（同一 url / 同一 init / 同一 timeoutMs）的闭包，由 request() 注入 */
+  readonly retry: () => Promise<unknown>
+
+  constructor(message: string, retry: () => Promise<unknown>) {
+    super(message)
+    this.name = 'TimeoutError'
+    this.retry = retry
+  }
+}
+
+/** 判定任意 catch 到的错误是否是「可重试的超时错误」（结构判据，跨模块边界也稳） */
+export function isTimeoutError(e: unknown): e is TimeoutError {
+  return !!e && typeof e === 'object'
+    && (e as TimeoutError).isTimeout === true
+    && typeof (e as TimeoutError).retry === 'function'
+}
+
+/** 可复用的重试包装：给任意错误，可重试就重发同一请求并返回结果，否则返回 undefined。
+ *  供 UI 红条的「重试」按钮直接调用，避免每个消费面自己拆错误对象。 */
+export async function retryRequest(e: unknown): Promise<unknown> {
+  if (!isTimeoutError(e)) return undefined
+  return e.retry()
+}
+
+/**
  * 通用 JSON 请求封装：自动附带认证头，非 2xx 抛出错误，返回解析后的 JSON。
  * 支持 options.timeoutMs 设置请求超时（默认 30 秒），超时自动 Abort 并抛出明确错误。
  */
@@ -293,8 +343,19 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       //   后者必须照旧抛出。只有带结构化体的错误才可能被 bizResp 收敛。
       const structBody = env.body
       if (!message) {
-        message = apiMsg('common.reqFailDetail', `请求失败 (${response.status})${env.display ? `: ${env.display}` : ''}`,
-          { status: response.status, text: env.display })
+        // ★ 2026-11-04 体验批 A10：5xx 与 4xx 分档，但**只在原文也拿不到时**才换句子——
+        //   §4.2-11 那条回归锁要的是「网关 HTML 原文拼进 message」，那是比"服务异常"更有用的信息，
+        //   不能被这一档顶掉（顶掉＝把一条既有回归改成新缺陷）。
+        //   5xx 无原文 ⇒ 「服务异常（状态码）· trace_id …」：trace_id 是日志里能查到的那一条，
+        //   人拿着它能直接定位，而"请检查后端服务"只能让人盲猜。
+        if (response.status >= 500 && !env.display) {
+          const tr = env.body && typeof env.body.trace_id === 'string' ? env.body.trace_id : ''
+          message = apiMsg('common.serverFail', `服务异常 (${response.status})`, { status: response.status })
+            + (tr ? ` · trace_id ${tr}` : '')
+        } else {
+          message = apiMsg('common.reqFailDetail', `请求失败 (${response.status})${env.display ? `: ${env.display}` : ''}`,
+            { status: response.status, text: env.display })
+        }
       }
       // ★ §4.2-3：403 越权集中识别——对外文案走统一解析器（本地化既有键），并钉稳定错误码
       //   FORBIDDEN（后端未回 code 时补），调用方据此分支；不清登录态（用户仍在线）。
@@ -314,7 +375,15 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       if (externalSignal?.aborted) throw error
-      throw new Error(apiMsg('common.timeout', '请求超时，请检查后端服务是否正常'))
+      // ★ 2026-11-04 体验批 A10：这一句原先写「请求超时，请检查后端服务是否正常」，
+      //   把人的调查方向直接指到服务器——而超时**绝大多数是这一跳没走完**（跨境链路、冷缓存、
+      //   慢查询），不是后端坏了。AGENTS §一·5「慢与坏必须分开报」的客户端版：
+      //   超时档只说"这一跳没走完、可以重试"；真 5xx 走下面那一条「服务异常（带 trace_id）」。
+      // ★ Q-M1（默认「要」）：给这一档挂「重发同一请求」的出口——retry 闭包复用**原始**
+      //   url / options（含同一 timeoutMs），UI 红条点一下就原样再发一次，不新建参数、不改判据；
+      //   外部 signal 也原样透传（同一 init），若它已 aborted 则由 request() 自己判回。
+      const retry = () => request<T>(url, options)
+      throw new TimeoutError(apiMsg('common.timeout', '这一跳没能走完，可以再试一次；连续几次都这样才需要查后端'), retry)
     }
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new Error(apiMsg('common.netFail', '无法连接后端服务'))

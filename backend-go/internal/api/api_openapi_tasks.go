@@ -43,6 +43,7 @@ import (
 	"translator/internal/errors"
 	"translator/internal/fileproc"
 	"translator/internal/llm"
+	"translator/internal/orchestrator"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
@@ -564,10 +565,24 @@ func (s *Server) handleOpenAPITaskStatus(w http.ResponseWriter, r *http.Request)
 			var payload struct {
 				Translations map[string]string `json:"translations"`
 				Sources      map[string]string `json:"sources"`
+				// ★ 2026-11-03 合规批：命中禁词而**按合规要求不翻**的处数（按语种）与逐条素材。
+				// 与 upstream_dead_lines/truncated_lines 那三档互斥——那三档答"想翻却没翻出来"，
+				// 这一档答"平台按合规要求决定不翻"。混记会把设计报成缺陷（§19 族二）。
+				ComplianceSkipped map[string]int                `json:"compliance_skipped"`
+				ComplianceItems   []orchestrator.ComplianceItem `json:"compliance_items"`
 			}
 			_ = json.Unmarshal([]byte(t.FinalResult), &payload)
 			resp["translations"] = payload.Translations
 			resp["sources"] = payload.Sources
+			// ★ 缺席优先：没有跳过就两个键都不出（出 0/[] 会被读成"本该收 0"，§25-b 那条同型）。
+			// 开放 API 是**机器读的那一面**，与 `sources` 第六档 `compliance_skipped` 必须同批出栈，
+			// 否则 SDK 客户能看到来源是"合规跳过"却拿不到「跳过了几处、哪些词」。
+			if len(payload.ComplianceSkipped) > 0 {
+				resp["compliance_skipped"] = payload.ComplianceSkipped
+			}
+			if len(payload.ComplianceItems) > 0 {
+				resp["compliance_items"] = payload.ComplianceItems
+			}
 		}
 	case "failed":
 		resp["error_code"] = errCode

@@ -138,6 +138,37 @@ func (s *Store) ListTicketArtifacts(ticketID int64) ([]*TicketArtifact, error) {
 	return out, nil
 }
 
+// ListTicketArtifactsForTickets 批量列多张单的产物（★ 2026-11-04 体验批 §5.4-B2）。
+// 顺序与 ListTicketArtifacts 逐字同形（ticket_id, file_id, lang, id）——
+// 「同一组里 md 在 original 之前」这条契约由 id 升序保证，两处若各排一次序迟早不一致。
+// 为什么新开批量口而不是让列表 handler 逐单查：工单列表页每张单都要带一份"这颗钮能不能点"的摘要，
+// 逐单查就是第二个 N+1（本批 §2.5 刚把进度那条 N+1 治掉）。
+// 空入参回**空 map**（不是 nil）；每张单在自己的 map 里也可能没有产物 ⇒ 调用方按"摘要缺席"渲染灰态。
+func (s *Store) ListTicketArtifactsForTickets(ids []int64) (map[int64][]*TicketArtifact, error) {
+	out := map[int64][]*TicketArtifact{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	args := make([]interface{}, 0, len(ids))
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	q := "SELECT " + ticketArtifactCols + " FROM ticket_artifacts WHERE ticket_id IN (" + placeholders(len(ids)) + ") ORDER BY ticket_id, file_id, lang, id"
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		a, serr := scanTicketArtifact(rows)
+		if serr != nil {
+			continue // 单行脏数据跳过（与逐单口同口径）
+		}
+		out[a.TicketID] = append(out[a.TicketID], a)
+	}
+	return out, nil
+}
+
 // GetTicketArtifact 取单件产物（强制 ticket_id 归属：aid 不属于该单即查不到 ⇒ 上层回 404）。
 // 参数：id=产物 ID；ticketID=工单 ID（来自已鉴权的详情/下载路径，绝不由客户端直接给表）。
 func (s *Store) GetTicketArtifact(id, ticketID int64) (*TicketArtifact, error) {

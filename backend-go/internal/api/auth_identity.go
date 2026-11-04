@@ -390,7 +390,7 @@ func (s *Server) ensurePersonalTenant(ctx context.Context, u *store.User, code s
 	perms.SentenceBalance = trialSentences
 	perms.PackageCode = "trial"
 	pb, _ := json.Marshal(perms)
-	t, err := s.Ten.Create(code, name, "", string(pb))
+	t, err := s.createTenantWithRoot(code, name, "", string(pb))
 	if err != nil {
 		if store.IsUniqueViolation(err) {
 			// 另一枪刚建好同一编码：复用它的，别把并发登录打成两家人。

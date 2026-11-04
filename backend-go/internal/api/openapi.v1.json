@@ -820,7 +820,7 @@
           },
           "sources": {
             "type": "object",
-            "description": "文本任务译文来源档：语言码 → 来源。**取值名单固定五种**：kb（翻译记忆直配，零模型调用）／model（模型译文且全部行可用）／model_with_source_fallback（模型译文，但有行未译出、已按原文交付）／upstream_failed（该语种判上游不可用，未译出行全部按原文交付）／approved（审批终稿覆盖）。请按枚举等值分支，不要做子串判断。",
+            "description": "文本任务译文来源档：语言码 → 来源。**取值名单固定六种**：kb（翻译记忆直配，零模型调用）／model（模型译文且全部行可用）／model_with_source_fallback（模型译文，但有行未译出、已按原文交付）／upstream_failed（该语种判上游不可用，未译出行全部按原文交付）／approved（审批终稿覆盖）／compliance_skipped（该语种整段命中内容合规禁词，按合规要求不译、交付位全是原文；与上面三档「想翻却没翻出来」互斥，不计入 unresolved_lines）。请按枚举等值分支，不要做子串判断。",
             "additionalProperties": {
               "type": "string",
               "enum": [
@@ -828,7 +828,8 @@
                 "model",
                 "model_with_source_fallback",
                 "upstream_failed",
-                "approved"
+                "approved",
+                "compliance_skipped"
               ]
             }
           },
@@ -851,6 +852,54 @@
             "description": "其中因模型输出被截断而未译出的行数（按语言码）。与 upstream_dead_lines 是两族，成因与补救动作不同。",
             "additionalProperties": {
               "type": "integer"
+            }
+          },
+          "compliance_skipped": {
+            "type": "object",
+            "description": "文本任务：按内容合规要求**决定不翻**的处数（按语言码）。与 unresolved_lines／upstream_dead_lines／truncated_lines 三档互斥：那三档答「想翻却没翻出来」，这一档答「平台按合规要求不翻」，因此**不计入**未译出三档与「质检存疑」。键缺席＝该语种没有合规跳过；不会下发 0 或 null。",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "compliance_items": {
+            "type": "array",
+            "description": "文本任务：合规跳过的逐条素材（与交付 .md 末尾「合规跳过」一节同源）。输入侧回显命中的词面（最多 5 项），输出侧只报行号、不回显词面。",
+            "items": {
+              "type": "object",
+              "properties": {
+                "lang": {
+                  "type": "string",
+                  "description": "语言码。"
+                },
+                "line": {
+                  "type": "integer",
+                  "description": "1 起的行号，口径与未译出内容那一节完全一致。"
+                },
+                "terms": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "命中词面。仅输入侧回显；输出侧不出现该键。"
+                },
+                "side": {
+                  "type": "string",
+                  "enum": [
+                    "input",
+                    "output"
+                  ],
+                  "description": "成因侧：input＝源文命中（该行不进模型、不交付译文、按原文保留）；output＝模型自产违禁译文（该行译文被丢弃、按原文保留、不回显词面）。"
+                },
+                "lead": {
+                  "type": "string",
+                  "description": "处置说明（客户可见一句，由平台统一下发，不要自行改写或本地转录）。"
+                }
+              },
+              "required": [
+                "lang",
+                "line",
+                "side"
+              ]
             }
           }
         }

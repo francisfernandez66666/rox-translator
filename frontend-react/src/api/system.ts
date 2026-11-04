@@ -15,16 +15,37 @@
 // ★ F-64②（2026-09-26 批 I-10）：本文件所有接口统一经 core.ts 的 bizResp 接线——
 //   HTTP 200 但业务体 success:false 会被如实降级为异常口径，调用方不再拿到「假成功」；
 //   新增接口一律写 bizResp(() => request(...))，禁止直返裸 request。
-import { bizResp, request, authHeaders, type AdminResp } from './core'
+import { bizResp, request, authHeaders, type AdminResp, LIST_TIMEOUT_MS } from './core'
 
-/** 获取系统健康状态（知识库/余额/流程/用量/模型等） */
+/** 获取系统健康状态（知识库/余额/流程/用量/模型等）
+ *  ★ 2026-11-04 §2.10：健康探针是轻量档，按方案走 request() 默认 30s，
+ *    **不**套 LIST_TIMEOUT_MS(45s)（与 core.ts 该常量注释一致）；慢就是真有问题，抬档只是让用户多按一次刷新。 */
 export async function systemHealth(): Promise<AdminResp> {
   return request('/api/system/health', { headers: authHeaders() })
 }
 
+/** 审计日志筛选条件（★ 2026-11-04 体验批 A3：由前端本地筛改为服务端筛）
+ *  为什么必须发出去：后端列表腿现在带**缺省 30 天界**，而面板原先不带任何参数、
+ *  拿回 100 条再在浏览器里按日期 filter——加界之后那种写法会把「30 天前的记录」
+ *  变成「筛不出来也没人说是为什么」。参数交给服务端判，界面才能如实说"这是近 30 天"。 */
+export interface AuditFilter {
+  action?: string
+  resource?: string
+  from?: string
+  to?: string
+  limit?: number
+}
+
 /** 获取审计日志列表 */
-export async function systemAudit(): Promise<AdminResp> {
-  return bizResp(() => request('/api/system/audit', { headers: authHeaders() }))
+export async function systemAudit(f?: AuditFilter): Promise<AdminResp> {
+  const parts: string[] = []
+  if (f?.action) parts.push(`action=${encodeURIComponent(f.action)}`)
+  if (f?.resource) parts.push(`resource=${encodeURIComponent(f.resource)}`)
+  if (f?.from) parts.push(`from=${encodeURIComponent(f.from)}`)
+  if (f?.to) parts.push(`to=${encodeURIComponent(f.to)}`)
+  if (f?.limit && f.limit > 0) parts.push(`limit=${encodeURIComponent(String(f.limit))}`)
+  const q = parts.length ? `?${parts.join('&')}` : ''
+  return bizResp(() => request(`/api/system/audit${q}`, { headers: authHeaders(), timeoutMs: LIST_TIMEOUT_MS }))
 }
 
 // ==================== 监控告警 ====================

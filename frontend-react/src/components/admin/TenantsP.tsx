@@ -19,6 +19,8 @@ import {
   type TenantInfo,
 } from '@/api'
 import { runGuarded } from '@/lib/runGuarded'
+// ★ §4.1/§4.2「三张脸」的判据出口（六档互斥，唯一实现；为什么不在面板里判，见该文件头）
+import { decideChargeOutcome } from '@/lib/tenantChargeOutcome'
 import { Panel, Field, toastResp, num } from './parts'
 import { useAdmin } from '@/stores/admin'
 import { t, tpl, useT, type Lang } from '@/i18n'
@@ -27,6 +29,15 @@ import { industries as fetchIndustries } from '@/api/industry'
 
 /** Any 租户管理出参宽松别名 */
 type Any = any
+
+/**
+ * 充值弹窗那条入口传给 charge() 的手填档位（表格「一步免收银台」不传，走 promptText）。
+ * ★ 特意提成具名类型而不写内联对象：§4.1 的 W1–W4 接线锁用「从函数签名往后找第一个 {」
+ *   切函数体，内联 `{ points: number; money: number }` 会给它一个假的函数体锚点
+ *   （实测锁红在 "expected '{ points: number; money: number }' to contain 'decideChargeOutcome('"）。
+ *   把类型挪出签名，那个「按花括号配平」的老手法才继续有效——改的是形态，不是判据方向。
+ */
+type ChargePreset = { points: number; money: number }
 
 /** 行业 code → 当前语言展示名（列表列用） */
 const industryLabel = (code: string, lang: Lang): string => industryName(code || '', lang) || '—'
@@ -134,20 +145,57 @@ export function TenantsP() {
   // 直接充值（走创建+支付两步）★ S1 积分口径（2026-09-15）：录入/提示均为积分，传 points 字段
   // 两步的目的：adminOrderCreate 先落一张 money=0 的订单（积分→内部 token 由后端按当期汇率换算，
   // 前端不碰 token 裸值），再 adminOrderPay 直接置付，等效超管代客「免收银台」到账。
-  async function charge(tt: TenantInfo) {
-    const points = await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
+  //
+  // ★★ 2026-11-04 体验批 §4.1「三张脸」（用户报的第 4 条：平台管理员给租户注入资金不生效）
+  //   旧形态的病灶是这两句：置付那一步**不判结果**，然后无条件 toastSuccess「已充值」。
+  //   于是"建单成功、置付没成"与"两步都成"在超管脸上长得一模一样，而钱根本没进去。
+  //   改成三张互不相同的脸：
+  //     ① 建单失败        ⇒ 红条（runGuarded 弹后端原文），不出账、不再走第二步；
+  //     ② 建单成功、置付失败 ⇒ **不绿**，报「订单已生成、尚未到账」并点名订单号，让人工去订单面板确认；
+  //     ③ 两步都成且回验通过 ⇒ 绿条。
+  //   另加 §4.2 的**到账回验**：置付响应带 balance_points（到账后现读余额）与 order_points（本单积分）。
+  //     判据是单向的：`balance_points >= order_points`——刚充进去的这笔必须**看得见地在余额里**。
+  //   ⚠️ 为什么不判"前值 + 本单 = 后值"：那需要一个"按租户号读余额"的接口，而后台现在没有
+  //     （billingQuota 只读**当前生效租户**）。为这条回验新开一个跨租户余额读点，
+  //     等于新增一条能读别人家余额的面——那是安全改动，不是测试改动，得单独拍板。
+  //     单向判据已经能抓住用户报的那个形态（"接口说成功而余额一动不动"，客户是空账户时必现）；
+  //     抓不住的那一档（账户里本来就有钱）在这里**如实报"没测到"**而不是判绿。
+  //   ⚠️ 旧注释里那句「钱已由 create 记账」**只在后端 auto_charge=1 且操作者是超管那一支成立**
+  //     （admin_billing.go 的 handleOrderCreate 分支）；把它当普适事实写在这儿，
+  //     下一个人就会顺着它把 ② 又改回"不判结果"。
+  // ★ 2026-11-04 第四波收口（§4.1 的第二处入口）：preset 非空＝充值弹窗那条路径，
+  //   它带手填的积分＋现金金额；preset 缺省＝表格「一步免收银台」那条（promptText 取积分、money=0）。
+  //   两条入口**必须共用这一份**两步链与六档判定——旧弹窗曾自己抄一份"建单成功就报绿、置付不判结果"，
+  //   于是同一个动作在两处给出两张不同的脸。抽参数是最小改法：charge() 函数体里那些
+  //   decideChargeOutcome／out.success 判据逐字不动，§4.1 的 W1–W4 接线锁与 M0138 变异体继续钉得住。
+  async function charge(tt: TenantInfo, preset?: ChargePreset) {
+    const points = preset ? String(preset.points) : await promptText({ body: tpl('tenants.chargePrompt', { name: tt.name }) })
     // 取消输入或填 0/负数都静默返回：取消不是错误，不该弹红条吓人
-    if (!points || Number(points) <= 0) return
-    const r = await runGuarded(() => adminOrderCreate({ tenant_id: tt.id, points: Number(points), money: 0 }))
-    if (!r || !toastResp(r)) return
+    if (!points || Number(points) <= 0) return false
+    const want = Number(points)
+    const r = await runGuarded(() => adminOrderCreate({ tenant_id: tt.id, points: want, money: preset?.money ?? 0 }))
     // r.order 未在 AdminResp 里声明（后端随成功体附带），取用时按宽松别名读
-    const o = (r as Any).order
-    // 支付这步不再判 success：钱已由 create 记账，置付失败宁可留在「待支付」让人工接手，
-    // 也不能在这里回滚或重复下单。但「网络断了」必须出声——旧写法裸 await，
-    // 置付请求连不上时是一条未处理 rejection，超管以为已经到账。
-    if (o && o.id) await runGuarded(() => adminOrderPay(o.id, tt.id))
-    toastSuccess(tpl('tenants.charged', { points }))
+    const o = (r as Any)?.order
+    let paid: Any | null = null
+    if (r && r.success && o && o.id) {
+      paid = await runGuarded(() => adminOrderPay(o.id, tt.id))
+    }
+    // 判定交给唯一判据函数（六档互斥；为什么收在那儿见 lib/tenantChargeOutcome.ts 文件头）
+    const out = decideChargeOutcome({
+      created: !!r && r.success === true,
+      hasOrderId: !!(o && (o.id || o.order_no)),
+      payReached: paid !== null,
+      paySuccess: !!paid && paid.success === true,
+      balancePoints: typeof paid?.balance_points === 'number' ? Number(paid.balance_points) : null,
+      orderPoints: typeof paid?.order_points === 'number' ? Number(paid.order_points) : null,
+    })
+    const vars = { no: String(o?.order_no || o?.id || ''), points: want }
+    if (out.success) toastSuccess(tpl(out.msgKey, vars))
+    else toastError(tpl(out.msgKey, vars))
     await load()
+    // 返回六档裁决给弹窗那条入口用：只有 credited 才关弹窗，其余档保持打开，
+    // 让超管照着提示去订单面板人工确认（待支付单还在，不回滚、不白丢）
+    return out.success
   }
 
   // removeTenant 删的是租户行本身：后端逐表清该 tenant_id 作用域下的全部业务表、最后删租户行
@@ -308,14 +356,12 @@ export function TenantsP() {
               onConfirm={async () => {
                 if (!(dlg && typeof dlg === 'object' && 'order' in dlg)) return
                 const tt = (dlg as { order: TenantInfo }).order
-                const r = await runGuarded(() => adminOrderCreate({ tenant_id: tt.id, points: Number(form.tokens || 0), money: Number(form.money || 0) }))
-                // toastResp 已负责失败弹错/成功提示：返回 false 时保持弹窗不关，让超管改数重试而不是白丢一张单
-                if (r && toastResp(r, t('tenants.charged'))) {
-                  const oid = Number((r as Any).order?.id ?? (r as Any).id ?? 0)
-                  // 置付失败只出声不回滚（订单留在待支付），理由同 charge()
-                  if (oid > 0) await runGuarded(() => adminOrderPay(oid, tt.id))
-                  setDlg(null)
-                }
+                // ★ 2026-11-04 第四波收口（§4.1 的第二处入口）：这里过去是"建单成功就
+                //   toastResp 报绿、置付不判结果"的**第二处旧病灶**——表格那条已在 slice3 改成
+                //   三张脸，弹窗漏了。现在两条入口共用同一个 charge()，六档判定只有一份实现。
+                //   失败档保持弹窗不关（待支付单不回滚），让超管改数或照提示去订单面板人工确认。
+                const ok = await charge(tt, { points: Number(form.tokens || 0), money: Number(form.money || 0) })
+                if (ok) setDlg(null)
               }}>
         <Field label={t('tenants.fieldPoints')}><input className="lc-input" type="number" value={num(form.tokens || 0)} onChange={(e) => setForm({ ...form, tokens: e.target.value })} /></Field>
         <Field label="¥"><input className="lc-input" type="number" value={num(form.money || 0)} onChange={(e) => setForm({ ...form, money: e.target.value })} /></Field>

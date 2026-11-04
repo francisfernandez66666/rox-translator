@@ -12,7 +12,7 @@
  * - 身份上下文：获取当前用户的账号/租户/组织部门信息
  */
 
-import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp } from './core'
+import { request, bizResp, authHeaders, API_BASE, handleUnauthorized, handleForbidden, apiMsg, type AdminResp, LIST_TIMEOUT_MS } from './core'
 // ★ B4（2026-10-24）：管理台建号（企业档）的回执结构体与邀请链接面共用一份定义，
 //   后端两处出栈是同一个 inviteLinkCreateResp，前端也必须只有一份形态。
 import type { InviteLinkCreateResult } from './invites'
@@ -51,7 +51,7 @@ export async function downloadUserImportTemplate(): Promise<boolean> {
 
 /** 获取后台用户列表 */
 export async function adminUsers(): Promise<AdminResp> {
-  return bizResp(() => request('/api/admin/users', { headers: authHeaders() }))
+  return bizResp(() => request('/api/admin/users', { headers: authHeaders(), timeoutMs: LIST_TIMEOUT_MS }))
 }
 
 /**

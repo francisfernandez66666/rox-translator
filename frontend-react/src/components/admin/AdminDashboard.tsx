@@ -165,6 +165,15 @@ export default function AdminDashboard() {
       )}
           {/* 部门管理员：组织级标签 */}
       {ad.myLevel === 2 && <StatusPill tone="idle">{t('admin.tagDept')}</StatusPill>}
+          {/* ★ 2026-11-04 §3.2 路线②：等级够但账号不在平台根 ⇒ 切换器缺席，**原因必须上屏幕**。
+              旧形态只有一句静默钳级（stores/admin.tsx），当事人看到的是"这个功能没了"，
+              实际发生的是"这个账号挂错了位置"——两半一起判，缺后半就是本条要修的缺陷。
+              只出声、不放宽判定（方案 §3.2 路线③被否：安全面判据不许再造第二把超管尺子）。 */}
+      {ad.platformBlocked && (
+        <span data-testid="admin-switch-blocked-reason" className="lc-pill" style={{ fontSize: 13 }}>
+          {t('admin.notOnPlatformRoot')}
+        </span>
+      )}
           {/* ★ F1：非超管顶栏显示其管理范围租户名 */}
       {!ad.isSuper && !!ad.tenantName && <StatusPill tone="idle">{ad.tenantName}</StatusPill>}
       {/* ★ E8：走 router navigate（pushState+合成 popstate 与 react-router 脱节） */}

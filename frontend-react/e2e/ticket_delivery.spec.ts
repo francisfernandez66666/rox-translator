@@ -266,4 +266,55 @@ test.describe('文件工单两段式交付（产物分组 → md 预览 → 原�
     }
     await page.screenshot({ path: 'artifacts/td4_mobile_320.png' });
   });
+
+  // ===== TD6（★ 2026-11-04 §5.2）：行内两颗下载钮——不必点开「进度」就能下 =====
+  // 用户报的第 5 条本体：译文 md 过去藏在「进度」展开里，行上没有。
+  // 目标形态＝**md 在前、原格式在后**（这个顺序就是"先看文字、再看排版件"的那个提醒）。
+  // ⚠️ 按记忆里那条 e2e 红线：`Link` 渲染成 <button>，取钮一律 getByRole/isVisible，
+  //    **不许用 count()**（display:none 的元素 count 仍回 1，那种判据在这里恒真）。
+  test('TD6 行内两颗下载钮在位、顺序为 md 在前、点击真发产物下载请求', async ({ page }) => {
+    test.setTimeout(300_000);
+    await login(page, USER, PASS);
+
+    const tid = await createTicket(page); // 内含"完成态才返回"的等待（150s 上限）
+    const row = page.locator('tr', { hasText: TICKET_TITLE }).first();
+
+    const mdBtn = row.getByTestId('tk-row-dl-md');
+    await expect(mdBtn, `工单 ${tid} 已完成，但行内没有「下载译文 md」那颗钮（§5 的报障本体）`)
+      .toBeVisible({ timeout: 15_000 });
+
+    // 原格式那一颗：要么是可点钮、要么是点名"未生成"的灰态——**不许整块沉默**
+    const origBtn = row.getByTestId('tk-row-dl-original');
+    const missingTip = row.getByTestId('tk-row-original-missing');
+    const hasOrig = await origBtn.isVisible().catch(() => false);
+    const hasMissing = await missingTip.isVisible().catch(() => false);
+    expect(hasOrig || hasMissing,
+      '完成态的原格式那一格既不是可点也不是点名灰态（静默缺席＝用户以为这个功能没了）').toBe(true);
+    expect(hasOrig && hasMissing, '原格式同时出现可点钮与"未生成"灰态（两档必须互斥）').toBe(false);
+
+    if (hasOrig) {
+      // 顺序判据（DOM 视线顺序，不写死"第几个子节点"）：md 必须在 original 之前
+      const order = await row.evaluate((tr) => {
+        const a = tr.querySelector('[data-testid="tk-row-dl-md"]');
+        const b = tr.querySelector('[data-testid="tk-row-dl-original"]');
+        if (!a || !b) return -1;
+        return (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? 1 : 0;
+      });
+      expect(order, '行内顺序不是「译文 md 在前、原格式在后」').toBe(1);
+
+      // 可达性探针：点它必须真的发出产物下载请求（断请求发出，而不是断界面变绿）
+      const resp = Promise.race([
+        page.waitForResponse((r) => /\/api\/tickets\/artifact\?/.test(r.url()), { timeout: 30_000 }),
+        new Promise<null>((res) => setTimeout(() => res(null), 30_000)),
+      ]);
+      await origBtn.click();
+      expect(await resp, '点行内「下载原格式」没有发出 /api/tickets/artifact 请求').not.toBeNull();
+    }
+    // 行内那颗钮的存在不等于「进度」里那套被搬走——弹窗仍是多文件×多语种的全集（§6.4 不动项）
+    const area = row.locator('xpath=ancestor-or-self::*');
+    expect(await area.count(), '行定位失败（ancestor 计数为零）').toBeGreaterThan(0);
+    await row.getByRole('button', { name: /进度|Progress/ }).first().click();
+    await expect(page.getByTestId('tk-artifacts'), '点「进度」后产物区不在（弹窗必须保留，本批只是**多**一个行内入口）')
+      .toBeVisible({ timeout: 15_000 });
+  });
 });

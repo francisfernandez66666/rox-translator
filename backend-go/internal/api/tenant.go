@@ -22,6 +22,7 @@ package api
 //   - 清除操作前建议先导出备份（代码注释约定）
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -32,11 +33,32 @@ import (
 
 	"translator/internal/auth"
 	apierrors "translator/internal/errors" // ★ F-46（批 I-9）：品牌图新增错误走统一出口（AGENTS §一·8）
+	"translator/internal/observability"
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
 
 // ============ SaaS 租户管理（管理后台，JWT admin 认证） ============
+
+// createTenantWithRoot 建租户并补「租户根组织」行。
+// ★ 2026-11-04 体验批 A4：这是 api 层**唯一**允许的建租户入口。
+// 为什么收成一个函数：A4 把「补根组织」从平台视图的读路径（每次 GET 遍历全租户补行）摘掉之后，
+// 这件事只剩两个合法发生地——启动回填（存量租户）与这里（增量租户）。
+// 漏挂一处的表现**不是报错**：ListPlatformOrgs 按 orgs 的 root 行铺平台树，
+// 缺行＝那个租户在平台树里不出现，屏幕上没有任何一条红（AGENTS「有自动降级的链路，能打开不算验收」同族）。
+// 补行失败**不回滚租户**：组织树缺柱子有读路径的 O(1) 自愈兜着，而"注册/建户整体失败"是更坏的代价；
+// 失败必须出声（observability.Warn），不许静默少一行。
+func (s *Server) createTenantWithRoot(code, name, expiresAt, permissions string) (*tenant.Tenant, error) {
+	t, err := s.Ten.Create(code, name, expiresAt, permissions)
+	if err != nil {
+		return nil, err
+	}
+	if _, e := s.Store.EnsureRootOrg(t.ID, t.Name); e != nil {
+		observability.Warn(context.Background(), "建租户: 根组织补行失败（平台树暂缺该租户，读路径可自愈）",
+			"tenant_id", t.ID, "err", e.Error())
+	}
+	return t, nil
+}
 
 // handleTenantList 租户列表接口（super_admin）：返回平台全部租户。
 // 参数 w: HTTP 响应写入器；r: HTTP 请求。返回: success=true 时携带 tenants 数组。
@@ -96,7 +118,7 @@ func (s *Server) handleTenantCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 创建租户
-	t, err := s.Ten.Create(req.Code, req.Name, req.ExpiresAt, req.Permissions)
+	t, err := s.createTenantWithRoot(req.Code, req.Name, req.ExpiresAt, req.Permissions)
 	if err != nil {
 		// ★ 脱敏（2026-09-12 PG 重研）：驱动错误不透吐（PG 泄漏约束名 tenants_code_key/SQLSTATE）
 		if store.IsUniqueViolation(err) {

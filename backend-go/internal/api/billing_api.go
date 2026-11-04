@@ -81,17 +81,16 @@ func (s *Server) gateUsageDepth(r *http.Request, withMoney bool) (int64, func(),
 	// 并发名额释放闭包：翻译流程结束后必须调用归还（★ 2026-09-09 TryAcquire 返回释放闭包，配对正确）
 	release := rl
 
-	// ★ 日限额口径（评审整改 D4）：max_daily_tokens（token 成本口径）优先；
-	//   未配置时回退旧 max_daily_chars 字符口径（存量租户兼容）
+	// ★ 日限额口径（★ 2026-11-03 复核批改写法）：判定只认 `max_daily_tokens`（与日计数器同一成本口径）。
+	//   旧形态在没配 tokens 时**直接拿 `max_daily_chars` 当同一侧**——那是"拿成本比字符"的量纲混用
+	//   （本包文件头 daily_budget.go 把病灶与取向写全了）。现在统一走那**一个**读数函数，
+	//   禁止在这里再拼第二个 if（一处判据两个读点就是本仓反复出事的形状）。
 	maxDaily := int64(0)
 	if s.Ten != nil {
 		if t, err := s.Ten.GetByID(tid); err == nil {
-			perms := tenant.ParsePerms(t.Permissions)
-			if perms.MaxDailyTokens > 0 {
-				maxDaily = perms.MaxDailyTokens
-			} else {
-				maxDaily = perms.MaxDailyChars
-			}
+			var unit string
+			maxDaily, unit = dailyBudgetFromPerms(tenant.ParsePerms(t.Permissions))
+			s.noteDailyBudgetUnit(unit) // 旧口径被忽略 ⇒ 每进程说一次（这一支**不放行则已，放行必出声**）
 		}
 	}
 	if err := s.Bill.CheckDailyQuota(tid, maxDaily); err != nil {
@@ -478,7 +477,7 @@ func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	chars, tokens, ok := s.quotaDailyPair(tid)
+	chars, tokens, unit, ok := s.quotaDailyPair(tid)
 	if !ok {
 		// ★ F-55：读取失败不再兜 0——0 是「不限」，把失败伪装成 0 就是给拆墙递刀。
 		observability.Error(r.Context(), "租户配额读取失败（日墙取值不可用）", "tenant_id", tid)
@@ -497,23 +496,35 @@ func (s *Server) handleTenantQuota(w http.ResponseWriter, r *http.Request) {
 		"max_daily_points": dailyPoints,
 		// ★ F-55：把「0=不限」显式化，前端输入框旁要显示「不限」而不是一个可以被原样存回去的 0
 		"unlimited": map[string]bool{"max_daily_chars": chars <= 0, "max_daily_points": dailyPoints <= 0},
+		// ★ 2026-11-03 复核批：这一面必须把**实际生效的那一把尺子**说出来。
+		//   旧形态只回 `max_daily_chars` 那个数字，而闸门现在不再吃它（量纲与日计数器不同，
+		//   见 daily_budget.go）——只回数字不回口径，运营就会读成"我配了日墙，怎么没拦"，
+		//   那正是本仓反复出过的「保存成功却不生效」假配置形态（est_tokens_config.go 点过同一族）。
+		//   读数与闸门走**同一个函数**（quotaDailyPair 里那一次），禁止在这处再拼第二个 if。
+		"daily_wall_unit": unit,
 	})
 }
 
-// quotaDailyPair 一次租户读取同时取回两道日墙（字符口径与积分/token 口径）。
-// 参数 tid: 租户 ID。返回 chars=每日字符上限、tokens=每日 token 上限、ok=是否取到真值。
+// quotaDailyPair 一次租户读取同时取回两道日墙（字符口径与积分/token 口径）**与生效口径**。
+// 参数 tid: 租户 ID。返回 chars=每日字符上限、tokens=每日 token 上限、
+// unit=**当前真正参与判定的那一把尺子**（取值见 daily_budget.go 那三个常数名）、
+// ok=是否取到真值。
 // ok=false 表示「存储层没配」或「查不到这个租户」——调用方必须把它与「值确实是 0」分开处理，
 // 因为 0 在本系统是「不限」的语义（billing/quota.go CheckDailyQuota），伪装成 0 等于拆墙（★ F-55）。
-func (s *Server) quotaDailyPair(tid int64) (chars, tokens int64, ok bool) {
+//
+// ★ 2026-11-03：`unit` 由本函数一并给出，是为了让"配额读写面显示哪把尺子在生效"与"闸门按哪把拦"
+// **同一次读取、同一个函数**算出来——两处各读各的 perms 迟早出现"面板说拦着、闸门其实没拦"。
+func (s *Server) quotaDailyPair(tid int64) (chars, tokens int64, unit string, ok bool) {
 	if s.Ten == nil {
-		return 0, 0, false
+		return 0, 0, dailyWallUnitUnlimited, false
 	}
 	t, err := s.Ten.GetByID(tid)
 	if err != nil || t == nil {
-		return 0, 0, false
+		return 0, 0, dailyWallUnitUnlimited, false
 	}
 	p := tenant.ParsePerms(t.Permissions)
-	return p.MaxDailyChars, p.MaxDailyTokens, true
+	_, unit = dailyBudgetFromPerms(p)
+	return p.MaxDailyChars, p.MaxDailyTokens, unit, true
 }
 
 // handleTenantQuotaSave 保存租户配额接口（tenant_admin 及以上；QPS/并发写入内存 Quota，每日上限写入租户 permissions）。
@@ -549,7 +560,7 @@ func (s *Server) handleTenantQuotaSave(w http.ResponseWriter, r *http.Request) {
 	//   而 store/audit.go 的 LogAuditDiff 不吃自动 diff，少列一个键就少一个键的轨迹。
 	// ★ F-55：取不到旧值（租户不存在/存储层异常）时直接中止——继续写就等于在
 	//   「看不见改什么」的前提下改生产配额，审计也无法自证。
-	beforeChars, beforeTokens, beforeOK := s.quotaDailyPair(tid)
+	beforeChars, beforeTokens, _, beforeOK := s.quotaDailyPair(tid)
 	if !beforeOK {
 		observability.Error(r.Context(), "租户配额保存前取值失败，已中止写入", "tenant_id", tid)
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "租户配额当前值读取失败，本次保存已中止"))
@@ -678,7 +689,7 @@ func (s *Server) quotaConcurrent(tid int64) int {
 // 参数 tid: 租户 ID。返回: 每日字符上限（0=不限）。
 // ⚠️ 需要区分「读取失败」与「确实是 0」的调用方（配额表单读写，★ F-55）请用 quotaDailyPair。
 func (s *Server) quotaDaily(tid int64) int64 {
-	chars, _, _ := s.quotaDailyPair(tid)
+	chars, _, _, _ := s.quotaDailyPair(tid)
 	return chars
 }
 
@@ -926,7 +937,7 @@ func (s *Server) handleUsageCost(w http.ResponseWriter, r *http.Request) {
 // quotaDailyTokens 租户每日 token 上限（permissions.max_daily_tokens，0=未配置）。
 // 薄委托到 quotaDailyPair，保证「字符墙/积分墙」两条读法同源（★ F-55：两套读法就是两套值）。
 func (s *Server) quotaDailyTokens(tid int64) int64 {
-	_, tokens, _ := s.quotaDailyPair(tid)
+	_, tokens, _, _ := s.quotaDailyPair(tid)
 	return tokens
 }
 

@@ -1,4 +1,4 @@
-// ============ stream_contract_delta_test.go 职责中文说明 ============
+// ============ stream_contract_delta_gate_test.go 职责中文说明 ============
 // 门禁 B1-2.2（DEF-P1-04，2026-11-01）：/api/chat/stream 的 **delta 帧不许带契约标签**。
 //
 // 与 engine 侧那批单测的分工：单测钉的是过滤器本身算得对不对，本文件钉的是

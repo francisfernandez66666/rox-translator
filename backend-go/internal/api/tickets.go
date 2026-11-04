@@ -317,8 +317,15 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 	}
 	// 隐私隔离：除超管外，一律只返回当前用户创建的工单（涉及用户隐私）
 	onlyMine := !auth.IsSuperAdmin(u)
+	// ★ 2026-11-04 体验批 A5：分页档位。脏参（非数字／负数／超上限）折回档位、不报错，
+	//   与 notifications 那条口径同形；档位常量只有一份（store.TicketPage*），这里只镜像判定入口。
+	limit := atoiDef(r.URL.Query().Get("limit"), 0)
+	offset := atoiDef(r.URL.Query().Get("offset"), 0)
+	// ★ 出栈的 limit/offset 必须是**真正生效的那一档**，不是回显入参（AGENTS §一·5 分页那条）：
+	//   脏值由 store 折档，客户端拿到的就是这一页实际用的档位，能对得上账。
+	effLimit, effOffset := store.EffectiveTicketPage(limit, offset)
 	// 租户隔离：仅查询生效租户下的工单
-	tickets, err := s.Store.ListTickets(s.effTenant(r, u), u.ID, onlyMine)
+	tickets, total, err := s.Store.ListTicketsPage(s.effTenant(r, u), u.ID, onlyMine, limit, offset)
 	if err != nil {
 		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：工单列表读的是本进程存储层，查询失败属服务端故障。
 		//   旧写法在 HTTP 层永远是 200：按状态码分支的客户端（SDK、监控、重试器）把它读成成功，
@@ -327,7 +334,39 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态，避免全量 N+1）
+	// ★ A5 治 N+1：原先每张运行中单各查一次 ticket_state ＋ 一次 ticket_files（10 张＝20 次往返）。
+	//   现先把运行中的 id 收齐、两条批量各取一次，再在内存里按单分组。
+	//   粒度保持"只给运行中的单查"——终态单的进度是常量，批量取整表反而更慢。
+	running := make([]int64, 0, len(tickets))
+	for _, t := range tickets {
+		if t.Status == "queued" || t.Status == "in_progress" {
+			running = append(running, t.ID)
+		}
+	}
+	stateMap, err := s.Store.TicketStatesForIDs(running)
+	if err != nil {
+		// 批量口失败**不**把整页打成 500：进度是一列装饰值，取不到就按档位兜底（queued 10／in_progress 10），
+		// 表现是"进度条不动"而不是"列表打不开"。旧形态逐条查时同样忽略错误，语义不变。
+		stateMap = map[int64][]*store.TicketState{}
+	}
+	fileMap, err := s.Store.TicketFilesForIDs(running)
+	if err != nil {
+		fileMap = map[int64][]*store.TicketFile{}
+	}
+	// ★ §5.4-B2：行内两颗下载钮需要每张单的产物摘要，所以**这一趟顺手批量取一次**（净增成本≈0）。
+	//   为什么不能"点击时再取详情"（方案里的 B1）：灰态文案要能说"有几语种、还差哪一件"，
+	//   拿不到摘要就只能写一句空泛的"完成后"——那是把「有内容地缺席」退回「沉默的灰钮」。
+	allIDs := make([]int64, 0, len(tickets))
+	for _, t := range tickets {
+		allIDs = append(allIDs, t.ID)
+	}
+	artMap, err := s.Store.ListTicketArtifactsForTickets(allIDs)
+	if err != nil {
+		// 与 stateMap 同一取向：摘要读不到不砍列表，退化成"每行都显示生成中"，
+		// 而**详情弹窗仍是全集**（那里逐单查，不受这一支影响）。
+		artMap = map[int64][]*store.TicketArtifact{}
+	}
+	// ★ 运行中工单附实时进度百分比（后端唯一真源；仅运行中才查状态）
 	// 出参折积分口径（tokens_billed → points_billed，2026-09-19）
 	out := make([]map[string]interface{}, 0, len(tickets))
 	for _, t := range tickets {
@@ -341,16 +380,69 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request) {
 			out = append(out, tv)
 			continue
 		}
-		states, _ := s.Store.TicketStates(t.ID)
-		tfiles, _ := s.Store.TicketFiles(t.ID)
 		pct := 10
 		if t.Status == "in_progress" {
-			pct = ticketProgressPct(t, states, tfiles)
+			pct = ticketProgressPct(t, stateMap[t.ID], fileMap[t.ID])
 		}
 		tv["progress"] = pct
 		out = append(out, tv)
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": out})
+	// ★ §5.4-B2：每行补一份产物摘要（新字段，旧客户端可忽略；数组元素原有字段一字未动）。
+	for i, t := range tickets {
+		out[i]["artifact_summary"] = ticketArtifactSummary(artMap[t.ID])
+	}
+	// 出栈补两把尺子（新字段可忽略＝对外放宽，数组元素字段一字未动）：
+	//   total＝同谓词下的总行数（分页器用它算页码）；
+	//   has_more＝**本页行数打满档位**才为真——刻意不用 total 算，
+	//   因为 count 与取页是两个时刻，中间来了新单时 total 偏大，拿它算"还有没有"会把
+	//   明明还有的一页读成"到底了"（反过来 total 偏小则会把空页读成"还有"）。
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"tickets":  out,
+		"total":    total,
+		"has_more": len(out) >= effLimit,
+		"limit":    effLimit,
+		"offset":   effOffset,
+	})
+}
+
+// ticketArtifactSummary 给工单列表的一行算出「行内两颗钮」的摘要（★ 2026-11-04 §5.4-B2）。
+// 出栈形状固定为 {"md": {...}|null, "original": {...}|null}——
+// ⚠️ 两个键**恒在**（没有产物时都出 null），不是整块缺席、也不是整块 null：
+//
+//	前端要按"这一件有没有"分派三态（可点／灰态点名原因）。
+//	键缺席与值为 null 在 JS 里都读成 undefined，但**整块缺席**会让每个消费方各判一次 obj?.md，
+//	而 Go 的 nil map 出栈恰好是 null——那是 §一·5「空值形态必须归一」在这一行的落点。
+//
+// 选组规则与详情面同源：先认 primary 那件所在的组（file_id+lang），
+// 没有 primary 就取第一组（store 侧顺序契约：同组内 md 在 original 之前，两处不再各排一次）。
+func ticketArtifactSummary(arts []*store.TicketArtifact) map[string]interface{} {
+	sum := map[string]interface{}{"md": nil, "original": nil}
+	if len(arts) == 0 {
+		return sum
+	}
+	fileID, lang := arts[0].FileID, arts[0].Lang
+	for _, a := range arts {
+		if a.Primary {
+			fileID, lang = a.FileID, a.Lang
+			break
+		}
+	}
+	pick := func(kind string) map[string]interface{} {
+		for _, a := range arts {
+			if a.FileID == fileID && a.Lang == lang && a.Kind == kind {
+				return map[string]interface{}{"id": a.ID, "name": a.Name, "lang": a.Lang, "size": a.Size}
+			}
+		}
+		return nil
+	}
+	if m := pick(store.TicketArtifactKindMD); m != nil {
+		sum["md"] = m
+	}
+	if o := pick(store.TicketArtifactKindOriginal); o != nil {
+		sum["original"] = o
+	}
+	return sum
 }
 
 // handleTicketCreate 创建工单接口（tenant_admin 及以上）。
@@ -852,6 +944,15 @@ type ticketQualityView struct {
 	UnresolvedLines   map[string]int    `json:"unresolved_lines,omitempty"`    // 语言 → 按原文回落的行数（总数）
 	UpstreamDeadLines map[string]int    `json:"upstream_dead_lines,omitempty"` // 语言 → 其中判上游断那一部分
 	TruncatedLines    map[string]int    `json:"truncated_lines,omitempty"`     // 语言 → 其中被 max_tokens 截断那一部分
+	// ★★ 2026-11-03 用户裁决①/②：工单通道按合规要求**决定不翻**的处数与逐条点名素材。
+	// 与上面三档**不同族**：那三档答"想翻但没翻出来"，这两键答"平台按合规不翻"——
+	// 混记＝把设计给客户看成缺陷，还会抬起「质检存疑」徽标（AGENTS §19 族二那条同判）。
+	// 空值口径同三档：omitempty ⇒ 没有跳过时**键整条缺席**（不是 0、不是 null）——
+	// 出 0 会被读成"这一单本该跳 0 处"，与"没跳"合起来就是一句给失败背书的话（§25-b 同型判据）。
+	// 类型直接取编排层那一份（**不许在 api 侧再声明一个同形 struct**：两处各一份迟早字段漂移，
+	// 而这一面是给客户与开放 API 同时读的）。
+	ComplianceSkipped map[string]int                `json:"compliance_skipped,omitempty"` // 语言 → 跳过处数
+	ComplianceItems   []orchestrator.ComplianceItem `json:"compliance_items,omitempty"`   // 逐条点名（交付面那一节读它）
 }
 
 // parseTicketQuality 从 final_result JSON 解析质量视图（改造 5）。
@@ -871,6 +972,10 @@ func parseTicketQuality(finalResult string) ticketQualityView {
 		UnresolvedLines   map[string]int    `json:"unresolved_lines"`
 		UpstreamDeadLines map[string]int    `json:"upstream_dead_lines"`
 		TruncatedLines    map[string]int    `json:"truncated_lines"`
+		// ★ 2026-11-03 裁决①/②：键名与 orchestrator.ticketPayload **逐字相同**（上面那条
+		// 「抄错一个字母就是接口说没回填而库里明明有」的警告对这两键同样成立）。
+		ComplianceSkipped map[string]int                `json:"compliance_skipped"`
+		ComplianceItems   []orchestrator.ComplianceItem `json:"compliance_items"`
 	}
 	if err := json.Unmarshal([]byte(finalResult), &p); err != nil {
 		return out
@@ -880,6 +985,8 @@ func parseTicketQuality(finalResult string) ticketQualityView {
 	out.UnresolvedLines = p.UnresolvedLines
 	out.UpstreamDeadLines = p.UpstreamDeadLines
 	out.TruncatedLines = p.TruncatedLines
+	out.ComplianceSkipped = p.ComplianceSkipped
+	out.ComplianceItems = p.ComplianceItems
 	out.EvalScores = p.EvalScores
 	out.ReviewEvalScores = p.ReviewEvalScores
 	out.FlaggedLangs = p.QualityFlaggedLangs
@@ -1144,7 +1251,13 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 租户隔离：仅列出生效租户下待审批工单
-	tickets, err := s.Store.ListPendingApproval(s.effTenant(r, u))
+	// ★ 2026-11-04 体验批 A5：与工单列表同一把档位尺子（store.TicketPage*／EffectiveTicketPage），
+	//   缺省档逐字等于改造前那条写死的 LIMIT 200。审批台原先"看到 200 条就以为审完了"，
+	//   第 201 条既不在页面上也没有任何一句话说明——现在出参如实带 total/has_more。
+	limit := atoiDef(r.URL.Query().Get("limit"), 0)
+	offset := atoiDef(r.URL.Query().Get("offset"), 0)
+	effLimit, effOffset := store.EffectiveTicketPage(limit, offset)
+	tickets, total, err := s.Store.ListPendingApprovalPage(s.effTenant(r, u), limit, offset)
 	if err != nil {
 		// ★ F-64②（批 I-10）：原 200 承载失败 → 500：待审批队列读的是本进程存储层，查询失败是服务端故障。
 		//   审批台（admin/TicketsP loadApproval）只在 r.success 时 setApprovalTickets，200 壳下
@@ -1152,7 +1265,15 @@ func (s *Server) handleApproveList(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, publicErrMessage(r.Context(), err)))
 		return
 	}
-	writeJSON(w, 200, map[string]interface{}{"success": true, "tickets": s.ticketsViewJSON(tickets)})
+	view := s.ticketsViewJSON(tickets)
+	writeJSON(w, 200, map[string]interface{}{
+		"success":  true,
+		"tickets":  view,
+		"total":    total,
+		"has_more": len(view) >= effLimit,
+		"limit":    effLimit,
+		"offset":   effOffset,
+	})
 }
 
 // handleApproveAction 审批操作接口：approve（批准）/ reject（驳回，带意见）。

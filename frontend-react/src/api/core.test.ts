@@ -177,11 +177,81 @@ describe('api/core', () => {
     core.setForbiddenCopyResolver(null)
   })
 
-  it('超时：timeoutMs 内未决 → 明确中文错误（区别于外部 abort）', async () => {
+  // ★ 2026-11-04 体验批 A10（M1）：超时这一档的**期望方向已翻转**，翻转理由写在这里——
+  //   旧断言 /超时/ 配的是旧文案「请求超时，请检查后端服务是否正常」，那句话把人的调查方向
+  //   直接指到服务器，而超时绝大多数是**这一跳没走完**（跨境链路、冷缓存、慢查询）。
+  //   AGENTS §一·5「慢与坏必须分开报」搬到客户端：超时只说"没走完、可重试"，
+  //   真 5xx 才有 M2 那条「服务异常」。这里不是删断言，是把判据换成方向正确的两句：
+  //   ① 必须出"没能走完"那一档；② 必须**不含**「请检查后端服务」（旧那句不许复活）。
+  it('超时：timeoutMs 内未决 → 「这一跳没走完」那一档，不许指向后端排查', async () => {
     vi.stubGlobal('fetch', (_u: string, init: RequestInit) => new Promise((_res, rej) => {
       init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
     }))
-    await expect(core.request('/slow', { timeoutMs: 20 })).rejects.toThrow(/超时/)
+    const msg = await core.request('/slow', { timeoutMs: 20 }).then(() => '', (e: unknown) => String((e as Error).message))
+    expect(msg).toMatch(/没能走完/)
+    expect(msg).not.toMatch(/请检查后端服务/)
+  })
+
+  // ★ 2026-11-04 体验批 A10（M2）：真 5xx 且后端没给句子、也没原文可兜 ⇒ 「服务异常」档，
+  //   并把 trace_id 带上（那是日志里能查到的那一条）。
+  //   ⚠️ 与 M1 必须**分得开**：两档混成一句就是本体的缺陷形态（"慢"被报成"坏"），
+  //   所以下面还钉一条反向对照——4xx 不许冒出「服务异常」。
+  it('5xx 无原文：出「服务异常」档并带 trace_id；4xx 仍走请求失败档', async () => {
+    vi.stubGlobal('fetch', async () => ({
+      ok: false, status: 503,
+      json: async () => ({ message: '', trace_id: 'abc123' }),
+      text: async () => '{"message":"","trace_id":"abc123"}',
+    } as unknown as Response))
+    await expect(core.request('/api/x')).rejects.toMatchObject({
+      status: 503,
+      message: '服务异常 (503) · trace_id abc123',
+    })
+    vi.stubGlobal('fetch', async () => ({
+      ok: false, status: 400,
+      json: async () => ({ message: '' }),
+      text: async () => '{"message":""}',
+    } as unknown as Response))
+    const msg = await core.request('/api/y').then(() => '', (e: unknown) => String((e as Error).message))
+    expect(msg).toMatch(/请求失败 \(400\)/)
+    expect(msg).not.toMatch(/服务异常/)
+  })
+
+  // ★ 2026-11-04 体验批 A10（M3 / §2.10 Q-M1）：超时那一档必须带「重发同一请求」的出口，
+  //   点它真把**同一个** url / init / timeoutMs 再发一遍（fetch 计数 + 逐字段对照）。
+  //   ⚠️ 与 M1/M2 互补：M1/M2 钉「慢与坏两档文案分开」，M3 钉「慢这一档有自救动作」；
+  //   只把文案改对而没有 retry 出口，Q-M1 仍算「未做」，本条就是那个反证靶。
+  it('超时：错误对象带 retry 出口，点它重发同一请求（url/init/timeoutMs 同一份）', async () => {
+    type Call = { url: string; init: RequestInit }
+    const calls: Call[] = []
+    let first = true
+    vi.stubGlobal('fetch', (url: string, init: RequestInit) => {
+      calls.push({ url, init })
+      if (first) {
+        first = false
+        // 第一发：挂到 abort 才 reject，逼出超时那一档
+        return new Promise<Response>((_res, rej) => {
+          init.signal!.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+        })
+      }
+      // 第二发：原样回包，证明 retry 真的把同一请求又发了一次
+      return Promise.resolve(jsonResponse({ success: true, tickets: [] }))
+    })
+    const e = await core.request('/api/tickets/list', {
+      method: 'POST', body: '{"page":1}', timeoutMs: 20,
+    }).catch((x: unknown) => x)
+    expect(core.isTimeoutError(e), '超时错误必须带 isTimeout 标记').toBe(true)
+    expect(typeof (e as import('./core').TimeoutError).retry).toBe('function')
+    await expect(core.retryRequest({ message: '普通失败' }), '非超时错误不该被当成可重试').resolves.toBeUndefined()
+    const r = await core.retryRequest(e)
+    expect(r).toMatchObject({ success: true })
+    expect(calls.length, '点重试后 fetch 恰两次').toBe(2)
+    // 同一 url / 同一 init：method/body/headers 逐字段对照；signal 每次由 request() 新建，
+    // 故只断「两次都挂了 signal（同一 timeoutMs 档的超时保护仍在）」，不拿对象引用比。
+    expect(calls[1].url).toBe(calls[0].url)
+    expect(calls[1].init.method).toBe(calls[0].init.method)
+    expect(calls[1].init.body).toBe(calls[0].init.body)
+    expect(calls[1].init.headers).toEqual(calls[0].init.headers)
+    expect(calls[1].init.signal).toBeTruthy()
   })
 
   // 回归锁（§4.2-11 盲区补齐）：非 JSON 错误体容错——后端偶发返回 HTML 错误页/纯文本
@@ -293,7 +363,7 @@ describe('api/core', () => {
   //   英文后台不得出现中文提示）。未注册回落中文原句（node 单测/SSR 口径），
   //   注册后按键取词（ToastBridge 注入 i18n.tpl 同款链路）。
   it('apiMsg：未注册回落中文兜底句、注册后按当前语言取词', () => {
-    expect(core.apiMsg('common.timeout', '请求超时，请检查后端服务是否正常')).toBe('请求超时，请检查后端服务是否正常')
+    expect(core.apiMsg('common.timeout', '这一跳没能走完，可以再试一次')).toBe('这一跳没能走完，可以再试一次')
     core.setApiMsgCopier((key, fallback, vars) => {
       void fallback
       return vars ? `EN[${key}:${JSON.stringify(vars)}]` : `EN[${key}]`
