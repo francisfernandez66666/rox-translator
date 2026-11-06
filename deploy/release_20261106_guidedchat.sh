@@ -101,17 +101,35 @@ scp -P "$PORT" -q "$PDF_LIST" "$HOST:/tmp/manual-pdf-shas-20261106h.txt" || bad 
 log "PDF 包 $(wc -c < "$PDFTAR" | tr -d ' ') B sha=$PDFTAR_SHA"
 
 # ---- 2. 换源换件（常设执行体；purge 腿不许关） ----
+#   ★ SKIP_SWAP=1 的用途是**可重入**：执行体已经落位、但后面的段（铺库/判据/冒烟/postdeploy）要单独复跑时，
+#     不许为了跑那四段再付一遍两站重启窗口＋边缘缓存窗口（AGENTS §三 那条「证等价而不是再跑一遍发版清单」同族）。
+#     它**不跳过**上传（铺库段要用服务器上的 PDF 包与清单），只跳过落位与重启。
 log "2/6 换源换件（两站 web＋二进制，含 CF purge 腿）"
-SWAP_OUT=$(ssh -p "$PORT" "$HOST" \
-  "bash /tmp/swap_web_and_binary.sh /tmp/frontend-dist-20261106h.tar.gz $TAR_SHA /tmp/translator-server-20261106h $BIN_SHA" 2>&1)
-SWAP_RC=$?
-echo "$SWAP_OUT" | tail -25
+if [ "${SKIP_SWAP:-0}" = "1" ]; then
+  ok "SKIP_SWAP=1 ⇒ 本段跳过（现网保持在已落位的那一代，不重启、不再清边缘缓存）"
+  SWAP_OUT="SWAP_ALL_OK=1（skipped）"
+  SWAP_RC=0
+else
+  SWAP_OUT=$(ssh -p "$PORT" "$HOST" \
+    "bash /tmp/swap_web_and_binary.sh /tmp/frontend-dist-20261106h.tar.gz $TAR_SHA /tmp/translator-server-20261106h $BIN_SHA" 2>&1)
+  SWAP_RC=$?
+  echo "$SWAP_OUT" | tail -25
+fi
 if [ "$SWAP_RC" != 0 ] || ! printf '%s\n' "$SWAP_OUT" | grep -q 'SWAP_ALL_OK=1'; then
-  echo "RELEASE_H_ABORT=换源换件（rc=$SWAP_RC；备料段拒了＝现网停在完整上一代）"
+  # ★ 这条消息必须**分得开两种停手位置**（旧写法一律写"停在完整上一代"，而实际踩到的是
+  #   「落位已完成、只有重启窗口探针判红」那一档 ⇒ 屏幕上的处置建议与现场完全两回事，
+  #   下一位会按"现网还是旧代"去重跑换源，白付一遍两站重启窗口）
+  if printf '%s\n' "$SWAP_OUT" | grep -q 'SWAP_ENTRY'; then
+    echo "RELEASE_H_ABORT=换源换件（rc=$SWAP_RC；**落位已完成**（见上面 SWAP_ENTRY 行），红的是重启窗口/复验那一条腿 ⇒ 现网已是新代，后续段用 SKIP_SWAP=1 复跑，别再跑一遍落位）"
+  else
+    echo "RELEASE_H_ABORT=换源换件（rc=$SWAP_RC；备料段拒了＝现网停在完整上一代）"
+  fi
   exit 1
 fi
 ok "SWAP_ALL_OK=1"
-if printf '%s\n' "$SWAP_OUT" | grep -Eq '^CF_PURGE='; then
+if [ "${SKIP_SWAP:-0}" = "1" ]; then
+  skip "CF_PURGE 读数本段没跑（SKIP_SWAP=1）；上一次落位那一跑的读数已记在《部署指南》§三十七"
+elif printf '%s\n' "$SWAP_OUT" | grep -Eq '^CF_PURGE='; then
   ok "执行体出了 CF_PURGE 那一行（$(printf '%s\n' "$SWAP_OUT" | grep -E '^CF_PURGE=' | head -1)）"
 else
   bad "执行体没出 CF_PURGE 读数（skipped／off／ok／rejected 四态之一都不出＝purge 腿不在位）"
@@ -216,9 +234,13 @@ for B in $SITES; do
     red "/onboarding 应 200，实得 $D [$B]"
   fi
 done
-# 4.5 assist 本批未换件 ⇒ 只登记一行读数，不许写成"已验"
-A=$(curl -sS -m 30 https://langcross.lexicorn.cn/assist-api/health 2>/dev/null || echo 'NOT_READ')
-printf 'NOTE assist 健康面（本批未动 assist，只登记）：%s\n' "$(printf '%s' "$A" | head -c 120)"
+# 4.5 assist 本批未换件 ⇒ 只登记**这台自己的读数**（unit 状态），不许打一个不存在的路径
+#     ⚠️ 两个坑都踩过：① 旧写法猜 /assist-api/health 与 /api/assist/health，两把都回 NOT_FOUND JSON
+#        ⇒ 屏幕上像"挂件坏了"，而那只是探针拼错 URL；② unit 名**不是** translator-assist（那是 /opt/translator/bin 下
+#        那个二进制名），现役单元是 **ai-assist.service**——拿不存在的单元名问 is-active 会回"inactive"，
+#        把"这台没读到"读成"挂件停了"（§三 那条 `systemctl is-enabled` 缺单元既打 not-found 又退非零的同族）。
+A=$(systemctl is-active ai-assist 2>/dev/null || echo '<未读到>')
+printf 'NOTE assist 单元状态（本批未动 assist，只登记）：%s\n' "$A"
 
 if [ "$FAIL" != 0 ]; then echo "FACE_FAIL=$FAIL"; exit 1; fi
 echo "FACE_UNMEASURED=$UNMEAS"
@@ -238,12 +260,20 @@ if [ "${FACE_UN:-0}" != 0 ]; then
   UNMEASURED=$((UNMEASURED+FACE_UN))
 fi
 
-# ---- 5. 手册下载面冒烟（两站各跑一次；四件套判据而不是"能下载"） ----
+# ---- 5. 手册下载面冒烟（两站各跑一次；四件套判据＋收完整，**三态**） ----
+#   退出码 0＝全绿／1＝有红项（内容不对，该有人去修）／2＝有 N 项没测到（跨境抖动）
+#   ⇒ 发版判据要求 0；拿到 2 复跑再判，把 2 读成"通过"或读成"产品缺陷"都是误判（AGENTS §一·5 §6.2 ⑤）。
 log "5/6 手册 PDF 公网下载面（两站各一次）"
 for B in "$BASE_MAIN" "$BASE_DEMO"; do
   tag=$(printf '%s' "$B" | sed 's|https://||; s|[^a-z0-9]*|-|g')
-  if BASE="$B" bash deploy/smoke_manual_pdf.sh > "/tmp/rel_h_pdf_${tag}.log" 2>&1; then
+  BASE="$B" bash deploy/smoke_manual_pdf.sh > "/tmp/rel_h_pdf_${tag}.log" 2>&1
+  SM_RC=$?
+  SM_UN=$(grep -c '^  ⏳' "/tmp/rel_h_pdf_${tag}.log" || true)
+  if [ "$SM_RC" = 0 ]; then
     ok "smoke_manual_pdf 全绿：$B"
+  elif [ "$SM_RC" = 2 ]; then
+    log "smoke_manual_pdf 有 ${SM_UN:-?} 项没测到（exit 2）：$B ⇒ 复跑段 5，不判绿也不判成缺陷（详见 /tmp/rel_h_pdf_${tag}.log）"
+    UNMEASURED=$((UNMEASURED + ${SM_UN:-1}))
   else
     tail -12 "/tmp/rel_h_pdf_${tag}.log"
     bad "smoke_manual_pdf 判红：$B（详见 /tmp/rel_h_pdf_${tag}.log）"
