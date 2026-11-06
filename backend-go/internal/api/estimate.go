@@ -161,6 +161,13 @@ func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64,
 			maxTokens += allow
 		}
 	}
+	// ★ 一期《确定的多语言能力》§6：第 6 支「知识层问答」allowance。
+	//   恒 0（该路径零模型调用），但**必须**在这里与各支相加，不许在 handler 里另算——
+	//   「预估＝各支相加」的单口形态是 C1 委托锁的判据，也是零成本承诺可断言的落点。
+	if allow := engine.KnowledgeQueryAllowanceTokens(0, req.TargetLangs); allow > 0 {
+		minTokens += allow
+		maxTokens += allow
+	}
 	return minTokens, maxTokens
 }
 

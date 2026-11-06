@@ -5605,6 +5605,570 @@ ckq T86-anon-csv-not-200 1 "$( [ "$T86ANON" != 200 ] && echo 1 || echo 0 )"
 T86NOT=$(curl -s -o /dev/null -w '%{http_code}' "$B/api/notifications" -H "$AH")
 ckq T86-notifications-200 200 "$T86NOT"
 
+# ============================================================================
+# T87–T93（★ 一期施工图 2026-11-05 §9.3）：知识层商品 UAT 段。
+#   ⚠️ 后端 API（§5.1 的 /api/product/*、/p/{tc}/{pc}、/sitemap.xml）由并行施工方落地，
+#      本节只按施工图**写定的契约**编码；**本节未在本机跑过、也不宣称 PASS**，需后端就绪
+#      后按 §11 的 run_uat.sh（PG 主矩阵）跑一次才算验收。
+#   ★ 硬纪律（逐条对照 §9.3 写法要求）：金额/数值先过 mny_norm；
+#      身份夹具按用户名取行必须 AND is_home=1；清场按显式 id 逐条摘、禁用「整租户蒸发」；
+#      反向正则字面元字符一律转义；每条负向锁（ckn）都配正向对照；
+#      ckn 三态 rc=2 判红并明说「判据自身失效」。
+#   共用夹具：T87 建产品 + confirmed 事实 + 两枚物料（一枚带 fact_refs、一枚空 fact_refs
+#      作「未误伤」对照），T88–T93 复用；T92 另在 B 租户建一枚产品作跨租户拼接靶子。
+# ============================================================================
+# pfield <字段> —— 从写接口响应体取字段（兼容 {"product":{...}}／{"fact":{...}} 与平铺信封）。
+#   与 r3field 同形：解析失败输出空串，让下游 ckq 红在「取不到 id」而不是崩脚本。
+pfield(){ python3 -c '
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+p=d
+for k in ("product","fact","asset","data"):
+    if isinstance(d.get(k),dict): p=d[k]; break
+print(p.get(sys.argv[1],"") if isinstance(p,dict) else "")' "$1" 2>/dev/null; }
+
+# ---------- 共用夹具：身份行一律「按用户名 + AND is_home=1」取（AGENTS §18 硬约定） ----------
+T87TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -dc '0-9')
+T87UID=$(dbq "SELECT id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -dc '0-9')
+T92TID=$(dbq "SELECT tenant_id FROM users WHERE username='uatuser_b' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -dc '0-9')
+if [ -z "$T87TID" ] || [ -z "$T87UID" ] || [ -z "$T92TID" ]; then
+  FAIL=$((FAIL+1)); echo "FAIL|T87-identity(按用户名取不到家行 uid/tenant_id ⇒ T87–T93 全部空转)"
+fi
+
+# ============================================================================
+# T87 产品建档 → 事实确认 → 齐备度读数 三段闭环（§9.3 T87）
+#   ⚠️ 金额/数值一律先过 mny_norm(`:246`)：SQLite REAL 回 6.0／PG numeric 回 6，
+#      直接字符串比会让两种方言各红一次（T51/T54 同族假红）。
+# ============================================================================
+T87SAVE=$(post "$H1" '{"name":"UAT-T87-知识层夹具","code":"uat_t87_shared","tagline":"UAT 登记用语"}' /api/product/save)
+ck T87-save-success '"success":true' "$T87SAVE"
+T87PID=$(printf '%s' "$T87SAVE" | pfield id)
+T87TC=$(printf '%s' "$T87SAVE" | pfield tenant_code)
+T87PC=$(printf '%s' "$T87SAVE" | pfield page_code)
+# ★ 建档缺省 draft，live 只由显式状态口给（§2.2 出厂安全档；save 的入参里压根没有 status，
+#   旧夹具往 save 里塞 "status":"live" 是被**静默丢弃**的那一档——产品一直 draft，
+#   于是 T93「默认进 sitemap」恒红，而红字指向 sitemap 过滤器而不是入参契约）。
+T87LIVE=$(post "$H1" "{\"id\":\"$T87PID\",\"status\":\"live\"}" /api/product/status)
+ck T87-status-live '"success":true' "$T87LIVE"
+ckq T87-product-id-nonempty 1 "$( [ -n "$T87PID" ] && echo 1 || echo 0 )"
+ckq T87-two-codes-nonempty 1 "$( [ -n "$T87TC" ] && [ -n "$T87PC" ] && echo 1 || echo 0 )"
+# 库侧事实（接口说成功不算验收，AGENTS §一·8）：建档真落行、两段短码非空（H6 不落空串）
+T87PN=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code='uat_t87_shared'" 2>/dev/null | tr -d '\r')")
+ckq T87-db-product-row 1 "${T87PN:-0}"
+T87DBCODES=$(dbq "SELECT COALESCE(tenant_code,'') || '|' || COALESCE(page_code,'') FROM products WHERE code='uat_t87_shared' LIMIT 1" 2>/dev/null | tr -d '\r')
+ckq T87-db-codes-nonempty 1 "$(printf '%s' "$T87DBCODES" | awk -F'|' '{print ($1!="" && $2!="")?1:0}')"
+
+# ② 事实确认：unverified → confirmed，只有 confirmed 可被对外内容引用（§2.2）
+T87FUP=$(post "$H1" "{\"product_id\":\"$T87PID\",\"kind\":\"spec\",\"key\":\"lead_time\",\"value\":\"7 天\",\"visibility\":\"public\"}" /api/product/fact/upsert)
+T87FID=$(printf '%s' "$T87FUP" | pfield id)
+ckq T87-fact-id-nonempty 1 "$( [ -n "$T87FID" ] && echo 1 || echo 0 )"
+T87FCF=$(post "$H1" "{\"id\":$T87FID}" /api/product/fact/confirm)
+ck T87-fact-confirm-success '"success":true' "$T87FCF"
+T87FSTAT=$(dbq "SELECT COALESCE(status,'') FROM product_facts WHERE id=$T87FID" 2>/dev/null | tr -d '\r')
+ckq T87-fact-status-confirmed confirmed "${T87FSTAT:-}"
+# 负向锁：未确认的缺省档不许被读成 confirmed；正向对照＝上面 confirmed 真在
+T87FUNCONF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id='$T87PID' AND status<>'confirmed'" 2>/dev/null | tr -d '\r')")
+ckq T87-no-unconfirmed-leak 0 "${T87FUNCONF:-0}"
+
+# ③ 齐备度读数：六格现算、空集归一 [] 不出 null（§2.5／§5.1）
+T87RD=$(get "$H1" "/api/product/readiness?product_id=$T87PID")
+ck T87-readiness-success '"success":true' "$T87RD"
+# 按数组长度判，不用 ck 吃 "readiness":[] 里的 []（BSD grep 空字符类会让判据自身失效，T83 同族）
+T87CELLS=$(printf '%s' "$T87RD" | python3 -c '
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: d={}
+print(len(d.get("readiness") or []))' 2>/dev/null || echo ERR)
+ckq T87-readiness-nonempty 1 "$( [ "$(mny_norm "${T87CELLS:-0}")" -ge 1 ] 2>/dev/null && echo 1 || echo 0 )"
+ckn T87-readiness-not-null '"readiness":null' "$T87RD"   # 正向对照＝上面「数组非空」
+
+# ============================================================================
+# T88 事实改动 ⇒ 物料 expired ⇒ 下载被拒（§9.3 T88 / §0 A3）
+#   ★ 夹具按用户名取身份行必须 AND is_home=1（本节顶部 T87TID/T87UID 已按此取）。
+#   ★ 清场按显式 id 逐条摘（见末尾「T87–T93 清场」），禁用「按 tenant_id 横扫整租户蒸发」。
+# ============================================================================
+T88A1=$(post "$H1" "{\"product_id\":\"$T87PID\",\"asset_type\":\"onepager\",\"lang\":\"zh\",\"body\":\"交期 7 天（引用事实 ${T87FID}）\",\"fact_refs\":[$T87FID],\"visibility\":\"public\"}" /api/product/asset/put)
+T88AID=$(printf '%s' "$T88A1" | pfield id)
+T88A2=$(post "$H1" "{\"product_id\":\"$T87PID\",\"asset_type\":\"tagline\",\"lang\":\"zh\",\"body\":\"不引用任何事实\",\"fact_refs\":[],\"visibility\":\"public\"}" /api/product/asset/put)
+T88AID2=$(printf '%s' "$T88A2" | pfield id)
+ckq T88-two-assets-created 1 "$( [ -n "$T88AID" ] && [ -n "$T88AID2" ] && echo 1 || echo 0 )"
+
+# 正向对照：事实未改动时下载口真的放行（否则「改动后拦」恒真＝空转，§5.6 V4 同族）
+req3 GET "$H1" "/api/product/asset/download?id=$T88AID"
+ckq T88-download-before-change-200 200 "$R3ST"
+ck T88-download-before-has-body '"success":true' "$R3BODY"
+
+# 事实改动：同一事实换新值 ⇒ ExpireAssetsByFactChange 把引用它的物料翻 expired
+T88CHG=$(post "$H1" "{\"id\":$T87FID,\"product_id\":\"$T87PID\",\"kind\":\"spec\",\"key\":\"lead_time\",\"value\":\"10 天\"}" /api/product/fact/upsert)
+ck T88-fact-change-success '"success":true' "$T88CHG"
+T88VAL1=$(dbq "SELECT COALESCE(validity,'') FROM product_assets WHERE id=$T88AID" 2>/dev/null | tr -d '\r')
+ckq T88-asset-expired expired "${T88VAL1:-}"
+T88VAL2=$(dbq "SELECT COALESCE(validity,'') FROM product_assets WHERE id=$T88AID2" 2>/dev/null | tr -d '\r')
+ckq T88-empty-factrefs-not-expired valid "${T88VAL2:-}"   # A4：空 fact_refs 永不误判 expired
+
+# 下载被拒：不是 200，且回可行动文案（不静默）；negative lock 配上面的正向 200 对照
+req3 GET "$H1" "/api/product/asset/download?id=$T88AID"
+ckq T88-download-blocked-not-200 1 "$( [ "$R3ST" != 200 ] && echo 1 || echo 0 )"
+ck T88-download-blocked-actionable 'expired|过期|已失效|重新生成|需更新' "$R3BODY"
+ckn T88-download-blocked-not-silent '"success":true' "$R3BODY"
+# 三态读数不同形：未改可下 / 已改拦＋点名 / 空 fact_refs 仍 valid（上面三条各占一形）
+
+# 三态读数两两不等（本段主判据），暗额度三键与伪造参数永不出栈——见下面 T89 段末
+# ★ 回到可用态：T88 改值把那一格打回 unverified（§2.2 设计），而 T89／T90 要验的是
+#   "答案真由已确认事实拼出来"，所以先把同一行重新确认（显式带 visibility，不改档）。
+#   ⚠️ 顺序就是判据的一部分：不重确认就直接跑 T90，答案里只剩物料句、事实值整段缺席，
+#      红字会指向"知识层答不出"而不是"上一段故意把它打回了未核实"。
+T88RECONF=$(post "$H1" "{\"id\":$T87FID}" /api/product/fact/confirm)
+ck T88-reconfirm-after-change '"success":true' "$T88RECONF"
+T88RESTAT=$(dbq "SELECT COALESCE(status,'') FROM product_facts WHERE id=$T87FID" 2>/dev/null | tr -d '\r')
+ckq T88-restored-confirmed confirmed "${T88RESTAT:-}"
+# ★ 值改动不许顺手把可见档洗成 gated（V1 的安全缺省只管**新建**那一支）：
+#   旧形态更新时省略 visibility ⇒ 一律写回 gated ⇒ 卖家只是改个数，那行就从对外页静默消失。
+T88REVIS=$(dbq "SELECT COALESCE(visibility,'') FROM product_facts WHERE id=$T87FID" 2>/dev/null | tr -d '\r')
+ckq T88-update-keeps-public-visibility public "${T88REVIS:-}"
+
+
+# ============================================================================
+# T89 耗尽三态（available / exhausted_today / disabled）读数各不同形（§9.3 T89 / §5.2）
+#   ★ 用 ckn 三态助手(`:555-564`)：grep rc=0 判红／rc=2 判红并明说「判据自身失效」／否则 PASS。
+#   ★ 反向正则字面元字符一律转义：下面要点名的是字面 `?tenant_id=`（不是「可有可无的 d」），
+#     故 `?` 写作 `\?`；`free_ip_daily` 的下划线是字面，不需转义；不写裸 `(` `[` 进反向模式。
+#   ★ 每条负向锁都配正向对照：三态各自「自己的状态词在」是「暗额度/伪造参数不在」的对照。
+#   三态由同一把尺子给出（§5.2）：默认档＝available；free_ip 日墙用满＝exhausted_today
+#     （含 resets_at）；运营关档（ops_policy.instant.free_daily_points<0）＝disabled。
+# ============================================================================
+T89BODY="{\"tenant_code\":\"$T87TC\",\"page_code\":\"$T87PC\",\"question\":\"交期多久？\"}"
+# ① available：先按**显式 key** 摘掉本号本 IP 的免费计数（同 T79 清场口径），再打问答面
+dbq "DELETE FROM rate_limits WHERE scope='free_ip' AND key IN ('127.0.0.1','::1')" >/dev/null 2>&1 || true
+T89AV=$(curl -s "$B/api/product/answer" -H "$J" -d "$T89BODY")
+ck T89-available-own-word 'available' "$T89AV"
+ckn T89-available-no-resets-at '"resets_at":' "$T89AV"   # 正向对照＝下面 exhausted 那支真带 resets_at
+
+# ② exhausted_today：把 free_ip 计数钉到日墙之上（count 给足，不依赖具体档位值）
+#   ★ 钉子必须钉在服务端真在看的那**两维**上，本轮实测连踩两次：
+#     ① 键＝`httpx.ClientIP(r)`，而回环有两个字面量（127.0.0.1 与 ::1，取决于 curl 走 v4 还是 v6）
+#        ⇒ 只钉一种，另一种那一格没人看，仍报 available；
+#     ② 窗起点＝`store.dayStartUnix(now)`（UTC 今日 00:00 的整秒），`RateDayLoad` 按**等值**判日界
+#        （注释写明：等值把"窗起点被写歪"也归零）⇒ 拿 `date +%s`（此刻）当 window_start
+#        会被判成"旧日／脏窗"⇒ 用量 0 ⇒ 恒 available。所以这里算的是今日 00:00，不是 now。
+T89DAY=$(python3 -c 'import time;print(int(time.time()//86400*86400))')
+dbq "DELETE FROM rate_limits WHERE scope='free_ip' AND key IN ('127.0.0.1','::1')" >/dev/null 2>&1 || true
+for _ip in '127.0.0.1' '::1'; do
+  dbq "INSERT INTO rate_limits(scope,key,count,window_start,lock_until) VALUES('free_ip','$_ip',999999,$T89DAY,0)" >/dev/null 2>&1 || true
+done
+# ★ 夹具自证：注入行必须真带"今日 UTC 00:00"那个窗起点。少了这条，日界算法哪天改了形，
+#   本段只会报"额度打满却还 available"（读起来像产品缺陷），而真因是钉子又钉歪了。
+T89WCHK=$(mny_norm "$(dbq "SELECT COUNT(1) FROM rate_limits WHERE scope='free_ip' AND window_start=$T89DAY AND count=999999" 2>/dev/null | tr -d '\r')")
+ckq T89-pin-window-is-utc-day-start 2 "${T89WCHK:-0}"
+T89EX=$(curl -s "$B/api/product/answer" -H "$J" -d "$T89BODY")
+ck T89-exhausted-own-word 'exhausted_today' "$T89EX"
+ck T89-exhausted-has-resets-at '"resets_at":' "$T89EX"
+ckn T89-exhausted-no-available 'available' "$T89EX"
+ckn T89-exhausted-no-disabled 'disabled' "$T89EX"
+
+# ③ disabled：运营关档走 ops_policy 保存口（同 T67 形态，必须经 API 让后端重读策略，不直改库）
+req3 GET "$AH" /api/admin/ops/policy; cks T89-policy-get 200
+T89OFF="/tmp/uat_t89_off_$$.json"; T89ORG="/tmp/uat_t89_org_$$.json"
+printf '%s' "$R3BODY" | python3 -c '
+import json,sys
+d=json.loads(sys.stdin.read() or "{}")
+plat=d.get("platform")
+if not isinstance(plat,dict): sys.exit(2)
+off=json.loads(json.dumps(plat))
+ins=dict(off.get("instant") or {})
+ins["free_daily_points"]=-1
+off["instant"]=ins
+open(sys.argv[1],"w",encoding="utf-8").write(json.dumps({"policy":off}))
+open(sys.argv[2],"w",encoding="utf-8").write(json.dumps({"policy":plat}))
+' "$T89OFF" "$T89ORG"
+T89SAVE=$(curl -s --max-time 60 -X POST "$B/api/admin/ops/policy/save" -H "$AH" -H "$J" --data "@$T89OFF")
+ck T89-disabled-save-success '"success":true' "$T89SAVE"
+T89DIS=$(curl -s "$B/api/product/answer" -H "$J" -d "$T89BODY")
+ck T89-disabled-own-word 'disabled|free_off' "$T89DIS"
+ckn T89-disabled-no-available 'available' "$T89DIS"
+ckn T89-disabled-no-exhausted 'exhausted_today' "$T89DIS"
+# 还原：原值交还（同 T67「绝不写死成清空」）
+T89REST=$(curl -s --max-time 60 -X POST "$B/api/admin/ops/policy/save" -H "$AH" -H "$J" --data "@$T89ORG")
+ck T89-disabled-restore-success '"success":true' "$T89REST"
+rm -f "$T89OFF" "$T89ORG"
+
+# 三态读数两两不等（本段主判据），暗额度三键与伪造参数永不出栈
+ckq T89-three-readouts-distinct 1 "$( [ "$T89AV" != "$T89EX" ] && [ "$T89EX" != "$T89DIS" ] && [ "$T89AV" != "$T89DIS" ] && echo 1 || echo 0 )"
+ckn T89-no-dark-quota-keys 'free_daily_points|free_ip_daily|free_tenant_daily_points' "$T89AV$T89EX$T89DIS"
+ckn T89-no-forged-tenant-param '\?tenant_id=' "$T89AV$T89EX$T89DIS"
+
+# ============================================================================
+# T90 零 token 事实（同刻比 usage_ledger 行数增量 == 0）（§9.3 T90 / §7.3 N1）
+#   ★ 基线**同刻取**、只比增量（AGENTS §三② 假红那一族）：用 MAX(id) 水位，
+#     不比全表绝对值——本库已被前面 80 多段写过。
+#   ★ 故意留在 T89 的 exhausted_today 态再走一次（§7.3 N3：额度耗尽知识问答仍零 token）。
+#   ★ 正向对照不可省：若 /api/product/answer 直接 404，ledger 增量当然 0 ⇒ 恒真空转；
+#     所以先钉「答案真的出栈了」，再判增量。
+# ============================================================================
+T90MARK=$(dbq "SELECT COALESCE(MAX(id),0) FROM usage_ledger" | tr -dc '0-9')
+T90ANS=$(curl -s "$B/api/product/answer" -H "$J" -d "$T89BODY")
+ck T90-answer-served '"success":true' "$T90ANS"
+ck T90-answer-has-fact 'UAT|交期|7 天|10 天' "$T90ANS"
+T90NEW=$(mny_norm "$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE id>${T90MARK:-0}" 2>/dev/null | tr -d '\r')")
+ckq T90-ledger-delta-zero 0 "${T90NEW:-0}"
+
+# ============================================================================
+# T91 个人租户可见产品包、不可见部门包（§9.3 T91 / §4.2 K3）
+#   ★ 「PG＋SQLite 双方言各跑一次」＝同一段 SQL 走 dbq(双方言断言层)，由 §11 的 PG 主矩阵
+#     与 DB_DRIVER=sqlite 快跑档各调用本脚本一次；列在位判据按方言各问一次（同 T77 ③⑤）。
+# ============================================================================
+T91COL(){ if [ "${DB_DRIVER:-sqlite}" = "postgres" ]; then
+    dbq "SELECT COUNT(*) FROM information_schema.columns WHERE table_name='kb_packages' AND column_name='product_id'"
+  else
+    dbq "SELECT COUNT(*) FROM pragma_table_info('kb_packages') WHERE name='product_id'"
+  fi; }
+ckq T91-product-id-col-both-dialects 1 "$(T91COL 2>/dev/null | tr -dc '0-9')"
+T91PERSONAL=$(dbq "SELECT COALESCE(is_personal,0) FROM tenants WHERE id=$T87TID" 2>/dev/null | tr -dc '0-9')
+echo "INFO|T91-fixture-is-personal=${T91PERSONAL:-0}（个人档上下文，非判据；换夹具租户请重核）"
+# 收口 SQL（`:1185`）放行 tenant 族、挡 department/cross_dept；产品包 pack_type=PackTenant
+T91PROD=$(mny_norm "$(dbq "SELECT COUNT(1) FROM kb_packages WHERE product_id='$T87PID' AND pack_type NOT IN ('department','cross_dept')" 2>/dev/null | tr -d '\r')")
+ckq T91-personal-sees-product-packs 1 "$( [ "$(mny_norm "${T91PROD:-0}")" -ge 1 ] 2>/dev/null && echo 1 || echo 0 )"
+# 负向锁：产品包不许落进部门/跨部门档；正向对照＝上面「产品包确在 tenant 族且可见」
+T91DEPT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM kb_packages WHERE product_id='$T87PID' AND pack_type IN ('department','cross_dept')" 2>/dev/null | tr -d '\r')")
+ckq T91-product-packs-not-department 0 "${T91DEPT:-0}"
+ckn T91-no-department-pack-in-product 'department|cross_dept' "$(dbq "SELECT COALESCE(pack_type,'') FROM kb_packages WHERE product_id='$T87PID'" 2>/dev/null | tr -d '\r')"
+
+# ============================================================================
+# T92 两段短码 URL：改名不改链、跨租户拼接 not-found（不 403）、伪造 ?tenant_id 不改归属
+#   （§9.3 T92 / §2.1 H1–H5、§5.7 P7/P8/P10、§5.6 V6）
+#   ★ 负向锁必须配正向对照（合法两段码确实取得到）；反向正则字面元字符一律转义。
+# ============================================================================
+T92SAVEB=$(post "$H2" '{"name":"UAT-T92-B-跨租户对照","code":"uat_t92_b"}' /api/product/save)
+T92PIDB=$(printf '%s' "$T92SAVEB" | pfield id)
+T92TCB=$(printf '%s' "$T92SAVEB" | pfield tenant_code)
+T92PCB=$(printf '%s' "$T92SAVEB" | pfield page_code)
+ckq T92-B-product-created 1 "$( [ -n "$T92PIDB" ] && [ -n "$T92PCB" ] && echo 1 || echo 0 )"
+
+# 正向对照：合法两段码确实取得到（否则「拼错就 not-found」恒真＝空转）
+req3 GET "" "/p/$T87TC/$T87PC"
+ckq T92-legit-200 200 "$R3ST"
+ck T92-legit-shows-A 'UAT-T87' "$R3BODY"
+
+# 跨租户拼接：A 租户段 + B 页面段 ⇒ not-found，不返 403 / 不 500 / 不出 B 的内容
+req3 GET "" "/p/$T87TC/$T92PCB"
+ckq T92-cross-tenant-not-403 1 "$( [ "$R3ST" != 403 ] && echo 1 || echo 0 )"
+ckq T92-cross-tenant-not-500 1 "$( [ "$R3ST" != 500 ] && echo 1 || echo 0 )"
+ckq T92-cross-tenant-not-200 1 "$( [ "$R3ST" != 200 ] && echo 1 || echo 0 )"
+ckn T92-cross-tenant-no-B-content 'UAT-T92-B' "$R3BODY"
+
+# 伪造 ?tenant_id 不改归属（V6/P7）：仍解到两段码的租户 A
+req3 GET "" "/p/$T87TC/$T87PC?tenant_id=$T92TID"
+ckq T92-forged-tenant-still-200 200 "$R3ST"
+ck T92-forged-tenant-shows-A 'UAT-T87' "$R3BODY"
+ckn T92-forged-tenant-no-B-content 'UAT-T92-B' "$R3BODY"
+
+# 改名不改链（H1）：name/slug 改后 tenant_code＋page_code 逐字节不变，链接仍 200
+T92REN=$(post "$H1" "{\"id\":\"$T87PID\",\"name\":\"UAT-T92-改名后\",\"slug\":\"uat-t92-renamed\"}" /api/product/save)
+ck T92-rename-success '"success":true' "$T92REN"
+T92ROW=$(dbq "SELECT COALESCE(tenant_code,'') || '|' || COALESCE(page_code,'') FROM products WHERE id='$T87PID' LIMIT 1" 2>/dev/null | tr -d '\r')
+ckq T92-codes-unchanged 1 "$( [ "$(printf '%s' "$T92ROW" | cut -d'|' -f1)" = "$T87TC" ] && [ "$(printf '%s' "$T92ROW" | cut -d'|' -f2)" = "$T87PC" ] && echo 1 || echo 0 )"
+req3 GET "" "/p/$T87TC/$T87PC"
+ckq T92-renamed-link-still-200 200 "$R3ST"
+ck T92-renamed-link-shows-new-name 'UAT-T92-改名后' "$R3BODY"
+
+# ============================================================================
+# T93 SEO：默认进 sitemap、卖家关后消失、受控字段不进 meta、公开面禁词负向锁
+#   （§9.3 T93 / §5.8 S1–S4、§8.7）
+#   ★ 同刻取生成前后两份 sitemap，只比差集（关一次只掉这一条 URL，别的产品不被连带抹掉）。
+#   ★ 每条负向锁配正向对照：登录态读得到受控值／页面真渲染，才不算「404 空壳恒真」。
+# ============================================================================
+T93SM0=$(curl -s "$B/sitemap.xml")
+T93LOC0=$(mny_norm "$(printf '%s' "$T93SM0" | python3 -c 'import sys;print(sys.stdin.read().count("<loc>"))' 2>/dev/null || echo 0)")
+# 正向对照：出厂默认开（seo_indexable=1）且 live ⇒ sitemap 收录该 URL
+ckF T93-default-in-sitemap "/p/$T87TC/$T87PC" "$T93SM0"
+T93OFF=$(post "$H1" "{\"product_id\":\"$T87PID\",\"indexable\":false}" /api/product/seo)
+ck T93-seo-off-success '"success":true' "$T93OFF"
+T93SM1=$(curl -s "$B/sitemap.xml")
+T93LOC1=$(mny_norm "$(printf '%s' "$T93SM1" | python3 -c 'import sys;print(sys.stdin.read().count("<loc>"))' 2>/dev/null || echo 0)")
+# 同刻前后只比差集：关一次只掉这一条，sitemap 本身不许被清空
+ckq T93-off-removed-from-sitemap 0 "$(printf '%s' "$T93SM1" | python3 -c 'import sys;print(1 if sys.argv[1] in sys.stdin.read() else 0)' "/p/$T87TC/$T87PC" 2>/dev/null || echo 0)"
+ckq T93-sitemap-only-one-url-dropped "$(( ${T93LOC0:-0} - 1 ))" "${T93LOC1:-0}"
+
+# 受控字段：登录态读得到（正向对照，§5.6 V4 两侧同口径），公开面 meta/首屏 HTML 不许出现
+T93GATE=$(post "$H1" "{\"product_id\":\"$T87PID\",\"kind\":\"price\",\"key\":\"list_price\",\"value\":\"UAT-T93-GATED-SECRET\",\"visibility\":\"gated\"}" /api/product/fact/upsert)
+T93FID=$(printf '%s' "$T93GATE" | pfield id)
+T93OWNER=$(get "$H1" "/api/product/fact/list?product_id=$T87PID")
+ckF T93-owner-sees-gated UAT-T93-GATED-SECRET "$T93OWNER"
+# ★ 替身文案的事实依据＝**条数**（值字面量永不出栈，但"有没有"必须说得出）：
+#   公开口若只回公开行，前端就无从知道"这里还压着 N 条"，只能按"列表短了几行"猜——那是猜不出来的。
+T93PUBJSON=$(curl -s "$B/api/product/public?tenant_code=$T87TC&page_code=$T87PC")
+ckn T93-public-json-no-gated-value 'UAT-T93-GATED-SECRET' "$T93PUBJSON"
+T93GC=$(printf '%s' "$T93PUBJSON" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(1 if (d.get("gated_count") or 0)>=1 else 0)' 2>/dev/null || echo ERR)
+ckq T93-public-gated-count-positive 1 "${T93GC:-0}"
+T93PUB=$(curl -s "$B/p/$T87TC/$T87PC")
+# ★ 这里点名的是**改名后**的产品名：T92 段把同一支产品改成了「UAT-T92-改名后」（那一段的判据就是"改名不改链"），
+#   所以本段若还按 T87 的旧名判，就是夹具自己的顺序自伤——红字指向"直出面没带上产品名"，而实现是对的。
+ckF T93-public-shows-product UAT-T92-改名后 "$T93PUB"
+# 受控值判**首屏 HTML 原文**（§5.8 S2：meta／JSON-LD／首屏静态 HTML 都不许出），故直接吃原始响应体
+ckn T93-public-no-gated-value 'UAT-T93-GATED-SECRET' "$T93PUB"
+T93META=$(printf '%s' "$T93PUB" | grep -o '<meta[^>]*>' 2>/dev/null || true)
+ckn T93-meta-no-gated-value 'UAT-T93-GATED-SECRET' "$T93META"
+# 禁词判**可见文本**（§8.7 现锁是 document.body.textContent，不是 raw HTML）：
+#   先剥 script/style 再剥标签，否则页里任何一段脚本含 "token" 就把公开页判成泄密（结构性假红）。
+T93TEXT=$(printf '%s' "$T93PUB" | python3 -c '
+import sys,re
+s=sys.stdin.read()
+s=re.sub(r"<script\b[^>]*>.*?</script>","",s,flags=re.S|re.I)
+s=re.sub(r"<style\b[^>]*>.*?</style>","",s,flags=re.S|re.I)
+print(re.sub(r"<[^>]+>"," ",s))' 2>/dev/null || echo "")
+# 正向对照：可见文本里产品名真在（页面真渲染了，不是 404 空壳 ⇒ 下面负向锁才有射程）
+ckF T93-public-text-shows-product UAT-T92-改名后 "$T93TEXT"
+ckn T93-public-no-banned '稍后重试|我们会跟进|请联系客服|等待审核处理|人工复核' "$T93TEXT"
+ckn T93-public-no-rate-bare '24917|33222|400 每积分' "$T93TEXT"
+ckn T93-public-no-token-bare '[Tt][Oo][Kk][Ee][Nn]' "$T93TEXT"
+
+# ============================================================================
+# T87–T93 清场（★ 按显式 id 逐条摘；禁用「按 tenant_id 横扫整租户蒸发」§18 拆租户那条）
+#   子表按本段自建的显式 id 逐条删，父表按显式产品 id 删；后端未就绪时各 id 为空 ⇒ 摘不到也无害。
+# ============================================================================
+for _aid in "${T88AID:-}" "${T88AID2:-}"; do
+  [ -n "$_aid" ] && dbq "DELETE FROM product_assets WHERE id=$_aid" >/dev/null 2>&1 || true
+done
+for _fid in "${T87FID:-}" "${T93FID:-}"; do
+  [ -n "$_fid" ] && dbq "DELETE FROM product_facts WHERE id=$_fid" >/dev/null 2>&1 || true
+done
+for _pid in "${T87PID:-}" "${T92PIDB:-}"; do
+  [ -n "$_pid" ] || continue
+  dbq "DELETE FROM product_assets WHERE product_id='$_pid'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM product_facts WHERE product_id='$_pid'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM kb_packages WHERE product_id='$_pid'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM feedbacks WHERE product_id='$_pid'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM products WHERE id='$_pid'" >/dev/null 2>&1 || true
+done
+# 计数反验：夹具产品、其子行、T89 注入的免费计数行都必须归零
+T87LEFT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code IN ('uat_t87_shared','uat_t92_b')" 2>/dev/null | tr -d '\r')")
+ckq T87-cleanup-products-gone 0 "${T87LEFT:-0}"
+T87FWHERE="product_id IN ('${T87PID:-__none__}','${T92PIDB:-__none__}')"
+T87LEFTF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE $T87FWHERE" 2>/dev/null | tr -d '\r')")
+ckq T87-cleanup-facts-gone 0 "${T87LEFTF:-0}"
+# ★ 两种回环字面量都要摘、都要反验（与上面注入同一把键集；只摘一种会把另一种留在库里当残骸）
+dbq "DELETE FROM rate_limits WHERE scope='free_ip' AND key IN ('127.0.0.1','::1')" >/dev/null 2>&1 || true
+T89RATE=$(mny_norm "$(dbq "SELECT COUNT(1) FROM rate_limits WHERE scope='free_ip' AND key IN ('127.0.0.1','::1')" 2>/dev/null | tr -d '\r')")
+ckq T89-cleanup-rate-gone 0 "${T89RATE:-0}"
+
+# ============================================================================
+# T94 物料文件腿（★ 一期 X2 2026-11-06：新口 /api/product/asset/upload 与 /asset/file）
+#   四条断言：上传成功出纯 basename／.srt 被拒且点名出路（AGENTS §14「拒绝文案只有一个出口」）／
+#   文件口下载字节数＝上传字节数／事实改动使物料 expired 后 **file 与 download 两口同一把尺子**
+#   （只判一个等于没判——「JSON 口拦得住、文件口拦不住」就是 A3 只剩半只锁）。
+#   本段自建夹具、段末按显式 id 清场（§18 拆租户那条），与 T87–T93 共用夹具互不依赖。
+#   ★ 多点读数一律 `|` 分隔符再 cut（AGENTS §一·6③：curl -w 空格劈行是现成的判据自伤源）。
+# ============================================================================
+T94T=$(tok uatuser_a uatpass123); T94H="Authorization: Bearer $T94T"
+T94SAVE=$(post "$T94H" '{"name":"UAT-T94-物料文件腿","code":"uat_t94_file","tagline":"UAT 登记用语"}' /api/product/save)
+T94PID=$(printf '%s' "$T94SAVE" | pfield id)
+ckq T94-product-id-nonempty 1 "$( [ -n "$T94PID" ] && echo 1 || echo 0 )"
+# 事实先行并确认：物料 fact_refs 指它，第四条断言才有「改动⇒expired」的触发源。
+T94FUP=$(post "$T94H" "{\"product_id\":\"$T94PID\",\"kind\":\"spec\",\"key\":\"warranty_years\",\"value\":\"2 年\",\"visibility\":\"public\"}" /api/product/fact/upsert)
+T94FID=$(printf '%s' "$T94FUP" | pfield id)
+ckq T94-fact-id-nonempty 1 "$( [ -n "$T94FID" ] && echo 1 || echo 0 )"
+ck T94-fact-confirm-success '"success":true' "$(post "$T94H" "{\"id\":${T94FID:-0}}" /api/product/fact/confirm)"
+
+# ① 合法件上传：假 PDF 几 KB，首字节 %PDF-（上传口只判扩展名与体积，不解析内容）；
+#    multipart 的 filename 用 `;filename=` 显式钉成 uat-94.pdf，磁盘临时名随机不参与判据。
+T94PDF=$(mktemp)
+printf '%%PDF-1.4\n' > "$T94PDF"
+head -c 4096 /dev/zero | tr '\0' 'x' >> "$T94PDF"
+T94PDFBYTES=$(wc -c < "$T94PDF" | tr -dc '0-9')
+T94UPF=$(mktemp)
+T94UPST=$(curl -s -o "$T94UPF" -w '%{http_code}' --max-time 60 "$B/api/product/asset/upload" -H "$T94H" -F "file=@${T94PDF};filename=uat-94.pdf;type=application/pdf")
+ckq T94-upload-200 200 "${T94UPST:-0}"
+T94UP=$(cat "$T94UPF"); rm -f "$T94UPF"
+ck T94-upload-success '"success":true' "$T94UP"
+T94REF=$(printf '%s' "$T94UP" | pv '.get("artifact_ref","")')
+# artifact_ref 必须是**纯 basename**：非空、无 /、无 \、无 ..（product_asset_file.go 口径②：
+# 库里只存 basename，取回口再做 filepath.Base 等值＋目录白名单；这一条钉的是出栈那一半）。
+T94REFSHAPE=$(printf '%s' "$T94REF" | awk '{print ($0!="" && index($0,"/")==0 && index($0,"\\")==0 && index($0,"..")==0)?1:0}')
+ckq T94-ref-pure-basename 1 "${T94REFSHAPE:-0}"
+# 出栈的 size_bytes 必须等于磁盘件字节（数值判据先过 mny_norm，方言假红同 T51/T54）。
+T94UPSIZE=$(printf '%s' "$T94UP" | pv '.get("size_bytes",0)')
+ckq T94-upload-size-eq "$(mny_norm "$T94PDFBYTES")" "$(mny_norm "${T94UPSIZE:-0}")"
+# 负向：回执不许带服务端绝对路径（目录名是排障抓手，不是出栈字段）；正向对照＝上面 basename 非空。
+ckn T94-upload-no-abs-path '/opt/|/var/|UploadDir' "$T94UP"
+
+# ② .srt 必须被拒（4xx），且拒绝文案点名出路（撤准入的五个纯文本容器走 RejectHint 那一句，
+#    不给通用「不支持」——把更省事的路藏起来就是 §14 那条纪律的反面）。
+T94SRT=$(mktemp)
+printf '1\n00:00:00,000 --> 00:00:01,000\nUAT-T94-REJECT-ME\n' > "$T94SRT"
+T94SRTR=$(mktemp)
+T94SRTST=$(curl -s -o "$T94SRTR" -w '%{http_code}' --max-time 60 "$B/api/product/asset/upload" -H "$T94H" -F "file=@${T94SRT};filename=uat-94.srt;type=text/plain")
+ckq T94-srt-rejected-4xx 1 "$(awk -v c="${T94SRTST:-0}" 'BEGIN{print (c>=400 && c<500)?1:0}')"
+T94SRTBODY=$(cat "$T94SRTR"); rm -f "$T94SRTR" "$T94SRT"
+ckF T94-srt-hint-container '纯文本容器' "$T94SRTBODY"
+ckF T94-srt-hint-paste '请直接粘贴内容到文本翻译' "$T94SRTBODY"
+ckn T94-srt-not-success '"success":true' "$T94SRTBODY"   # 正向对照＝上面 4xx 与两句出路文案都在
+
+# ③ 带 ref 建物料行（quote_sheet）→ file 口必须 200 且**逐字节等值**（size_download 与磁盘 wc -c 各读一次）。
+T94ASS=$(post "$T94H" "{\"product_id\":\"$T94PID\",\"asset_type\":\"quote_sheet\",\"lang\":\"zh\",\"body\":\"UAT-T94 报价单正文\",\"artifact_ref\":\"$T94REF\",\"fact_refs\":[${T94FID:-0}],\"visibility\":\"public\"}" /api/product/asset/put)
+ck T94-asset-put-success '"success":true' "$T94ASS"
+T94AID=$(printf '%s' "$T94ASS" | pfield id)
+ckq T94-asset-id-nonempty 1 "$( [ -n "$T94AID" ] && echo 1 || echo 0 )"
+T94DL=$(mktemp)
+T94DLMETA=$(curl -s -o "$T94DL" -w '%{http_code}|%{size_download}' --max-time 60 "$B/api/product/asset/file?id=${T94AID:-0}" -H "$T94H")
+T94DLST=$(printf '%s' "$T94DLMETA" | cut -d'|' -f1)
+T94DLBYTES=$(printf '%s' "$T94DLMETA" | cut -d'|' -f2)
+ckq T94-file-200 200 "${T94DLST:-0}"
+ckq T94-file-bytes-eq "$(mny_norm "$T94PDFBYTES")" "$(mny_norm "${T94DLBYTES:-0}")"
+rm -f "$T94DL"
+
+# ④ 事实改值 ⇒ 物料 expired ⇒ **两个出口同一把尺子**都非 200（409）。
+#    file 口与 JSON 口都先过 AssetForDownload 那一道闸（product_asset_file.go 口径①）；
+#    上面第③条的正向 200 就是这条负向锁的正向对照——没有它，「被拒」可能只是路由压根不通。
+T94CHG=$(post "$T94H" "{\"id\":${T94FID:-0},\"product_id\":\"$T94PID\",\"kind\":\"spec\",\"key\":\"warranty_years\",\"value\":\"3 年\"}" /api/product/fact/upsert)
+ck T94-fact-change-success '"success":true' "$T94CHG"
+T94VAL=$(dbq "SELECT COALESCE(validity,'') FROM product_assets WHERE id=${T94AID:-0}" 2>/dev/null | tr -d '\r')
+ckq T94-asset-expired expired "${T94VAL:-}"
+req3 GET "$T94H" "/api/product/asset/file?id=${T94AID:-0}"
+T94FILECODE="${R3ST:-}"
+ckq T94-file-expired-409 409 "${T94FILECODE:-0}"
+ckF T94-file-expired-msg '重新生成并审核' "$R3BODY"
+req3 GET "$T94H" "/api/product/asset/download?id=${T94AID:-0}"
+ckq T94-download-expired-409 409 "${R3ST:-0}"
+ckq T94-two-ends-same-ruler "${T94FILECODE:-?}" "${R3ST:-?}"
+
+# ---------- T94 清场（按本段显式 id 逐条摘，反验计数归 0；禁整租户蒸发） ----------
+# 注：上传件落在 UAT 实例自己的 UploadDir/_product_assets 下，随实例销毁一起回收，
+#     脚本不猜服务端磁盘路径（猜路径＝第二把尺子，同 §一·12 不许把远端路径拼进判据）。
+[ -n "${T94AID:-}" ] && dbq "DELETE FROM product_assets WHERE id=$T94AID" >/dev/null 2>&1 || true
+[ -n "${T94FID:-}" ] && dbq "DELETE FROM product_facts WHERE id=$T94FID" >/dev/null 2>&1 || true
+[ -n "${T94PID:-}" ] && dbq "DELETE FROM kb_packages WHERE product_id='$T94PID'" >/dev/null 2>&1 || true
+[ -n "${T94PID:-}" ] && dbq "DELETE FROM products WHERE id='$T94PID'" >/dev/null 2>&1 || true
+rm -f "$T94PDF"
+T94LEFT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code='uat_t94_file'" 2>/dev/null | tr -d '\r')")
+ckq T94-cleanup-product-gone 0 "${T94LEFT:-0}"
+T94LEFTA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE product_id='${T94PID:-__none__}'" 2>/dev/null | tr -d '\r')")
+ckq T94-cleanup-asset-gone 0 "${T94LEFTA:-0}"
+T94LEFTF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id='${T94PID:-__none__}'" 2>/dev/null | tr -d '\r')")
+ckq T94-cleanup-fact-gone 0 "${T94LEFTF:-0}"
+
+# ============================================================================
+# T95 卖家写侧全链路（★ 一期 X1 2026-11-06：卖家今天第一次能自己走完的那条路）
+#   建档（不带 id）→ 出栈两短码 → 事实 upsert→confirm → public 物料 → 切 live →
+#   匿名对外页读得到 → SEO 关掉后 sitemap 消失 → **再开得回**。
+#   最后一步不是凑数：单向锁（只判「关得掉」）看不见「开得回」那条腿被摘掉——
+#   那会让关掉过的页面永久退出索引，而屏幕上每一次「保存成功」都是真的。
+#   本段自建夹具、段末按显式 id 清场，与 T87/T94 的夹具互不依赖。
+# ============================================================================
+T95T=$(tok uatuser_a uatpass123); T95H="Authorization: Bearer $T95T"
+T95SAVE=$(post "$T95H" '{"name":"UAT-T95-写侧链路","code":"uat_t95_write","tagline":"UAT 登记用语"}' /api/product/save)
+ck T95-save-success '"success":true' "$T95SAVE"
+T95PID=$(printf '%s' "$T95SAVE" | pfield id)
+T95TC=$(printf '%s' "$T95SAVE" | pfield tenant_code)
+T95PC=$(printf '%s' "$T95SAVE" | pfield page_code)
+ckq T95-product-id-nonempty 1 "$( [ -n "$T95PID" ] && echo 1 || echo 0 )"
+ckq T95-save-returns-two-codes 1 "$( [ -n "$T95TC" ] && [ -n "$T95PC" ] && echo 1 || echo 0 )"
+# ① 事实：kind=spec 一条，显式 public，确认库里 status 真翻 confirmed（出栈 success 不算账，§一·8）
+T95FUP=$(post "$T95H" "{\"product_id\":\"$T95PID\",\"kind\":\"spec\",\"key\":\"e2e_key\",\"value\":\"UAT-T95-FACT-VALUE\",\"visibility\":\"public\"}" /api/product/fact/upsert)
+T95FID=$(printf '%s' "$T95FUP" | pfield id)
+ckq T95-fact-id-nonempty 1 "$( [ -n "$T95FID" ] && echo 1 || echo 0 )"
+T95FCF=$(post "$T95H" "{\"id\":${T95FID:-0}}" /api/product/fact/confirm)
+ck T95-fact-confirm-success '"success":true' "$T95FCF"
+T95FSTAT=$(dbq "SELECT COALESCE(status,'') FROM product_facts WHERE id=${T95FID:-0}" 2>/dev/null | tr -d '\r')
+ckq T95-fact-status-confirmed confirmed "${T95FSTAT:-}"
+# ② public 物料：body 就是匿名对外页那两条判据的靶子；fact_refs 留空 ⇒ 本段不再制造 expired
+T95ASS=$(post "$T95H" "{\"product_id\":\"$T95PID\",\"asset_type\":\"onepager\",\"lang\":\"en\",\"body\":\"UAT-T95-PUBLIC-ASSET\",\"fact_refs\":[],\"visibility\":\"public\"}" /api/product/asset/put)
+ck T95-asset-put-success '"success":true' "$T95ASS"
+T95AID=$(printf '%s' "$T95ASS" | pfield id)
+ckq T95-asset-id-nonempty 1 "$( [ -n "$T95AID" ] && echo 1 || echo 0 )"
+# ③ 切 live：sitemap 的准入是 live ∧ indexable 两把尺子（product_public_api.go 口径④），不切则 ⑤ 无靶
+T95LIVE=$(post "$T95H" "{\"id\":\"$T95PID\",\"status\":\"live\"}" /api/product/status)
+ck T95-status-live '"success":true' "$T95LIVE"
+# ④ 匿名对外页（零 token：公开面可达是 F-79 同族纪律）：public 事实值与 public 物料 body 都要读得到
+T95PUB=$(curl -s --max-time 60 "$B/api/product/public?tenant_code=$T95TC&page_code=$T95PC")
+ck T95-public-found '"found":true' "$T95PUB"
+ckF T95-public-shows-asset UAT-T95-PUBLIC-ASSET "$T95PUB"
+ckF T95-public-shows-fact UAT-T95-FACT-VALUE "$T95PUB"
+# ⑤ SEO 往返：默认收录 → 关后消失 → 开回重现（三读数各不同形；关掉那一步复用 T93 的同款现算判据）
+T95SM0=$(curl -s --max-time 60 "$B/sitemap.xml")
+ckF T95-default-in-sitemap "/p/$T95TC/$T95PC" "$T95SM0"
+T95OFF=$(post "$T95H" "{\"product_id\":\"$T95PID\",\"indexable\":false}" /api/product/seo)
+ck T95-seo-off-success '"success":true' "$T95OFF"
+T95SM1=$(curl -s --max-time 60 "$B/sitemap.xml")
+ckq T95-off-removed-from-sitemap 0 "$(printf '%s' "$T95SM1" | python3 -c 'import sys;print(1 if sys.argv[1] in sys.stdin.read() else 0)' "/p/$T95TC/$T95PC" 2>/dev/null || echo 0)"
+T95ON=$(post "$T95H" "{\"product_id\":\"$T95PID\",\"indexable\":true}" /api/product/seo)
+ck T95-seo-on-success '"success":true' "$T95ON"
+ckF T95-back-in-sitemap "/p/$T95TC/$T95PC" "$(curl -s --max-time 60 "$B/sitemap.xml")"
+ckq T95-seo-roundtrip-same-code "$(mny_norm "$(printf '%s' "$T95SM0" | python3 -c 'import sys;print(sys.stdin.read().count("<loc>"))' 2>/dev/null || echo 0)")" "$(mny_norm "$(printf '%s' "$(curl -s --max-time 60 "$B/sitemap.xml")" | python3 -c 'import sys;print(sys.stdin.read().count("<loc>"))' 2>/dev/null || echo 0)")"
+
+# ---------- T95 清场（按本段显式 id 逐条摘，反验计数归 0；禁整租户蒸发） ----------
+[ -n "${T95AID:-}" ] && dbq "DELETE FROM product_assets WHERE id=$T95AID" >/dev/null 2>&1 || true
+[ -n "${T95FID:-}" ] && dbq "DELETE FROM product_facts WHERE id=$T95FID" >/dev/null 2>&1 || true
+[ -n "${T95PID:-}" ] && dbq "DELETE FROM kb_packages WHERE product_id='$T95PID'" >/dev/null 2>&1 || true
+[ -n "${T95PID:-}" ] && dbq "DELETE FROM products WHERE id='$T95PID'" >/dev/null 2>&1 || true
+T95LEFT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code='uat_t95_write'" 2>/dev/null | tr -d '\r')")
+ckq T95-cleanup-product-gone 0 "${T95LEFT:-0}"
+T95LEFTA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE product_id='${T95PID:-__none__}'" 2>/dev/null | tr -d '\r')")
+ckq T95-cleanup-asset-gone 0 "${T95LEFTA:-0}"
+T95LEFTF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id='${T95PID:-__none__}'" 2>/dev/null | tr -d '\r')")
+ckq T95-cleanup-fact-gone 0 "${T95LEFTF:-0}"
+
+# ============================================================================
+# T96 引导流的后端半边（★ O 组 2026-11-06：目标语言**只存产品行**）
+#   四条判据：建档带去重归一／公开口原样出栈（空也是 []，不出 null）／
+#   update 省略＝不表态（改 tagline 不许把语种清空）／显式空数组＝真清空。
+#   ★ hreflang 那一条**不在这里判**：它需要后端直出的 SPA 壳，而 UAT 实例的 WebDist 未必在位，
+#     拿"404 也算跑过"的腿混进判据就是空转。那半边的真判据在 Go 侧
+#     internal/api/product_hreflang_gate_test.go（W1a/W1b/W1c/W2/W3＋射程自证），
+#     本段只验**数据面**：库里那一串与接口出栈那一份是否同一件事。
+#   本段自建夹具、段末按显式 id 清场（禁整租户蒸发），夹具取身份一律现登录现取 token。
+# ============================================================================
+T96T=$(tok uatuser_a uatpass123); T96H="Authorization: Bearer $T96T"
+T96SAVE=$(post "$T96H" '{"name":"UAT-T96-引导语种","code":"uat_t96_langs","tagline":"三条语种判据的靶子","target_langs":["ja","en","ja",""]}' /api/product/save)
+T96PID=$(printf '%s' "$T96SAVE" | pfield id)
+ckq T96-product-id-nonempty 1 "$( [ -n "$T96PID" ] && echo 1 || echo 0 )"
+# ① 库里必须是**归一后**的那一份：去重、去空项、保序（顺序给 hreflang 当主次，不许被排成字典序）
+T96DB=$(mny_norm "$(dbq "SELECT target_langs FROM products WHERE id='$T96PID'" 2>/dev/null | tr -d '\r')")
+ckq T96-db-langs-normalized "ja,en" "${T96DB:-}"
+
+# ② 公开口原样出栈：数组、顺序、且**不为 null**（消费方各判一次 null 是本仓老坑）
+T96PC=$(printf '%s' "$T96SAVE" | pv '.get("product",{}).get("page_code","")')
+[ -z "$T96PC" ] && T96PC=$(printf '%s' "$(get "$T96H" "/api/product/list")" | python3 -c 'import sys,json;print(next((x.get("page_code","") for x in json.load(sys.stdin).get("products",[]) if x.get("id")=="'$T96PID'"),""))' 2>/dev/null || true)
+T96TCC=$(printf '%s' "$T96SAVE" | pv '.get("product",{}).get("tenant_code","")')
+[ -z "$T96TCC" ] && T96TCC=$(printf '%s' "$(get "$T96H" "/api/product/list")" | python3 -c 'import sys,json;print(next((x.get("tenant_code","") for x in json.load(sys.stdin).get("products",[]) if x.get("id")=="'$T96PID'"),""))' 2>/dev/null || true)
+T96PUB=$(curl -s --max-time 60 "$B/api/product/public?tenant_code=$T96TCC&page_code=$T96PC")
+# ★ ckF 不是"顺手换一下"：`ck` 走 `grep -E`，`["ja","en"]` 会被读成**字符类**（匹配单个 j/a/,,e/n），
+#   于是"接口明明出了这一份数组、判据恒红"（本批首跑真红在此，AGENTS §一·7「正则里的字面元字符一律转义」）。
+ckF T96-public-target-langs-array '"target_langs":["ja","en"]' "$T96PUB"
+ckn T96-public-target-langs-not-null '"target_langs":null' "$T96PUB"
+
+# ③ 正向对照：**没声明**的另一份产品，公开口必须出空数组（而不是 12 语、也不是"跟随界面语种"）
+T96BARE=$(post "$T96H" '{"name":"UAT-T96-未声明","code":"uat_t96_bare"}' /api/product/save)
+T96BPID=$(printf '%s' "$T96BARE" | pfield id)
+T96BB=$(mny_norm "$(dbq "SELECT target_langs FROM products WHERE id='$T96BPID'" 2>/dev/null | tr -d '\r')")
+ckq T96-bare-db-empty "" "${T96BB-}"
+T96BPUB=$(curl -s --max-time 60 "$B/api/product/public?tenant_code=$(printf '%s' "$T96BARE" | pv '.get("product",{}).get("tenant_code","")')&page_code=$(printf '%s' "$T96BARE" | pv '.get("product",{}).get("page_code","")')")
+ckF T96-bare-public-array '"target_langs":[]' "$T96BPUB"
+
+# ④ 省略＝不表态：交**完整档案**（name 必填＝这一支的契约是"把这份存回去"，不是 PATCH）但**不带 target_langs**，
+#    语种必须原样留着（引导第 2 步之后还会回改资料，这里失守就会静默清空）
+# ★ 这里的 body 必须用"单引号串 ＋ 变量插进去"拼：写成 `"{"id":"$T96PID",...}"` 时内层双引号**不转义**，
+#   送出去的是 `{id:prd_x,...}` 这种非法 JSON ⇒ 接口如实回 VALIDATION_ERROR（产品对、夹具错），
+#   而下一条"省略不表态"会因为"什么都没改成"而**空转判绿**——那比红更坏（红的是判据，绿的是错觉）。
+ckF T96-tagline-ok '"success":true' "$(post "$T96H" '{"id":"'"$T96PID"'","name":"UAT-T96-引导语种","tagline":"改过的一句话定位"}' /api/product/save)"
+T96DB2=$(mny_norm "$(dbq "SELECT target_langs FROM products WHERE id='$T96PID'" 2>/dev/null | tr -d '\r')")
+ckq T96-omitted-keeps-langs "ja,en" "${T96DB2:-}"
+# ④b 反向对照：tagline 必须**真改到了**，否则上面那条"语种还在"可能只是"这一单根本没落库"
+ckq T96-tagline-actually-written "改过的一句话定位" "$(mny_norm "$(dbq "SELECT tagline FROM products WHERE id='$T96PID'" 2>/dev/null | tr -d '\r')")"
+
+# ⑤ 显式空数组＝真清空（与"省略"必须分得开，否则两态同形）
+ckF T96-clear-ok '"success":true' "$(post "$T96H" '{"id":"'"$T96PID"'","name":"UAT-T96-引导语种","target_langs":[]}' /api/product/save)"
+T96DB3=$(mny_norm "$(dbq "SELECT target_langs FROM products WHERE id='$T96PID'" 2>/dev/null | tr -d '\r')")
+ckq T96-explicit-clear "" "${T96DB3-}"
+
+# ---------- T96 清场（按显式 id 摘，反验归 0） ----------
+for T96P in "$T96PID" "$T96BPID"; do
+  [ -n "$T96P" ] && dbq "DELETE FROM kb_packages WHERE product_id='$T96P'" >/dev/null 2>&1 || true
+  [ -n "$T96P" ] && dbq "DELETE FROM products WHERE id='$T96P'" >/dev/null 2>&1 || true
+done
+T96LEFT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code IN ('uat_t96_langs','uat_t96_bare')" 2>/dev/null | tr -d '\r')")
+ckq T96-cleanup-gone 0 "${T96LEFT:-0}"
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0

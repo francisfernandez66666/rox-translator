@@ -27,7 +27,10 @@ describe('syncRouteMeta', () => {
       return document.title
     })
     expect(new Set(titles).size).toBeGreaterThanOrEqual(4) // /login 与 /register 同为统一登录页
-    expect(titles[0]).toContain('专业 AI 翻译')
+    // ★ 首页 title 按 2026-11-06 定稿口径＝**肯定句主张**（旧稿「专业 AI 翻译…」已被推翻，
+    //   否定句式会把概念发散掉）。这里钉的是"这一句必须是主张句"，不是钉死措辞：
+    //   改文案要连 route_meta.json 与本行一起改，别只改一侧（那会让 SEO 面与界面各说一套）。
+    expect(titles[0]).toContain('自己会对外开口')
     expect(titles[1]).toContain('定价')
   })
 

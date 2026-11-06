@@ -39,6 +39,9 @@ export const SCAN_TESTS = [
   //   不是产品缺陷；这正是那条自指锁存在的理由）。
   'src/api/ticketsComplianceLock.test.ts',
   'src/components/admin/doubleConfirmGate.test.ts',
+  // ★ 2026-11-06 一期收尾批：跨语言逐口现读（前端 product.ts 的 withQuery/postBody vs 后端
+  //   handler 与助手的 URL.Query().Get／json 标签，还要花括号配平取体），是遍历型 ⇒ 180s 预算。
+  'src/api/productQueryContract.lock.test.ts',
   'src/vitestScanLayout.lock.test.ts', // 本锁自己就是遍历型的（自指腿：不在名单里就会拿 30s 预算去扫全仓）
 ]
 

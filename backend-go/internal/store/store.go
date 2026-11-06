@@ -49,6 +49,12 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		return nil, err // 迁移失败则返回错误
 	}
+	// ★ 一期《确定的多语言能力》：三张新表已在 migrate() 的 stmts 里建好，这里只补现网表列
+	//   与产品包部分唯一索引。必须排在 migrate() **之后**（EnsureColumns 对不存在的表会报错），
+	//   且排在读路径之前（缺列会让产品包查询在运行时才炸）。失败直接中断启动，不静默降级。
+	if err := s.ProductMigrate(); err != nil {
+		return nil, err
+	}
 	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
 	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
@@ -650,6 +656,67 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_regattr_user ON registration_attribution(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_regattr_created ON registration_attribution(created_at)`,
+		// ---------- 一期《确定的多语言能力》：产品档案 / 事实项 / 物料货架 ----------
+		// ★ 两段短码与 slug 一律 NOT NULL 无默认：唯一索引会把空串也当一个值，
+		//   留 DEFAULT '' 会让第一行能建、第二行必撞 ux_product_page / ux_product_tenant_slug。
+		`CREATE TABLE IF NOT EXISTS products (
+			id TEXT PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			user_id INTEGER NOT NULL DEFAULT 0,
+			code TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			tagline TEXT NOT NULL DEFAULT '',
+			industry_code TEXT NOT NULL DEFAULT '',
+			audience TEXT NOT NULL DEFAULT '',
+			use_case TEXT NOT NULL DEFAULT '',
+			style_notes TEXT NOT NULL DEFAULT '',
+			banned_notes TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'draft',
+			slug TEXT NOT NULL,
+			tenant_code TEXT NOT NULL,
+			page_code TEXT NOT NULL,
+			seo_indexable INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS product_facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id BIGINT NOT NULL,
+			product_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'unverified',
+			visibility TEXT NOT NULL DEFAULT 'gated',
+			source TEXT NOT NULL DEFAULT 'manual',
+			locked INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS product_assets (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			tenant_id BIGINT NOT NULL,
+			product_id TEXT NOT NULL,
+			asset_type TEXT NOT NULL,
+			lang TEXT NOT NULL,
+			body TEXT NOT NULL,
+			artifact_ref TEXT NOT NULL DEFAULT '',
+			review_status TEXT NOT NULL DEFAULT 'unreviewed',
+			validity TEXT NOT NULL DEFAULT 'valid',
+			visibility TEXT NOT NULL DEFAULT 'gated',
+			fact_refs TEXT NOT NULL DEFAULT '[]',
+			source_kind TEXT NOT NULL DEFAULT 'model',
+			version INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_tenant_slug ON products(tenant_id, slug)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_codes ON products(tenant_code, page_code)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_page ON products(page_code)`,
+		`CREATE INDEX IF NOT EXISTS idx_product_tenant ON products(tenant_id, status, id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_fact ON product_facts(product_id, kind, key)`,
+		`CREATE INDEX IF NOT EXISTS idx_fact_tenant_updated ON product_facts(tenant_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_asset_product_lang ON product_assets(product_id, lang, validity)`,
 	}
 	// 方言：以现有 SQLite DDL 为唯一真源，PostgreSQL 下经 db.ToDialect 自动改写
 	d := db.CurrentDialect()

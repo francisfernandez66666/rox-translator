@@ -29,8 +29,10 @@ func packAllowSet(scope *kb.PackScope) map[int64]bool {
 	if scope == nil {
 		return out
 	}
-	for _, m := range []map[int64]bool{scope.TenantPackIDs, scope.SharedPackIDs,
-		scope.PersonaPackIDs, scope.UniversalPackIDs} {
+	// ★ 一期：产品包也进 allow 集合（pack_type 虽是 tenant，但装配口在 BuildUserPackScope，
+	//   单独并集可防「Rank 认得它、术语闸却查不到」的半接线形态）。
+	for _, m := range []map[int64]bool{scope.TenantPackIDs, scope.ProductPackIDs,
+		scope.SharedPackIDs, scope.PersonaPackIDs, scope.UniversalPackIDs} {
 		for id := range m {
 			if id > 0 {
 				out[id] = true

@@ -539,6 +539,37 @@ func (s *Server) handleTenantBrandingGet(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, 200, s.brandingPayload(r))
 }
 
+// tenantByHost 按**访问域名**解析租户 ID（F-73 通配子域那条链的唯一实现，2026-11-06 从
+// brandingPayload 原样抽出成导出面内的一个函数，判据一字未动）。
+//
+// ★ 为什么必须有这一个口而不是各处自己判：`tenant.FromContext(ctx)` 在**匿名请求**上恒等于 1
+//
+//	（server.go 中间件第 4 支：历史 rox 默认档），它表达的是"这条请求按哪个租户记账"，
+//	不是"这台域名叫谁"。把它当"访问域名"用，会让所有非 1 号租户的公开面恒判"跨租户"而回落空态
+//	——一期对外页／知识层问答的 T89／T92 整片红就是这个误用的真身。
+//
+// 主站前缀（含 apex／回环／没登记的子域）⇒ 回 0＝平台根，不套用任何租户品牌。
+// 参数：s=Server，r=请求；返回按域名解析出的租户 ID（解析不到为 0）。
+func (s *Server) tenantByHost(r *http.Request) int64 {
+	prefix := tenantPrefixFromHost(s, r.Host)
+	if prefix == "" {
+		return 0
+	}
+	primary := s.primaryHost()
+	base := brandingBaseDomain(s)
+	primaryPrefix := ""
+	if strings.HasSuffix(primary, "."+base) {
+		primaryPrefix = strings.TrimSuffix(primary, "."+base)
+	}
+	if prefix == primaryPrefix || s.Ten == nil {
+		return 0
+	}
+	if t, err := s.Ten.GetByDomain(prefix); err == nil && t != nil {
+		return t.ID
+	}
+	return 0
+}
+
 // brandingPayload 解析当前访问域名的租户品牌定制（供接口与 SPA 首屏注入复用）。
 // 解析优先级：显式 ?tenant_id=（★ F-79 起**只对超管与该租户自己的成员生效**，见 branding_scope.go）
 // > 按访问子域前缀；主站前缀（如 langcross）按全局根处理，不套用任何租户品牌。
@@ -560,19 +591,7 @@ func (s *Server) brandingPayload(r *http.Request) map[string]interface{} {
 	}
 	// 按访问子域前缀解析专属租户品牌；主站前缀按全局根处理，不套用任何租户品牌
 	if tid <= 0 && !explicitPlatform {
-		if prefix := tenantPrefixFromHost(s, r.Host); prefix != "" {
-			primary := s.primaryHost()
-			base := brandingBaseDomain(s)
-			primaryPrefix := ""
-			if strings.HasSuffix(primary, "."+base) {
-				primaryPrefix = strings.TrimSuffix(primary, "."+base)
-			}
-			if prefix != primaryPrefix && s.Ten != nil {
-				if t, err := s.Ten.GetByDomain(prefix); err == nil && t != nil {
-					tid = t.ID
-				}
-			}
-		}
+		tid = s.tenantByHost(r)
 	}
 	// 全局根域名（主站 langcross / apex）：返回平台级默认品牌；平台主站品牌定制存于 system_config
 	if tid <= 0 {

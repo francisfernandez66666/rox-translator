@@ -85,6 +85,16 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 		// ★ G6（2026-10-19）：只有**前端已知路由**才回退 SPA 入口；其余未知深链直出真 404 面。
 		//   旧形态对任何磁盘上不存在的路径一律回 index.html（状态码 200），于是「地址不存在」与
 		//   「要登录」在访客眼里同形（D7），且 SEO 拿不到真实状态码。已知路由白名单见 spaClientRoutes。
+		// ★ 一期裁定 6：对外产品页 `/p/{tenantCode}/{pageCode}` 是**动态两段**路径，磁盘上永不存在，
+		//   所以它只能靠短码解析判存在性。判据按 `/p/` **前缀**收（不是按"形状对不对"收）：
+		//   段数不对、短码解不到、跨租户拼接一律真 404——把 `/p/x/y/z` 当"前缀已知"回 200 壳，
+		//   等于让访客与爬虫对拼错的地址拿到一个看起来正常的页面（G6 当年治的就是这个形态）。
+		if strings.HasPrefix(path, productPublicRoutePrefix) {
+			if _, ok := s.productPageFor(r); !ok {
+				s.serveSPANotFound(w, r)
+				return
+			}
+		}
 		if isKnownClientRoute(path) {
 			// SPA 路由回退到 index.html（注入当前域名品牌，消除首屏「先通用后品牌」闪烁）
 			s.serveIndexHTML(w, r, filepath.Join(dist, "index.html"))
@@ -125,10 +135,22 @@ var spaClientExactRoutes = map[string]bool{
 	"/packages":     true,
 	"/my":           true,
 	"/chat-history": true,
+	"/products":     true,
+	// ★ O 组（2026-11-06）：卖家写侧单页详情与引导页都是**可被转发的深链**
+	//   （引导横幅把人带去 /onboarding，详情页链接常在钉钉/微信里传）。
+	//   不登记进这张表 ⇒ 后端直出 404，而本地 dev server 一切正常——TestSPAClientRouteCoverage 就是抓这一族的。
+	"/products/detail":  true,
+	"/onboarding":       true,
+	"/products/facts":   true,
+	"/products/answers": true,
 }
 
 // spaClientRoutePrefixes 带子树的前端路由（/admin 内的面板由本地 tab 态切换，但仍保守放行整棵子树）。
-var spaClientRoutePrefixes = []string{"/admin"}
+// ★ `/p` 是对外产品页（`/p/{tenantCode}/{pageCode}`，一期裁定 6）：段数是动态的，精确白名单写不完，
+//
+//	所以进前缀档。**它不是"前缀放行就等于存在"**——存在性由 handleSPA 里那段短码解析判（解不到真 404），
+//	这一档只负责"形状对了才交给 SPA 壳渲染"。
+var spaClientRoutePrefixes = []string{"/admin", "/p"}
 
 // isKnownClientRoute 判断路径是否为前端已知路由（G6：仅已知路由才回退 SPA 入口）。
 // 参数 path: URL 路径（已由 handleSPA 归一为该形态）。返回: 命中白名单即 true。
@@ -201,6 +223,10 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request, path str
 			w.Header().Set("Vary", "Accept-Language")
 		}
 	}
+	// ★ 一期裁定 6＋§5.8：对外产品页的元数据**不复制第二份事实源**，由 products 表现算注入
+	//   （静态路由仍走上面那份 route_meta.json，两者共用同一批替换器与 hreflang 码表）。
+	//   非 `/p/` 路径时该函数原样返回，主站／定价／比价等页面的字节判据一字不动。
+	html = s.injectProductMeta(html, r, seoBrandForRequest(bp))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	// ★ 2026-10-18 慢链路批（#1「国内加载慢」）：关键资源提前声明（RFC 8288 Link）。

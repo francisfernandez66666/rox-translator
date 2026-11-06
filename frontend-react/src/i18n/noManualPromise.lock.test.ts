@@ -43,7 +43,14 @@ const BANNED = [
 ]
 
 // CUSTOMER_KEYS：客户面（非管理台）会读到的处置文案，逐条点名。
-const CUSTOMER_KEYS = ['tk.qaFlaggedTip', 'tk.qaErrorNote']
+// ★ 一期（2026-11-05，§8.4）：新访客面/卖家面「两副面孔」两句文案加入横扫射程——
+//   不加这一步，新文案就在禁词闸的射程外（AGENTS「负向恒真是空转」）。
+//   这两个键的事实源＝dicts.zh/en 两份底典 ＋ 十份全量 locale（共 12 份，与 tk.* 同形），
+//   故 N1 的「≥12 份」覆盖面自证照常成立；BANNED 禁词表一字不动。
+const CUSTOMER_KEYS = [
+  'tk.qaFlaggedTip', 'tk.qaErrorNote',
+  'product.exhaust.visitor.busy', 'product.exhaust.owner.reason',
+]
 
 // readAll 拼出全部词典正文（读不到任何一份即红——"没读到"绝不能当"没问题"）。
 function readAll(): Array<[string, string]> {

@@ -261,6 +261,64 @@ TXN_TAIL=$(grep -oE 'T-PASS=[0-9]+ FAIL=[0-9]+' "$WORK/api_uat_txn.log" | tail -
 TXN_PASS=$(echo "$TXN_TAIL" | grep -oE 'PASS=[0-9]+' | cut -d= -f2)
 TXN_FAIL=$(echo "$TXN_TAIL" | grep -oE 'FAIL=[0-9]+' | cut -d= -f2)
 
+# ---------- 5.9 产品对外页 e2e 夹具（★ 2026-11-06 补：三条 PRODUCT_* 判据此前恒 skip＝有代码无调度） ----------
+# 为什么必须在这里建：`e2e/product_public.spec.ts` 与 `product_shelf.spec.ts` 的两段短码是后端
+# crypto/rand 签发的不可枚举值（猜一个号正是这套设计要堵的口子），只能由夹具现建现取；
+# T 套件（api_uat_txn）的夹具在它自己段末已按显式 id 清干净，交不到 Playwright 手里。
+# 夹具失败**不静默放行**：PROD_FIXTURE_OK=0 时抬进第 7 段的闸门判定（"没测到"不等于"通过"）。
+PROD_FIXTURE_OK=0
+JSON_CT='Content-Type: application/json'
+PROD_ID=""
+PROD_F_PUB=""
+PROD_F_GATE=""
+E2E_TOK=$(curl -s -m 10 "$BASE_URL/api/auth/login" -H "$JSON_CT" \
+  -d '{"username":"uatuser_a","password":"uatpass123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
+if [ -n "$E2E_TOK" ]; then
+  PJ=$(curl -s -m 10 -X POST "$BASE_URL/api/product/save" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d '{"name":"UAT-E2E-对外页","code":"uat_e2e_public","tagline":"E2E 夹具产品"}')
+  PROD_ID=$(printf '%s' "$PJ" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(((d.get("product") or {}).get("id")) or d.get("id") or "")' 2>/dev/null || true)
+  PC=$(printf '%s' "$PJ" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("product") or {}).get("page_code",""))' 2>/dev/null || true)
+  TC=$(printf '%s' "$PJ" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("product") or {}).get("tenant_code",""))' 2>/dev/null || true)
+  # live 由显式状态口给（save 的入参里没有 status；建档缺省 draft 是设计）
+  curl -s -m 10 -X POST "$BASE_URL/api/product/status" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"id\":\"$PROD_ID\",\"status\":\"live\"}" >/dev/null
+  FPUB=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/upsert" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"product_id\":\"$PROD_ID\",\"kind\":\"spec\",\"key\":\"lead_time\",\"value\":\"E2E公开交期 9 天\",\"visibility\":\"public\"}")
+  FPIG=$(printf '%s' "$FPUB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
+  curl -s -m 10 -X POST "$BASE_URL/api/product/fact/confirm" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"id\":$FPIG}" >/dev/null
+  FGATE=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/upsert" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"product_id\":\"$PROD_ID\",\"kind\":\"price\",\"key\":\"list_price\",\"value\":\"E2E受控价 7111\",\"visibility\":\"gated\"}")
+  PROD_F_PUB=$FPIG
+  PROD_F_GATE=$(printf '%s' "$FGATE" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
+  if [ -n "$PROD_ID" ] && [ -n "$TC" ] && [ -n "$PC" ]; then
+    export PRODUCT_ID="$PROD_ID" PRODUCT_TENANT_CODE="$TC" PRODUCT_PAGE_CODE="$PC"
+    export PRODUCT_PUBLIC_VALUE='E2E公开交期 9 天' PRODUCT_GATED_VALUE='E2E受控价 7111'
+    # 登录态 storageState：token 存 sessionStorage（core.ts 的持久化口径），origins 必须等于 BASE_URL
+    PROD_STATE="$WORK/prod-auth-state.json"
+    python3 -c '
+import json, sys
+tok, origin, path = sys.argv[1], sys.argv[2], sys.argv[3]
+open(path, "w", encoding="utf-8").write(json.dumps({
+    "cookies": [],
+    "origins": [{"origin": origin, "localStorage": [], "sessionStorage": [{"name": "auth_token", "value": tok}]}],
+}))' "$E2E_TOK" "$BASE_URL" "$PROD_STATE"
+    export PRODUCT_AUTH_STATE="$PROD_STATE"
+    # ★ 登录态那条正向对照用 `request.get` 打接口：APIRequestContext **只带 cookie，不带 sessionStorage**，
+    #   所以 storageState 对它完全无效（实测 401「链路没通」）。浏览器侧的判据靠 storageState，
+    #   接口侧的判据必须显式带这台夹具自己的 token——两个消费者各有各的凭证通道，不许互相冒充。
+    export PRODUCT_TOKEN="$E2E_TOK"
+    # 货架那条用例按另一个变量名取同一份 storageState（两个 spec 各点各自的名字，便于单独复跑时只给一个）
+    export PRODUCT_SHELF_AUTH_STATE="$PROD_STATE"
+    PROD_FIXTURE_OK=1
+    log "产品 e2e 夹具就绪：product=${PROD_ID} 短码=${TC}/${PC}（受控值只经 env 交判据，不进日志正文之外的任何地方）"
+  else
+    log "⚠️ 产品 e2e 夹具建不起来（id/tenant_code/page_code 取空）⇒ 三条 PRODUCT_* 判据将整段跳过，本项计入闸门"
+  fi
+else
+  log "⚠️ uatuser_a 登录失败 ⇒ 产品 e2e 夹具没建，三条 PRODUCT_* 判据将整段跳过，本项计入闸门"
+fi
+
 # ---------- 6. 前端像素级 UAT ----------
 log "===== 前端 E2E UAT（像素级 + 运行时健康 + 冒烟）====="
 mkdir -p frontend-react/artifacts
@@ -304,6 +362,21 @@ if [ "${PW_EXIT:-1}" -ne 0 ]; then
   fi
 fi
 [ "$PW_FAIL" = "1" ] && echo "❌ 前端 E2E 失败（exit=${PW_EXIT}），发布闸门拦截"
+
+# ---------- 6.9 产品 e2e 夹具清场（★ 按显式 id 逐条摘；绝不"按 tenant_id 横扫整租户蒸发"） ----------
+if [ -n "$PROD_ID" ]; then
+  for _fid in "${PROD_F_PUB:-}" "${PROD_F_GATE:-}"; do
+    [ -n "$_fid" ] && dbq "DELETE FROM product_facts WHERE id=$_fid" >/dev/null 2>&1 || true
+  done
+  dbq "DELETE FROM product_assets WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM product_facts WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM kb_packages WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM feedbacks WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
+  dbq "DELETE FROM products WHERE id='$PROD_ID'" >/dev/null 2>&1 || true
+  PROD_LEFT=$(dbq "SELECT COUNT(1) FROM products WHERE id='$PROD_ID'" 2>/dev/null | tr -dc '0-9')
+  log "产品 e2e 夹具清场：残留产品行数=${PROD_LEFT:-0}（必须 0）"
+  [ "${PROD_LEFT:-1}" != "0" ] && PW_FAIL=1 && echo "❌ 产品 e2e 夹具没摘干净（残留 ${PROD_LEFT} 行），发布闸门拦截"
+fi
 
 # 跳过点名（★ 2026-11-03 新腿）：从本次 json 报告里把 status=skipped 的用例与它自己的理由摘出来。
 # 判"跳过"不算闸门失败（可达探针挡着就是设计，硬跑只会造出假红），但**必须能被点名**——
@@ -354,6 +427,10 @@ log "方言：${DB_DRIVER}"
 log "后端 API UAT（A/B 主链路）：PASS=${API_PASS:-0} FAIL=${API_FAIL:-0}"
 log "后端交易专项 UAT（T 套件）：PASS=${TXN_PASS:-0} FAIL=${TXN_FAIL:-0}"
 log "前端 E2E UAT：exit=${PW_EXIT:-?}（FAIL=${PW_FAIL:-1}，跳过=${PW_SKIP_CNT:-?}）；明细见 pixel_uat.log（截图：frontend-react/artifacts/）"
+log "产品对外页 e2e 夹具：$([ "$PROD_FIXTURE_OK" = "1" ] && echo '就绪（三条 PRODUCT_* 判据真跑）' || echo '未就绪（那三条今天没测到 ⇒ 计入闸门，不等于通过）')"
+# ★ 夹具未就绪＝那三条判据整段跳过。"跳过"在这条链上不是中性读数：
+#   它是本批专门要堵的"有代码无调度"（AGENTS §三 第二层），所以抬进闸门而不是只留一行 WARN。
+[ "${PROD_FIXTURE_OK:-0}" != "1" ] && PW_FAIL=1
 log "日志目录：$WORK"
 log "=============================="
 [ "${KEEP:-0}" != "1" ] && { kill $SERVER_PID $MOCK_PID $CHAIN_PID $ASSIST_PID 2>/dev/null || true; }

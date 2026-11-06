@@ -46,6 +46,9 @@ const PricingPage = lazy(() => import('./components/PricingPage'))
 const PriceComparePage = lazy(() => import('./components/PriceComparePage'))
 // AI 顾问（官网入口点进来的独立页，同样按路径懒加载）
 const AiAssist = lazy(() => import('./components/AiAssist'))
+// ★ 一期（2026-11-05 §5.7）：对外公开页 /p/{tenantCode}/{pageCode}，与 App.tsx 的 !user 分支逐支等值。
+//   同样 React.lazy —— 公开面无 router 快车道里，新页面只进懒加载 chunk，不进入口静态依赖。
+const ProductPublicPage = lazy(() => import('./components/ProductPublicPage'))
 
 /** 营销门面外壳：未登录可达的三页共用（价格/比价/官网）——不带 auth 档顶栏，页内即完整营销页 */
 function MarketingShell({ children }: { children: ReactNode }) {
@@ -125,6 +128,19 @@ function PublicRoutes() {
         <Landing />
         {/* ★ autosales：落地页常驻 AI 接待挂件 */}
         <AiAssist />
+      </MarketingShell>
+    )
+  }
+  // ★ 一期 §5.7：对外页 /p/{tenantCode}/{pageCode} 两段短码，与 App.tsx 的 !user 分支逐支等值
+  //   （navShim.test.ts D 段按两棵树全集判）。走 MarketingShell ＝ PublicShell + RouteBoundary + Suspense，
+  //   与三支营销页同一形态；无 token 时由 main.tsx 的 /p/ 前缀那一支分诊进本树。
+  if (path.startsWith('/p/')) {
+    const segments = path.split('/')
+    const tenantCode = segments[2] || ''
+    const pageCode = segments[3] || ''
+    return (
+      <MarketingShell>
+        <ProductPublicPage tenantCode={tenantCode} pageCode={pageCode} />
       </MarketingShell>
     )
   }

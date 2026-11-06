@@ -19,7 +19,27 @@ func (s *Store) BuildUserPackScope(tid int64, chain []int64, allowCross bool, jo
 	if err != nil || scope == nil {
 		return scope, err
 	}
+	attachProductPackIDs(scope) // nil map 先建，下面写入才不会 panic
+	// ★ 一期《确定的多语言能力》§4.1：产品包插在 Rank 的 150 档，必须在这里装配集合。
+	//   BuildPackScope 在冻结文件 kbpackages.go 里（只减不增），不许改它；
+	//   产品包 pack_type 复用 'tenant' ⇒ 它同时已在 TenantPackIDs 内，allow 集合天然包含，
+	//   这里只补「哪几个包是产品包」这一维，供 Rank 判 150 与 packAllowSet 并集。
+	//   ★ 查询失败不放大也不阻断：仅不叠加产品层，老租户行为与此前逐字一致（E1）。
+	if ids, perr := s.ListProductPackIDs(tid); perr == nil {
+		for id := range ids {
+			scope.ProductPackIDs[id] = true
+		}
+	}
 	return s.attachPersonaPacks(scope, jobRole), nil
+}
+
+// attachProductPackIDs 初始化产品包集合（nil map 写入会 panic，统一在这里建）。
+// 参数：scope=可见范围；返回同一对象。
+func attachProductPackIDs(scope *kb.PackScope) *kb.PackScope {
+	if scope.ProductPackIDs == nil {
+		scope.ProductPackIDs = map[int64]bool{}
+	}
+	return scope
 }
 
 // attachPersonaPacks 把 job_role 命中的启用角色包叠加进 scope（就地修改并返回同一对象）。

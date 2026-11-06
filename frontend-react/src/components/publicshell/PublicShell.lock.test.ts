@@ -5,6 +5,8 @@
 // 这一批把四支未登录门面（官网首页 / 定价 / 比价 / 登录注册）统一套上 PublicShell，
 // 复用登录态前台外壳的「顶栏＋汉堡抽屉」形态。用户令是把**四支**当成一件事，所以本锁
 // 按**路由全集**判（同 AGENTS §三「家族级锁要按全集判」，只测单页＝漏一页就整页返祖）。
+// ★ 2026-11-05 一期 §5.7：新增第五支对外页 /p/{tenantCode}/{pageCode}（未登录免验证可达），
+//   同样属未登录门面 ⇒ 按同一条全集判据纳入 L1 逐页点名，**不许**为绿灯把它写成豁免。
 //
 // 四条判据（各问一个"改坏了会不会红"）：
 //   L1 接线（守卫级）：App.tsx 的未登录分诊块里，**每一个** `return (` 都必须被 <PublicShell>
@@ -60,13 +62,18 @@ function wiringFailures(app: string): string[] {
   const pageReturns = (block.match(/return \(/g) || []).length
   const shells = (block.match(/<PublicShell/g) || []).length
   // ★ 2026-10-21 IAM P1-7：登录兜底已收进 LoginFace（它内部出 auth 档 PublicShell），
-  //   所以这里三支营销页各一次 return( + PublicShell，登录支是 `return <LoginFace …>`。
-  //   判据仍按路由全集：三支营销页必须被壳包住，登录支必须走唯一登录面。
-  if (pageReturns < 3) bad.push(`未登录分诊块里只数到 ${pageReturns} 个营销页 return（预期 ≥3，锚点可能漂了）`)
-  if (shells !== pageReturns) bad.push(`营销页返回 ${pageReturns} 支、<PublicShell 只出现 ${shells} 次 ⇒ 有门面漏包外壳`)
+  //   ★ 2026-11-05 一期 §5.7：新增对外页 /p/{tenantCode}/{pageCode}，属未登录门面、同样必须套壳。
+  //   所以这里**四支门面页**各一次 return( + PublicShell（三支营销页 + 对外页），
+  //   登录支是 `return <LoginFace …>`。判据仍按路由全集：四支门面页必须被壳包住，
+  //   登录支必须走唯一登录面。★ 新页面**不许**写成豁免——漏包当场红。
+  if (pageReturns < 4) bad.push(`未登录分诊块里只数到 ${pageReturns} 个门面页 return（预期 ≥4：三支营销页 + 一期对外页，锚点可能漂了）`)
+  if (shells !== pageReturns) bad.push(`门面页返回 ${pageReturns} 支、<PublicShell 只出现 ${shells} 次 ⇒ 有门面漏包外壳`)
   if (!block.includes('<LoginFace')) bad.push('未登录兜底分支没有走 <LoginFace>（登录支的 PublicShell 已收进该组件）')
-  // 逐页点名：每个页面根之前 600 字符内必须出现过 <PublicShell（这正是三支营销页的收口跨度）
-  for (const p of ['<PricingPage />', '<PriceComparePage />', '<Landing />']) {
+  // ★ 一期：对外页必须按 /p/ 两段短码前缀判定（与 main.tsx 的 PUBLIC_PREFIX 同口径），
+  //   不许塞回精确 Set 的 `path === '…'` 形态——那会让动态两段码永远匹配不上。
+  if (!block.includes("path.startsWith('/p/')")) bad.push('对外页分支缺 /p/ 前缀判定（动态两段短码不能走精确匹配）')
+  // 逐页点名：每个页面根之前 600 字符内必须出现过 <PublicShell（四支门面页的收口跨度）
+  for (const p of ['<PricingPage />', '<PriceComparePage />', '<Landing />', '<ProductPublicPage']) {
     const i = block.indexOf(p)
     if (i < 0) { bad.push(`未登录分诊块里找不到页面 ${p}`); continue }
     const before = block.slice(Math.max(0, i - 600), i)
@@ -215,9 +222,20 @@ describe('未登录门面移动壳（PublicShell）锁', () => {
   const cssRaw = readFileSync(CSS, 'utf8')
   const specRaw = readFileSync(SPEC, 'utf8')
 
-  it('L1 接线：未登录四支门面每一支都被 <PublicShell> 包住', () => {
+  it('L1 接线：未登录门面（三支营销页 + 一期对外页）每一支都被 <PublicShell> 包住', () => {
     const bad = wiringFailures(appRaw)
     expect(bad, bad.join('\n')).toEqual([])
+  })
+
+  it('★ 一期反证 R7：摘掉对外页那一支 <PublicShell> 必须被 L1 判红（不加豁免）', () => {
+    const idx = appRaw.indexOf('<ProductPublicPage')
+    expect(idx, '反证失效：找不到对外页锚点').toBeGreaterThan(-1)
+    const shellIdx = appRaw.lastIndexOf('<PublicShell>', idx)
+    expect(shellIdx, '反证失效：对外页前找不到 <PublicShell>').toBeGreaterThan(-1)
+    const mutated = appRaw.slice(0, shellIdx) + appRaw.slice(shellIdx + '<PublicShell>'.length)
+    expect(mutated, '反证失效：变异没落地').not.toBe(appRaw)
+    expect(wiringFailures(mutated).length, 'R7 失效：对外页漏包外壳没被判红').toBeGreaterThan(0)
+    expect(wiringFailures(appRaw), '对照组：真实实现必须干净').toEqual([])
   })
 
   it('L2 形态：≤640 收起三支页头（display:none）且登录壳按令牌让位', () => {

@@ -109,6 +109,21 @@ const IdentitySwitcher = lazy(() => import('./components/frontshell/IdentitySwit
 const KbUploadDialog = lazy(() => import('./components/KbUploadDialog'))
 // AiAssist AI 销售/客服常驻挂件（除登录/注册页外全站显示；★ autosales）
 const AiAssist = lazy(() => import('./components/AiAssist'))
+// ★ 一期（2026-11-05 §5.7／§8.1）：对外页与三块产品面板一律 React.lazy，禁止入口包静态 import。
+//   对外页在未登录分诊块（下面 !user 分支）用；三块面板挂 FrontShell 路由（登录态壳）。
+const ProductPublicPage = lazy(() => import('./components/ProductPublicPage'))
+// ProductShelf 卖家产品货架与齐备度四态（缺与过期不同形，§5.6；★ autosales）
+const ProductShelf = lazy(() => import('./components/ProductShelf'))
+// ProductFacts 产品事实项与确认态（认证类只许人工确认，未 confirmed 不进对外内容，§2.2）
+const ProductFacts = lazy(() => import('./components/ProductFacts'))
+// ProductAnswers 知识层问答面板（走零 token 那条腿，耗尽态文案唯一出口在 lib/productExhaustCopy）
+const ProductAnswers = lazy(() => import('./components/ProductAnswers'))
+// ProductDetail 卖家写侧单页详情（★ X1：建档／事实录入／物料审核／SEO 与对外链接四段同一页）
+const ProductDetail = lazy(() => import('./components/ProductDetail'))
+// Onboarding 引导页（★ O 组：步骤全部由 lib/onboardingSchema 驱动，本页不写死任何一步）
+const Onboarding = lazy(() => import('./components/Onboarding'))
+// OnboardingPrompt 登录后那条底部横幅（判据现读；单独一个 chunk，用独立 Suspense 包）
+const OnboardingPrompt = lazy(() => import('./components/Onboarding').then((m) => ({ default: m.OnboardingPrompt })))
 
 // 小组件保持静态导入（避免过度拆分）
 import { ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
@@ -410,6 +425,7 @@ function FrontShell() {
           //   key 用 id+tenant_id 而不是只 id：管理员移除成员后同一 uid 换租户、
           //   超管在后台切生效租户，都是"同一个人换了一份数据作用域"。
           //   登录态从无到有同样会重挂，这正是想要的效果（旧形态靠 Root 整棵树切换天然重挂）。
+          <>
           <RouteBoundary key={user ? `${user.id}:${user.tenant_id ?? 0}` : 'anon'}>
             <Suspense fallback={<PageLoading />}>
               <Routes>
@@ -429,11 +445,26 @@ function FrontShell() {
                 <Route path="/compare" element={<PriceComparePage />} />
                 {/* ★ 〇-AM：对话历史记录页（工作台 SSE 翻译通道的持久化话记录查看） */}
                 <Route path="/chat-history" element={<ChatHistory />} />
+                {/* ★ 一期 §8.1：三块产品面板挂登录态壳，各自独立懒加载分片（禁止入口包静态 import） */}
+                <Route path="/products" element={<FrontPage><ProductShelf /></FrontPage>} />
+                <Route path="/products/facts" element={<FrontPage><ProductFacts /></FrontPage>} />
+                <Route path="/products/answers" element={<FrontPage><ProductAnswers /></FrontPage>} />
+                {/* ★ X1（2026-11-06）：?id= 选产品，不带 id 时页面自己取列表第一份；建不了档就没有「备好的物料」这一件商品 */}
+                    <Route path="/products/detail" element={<FrontPage><ProductDetail /></FrontPage>} />
+                    <Route path="/onboarding" element={<FrontPage><Onboarding /></FrontPage>} />
                 {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
             </Suspense>
           </RouteBoundary>
+          {/* ★ O 组（2026-11-06）：登录后"确实一个产品都没有"才出现的底部横幅。
+              判据只认 productList 回 success 且数组为空；读失败一律不出，
+              免得把一次接口抖动读成"这人没产品"而把老用户一次次推进向导。
+              刻意挂在 RouteBoundary 之外并自带一层 Suspense：
+              不进主布局流（后台像素锁的几何档不因一条只有新用户看得见的横幅而翻红），
+              也不与公司那个 Suspense 共担首屏。 */}
+<Suspense fallback={null}><OnboardingPrompt /></Suspense>
+          </>
         )}
       </div>
 
@@ -547,6 +578,23 @@ function Root() {
               <Landing />
               {/* ★ autosales：落地页常驻 AI 接待挂件 */}
               <AiAssist />
+            </Suspense>
+          </RouteBoundary>
+        </PublicShell>
+      )
+    }
+    // ★ 一期 §5.7：对外页 /p/{tenantCode}/{pageCode} 两段短码，未登录免验证可达。
+    //   与 main.tsx 的 PUBLIC_PREFIX 前缀判定同一口径；短码创建即定、改名不改 URL（§2.1 H1）。
+    //   套 PublicShell + RouteBoundary + Suspense，与上面三支营销页同形（PublicShell.lock.test.ts L1 按全集判）。
+    if (path.startsWith('/p/')) {
+      const segments = path.split('/')
+      const tenantCode = segments[2] || ''
+      const pageCode = segments[3] || ''
+      return (
+        <PublicShell>
+          <RouteBoundary>
+            <Suspense fallback={<PageLoading />}>
+              <ProductPublicPage tenantCode={tenantCode} pageCode={pageCode} />
             </Suspense>
           </RouteBoundary>
         </PublicShell>

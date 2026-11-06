@@ -152,21 +152,34 @@ class BootErrorBoundary extends React.Component<{ children: React.ReactNode }, {
 installChunkRecovery()
 
 // ============================================================================
-// 入口分诊（★ 2026-10-17 批 B）
+// 入口分诊（★ 2026-10-17 批 B；★ 一期 2026-11-05 §5.7 改「精确 Set ＋ /p/ 前缀」两支）
 //   · 无 token 且落在公开路径 ⇒ PublicRoot：不加载 react-router，也不加载工作台/后台静态依赖
 //     （官网访客此前要为整棵树付 367 KB router + 后台面板词条，本批拆开）。
 //   · 其余一律 App：有 token 的用户、以及**未登录但落在 `/admin` 等非公开路径**的访客。
 //     ⚠️ 后者不能走 PublicRoot：`/admin` 未登录时 App 出 `Login mode="admin"`（管理员登录形态），
 //     与 PublicRoot 兜底的 `mode="home"` 不是同一屏（见 PublicRoot.tsx 文件头口径①）。
-//   白名单**故意只收这五条**，与 App.tsx 的门面分支一一对应；新公开页要同时加进两处
-//   （App.tsx 的 !user 分诊 + 这里），否则那一页会退回"要下 router 才打不开"的老形态。
+//   白名单**故意只收这五条**（精确匹配，与 App.tsx 的三支门面分支一一对应）；
+//   ★ 一期新增的对外页 `/p/{tenantCode}/{pageCode}` 是**动态两段短码**，不能塞进精确 Set：
+//     它由 `PUBLIC_PREFIX` 前缀那一支单独判定，创建即定、改名不改 URL（§2.1 H1）。
+//     两支合起来才是完整的公开面分诊——任何一支被摘掉，对外页就会退回"要下 router 才打不开"。
 //   `getAuthToken()` 读的是 api/core 的内存态（非现场读存储），见上方 import 处的注释。
+//   ★ 机械锁＝src/lib/navShim.test.ts A 段（两支判据 ＋ 「退回精确匹配必须红」反证）
+//     ＋ chunkRecovery.wiring.test.ts ／ PublicShell.lock.test.ts L1（新页面套壳与边界）。
 // ============================================================================
+// 精确白名单：五条静态门面路径（官网首页／定价／比价／登录／注册）。
 const PUBLIC_PATHS = new Set(['/', '/pricing', '/compare', '/login', '/register'])
-/** 入口分诊：没有 token 且落在公开路径才走 PublicRoot，其余（含有 token 的任何路径、/admin）走 App。
+// 对外页前缀：`/p/{tenantCode}/{pageCode}`，两段短码、未登录免验证可达（§5.7）。
+const PUBLIC_PREFIX = '/p/'
+/** 公开路径判定：精确命中白名单，或落在 /p/ 两段短码对外页前缀下。
+ *  两支缺一不可：只留精确 Set ⇒ 对外页被当成非公开路径走 App（多下 router）；
+ *  只留前缀 ⇒ 五条静态门面页反而要下 router。 */
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.has(pathname) || pathname.startsWith(PUBLIC_PREFIX)
+}
+/** 入口分诊：没有 token 且落在公开路径（两支合判）才走 PublicRoot，其余走 App。
  *  纯内存判定（getAuthToken 不读现场存储），所以它在首帧前就能算出唯一答案。 */
 function pickEntry(): typeof App {
-  return !getAuthToken() && PUBLIC_PATHS.has(window.location.pathname) ? PublicRoot : App
+  return !getAuthToken() && isPublicPath(window.location.pathname) ? PublicRoot : App
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

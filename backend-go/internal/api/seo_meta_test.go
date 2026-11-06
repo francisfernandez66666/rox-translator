@@ -11,6 +11,7 @@
 package api
 
 import (
+	"html"
 	"net/http/httptest"
 	"os"
 	"strconv"
@@ -66,8 +67,21 @@ func TestInjectRouteMeta(t *testing.T) {
 		t.Fatal("pricing meta 不存在")
 	}
 	out := injectRouteMeta(seoSampleHTML, meta, "en", "LangCross", "https", "example.com", "/pricing", false)
+	// ★ 期望值**现读**嵌入的 route meta，不再写死标题字面量（2026-11-06 对外叙事重写批踩过：
+	//   旧版这里钉着 "Pricing &amp; Plans · LangCross"，文案一换整条就红在判据自己身上，
+	//   而注入逻辑一字没错——那是 §三 记着的「靶子搬家/口径换了判据没跟」同族，改判据不改产品）。
+	//   现读之后这条腿仍然有射程：它判的是**注入这件事真把当前真值放进了 <title> 并转义了**，
+	//   所以还要配一条反向对照（下面 wantTitleEscaped 为空即判红＝真值取不到时不许静默通过）。
+	wantTitleRaw := meta.Title["en"]
+	if wantTitleRaw == "" {
+		t.Fatal("route meta 里取不到 /pricing 的 en 标题 ⇒ 本条判据无靶子（判红而不是跳过）")
+	}
+	// 注入出去的 title **就是 route meta 里那一份**（品牌名已含在真值里，白标时整串替换品牌），
+	//   所以期望值只有"转义后逐字相等"这一种写法；再拼一次 " · LangCross" 是把实现的形态抄进判据，
+	//   实现改成"品牌前缀"那天它就会假红（本条上一版就是这么错的）。
+	wantTitle := "<title>" + html.EscapeString(wantTitleRaw) + "</title>"
 	for _, want := range []string{
-		"<title>Pricing &amp; Plans · LangCross</title>",
+		wantTitle,
 		`rel="canonical" href="https://example.com/pricing?lang=en"`,
 		`name="robots" content="index,follow"`,
 		`hreflang="ja" href="https://example.com/pricing?lang=ja"`,
@@ -84,6 +98,12 @@ func TestInjectRouteMeta(t *testing.T) {
 	}
 	if strings.Count(out, `rel="canonical"`) != 1 {
 		t.Fatalf("canonical 重复: %s", out)
+	}
+
+	// 反向对照：判据现读的是**当前真值**；若注入读的是另一份（写死的旧标题），
+	// 上面那条会因"真值不在画面里"而红——这里再钉一次：画面里必须含真值本身，且不含空标题。
+	if !strings.Contains(out, html.EscapeString(wantTitleRaw)) {
+		t.Fatalf("title 里没有 route meta 的当前真值 %q ⇒ 注入吃的是别处的事实源", wantTitleRaw)
 	}
 	// 12 条 hreflang + x-default
 	if n := strings.Count(out, `hreflang="`); n != 13 {

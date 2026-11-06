@@ -77,6 +77,9 @@ func (s *Server) handlePricingMeta(w http.ResponseWriter, r *http.Request) {
 		// 与「3,000 积分 = ¥299」这条套餐面值同源同联动（F-78：汇率与尺子是一对，只动一头本页跟着一起动）。
 		"points_price_money": moneyPerPoint(rate, ruler),
 		"unit":               "points",
+		// ★ 一期：知识层查询恒 0 积分。刻意不带 omitempty／不省略字段——
+		//   出栈缺席会被读成「字段没实现」，明出 0 才是在对外承诺「不收费」。
+		"points_knowledge_query": 0,
 	})
 }
 

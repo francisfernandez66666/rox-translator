@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（528 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（545 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -73,6 +73,7 @@ var exactEN = map[string]string{
 	"q 超长（≤100 字符）":                                         "q too long (<=100 characters)",
 	"role 仅支持 read/write/manage（空串=撤销）":                     "role supports read/write/manage only (empty string = revoke)",
 	"sentences 与 points 至少一项大于 0（积分包填 points）":              "At least one of sentences/points must be > 0 (use points for credit packs)",
+	"sitemap 生成失败":                                          "Failed to generate the sitemap",
 	"source_text 不能为空":                                      "source_text must not be empty",
 	"state 不匹配，疑似 CSRF":                                     "State mismatch (possible CSRF)",
 	"status 取值仅支持 pending / approved / rejected（留空为全部）":     "status supports only pending / approved / rejected (leave empty for all)",
@@ -98,10 +99,16 @@ var exactEN = map[string]string{
 	"不能删除自己所在的租户":                                           "You cannot delete the tenant you belong to",
 	"不能删除自己的账号":                                             "You cannot delete your own account",
 	"两条档位必须一次提交，缺少 ":                                        "Both tiers must be submitted together; missing ",
+	"个人产品面必须带有效租户":                                          "The personal product view requires a valid tenant",
 	"个人注册不能使用企业邀请码":                                         "Personal sign-up cannot use a company invite code",
 	"临时缓存写入失败":                                              "Temp cache write failed",
 	"二维码生成失败":                                               "QR code generation failed",
 	"二维码生成失败: ":                                             "QR code generation failed: ",
+	"产品不存在":                                                 "Product not found",
+	"产品列表读取失败":                                              "Failed to read the product list",
+	"产品包不可用":                                                "Product pack unavailable",
+	"产品包建档失败":                                               "Failed to create the product pack",
+	"产品资料更新失败":                                              "Failed to update product details",
 	"产物不存在":                                                 "Artifact not found",
 	"产物不存在或已过保留期，请重新发起工单获取":                                 "Artifact not found or past its retention period; start a new ticket to generate it again",
 	"产物文件不存在":                                               "Deliverable file not found",
@@ -268,6 +275,7 @@ var exactEN = map[string]string{
 	"文件上传失败":                                               "File upload failed",
 	"文件不存在":                                                "File not found",
 	"文件保存失败":                                               "File save failed",
+	"文件写入失败":                                               "Failed to write the file",
 	"文件无有效数据":                                              "File contains no valid data",
 	"文件读取失败":                                               "File read failed",
 	"文档内容超过 256KB 上限":                                      "Document content exceeds the 256KB limit",
@@ -327,11 +335,15 @@ var exactEN = map[string]string{
 	"条目不存在或无权操作":                                           "Entry not found or no permission",
 	"此接口为租户自助视图，平台账号请使用超管 TM 审核台":                          "This is the tenant self-service view; platform accounts should use the super-admin TM review console",
 	"没有可朗读的内容":                                             "There is no content to read aloud",
+	"没有要导入的说法":                                             "No phrases to import",
 	"注册已关闭，请联系管理员开通":                                       "Registration is disabled; contact an administrator",
 	"注册成功，已加入企业":                                           "Signed up successfully; you have joined the company",
 	"注册成功，试用额度已发放":                                         "Signed up successfully; trial credit has been granted",
 	"注册校验失败，请稍后重试":                                         "Registration check failed; please retry later",
 	"注销申请已生效：今日仍可使用，明日 00:00 起无法登录；名下 API Key 已全部停用。数据保留，如需撤回请联系管理员重新启用。": "Deactivation scheduled: usable until today, login blocked from tomorrow 00:00; all your API keys are disabled. Data is retained; to revoke, ask an administrator to re-enable.",
+	"源文与译文不能为空":             "Source and translation must not be empty",
+	"物料 ID 不合法":             "Invalid asset ID",
+	"物料文件不存在或已被清理，请重新上传":    "The material file is missing or was cleaned up; please upload it again",
 	"状态仅支持 active/disabled": "status supports active/disabled only",
 	"生成 xlsx 失败":            "Failed to generate xlsx",
 	"生成兑换码失败":               "Failed to generate redemption code",
@@ -454,6 +466,7 @@ var exactEN = map[string]string{
 	"该邮箱未注册，请确认邮箱或先注册账号":                                     "This email is not registered; check the address or create an account",
 	"语音产物暂存失败":                                               "Failed to stage the audio result on the server",
 	"语音产物读取失败":                                               "Failed to read the audio result",
+	"说法读取失败":                                                 "Failed to read approved phrases",
 	"请以 multipart/form-data 提交图片":                            "Please submit the image as multipart/form-data",
 	"请以 multipart/form-data 提交录音":                            "Please submit the recording as multipart/form-data",
 	"请使用 GET 或 POST 请求":                                      "Please use a GET or POST request",
@@ -470,6 +483,7 @@ var exactEN = map[string]string{
 	"请填写回复内容":                                                "Reply content is required",
 	"请填写有效的联系邮箱":                                             "A valid contact email is required",
 	"请填写用户名或选择跳过":                                            "Enter a username or choose to skip",
+	"请填写联系邮箱与留言内容":                                           "Please fill in your contact email and message",
 	"请填写邮箱并输入验证码":                                            "Enter your email and the verification code",
 	"请提供 order_id":                                           "order_id is required",
 	"请提供发票 id":                                               "Invoice id is required",
@@ -509,6 +523,8 @@ var exactEN = map[string]string{
 	"运营策略仅超级管理员可设置":                                          "Only super-admins can set ops policies",
 	"运营策略已保存":                                                "Ops policy saved",
 	"还没有可用的 Cloudflare API Token（库内未配置，或密文解不开）":              "No usable Cloudflare API token yet (not configured, or the stored secret cannot be decrypted).",
+	"这批说法都没能导入：源文与译文都必须非空":                                   "None of these phrases were imported: both the source and the translation must be non-empty",
+	"这条物料没有附件，正文内容在物料详情里":                                    "This material has no attachment; its text is in the material details",
 	"邀请开关保存失败: ":                                             "Failed to save referral switch: ",
 	"邀请码不存在":                                                 "Invite code not found",
 	"邀请码不能为空":                                                "Invite code must not be empty",
@@ -543,6 +559,7 @@ var exactEN = map[string]string{
 	"验证码错误次数过多，请重新获取":                  "Too many wrong code attempts; request a new code",
 	"默认租户不可删除":                         "The default tenant cannot be deleted",
 	"默认租户不可清除":                         "The default tenant cannot be purged",
+	"齐备度读取失败":                          "Failed to read readiness",
 }
 
 // patternEN 模式词条：中文 fmt 模板 → 英文 fmt 模板（占位符种类与顺序两侧一致）。

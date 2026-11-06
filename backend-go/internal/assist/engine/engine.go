@@ -659,6 +659,11 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	rep = e.guardReplyFabrication(ctx, answer, rep)
 	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
 	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 一期《确定的多语言能力》§7.1：知识层答案守卫。
+	//   位置纪律：必须在 brand 之后、recharge 之前（先过反编造/报价/品牌三道，再谈充值意图）；
+	//   不许跨过下面的 observeVisitorAsides（那条只读不改，仍在 localizeActionNames 之后）。
+	//   ctx 未注入知识层素材时原样放行 ⇒ 所有既有链路行为一字不变。
+	rep = e.guardKnowledgeAnswer(ctx, answer, rep)
 	// ★ 2026-10-30 组7 §8.3（R-1…R-5）：充值入口的唯一判据。
 	// 位置刻意排在所有"删句子"的守卫之后、按钮本地化之前：
 	//  · 之前那些腿可能把 tickets 按钮或正文改掉，判断「本轮已在推工单」要看**最终**按钮集；

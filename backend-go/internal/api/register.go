@@ -530,12 +530,15 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 			Host: r.Host, LandingPath: req.LandingPath, UserAgent: r.Header.Get("User-Agent"),
 		})
 	}
-	// ★ 注册成功自动发送《产品手册》PDF 邮件（个人/企业用户均发送；用 info 专用邮箱，附件为手册 PDF）
+	// ★ 注册成功自动发送《产品手册》**链接**邮件（个人/企业用户均发送；用 info 专用邮箱）
 	if req.Email != "" {
-		// 后台异步发送《产品手册》PDF 邮件，避免阻塞注册响应（★ F-17：语种随注册界面语言）
-		go func(to, uname, lang string) {
-			_ = s.sendManualEmail(to, uname, lang)
-		}(strings.TrimSpace(req.Email), req.Username, mailLang)
+		// 站点基址必须在**请求还在的时候**算好带进 goroutine：r 不能在异步里读（同一口径见邀请链接）。
+		// 取 inviteBaseURL 那一个实现，不在这里另拼一次 scheme/host——两处各判一次协议迟早打架。
+		base := inviteBaseURL(r)
+		// 后台异步发送，避免阻塞注册响应（★ F-17：语种随注册界面语言）
+		go func(to, uname, lang, origin string) {
+			_ = s.sendManualEmail(to, uname, lang, origin)
+		}(strings.TrimSpace(req.Email), req.Username, mailLang, base)
 	}
 	// ★ 企业注册提醒（需求 2026-08-27）：企业用户注册成功后，向注册人发送欢迎邮件
 	//   并抄送运营邮箱（抄送地址由 OPS_NOTIFY_EMAIL 环境变量控制，空=不抄送）建联。

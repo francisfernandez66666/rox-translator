@@ -281,6 +281,22 @@ func OcrFixAllowanceTokens(imageFiles int) int64 {
 	return calls*fixed + int64(imageFiles)*4*20*(perLineInput+perLineOutput)
 }
 
+// KnowledgeQueryAllowanceTokens 知识层问答的预估 allowance（一期第 6 支）。
+//
+// ★ 恒返 0 是**产品承诺不是占位**：这条路径只查 product_facts/product_assets 的已备内容，
+//
+//	一次模型都不调（§7.3 N1 的零 LLM 判据）。写成恒 0 是为了让「零成本」成为可断言的事实：
+//	api/estimate.go 把它当作与其余五支同形的「一支」相加，六键提交面与价格公式一行不动，
+//	而单测能直接问「这条路径到底该不该计 token」。
+//	⚠️ 将来若给知识层问答接了任何模型调用，必须**同时**改这里与 §7.3 的零 LLM 锁——
+//	只改调用链不改 allowance 就是 AGENTS §一·5④「预估与实扣两把尺子」的复发。
+//
+// 参数 hits=命中的已备语料条数，langs=目标语种；返回预估 token allowance（恒 0）。
+func KnowledgeQueryAllowanceTokens(hits int, langs []string) int64 {
+	_, _ = hits, langs // 刻意不参与计算：本路径零模型调用，参数只为保持六支同形签名
+	return 0
+}
+
 // ApplyMarkup 真实 token 口径 → 实收口径（唯一实现；api/estimate.go 的 applyMarkup 薄委托它）。
 // 为什么从 api 搬进 engine：分段判定（api.chatEstimateAndPlan 那**一处**）也要把上限积分折回
 // token 才能比"这次走不走分段"，而判定必须在**预估侧与执行侧同一次算**——

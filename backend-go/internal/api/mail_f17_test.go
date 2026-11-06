@@ -208,41 +208,86 @@ func TestUATBatchE_LoadManualPDFLangChain(t *testing.T) {
 	}
 }
 
-// TestUATBatchE_BuildManualMailMsgLang mock 级锁：主题渲染/正文语种/附件名随语种（修复文档断言④前端链路除外）。
-func TestUATBatchE_BuildManualMailMsgLang(t *testing.T) {
+// TestUATBatchE_ManualMailLink mock 级锁：主题渲染／正文问候语语种／**手册链接语种**／**永不挂附件**。
+//
+// ★★ 这是一次**判据方向翻转**（2026-11-06 E 组裁定），不是"把红断言删掉让它绿"：
+//
+//	旧版这里钉的是「附件名必须随语种」（`产品手册.pdf`／`User Guide.pdf`…），
+//	新版钉的是「链接必须随语种 ＋ 一条附件都不许挂」。翻转理由写在实现注释里
+//	（manualGreeting 头部那三条：退信是结构性的／发出去的附件收不回／站内链接永远指向当前稿），
+//	留着旧期望会让下一位照着旧口径把附件装回来——那正是本仓反复付学费的"旧断言指回旧实现"。
+func TestUATBatchE_ManualMailLink(t *testing.T) {
 	s := f41StoreServer(t)
-	pdf := []byte("%PDF-fake")
-	// 中文链路：主题渲染掉 {brand} 占位（修复历史直挂未渲染主题），附件中文名、正文中文问候
+	base := "https://langcross.example"
+	linkOf := func(lang string) string { return base + "/docs/manual/" + lang + ".pdf" }
+
+	// 中文链路：主题渲染掉 {brand} 占位（修复历史直挂 tpl.Subject 未替换的存量口径）
 	tpl := s.getMailTpl("manual", "zh")
-	msg := buildManualMailMsg("a@b.c", "alice", "zh", tpl, pdf, manualPDFName("zh"))
+	msg := buildManualMailMsg("a@b.c", "alice", "zh", tpl, linkOf("zh"))
 	if strings.Contains(msg.Subject, "{brand}") {
 		t.Fatalf("主题应完成 {brand} 占位渲染，实际 %q", msg.Subject)
 	}
 	if !strings.Contains(msg.Body, "亲爱的 alice") {
 		t.Fatalf("zh 正文应为中文问候，实际 %q", msg.Body)
 	}
-	if len(msg.Attachments) != 1 || msg.Attachments[0].Name != "产品手册.pdf" {
-		t.Fatalf("zh 附件名应为 产品手册.pdf，实际 %+v", msg.Attachments)
+	// ★ 正向防线：**一条附件都不许挂**（将来谁觉得"带附件更方便"，这里先红，而不是等一封退信才发现）
+	if len(msg.Attachments) != 0 {
+		t.Fatalf("手册邮件不得挂附件，实际 %+v", msg.Attachments)
 	}
-	// 非中文：英文问候 + 语种化附件名（泰/德两例代表「其余回落 en 正文、附件名精确语种」）
-	for lang, wantName := range map[string]string{"th": "คู่มือผู้ใช้.pdf", "de": "Benutzerhandbuch.pdf"} {
-		t2 := s.getMailTpl("manual", lang)
-		m2 := buildManualMailMsg("x@y.z", "bob", lang, t2, pdf, manualPDFName(lang))
+	if !strings.Contains(msg.Body, "/docs/manual/zh.pdf") {
+		t.Fatalf("zh 正文必须含该语种的手册链接，实际 %q", msg.Body)
+	}
+
+	// 非中文：英文问候 + 链接吃精确语种（泰/德两例代表「其余回落 en 正文、链接按语种」）
+	for lang, want := range map[string]string{"th": "/docs/manual/th.pdf", "de": "/docs/manual/de.pdf"} {
+		m2 := buildManualMailMsg("x@y.z", "bob", lang, s.getMailTpl("manual", lang), base+want)
 		if !strings.Contains(m2.Body, "Dear bob") {
 			t.Fatalf("语种 %s 正文应回落英文问候，实际 %q", lang, m2.Body)
 		}
-		if m2.Attachments[0].Name != wantName {
-			t.Fatalf("语种 %s 附件名应为 %q，实际 %q", lang, wantName, m2.Attachments[0].Name)
+		if !strings.Contains(m2.Body, want) || len(m2.Attachments) != 0 {
+			t.Fatalf("语种 %s 链接应为 %q 且不挂附件，实际 body=%q att=%+v", lang, want, m2.Body, m2.Attachments)
 		}
 	}
-	// 繁体：中文系走中文问候（不误翻），但附件名吃繁体专档名
-	mh := buildManualMailMsg("t@u.v", "carol", "zh_hant", s.getMailTpl("manual", "zh_hant"), pdf, manualPDFName("zh_hant"))
-	if !strings.Contains(mh.Body, "亲爱的 carol") || mh.Attachments[0].Name != "產品手冊.pdf" {
-		t.Fatalf("zh_hant 应为中文问候+繁体附件名，实际 body=%q name=%q", mh.Body, mh.Attachments[0].Name)
+
+	// 繁体：中文系走中文问候（不误翻），但链接吃繁体专档名
+	mh := buildManualMailMsg("t@u.v", "carol", "zh_hant", s.getMailTpl("manual", "zh_hant"), linkOf("zh_hant"))
+	if !strings.Contains(mh.Body, "亲爱的 carol") || !strings.Contains(mh.Body, "/docs/manual/zh_hant.pdf") {
+		t.Fatalf("zh_hant 应为中文问候＋繁体语种链接，实际 body=%q", mh.Body)
 	}
-	// 无 PDF：仅正文邮件，不带空附件
-	m3 := buildManualMailMsg("x@y.z", "bob", "en", s.getMailTpl("manual", "en"), nil, manualPDFName("en"))
+
+	// ★ 链接拿不到（手册没铺库／基址为空）＝**不写那一行**，也不许留一个空链接或假链接
+	m3 := buildManualMailMsg("x@y.z", "bob", "en", s.getMailTpl("manual", "en"), "")
 	if len(m3.Attachments) != 0 {
-		t.Fatalf("pdf 为空不得挂空附件，实际 %+v", m3.Attachments)
+		t.Fatalf("无链接时也不许挂附件，实际 %+v", m3.Attachments)
+	}
+	if strings.Contains(m3.Body, "docs/manual") || strings.Contains(m3.Body, "attached") {
+		t.Fatalf("链接取不到时正文不该出现手册链接／附件措辞，实际 %q", m3.Body)
+	}
+}
+
+// TestUATBatchE_ManualLinkShape 链接形状与"在不在"必须同尺：
+//
+//	① 库里那份稿子在（manual_pdf_dir 命中）⇒ 给链接，且路径逐字等于 `/docs/manual/<码>.pdf`；
+//	② 不在 ⇒ 返回空串（调用方据此**不写那一行**，而不是发一个点开 404 的链接）；
+//	③ 基址空 ⇒ 同样返回空串（异步 goroutine 拿不到请求时宁可少一行）。
+//
+// 这一组同时钉住「回落链只有 docs_manual.go 那一份」：邮件侧不许自己排 en/zh 优先级。
+func TestUATBatchE_ManualLinkShape(t *testing.T) {
+	s := f41StoreServer(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(dir+"/th.pdf", []byte("%PDF-1.4 fake"), 0o644); err != nil {
+		t.Fatalf("铺靶子手册失败: %v", err)
+	}
+	if err := s.Store.SetConfig("manual_pdf_dir", dir); err != nil {
+		t.Fatalf("配 manual_pdf_dir 失败: %v", err)
+	}
+	if got := s.manualLinkFor("https://langcross.example/", "th"); got != "https://langcross.example/docs/manual/th.pdf" {
+		t.Fatalf("① 有稿时链接形状错（尾斜杠／前缀都要收敛）：%q", got)
+	}
+	if got := s.manualLinkFor("https://langcross.example", "ja"); got != "" {
+		t.Fatalf("② 该语种（含 en/zh 回落链）无稿时必须回空串，实得 %q", got)
+	}
+	if got := s.manualLinkFor("", "th"); got != "" {
+		t.Fatalf("③ 基址为空时必须回空串，实得 %q", got)
 	}
 }

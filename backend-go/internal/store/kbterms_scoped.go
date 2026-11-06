@@ -20,8 +20,16 @@ import (
 // FindTermsBySubstringAllowed 同 FindTermsBySubstring，但把结果限制在 allow 包集合内。
 //
 // allow 为空 ⇒ 返回空（没有可见域就没有术语，**绝不放宽成"查全部"**）。
-// 排序：源文更长优先（长术语更具体），其次包类型（企业 > 角色 > 行业 > 其它），最后 id。
-// 调用方（engine.gateCtx.termReqs）按 `source+lang` 去重，取第一条 ⇒ 企业包优先。
+// 排序：源文更长优先（长术语更具体），其次包类型（产品 > 企业 > 角色 > 行业 > 其它），最后 id。
+// 调用方（engine.gateCtx.termReqs）按 `source+lang` 去重，取第一条 ⇒ 产品私有说法优先。
+//
+// ★ 一期审阅修正（相对施工文档 §4.3「新增可选入参 productPackIDs」）：改用 SQL 直判
+//
+//	`COALESCE(p.product_id,'') <> ''`，**不改函数签名、不动任何调用点**。理由：
+//	① product_id 只可能由产品包写入（唯一真值在库里），传第二份集合进函数＝第二把尺子，
+//	   漏传/传旧集合会让同一份数据出现两种排序；② 该函数被 engine/gates.go 的术语硬闸
+//	   对全租户默认调用，改签名要动所有调用点，正是发布前置 E1 最怕的改动面；
+//	③ 旧库所有存量包 product_id 补列默认 '' ⇒ −1 分支永不命中 ⇒ 老租户行序逐条不变。
 //
 // 不加跨请求缓存：可见域含「组织链 + job_role」，缓存键必须带上它们才不会串
 // （那一维的唯一实现是 engine.cjkCacheScopeKey；这里只走请求内缓存，代价是每段一次小查询）。
@@ -45,8 +53,10 @@ func (s *Store) FindTermsBySubstringAllowed(srcLang, srcText string, allow map[i
 		"WHERE e.source_lang=? AND e.layer=1 AND p.role='source' AND COALESCE(p.enabled,1)=1 " +
 		"AND e.package_id IN (" + ph + ") " +
 		"AND ? LIKE '%' || e.source_text || '%' " +
-		"ORDER BY length(e.source_text) DESC, CASE p.pack_type " +
-		"WHEN 'tenant' THEN 0 WHEN 'persona' THEN 1 WHEN 'industry' THEN 2 ELSE 3 END, e.id"
+		"ORDER BY length(e.source_text) DESC, CASE " +
+		"WHEN COALESCE(p.product_id,'') <> '' THEN -1 " + // 产品私有说法：一期插层，老库恒不命中
+		"WHEN p.pack_type='tenant' THEN 0 WHEN p.pack_type='persona' THEN 1 " +
+		"WHEN p.pack_type='industry' THEN 2 ELSE 3 END, e.id"
 	args := make([]interface{}, 0, len(ids)+2)
 	args = append(args, srcLang)
 	for _, id := range ids {

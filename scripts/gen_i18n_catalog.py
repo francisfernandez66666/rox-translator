@@ -725,6 +725,30 @@ T.update({
 "二维码生成失败": "QR code generation failed",
 })
 
+# —— 一期《确定的多语言能力》批次 4（2026-11-05）：产品面 / 对外页新增的写死中文提示。
+#   全部写死在 apierrors.New 的第二实参，覆盖闸 TestAPICnMessageLiteralsCovered 当场报缺；
+#   英文访客点开产品货架 / 对外页撞到这些即是一句中文（漏翻译）。措辞按「是谁的什么失败了」分流，
+#   不写「重试」承诺（多因租户/数据态，重试只会再失败一次）。
+T.update({
+"个人产品面必须带有效租户": "The personal product view requires a valid tenant",
+"产品不存在": "Product not found",
+"产品列表读取失败": "Failed to read the product list",
+"产品包建档失败": "Failed to create the product pack",
+"产品资料更新失败": "Failed to update product details",
+"物料 ID 不合法": "Invalid asset ID",
+"齐备度读取失败": "Failed to read readiness",
+"产品包不可用": "Product pack unavailable",
+"说法读取失败": "Failed to read approved phrases",
+"源文与译文不能为空": "Source and translation must not be empty",
+"没有要导入的说法": "No phrases to import",
+"这批说法都没能导入：源文与译文都必须非空": "None of these phrases were imported: both the source and the translation must be non-empty",
+"文件写入失败": "Failed to write the file",
+"这条物料没有附件，正文内容在物料详情里": "This material has no attachment; its text is in the material details",
+"物料文件不存在或已被清理，请重新上传": "The material file is missing or was cleaned up; please upload it again",
+"请填写联系邮箱与留言内容": "Please fill in your contact email and message",
+"sitemap 生成失败": "Failed to generate the sitemap",
+})
+
 exact = dict(T)
 pats = []
 for zh, en in DYN.items():

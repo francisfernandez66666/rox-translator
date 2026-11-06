@@ -24,13 +24,13 @@ import {
   CheckIcon,
   CheckCircleIcon,
   ClipboardIcon,
+  DocIcon,
   GlobeIcon,
   LayersIcon,
   SendIcon,
   ShieldIcon,
   TerminalIcon,
   UploadIcon,
-  UsersIcon,
 } from '@/ui/langcross/src'
 // 图标在这里只承担「装饰性图示」，不带独立点击语义：卡片图标位固定 24，行内箭头/勾选 14~18
 import { useT, translateIn, demoSrcLang, type Lang } from '@/i18n' // useT() → [语种, t, tpl]；translateIn 按指定语种取词；demoSrcLang 决策演示源语种（en→zh）；版权行用 tpl 插值品牌名
@@ -1146,7 +1146,10 @@ export default function Landing() {
         <div className="lc-bento-row">
           {/* 四张小卡表驱动：这里只配「词典键 + 图标」，文案取 land.fc.<k>.t/.d，加一张卡只动两处 */}
           {[
-            { k: 'team', Icon: UsersIcon },
+            // ★ X3 定稿（2026-11-06）：三张主卡＝话术（大卡）· 翻译（中卡）· 文件（本行第一张）。
+            //   原「团队协作」那张降位：团队那一层已经写进翻译卡的表述里（"现场谁拿谁会用"），
+            //   两张卡讲同一件事就会给人"到底几件事"的发散感——用户令「该精准的地方就上精准话术」。
+            { k: 'file', Icon: DocIcon },
             { k: 'memory', Icon: LayersIcon },
             { k: 'quality', Icon: ShieldIcon },
             { k: 'api', Icon: TerminalIcon },

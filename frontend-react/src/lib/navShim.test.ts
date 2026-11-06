@@ -131,7 +131,9 @@ function fullClosure(roots: string[], files: Map<string, string>): Set<string> {
 }
 
 // ---------------------------------------------------------------- A 入口分诊
-/** A 判据：main.tsx 必须 lazy 分诊、且白名单与 App 的未登录分支同步 */
+/** A 判据（★ 一期 §5.7 重写）：main.tsx 必须 lazy 分诊；公开路径按**两支**判定——
+ *  「精确 Set」命中五条静态门面页，或「/p/ 前缀」命中两段短码对外页；
+ *  精确白名单仍与 App 的未登录分支同步。任一分支被摘掉都判红（配「退回精确匹配」反证）。 */
 function entryTriageFailures(files: Map<string, string>): string[] {
   const bad: string[] = []
   const main = files.get(MAIN)
@@ -140,13 +142,19 @@ function entryTriageFailures(files: Map<string, string>): string[] {
   // ① 两个入口都必须是 lazy（静态 import App 就等于把 router 钉回入口包）
   if (!/lazy\(\(\) => import\('\.\/App'\)\)/.test(main)) bad.push('main.tsx 里 App 不是 React.lazy（静态 import 会把 router/后台面板钉回入口包）')
   if (!/lazy\(\(\) => import\('\.\/PublicRoot'\)\)/.test(main)) bad.push('main.tsx 里 PublicRoot 不是 React.lazy')
-  // ② 分诊必须按「token × 路径」两支判定，且调用它在渲染里
+  // ② 分诊两支：精确 Set ＋ /p/ 前缀判定，且 pickEntry 必须两支合判（★ 动态段不能塞进 Set）
   if (!/function pickEntry\(\)/.test(main)) bad.push('main.tsx 缺 pickEntry() 分诊（或改名了，请同步本锁）')
-  if (!/!getAuthToken\(\) && PUBLIC_PATHS\.has\(window\.location\.pathname\)/.test(main)) {
-    bad.push('分诊判据被改动（本锁认「无 token 且落在公开路径 ⇒ PublicRoot」）')
+  if (!/function isPublicPath\(/.test(main)) bad.push('main.tsx 缺 isPublicPath() 前缀分诊助手（动态 /p/ 段必须单独一支）')
+  if (!/PUBLIC_PATHS\.has\(/.test(main)) bad.push('精确 Set 那一支不见了（五条静态门面页会退回下 router）')
+  if (!/const PUBLIC_PREFIX = '\/p\/'/.test(main)) bad.push('两段短码前缀常量 PUBLIC_PREFIX 不见了')
+  if (!/pathname\.startsWith\(PUBLIC_PREFIX\)/.test(main)) {
+    bad.push('前缀判定那一支不见了（对外页 /p/{tenantCode}/{pageCode} 会退回"要下 router 才打不开"的老形态）')
+  }
+  if (!/!getAuthToken\(\) && isPublicPath\(window\.location\.pathname\)/.test(main)) {
+    bad.push('分诊式被改动（本锁认「无 token 且 isPublicPath(...) ⇒ PublicRoot」两支合判）')
   }
   if ((main.match(/pickEntry\(\)/g) || []).length < 2) bad.push('pickEntry() 定义了却没在渲染里用（分诊空转）')
-  // ③ 白名单 = App 未登录分支里出现的路径 ＋ 登录/注册两条。不同步＝新公开页退回"要下 router"的老形态
+  // ③ 精确白名单 = App 未登录分支里出现的路径 ＋ 登录/注册两条。不同步＝静态门面页退回"要下 router"的老形态
   const guest = guestRegion(app)
   if (!guest) return [...bad, '读不到 App.tsx 的未登录分诊区（锚点 `if (!user) {` / `// 后台路由守卫` 之一漂了）']
   const m = main.match(/const PUBLIC_PATHS = new Set\(\[([^\]]*)\]\)/)
@@ -235,6 +243,10 @@ const GUEST_MARKERS: Array<[string, RegExp]> = [
   //   锁的是「两棵树都真的问过这个判据」，不是参数拼写。
   ['门面开关判定', /!landingEnabledForGuest\(/],
   ['营销壳（不带 auth 档）', /<PublicShell>/],
+  // ★ 一期 §5.7：对外页两段短码分支必须两棵树都在。无 token 的访客实际走 PublicRoot，
+  //   若只留 App 侧（L1 锁得住）而 PublicRoot 侧被删，现有五条 marker 全绿、页面却打不开——
+  //   这条补的正是「两棵树同一地址同一屏」在动态段上的射程。
+  ['对外页 /p/ 两段短码分支', /path\.startsWith\('\/p\/'\)/],
 ]
 /** 登录面唯一调用点内部必须有的口径（两棵树共用，所以只查一次） */
 const FACE_MARKERS: Array<[string, RegExp]> = [
@@ -289,7 +301,7 @@ function parityFailures(files: Map<string, string>): string[] {
 }
 
 describe('A 入口分诊（main.tsx）', () => {
-  it('两个入口都 lazy，分诊按 token × 公开路径，白名单与 App 分支同步', () => {
+  it('两个入口都 lazy，分诊按 token ×「精确 Set ＋ /p/ 前缀」两支，白名单与 App 分支同步', () => {
     const bad = entryTriageFailures(FILES)
     expect(bad, bad.join('\n')).toEqual([])
   })
@@ -302,6 +314,26 @@ describe('A 入口分诊（main.tsx）', () => {
     m2.set(MAIN, (m2.get(MAIN) || '').replace("'/compare',", "'/compare', '/admin',"))
     expect(m2.get(MAIN), '反证失效：变异没落地').not.toBe(FILES.get(MAIN))
     expect(entryTriageFailures(m2).join('\n'), '白名单不同步没被判红').toContain('PUBLIC_PATHS')
+  })
+  it('★ 一期反证：退回精确匹配／摘掉 /p/ 前缀那一支 —— 各自必须判红（锁比实现更先坏）', () => {
+    // 形态一：pickEntry 直接退回 PUBLIC_PATHS.has（旧形态），前缀助手成死码 ⇒ 分诊式判据必须红
+    const m1 = new Map(FILES)
+    m1.set(MAIN, (m1.get(MAIN) || '').replace(
+      '!getAuthToken() && isPublicPath(window.location.pathname)',
+      '!getAuthToken() && PUBLIC_PATHS.has(window.location.pathname)'))
+    expect(m1.get(MAIN), '反证失效：变异没落地（退回精确匹配的字符串没命中）').not.toBe(FILES.get(MAIN))
+    expect(entryTriageFailures(m1).join('\n'), '退回精确匹配没被判红').toContain('分诊式')
+
+    // 形态二：isPublicPath 还在，但前缀那一支被摘掉（只剩精确 Set）⇒ 前缀判据必须红
+    const m2 = new Map(FILES)
+    m2.set(MAIN, (m2.get(MAIN) || '').replace(
+      'return PUBLIC_PATHS.has(pathname) || pathname.startsWith(PUBLIC_PREFIX)',
+      'return PUBLIC_PATHS.has(pathname)'))
+    expect(m2.get(MAIN), '反证失效：变异没落地（前缀分支字符串没命中）').not.toBe(FILES.get(MAIN))
+    expect(entryTriageFailures(m2).join('\n'), '摘掉前缀判定没被判红').toContain('前缀判定')
+
+    // 对照组：真实实现必须干净（否则上面两条"红"没有意义）
+    expect(entryTriageFailures(FILES)).toEqual([])
   })
 })
 
@@ -347,7 +379,7 @@ describe('C 桥接唯一入口（navRouter / nav）', () => {
 })
 
 describe('D 公开面与 App 的未登录三支等值', () => {
-  it('九个锚点两处都在 + 门面关闭分支语义等值 + 登录后换树那一腿在位', () => {
+  it('锚点两处都在 + 门面关闭分支语义等值 + 登录后换树那一腿在位', () => {
     const bad = parityFailures(FILES)
     expect(bad, bad.join('\n')).toEqual([])
   })

@@ -54,6 +54,8 @@ import * as pHub from './panels/hub'
 import * as pReconcile from './panels/reconcile'
 // ★ 〇-X #55（2026-09-28）：官网公开比价/算价页 /compare 词典
 import * as pCost from './panels/cost'
+// ★ 一期（2026-11-05）：产品面板（zh/en 两条腿），PANELS 表必须登记否则目录全量双向断言红
+import * as pProduct from './panels/product'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -81,6 +83,8 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'cost', mod: pCost },
   // ★ 多身份 B4-c：企业邀请链接面板
   { name: 'invitelink', mod: pInviteLink },
+  // ★ 一期：产品面板（与 appPanels.ts / allKeys.ts 的 import 同步，见文件头口径）
+  { name: 'product', mod: pProduct },
 ]
 
 describe('i18n 中英词典键值对等性', () => {

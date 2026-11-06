@@ -19,6 +19,7 @@ type PackScope struct {
 	Chain            []int64          // 组织祖先链原始切片（[自身..根]；缓存指纹用）
 	ChainPacks       map[int64]int    // 链内部门包：包ID → 祖先距离（0=本部门,1=父,...）
 	TenantPackIDs    map[int64]bool   // 企业包集合（pack_id=0 历史行语义上归此层）
+	ProductPackIDs   map[int64]bool   // 产品私有说法包（一期；pack_type 仍是 tenant，靠 product_id 列识别）
 	SharedPackIDs    map[int64]bool   // 行业包集合（注册行业匹配；含宿主租户1的行业包；全行业+超管可见）
 	PersonaPackIDs   map[int64]bool   // 角色包集合（persona；按用户 job_role 装配；宿主租户0；2026-09-19）
 	JobRole          string           // 发起用户的职业角色编码（缓存键组件：不同角色用户不得串缓存）
@@ -26,6 +27,18 @@ type PackScope struct {
 	AllowCrossDept   bool             // 租户策略开关 kb_cross_dept_fallback（默认开）
 	CrossDeptPacks   map[int64]string // 跨部门候选部门包：包ID → 包名（打标用；开关关或无可共享包时为空）
 }
+
+// ProductPackRank 返回产品包的排序秩（一期《确定的多语言能力》§4.1）。
+//
+// ★ 单一回滚开关：把这里改成既有秩（200/300）即可单独摘掉产品包插层，
+//
+//	Rank 与 SQL 两侧都不必改结构（§12）；反证锁断言 Rank 真的调了本函数，
+//	防「回滚开关本身是死码」。
+//
+// 为什么是 150：链内部门 0..N → 跨部门 100 → **产品 150** → 企业 200 → 行业 300
+// → 角色 350 → locale/兜底 400。产品的私有说法必须赢过平台行业包（这是本商品的定义）。
+// 参数：无；返回产品包秩。
+func ProductPackRank() int { return 150 }
 
 // Distance 返回包在祖先链上的距离（0=本部门）；非链内包返回 false。
 func (s *PackScope) Distance(packID int64) (int, bool) {
@@ -38,10 +51,15 @@ func (s *PackScope) Distance(packID int64) (int, bool) {
 
 // Rank 计算行的全局排序秩（越小越优先）——业务优先级裁决依据：
 //
-//	部门(链内部门包，按祖先距离 0..N) > 跨部门(100) > 企业包/历史无主行(200)
-//	> 行业包/文化包(300) > 角色包(350) > 无scope兜底(400)。
+//	部门(链内部门包，按祖先距离 0..N) > 跨部门(100) > 产品包(150)
+//	> 企业包/历史无主行(200) > 行业包/文化包(300) > 角色包(350) > 无scope兜底(400)。
 //
 // 注：跨部门仅作例句参考（InChain=false），但业务展示优先级排在企业/行业之上。
+// ★ 一期产品包插层必须排在 TenantPackIDs **之前**：产品包 pack_type 复用 'tenant'，
+//
+//	BuildPackScope 会把它同时装进 TenantPackIDs；若放到企业分支之后，产品包先命中
+//	200 就返回了，150 分支是永远走不到的死码（这不是"顺序偏好"而是功能失效）。
+//
 // 参数 packID=行归属包 ID（0=历史无主行），rowTenant=行宿主租户。
 func (s *PackScope) Rank(packID int64, rowTenant int64) int {
 	if s == nil {
@@ -52,6 +70,9 @@ func (s *PackScope) Rank(packID int64, rowTenant int64) int {
 	}
 	if _, ok := s.CrossDeptPacks[packID]; ok {
 		return 100 // 跨部门（仅例句参考，但优先级在企业/行业之上）
+	}
+	if s.ProductPackIDs != nil && s.ProductPackIDs[packID] {
+		return ProductPackRank() // 150：产品私有说法赢过企业/行业包；可单独回滚（§12）
 	}
 	if packID == 0 {
 		return 200 // 历史无主行按企业层级

@@ -165,6 +165,14 @@ var publicRouteAllowlist = map[string]string{
 	// 真正的用户/组同步端点走 s.scimGuard（Bearer Token → 租户），不在本白名单。
 	"/api/scim/v2/Schemas":               "SCIM 静态 Schema 描述：RFC 7644 发现端点，无租户数据",
 	"/api/scim/v2/ServiceProviderConfig": "SCIM 服务能力描述：RFC 7644 发现端点，无租户数据",
+	// ★ 一期《确定的多语言能力》四条免登录面（2026-11-05 人工评审登记）。
+	//   共同自保：两段「不可枚举短码」本身即凭据（crypto/rand 16B→32hex，Q2 解析口两段同租户校验，
+	//   跨租户拼接一律空态、不返 403、不挂他租户品牌）；公开检索语料只有
+	//   store.ListPublicCorpus 一个出口，SQL 硬带 visibility='public' ⇒ 受控字段整段缺席。
+	"/api/product/public": "对外页首屏：两段不可枚举短码即凭据，只出产品信息与 public 语料，零受控值、零写副作用",
+	"/api/product/answer": "知识层问答：短码即凭据，零 LLM 调用、零 usage_ledger 写入，只回已备物料原文与公开事实（不返 403）",
+	"/api/product/lead":   "产品页匿名留资：蜜罐 + 独立 lead-product: 配额账（3/日、10s 间隔，与 lead:/lead-public: 不互扣）+ 归属只取产品行 tenant_id，不采信 ?tenant_id",
+	"/sitemap.xml":        "动态产品页 sitemap：只出 seo_indexable=1 且 status='live' 的 URL 字面，零受控字段、零租户内部数据",
 }
 
 // TestRouteAuthGate 静态断言：本包每条注册路由要么执行鉴权，要么在公开白名单里带理由。

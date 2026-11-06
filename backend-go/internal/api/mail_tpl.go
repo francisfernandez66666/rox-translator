@@ -152,7 +152,10 @@ var mailTplMetas = []MailTplMeta{
 	},
 	{
 		Code: "manual", Name: "产品手册(注册欢迎)",
-		Desc: "注册成功后随邮件发给新用户的《产品手册》PDF（此正文即 PDF 内容，支持 #/##/- 排版标记，超管可改）",
+		// ★ 2026-11-06 E 组：这封信**不再挂 PDF 附件**，改为给站内手册链接（理由见 manualGreeting 头部三条）。
+		//   这里同时如实改掉运营看到的说明——旧说明写着"此正文即 PDF 内容"，
+		//   而代码从来只用本模板的**主题**，正文由 manualGreeting 按语种生成；留着它＝运营改完以为生效了。
+		Desc: "注册成功后发给新用户的《产品手册》欢迎信（随邮件给出站内手册链接，不再附 PDF）。本模板当前只决定**主题**；正文按语种由系统生成",
 		Vars: []string{"username", "brand"},
 		Default: MailTpl{
 			Subject: "【{brand}】欢迎使用 · 产品手册",
@@ -161,7 +164,8 @@ var mailTplMetas = []MailTplMeta{
 	},
 }
 
-// manualDefaultBody 产品手册默认正文（注册成功邮件附件 PDF 的内容源）。
+// manualDefaultBody 产品手册默认正文（★ 注意：注册欢迎信的正文由 manualGreeting 按语种生成，
+// 这份长文是**手册文字稿**的历史载体，改它不等于改用户收到的那封信——见 manual 模板 Desc 那条说明）。
 // 面向小白：先讲价值与卖点，再分别给「个人用户」与「企业用户」一步一步的上手步骤。
 const manualDefaultBody = `# 能言 LangCross 产品手册（新手一步到位）
 
@@ -310,69 +314,92 @@ func (s *Server) sendTemplatedMail(to, code, lang string, data map[string]string
 	return s.enqueueMail(msg, false)
 }
 
-// manualPDFNames 手册附件名按语种（★ F-17 批E：附件名跟随收件人界面语言）。
-// 空串/中文系=简体中文名；白名单外由调用方先归一化为空串。
-var manualPDFNames = map[string]string{
-	"": "产品手册.pdf", "zh": "产品手册.pdf", "zh_hant": "產品手冊.pdf",
-	"en": "User Guide.pdf", "ja": "ユーザーガイド.pdf", "ko": "사용자 가이드.pdf",
-	"de": "Benutzerhandbuch.pdf", "fr": "Guide d'utilisation.pdf", "es": "Guía de usuario.pdf",
-	"pt": "Guia do usuário.pdf", "ru": "Руководство пользователя.pdf", "ar": "دليل المستخدم.pdf",
-	"th": "คู่มือผู้ใช้.pdf",
-}
-
-// manualPDFName 取某语种的附件文件名（未知语种回中文名的兜底由 normalizeMailLang 前置保证）。
-func manualPDFName(lang string) string {
-	if n, ok := manualPDFNames[lang]; ok {
-		return n
-	}
-	return manualPDFNames[""]
-}
-
 // manualGreeting 手册邮件正文问候语（中英两稿：中文系=原中文稿，其余回落英文——
 // 与决策项 ③「其余回落 en」同口径，避免机翻误翻风险；超管可经 manual 模板语种键覆盖主题/正文级配置）。
-// 参数 lang=归一化后的语种（可空）；username=收件人用户名。
-func manualGreeting(lang, username string) string {
-	if isChineseMailLang(lang) {
-		return fmt.Sprintf("亲爱的 %s：\n\n欢迎使用能言 LangCross！附件为《产品手册》PDF，包含个人与企业用户的上手步骤，建议先花 5 分钟阅读。\n\n—— 能言 LangCross 团队", username)
+// ★ 2026-11-06 E 组改形：**邮件不再带 PDF 附件，只给站内链接**。三个理由缺一不可：
+//
+//	① 附件逼近 20 MB 会被退信，那是**结构性**失败，压图只是推迟它；
+//	② 带图 PDF 一旦流出去就收不回（邮件会被转发、被爬到），不发附件＝这一族风险清零；
+//	③ 站内链接永远指向库里那份当前稿，而附件永远是被反复转发的旧稿。
+//
+// 参数 lang=归一化后的语种（可空）；username=收件人用户名；link=手册绝对链接（空＝不写那一行）。
+func manualGreeting(lang, username, link string) string {
+	// 链接拿不到时不许放一个空链接／假链接过去：一封写着"手册在这里："而后继空白的邮件，
+	// 比一封不提手册的邮件更让客户以为站点坏了（AGENTS「读数不许为失败背书」同族）。
+	line := ""
+	if strings.TrimSpace(link) != "" {
+		if isChineseMailLang(lang) {
+			line = "\n《产品手册》（站内常年更新版）：" + link + "\n"
+		} else {
+			line = "\nUser guide (the current version, always): " + link + "\n"
+		}
 	}
-	return fmt.Sprintf("Dear %s,\n\nWelcome to LangCross! Please find our User Guide (PDF) attached, which walks you through the first steps for both individual and enterprise users. We suggest a 5-minute read to get started.\n\n—— The LangCross Team", username)
+	if isChineseMailLang(lang) {
+		return fmt.Sprintf("亲爱的 %s：\n\n欢迎使用能言 LangCross！手册里有个人与企业用户的上手步骤，建议先花 5 分钟阅读。%s\n—— 能言 LangCross 团队", username, line)
+	}
+	return fmt.Sprintf("Dear %s,\n\nWelcome to LangCross! Our guide walks you through the first steps for both individual and enterprise users — a 5-minute read is worth it.%s\n—— The LangCross Team", username, line)
 }
 
-// buildManualMailMsg 组装手册邮件（纯函数，供单测断言主题渲染/正文语种/附件名——
-// sendManualEmail 的组消息部分抽出让「附件名与模版语种」可离线锁定）。
-// 参数 to/username/lang：收件人；tpl：已按语种解析的 manual 模板；pdf/pdfName：附件内容与文件名（pdf 空=无附件）。
-func buildManualMailMsg(to, username, lang string, tpl MailTpl, pdf []byte, pdfName string) *mail.Message {
+// buildManualMailMsg 组装手册邮件（纯函数，供单测断言主题渲染/正文语种/**链接形态**——
+// sendManualEmail 的组消息部分抽出让「链接与模板语种」可离线锁定）。
+//
+// ★ 本函数**永不再挂附件**：判据里那条「Attachments 必须为空」是正向防线，
+//
+//	它挡的是"过一阵又有人觉得带附件更方便"——那时这条锁先红，而不是等一封退信才发现。
+//
+// 参数 to/username/lang：收件人；tpl：已按语种解析的 manual 模板；link：手册绝对链接（空＝不写那一行）。
+func buildManualMailMsg(to, username, lang string, tpl MailTpl, link string) *mail.Message {
 	// 主题走模板渲染（修复历史直挂 tpl.Subject 未替换 {brand} 的存量口径）
 	msg := renderMailTpl(tpl, map[string]string{"username": username, "brand": defaultBrand})
-	msg.Body = manualGreeting(lang, username)
+	msg.Body = manualGreeting(lang, username, link)
 	msg.To = to
-	if len(pdf) > 0 {
-		msg.Attachments = []mail.Attachment{{Name: pdfName, Data: pdf}}
-	}
+	msg.Attachments = nil
 	return msg
 }
 
-// sendManualEmail 注册成功后给新用户发送《产品手册》PDF 邮件（附件为你提供的产品手册 PDF 文件）。
-// 使用 INFO_SMTP_* 配置的专用邮箱发送；邮件正文模板内容可在后台「邮件模板」中配置（manual 模板）。
-// ★ F-17（2026-09-25 批E）语种跟随：参数 lang=注册界面语种（可空=中文链路），
-// 主题/附件名/PDF 文件均按语种取稿。
-// PDF 附件来源（按优先级）：system_config.manual_pdf_dir 下 {lang}.pdf → en → zh →
-// 旧单文件链（manual_pdf_path > 环境变量 MANUAL_PDF_PATH > /opt/translator/data/manual.pdf > manual.pdf）。
-// 找不到时仍发送正文邮件（仅不含附件），并在日志提示。
-func (s *Server) sendManualEmail(to, username, lang string) error {
-	tpl := s.getMailTpl("manual", lang)
-	pdf, path, err := s.loadManualPDF(lang)
-	if err != nil {
-		log.Printf("[mail] 手册PDF未找到 to=%s lang=%s err=%v（将仅发送正文邮件）", to, lang, err)
+// manualLinkFor 拼手册链接的**唯一形状**：`/docs/manual/<语种码>.pdf`（与注册串那一个常量同源）。
+//
+// ★ 这里**不读 PDF 字节**，也**不重复实现回落链**：
+//
+//	回落（{lang} → en → zh）是 docs_manual.go 那一个路由的事实，邮件只递"请求语种"过去；
+//	在这里再排一遍优先级＝第二把尺子，两处对"这份稿子在不在"的判断迟早相反（邮件说有、点开 404）。
+//	所以只问一次 `manualPDFPresent`：**它在才给链接，不在就不写那一行**（见 manualGreeting 的纪律）。
+//
+// 参数 base=站点基址（scheme://host，与邀请链接同一个 inviteBaseURL），lang=注册界面语种；返回空串＝不给链接。
+func (s *Server) manualLinkFor(base, lang string) string {
+	code := normalizeMailLang(lang)
+	if code == "" {
+		code = "zh" // 空语种=中文链路（app_lang 空留 zh 口径），与 loadManualPDF 的缺省一致
 	}
-	msg := buildManualMailMsg(to, username, lang, tpl, pdf, manualPDFName(lang))
+	if strings.TrimSpace(base) == "" || !s.manualPDFPresent(code) {
+		return ""
+	}
+	return strings.TrimRight(base, "/") + manualPDFPrefix + code + manualPDFSuffix
+}
+
+// sendManualEmail 注册成功后发送《产品手册》**链接**邮件（个人/企业用户均发；用 info 专用邮箱）。
+// 正文模板可在后台「邮件模板」中配置（manual 模板）。
+// ★ F-17（2026-09-25 批E）语种跟随：主题与链接语种都随注册界面语言（可空=中文链路）。
+// ★ E 组（2026-11-06）：**不再挂 PDF 附件**——退信是结构性的、发出去的附件收不回、
+//
+//	而站内链接永远指向当前稿（三条理由见 manualGreeting 头部）。
+//
+// 参数 base 由调用点在请求还在时算好传入（异步 goroutine 里不能读 r）。
+func (s *Server) sendManualEmail(to, username, lang, base string) error {
+	tpl := s.getMailTpl("manual", lang)
+	link := s.manualLinkFor(base, lang)
+	if link == "" {
+		// 手册没铺库／基址取不到：如实点名，仍然发正文邮件，只是不写那一行链接
+		log.Printf("[mail] 手册链接取不到 to=%s lang=%s base=%q（本封只发正文，不给链接）", to, lang, base)
+	}
+	msg := buildManualMailMsg(to, username, lang, tpl, link)
 	if err := s.enqueueMail(msg, true); err != nil {
 		return err
 	}
-	if path != "" {
-		log.Printf("[mail] 手册邮件已入队 to=%s (附件PDF <- %s, %d字节)", to, path, len(pdf))
+	if link != "" {
+		log.Printf("[mail] 手册邮件已入队 to=%s 链接=%s（附件已退役，不读 PDF 字节）", to, link)
 	} else {
-		log.Printf("[mail] 手册邮件已入队 to=%s (无附件PDF)", to)
+		log.Printf("[mail] 手册邮件已入队 to=%s（无链接、无附件）", to)
 	}
 	return nil
 }
@@ -407,7 +434,12 @@ func (s *Server) syncSendMail(msg *mail.Message, useInfo bool) error {
 // （下划线码另试连字符变体文件名，兼容交付包 LangCross-User-Guide-zh-hant.pdf 一类命名）；
 // 目录未配置或未命中时回落旧单文件链（manual_pdf_path > env MANUAL_PDF_PATH >
 // /opt/translator/data/manual.pdf > manual.pdf）——老部署零改动仍可发中文手册。
-func (s *Server) loadManualPDF(lang string) (data []byte, path string, err error) {
+// manualPDFCandidates 手册文件的**唯一一份**候选顺序（精确语种 → en → zh → 旧单文件链）。
+// 读字节（loadManualPDF）与只判存在（manualPDFPresent）都必须走这里，
+// 否则"邮件说有、点开 404"这种两处判断相反的情况就会长出来。
+// 参数 lang=归一化后的语种码（可空）；返回按优先级排列的路径列表。
+func (s *Server) manualPDFCandidates(lang string) []string {
+	cands := []string{}
 	// 1) 多语种目录：按「精确语种 → en → zh」次序找 {code}.pdf（去重）
 	if dir, _ := s.Store.GetConfig("manual_pdf_dir"); strings.TrimSpace(dir) != "" {
 		dir = strings.TrimSpace(dir)
@@ -433,10 +465,7 @@ func (s *Server) loadManualPDF(lang string) (data []byte, path string, err error
 		for _, code := range order {
 			// 文件名两种写法：下划线码（zh_hant.pdf）与连字符码（zh-hant.pdf）
 			for _, c := range []string{code, strings.ReplaceAll(code, "_", "-")} {
-				p := filepath.Join(dir, c+".pdf")
-				if d, e := os.ReadFile(p); e == nil && len(d) > 0 {
-					return d, p, nil
-				}
+				cands = append(cands, filepath.Join(dir, c+".pdf"))
 			}
 		}
 	}
@@ -449,9 +478,27 @@ func (s *Server) loadManualPDF(lang string) (data []byte, path string, err error
 		candidates = append(candidates, p)
 	}
 	candidates = append(candidates, "/opt/translator/data/manual.pdf", "manual.pdf")
-	for _, c := range candidates {
-		if d, e := os.ReadFile(c); e == nil && len(d) > 0 {
-			return d, c, nil
+	cands = append(cands, candidates...)
+	return cands
+}
+
+// manualPDFPresent 只判"这份稿子在不在"（os.Stat，**不读字节**），供邮件决定给不给链接。
+// 参数 code=已归一的语种码；返回是否有可读的手册文件。
+func (s *Server) manualPDFPresent(code string) bool {
+	for _, p := range s.manualPDFCandidates(code) {
+		if fi, e := os.Stat(p); e == nil && !fi.IsDir() && fi.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// loadManualPDF 按 manualPDFCandidates 的唯一顺序读取 PDF 字节，返回内容、命中路径。
+// 参数 lang=归一化后的语种码（可空）；找不到时报错并点名该配哪个配置键。
+func (s *Server) loadManualPDF(lang string) (data []byte, path string, err error) {
+	for _, p := range s.manualPDFCandidates(lang) {
+		if d, e := os.ReadFile(p); e == nil && len(d) > 0 {
+			return d, p, nil
 		}
 	}
 	return nil, "", fmt.Errorf("未找到产品手册PDF（请配置 system_config.manual_pdf_dir（多语种目录，内含 {lang}.pdf）或 manual_pdf_path，或将文件放到 /opt/translator/data/manual.pdf）")

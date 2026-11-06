@@ -19,8 +19,8 @@
 export const zh: Record<string, string> = {
   // —— 顶栏与标题 ——
   'cmp.navEntry': '比价与算价',
-  'cmp.title': '翻译要花多少钱，这里当场算给你',
-  'cmp.intro': '填字数、选语种与模式，页面按我们真实在用的算价公式当场出结果，并和同一批内容的人工笔译报价放在一起对照。公式、系数、对照价的来源全部公开，不做「起价很低、结算另算」那套。',
+  'cmp.title': '一支 AI 外贸 Agent 要花多少钱，这里当场算给你',
+  'cmp.intro': '填字数、选语种与模式，页面按我们真实在用的算价公式当场出结果，并和同一批内容的人工笔译报价放在一起对照——真正的对照物是招一个外语业务员、找翻译外包，还是这单干脆算了。公式、系数、对照价的来源全部公开，不做「起价很低、结算另算」那套。',
   // —— 试算器 ——
   'cmp.calcTitle': '自助试算',
   'cmp.unavailable': '算价系数暂时取不到，本页不提供估算结果。请稍后刷新，或先查看价格方案。',
@@ -72,8 +72,8 @@ export const zh: Record<string, string> = {
 export const en: Record<string, string> = {
   // —— Top nav and headline ——
   'cmp.navEntry': 'Pricing & estimate',
-  'cmp.title': 'See what a translation actually costs, right here',
-  'cmp.intro': 'Enter a word count, pick the target languages and the mode, and the page applies the same formula we bill with — next to the human translation quote for the very same volume. The formula, the coefficients and the source of the comparison price are all public; no “starting at” pricing that changes at checkout.',
+  'cmp.title': 'What an AI trade agent costs — worked out on the spot',
+  'cmp.intro': 'Enter the character count, pick languages and mode: the page applies the same pricing formula we actually bill with, side by side with a human translation quote for the very same content. The real comparison is hiring someone who speaks the language, outsourcing the translation, or dropping the order. Formula, coefficients and the sources of our reference prices are all public — no "low from-price, different at checkout".',
   // —— Calculator ——
   'cmp.calcTitle': 'Self-service estimate',
   'cmp.unavailable': 'Pricing coefficients are temporarily unavailable, so this page shows no estimate. Please refresh later, or see the plans.',

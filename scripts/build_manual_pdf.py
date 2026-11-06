@@ -118,6 +118,16 @@ def parse_blocks(md: str):
             blocks.append(("code", f"<pre>{inline_md(code)}</pre>"))
             continue
 
+        # 图片（★ E 组 2026-11-06：手册每章配一张**夹具**功能截图）
+        # 独占一行的 `![alt](name)` 才当图；段中间的 `![](...)` 仍按普通文字走，
+        # 否则一句正文里出现括号就会被切成两块（排版事故比漏一张图难查）。
+        m = re.match(r"^!\[([^\]]*)\]\(([^)\s]+)\)\s*$", line)
+        if m:
+            alt = m.group(1).replace('"', "")
+            blocks.append(("img", f'<div class="shotbox"><img class="shot" src="{m.group(2)}" alt="{alt}"/></div>'))
+            i += 1
+            continue
+
         # heading
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
         if m:
@@ -262,6 +272,10 @@ code {{ background: #f0f0f0; padding: 1px 3px; font-size: 9px; }}
 pre {{ background: #f0f0f0; padding: 8px; margin: 0 0 8px; font-size: 9px; white-space: pre-wrap; }}
 hr {{ border: none; border-top: 1px solid #ccc; margin: 8px 0; }}
 a {{ color: #1a1a1a; }}
+/* 手册配图（E 组 2026-11-06）：宽度跟着版心走，高度按比例——截图是 1440×900，
+   不写 max-width 会按原始像素撑破内容区；边框是灰线，不是把截图当正文色块。 */
+div.shotbox {{ margin: 0 0 8px; }}
+img.shot {{ max-width: 100%; height: auto; border: 1px solid #bbb; }}
 """
 
 
@@ -295,10 +309,41 @@ def measure_block(scratch_doc, html, css, arch):
     return CONTENT_H - spare
 
 
+def resolve_shots(md: str, manual_dir: str, lang: str):
+    """把 md 里的 `![alt](img/<章节>.png)` 换成**本语种那一张**截图并读进内存。
+
+    md 里刻意只写章节名、不写语种（同 AGENTS §一·14「清单只有一份」的同一手法）：
+    12 份手册的正文因此不需要各改各的路径，语种由生成器按当前 lang 现拼
+    `img/<章节>/<lang>.png`。文件不在 ⇒ **整行撤下**（正文照常出图位以外的内容）并计入 missing，
+    由调用方出声——**不许**留一个指向空气的 `<img>`（那是把"缺图"藏成"图坏了"）。
+    """
+    out, images, missing = [], {}, []
+    n = 0
+    for ln in md.split("\n"):
+        m = re.match(r"^!\[[^\]]*\]\(img/([^)\s]+)\.png\)\s*$", ln.strip())
+        if not m:
+            out.append(ln)
+            continue
+        cand = os.path.join(manual_dir, "img", m.group(1), f"{lang}.png")
+        if not os.path.exists(cand):
+            missing.append(os.path.relpath(cand, manual_dir))
+            continue
+        name = f"shot{n}.png"
+        with open(cand, "rb") as fh:
+            images[name] = fh.read()
+        out.append(re.sub(r"\(img/[^)\s]+\.png\)", f"({name})", ln.strip()))
+        n += 1
+    return "\n".join(out), images, missing
+
+
 def build_pdf(md_path, out_path, font_path):
-    md = open(md_path, encoding="utf-8").read()
+    md_raw = open(md_path, encoding="utf-8").read()
     lang = re.search(r"manual\.([\w-]+)\.md$", md_path).group(1)
     rtl = lang == "ar"
+    manual_dir = os.path.dirname(os.path.abspath(md_path))
+    md, shots, missing = resolve_shots(md_raw, manual_dir, lang)
+    if missing:
+        print(f"WARN {lang} 缺截图 {len(missing)} 张（正文照常出，图位撤下）: {', '.join(missing[:3])}")
 
     # Subset the font to this manual's glyphs -> small, no per-call bloat.
     chars = set(md)
@@ -309,6 +354,10 @@ def build_pdf(md_path, out_path, font_path):
 
     arch = pymupdf.Archive()
     arch.add((subset, "ArialUnicode.ttf"))
+    # 截图走 archive 而不是 file:// ——实测 insert_htmlbox 对 file:// 一律 0 张图（静默丢图），
+    # 只有 archive 里的名字会被解析；所以这里必须在 measure 之前就把字节灌进去。
+    for name, data in shots.items():
+        arch.add((data, name))
     css = build_css(rtl)
     blocks = parse_blocks(md)
 
