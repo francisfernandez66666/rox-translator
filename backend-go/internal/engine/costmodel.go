@@ -297,6 +297,22 @@ func KnowledgeQueryAllowanceTokens(hits int, langs []string) int64 {
 	return 0
 }
 
+// OnboardDraftAllowanceTokens 引导页「自由描述 → 候选字段」的预估 allowance（第 7 支，★ 2026-11-07）。
+//
+// ★ 恒返 0 是**产品承诺不是占位**（与上面 KnowledgeQueryAllowanceTokens 完全同形，AGENTS §28）：
+//
+//	这一档的模型成本由**平台承担**（engine/onboard_draft.go 打 llm.WithPlatformCost(llm.PlatformOnboardDraft)
+//	⇒ 留痕行照写、客户余额一分不动，AGENTS §一·11），而卖家此刻还没确认任何东西——
+//	让他为一份可能整份被改掉的候选草稿备钱，方向本身就不成立。
+//	签名刻意**不带任何入参**：任何输入都必须得同一个数，等值锁因此没有"喂错档位"的空隙。
+//	⚠️ 将来若把这一档改成客户承担，必须**同时**改这里、llm.Platform* 与 store 的名单、
+//	以及 UAT T97 那条"零余额变动"判据；只改扣费侧不改 allowance 就是 §一·5④ 那两把尺子。
+//
+// 返回: 预估 token allowance（恒 0）。
+func OnboardDraftAllowanceTokens() int64 {
+	return 0 // 全函数只有这一行返回：平台承担 ⇒ 客户侧零成本（等值锁 TestOnboardDraftAllowanceIsZeroByConstruction）
+}
+
 // ApplyMarkup 真实 token 口径 → 实收口径（唯一实现；api/estimate.go 的 applyMarkup 薄委托它）。
 // 为什么从 api 搬进 engine：分段判定（api.chatEstimateAndPlan 那**一处**）也要把上限积分折回
 // token 才能比"这次走不走分段"，而判定必须在**预估侧与执行侧同一次算**——

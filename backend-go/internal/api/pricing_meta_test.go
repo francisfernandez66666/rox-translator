@@ -115,7 +115,7 @@ func TestPricingMetaContractAndNoTokenLeak(t *testing.T) {
 	// 顶层键集合等值：加字段必须先过这条评审，防止"顺手回显一下内部量"
 	for k := range resp {
 		switch k {
-		case "success", "modes", "points_price_money", "unit", "points_knowledge_query":
+		case "success", "modes", "points_price_money", "unit", "points_knowledge_query", "points_onboard_draft":
 		default:
 			t.Fatalf("出参出现契约外顶层键 %q：公开口加字段要评审是否漏内部口径", k)
 		}

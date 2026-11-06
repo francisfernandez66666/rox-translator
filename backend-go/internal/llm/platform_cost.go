@@ -39,6 +39,11 @@ const (
 	// PlatformDomainDetect 文档级领域判定（2026-10-29 第十二轮）：客户没有直接下单这一步，
 	// 它是平台为"行业/职业用语适配"付的固定成本；词表进 prompt 的那部分仍按真实用量由客户承担。
 	PlatformDomainDetect = "domain_detect"
+	// PlatformOnboardDraft 引导页「自由描述 → 候选字段」判定腿（★ 2026-11-07 用户裁决）：
+	// 卖家**还没确认任何东西**，产出只是一份待改的候选 ⇒ 让客户为一份可能整份被改掉的草稿备钱不成立。
+	// 与 store.PlatformTaskTypeExclPred 的名单逐字同步（跨包等值锁＝api/platform_cost_charge_test.go
+	// 的 TestPlatformCost08AD2_LabelListsAgree）：漏一侧＝这笔成本既进客户日额又出现在客户账单里。
+	PlatformOnboardDraft = "onboard_draft"
 )
 
 // WithPlatformCost 标注「本 ctx 上的模型用量由平台承担」。

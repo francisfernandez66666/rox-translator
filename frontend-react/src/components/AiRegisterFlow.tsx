@@ -37,37 +37,22 @@ import {
   captchaLoadState, parseCaptchaProvider,
   type CaptchaProvider, type CaptchaLoadState, type CaptchaHandle,
 } from '@/lib/captcha'
-import { useT, getLang, tpl } from '@/i18n'
+import { useT, tpl } from '@/i18n'
 import { EyeIcon, EyeOffIcon, Checkbox } from '@/ui/langcross/src'
-import { typingUnitOf, chatTypingMs } from '@/i18n/script' // ★ 〇-Q：聊天打字单元/速度按文字系统分档
+// ★ H1（2026-11-06）：对话式引导的外壳（状态机＋视图＋样式）收成 components/guidedchat 一份，
+//   注册引导／完善信息／引导建产品三个场景共用；打字单元与速度按语种取那份也在状态机里。
+import { GuidedChatFrame } from './guidedchat/GuidedChatFrame'
+import { useGuidedChat, sleep, type GuidedMsgBase } from './guidedchat/guidedChatMachine'
 import { useBranding } from '@/branding'
 
-/** 屏幕是否偏好减少动效（驱动动效直出终态） */
-function usePrefersReducedMotion() {
-  const [r, setR] = useState(false)
-  useEffect(() => {
-    // matchMedia 必须带守卫：jsdom / 老旧 WebView 上不存在，裸调会在 effect 里直接抛
-    if (typeof window ==='undefined'|| !window.matchMedia) return
-    const m = window.matchMedia('(prefers-reduced-motion: reduce)')
-    const f = () => setR(m.matches)
-    f()
-    m.addEventListener?.('change', f)
-    return () => m.removeEventListener?.('change', f)
-  }, [])
-  return r
-}
 
-// 动效节拍之间的统一间隔单位：本文件所有「等一下」都走它，避免散落 setTimeout(数字) 难调
-const sleep = (ms: number) => new Promise<void>((res) => setTimeout(res, ms))
 
 // ---------- 聊天消息模型 ----------
 // 一条消息 = 一个气泡，靠可选字段决定它渲染成什么（文本 / 选项组 / 表单 / chips / 检查点 / 摘要卡）。
 // 刻意不用 union type 分派：同一条气泡可能先只有文本、打完字后再挂上选项，union 反而要拆消息 id。
 interface Opt { t: string; d: string } // 选项：标题 + 一句说明
 // 留资流程气泡：角色 + 文本（顾问话术与用户回答共用一种结构）
-interface Msg {
-  id: number
-  side:'ai'|'user'
+interface Msg extends GuidedMsgBase {
   full?: string // 打字机目标全文（同时作为 ghost 占位撑高，避免逐字打字时行高跳动）
   text?: string // 已打出文本
   typing?: boolean
@@ -157,22 +142,15 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   // 用法：把原来写 t('auth.aiX') 的地方换成 t(tk('auth.aiX'))。
   const tk = useCallback((k: string) => (mode === 'complete' ? ACP_KEYS[k] ?? k : k), [mode])
   const branding = useBranding()
-  const reduced = usePrefersReducedMotion()
-  const chatRef = useRef<HTMLDivElement>(null) // 聊天滚动容器：每次追加消息都要手动贴底
-  const genRef = useRef(0) // 代际：上一步 / 重挂时 ++，进行中的打字与定时器自行熄火
-  const idRef = useRef(0) // 消息自增 id（同时也是「本步起点」的界标，见 stepRender.startId）
+  // ★ H1（2026-11-06）：reduced / chatRef / genRef / idRef / msgs / stepLabel / trackPct / backHidden
+  //   全部由 guidedchat 那一份状态机持有（见下方 flow），本组件不再各存一份。
   // 已选答案放 ref 而不是 state：问答分支只在下一次渲染时读，不需要为它重渲染
   const selRef = useRef<{ type?:'personal'|'enterprise'; role?:'admin'|'staff'; industryCode?: string; industryName?: string; personaCode?: string; personaName?: string }>({})
   // 角色问答选项（2026-09-19）：动态取后端角色字典，失败/为空落本地兜底词库
   const [personaList, setPersonaList] = useState<Array<{ code: string; name: string }>>(PERSONA_FALLBACK)
 
-  const [msgs, setMsgs] = useState<Msg[]>([]) // 整条聊天流（消息是不可变更新的数组）
-  const [stepLabel, setStepLabel] = useState('') // 进度条左侧「第 x / y 步 · 名称」
-  const [trackPct, setTrackPct] = useState(0)
-  // 上一步按钮：首步隐藏、完成后禁用（两个态分开，别用一个 boolean 混表达）
-  const [backHidden, setBackHidden] = useState(true)
+  // 上一步按钮：首步隐藏（flow.backHidden）与收尾后禁用（backDisabled）是两个态，别混表达
   const [backDisabled, setBackDisabled] = useState(false)
-  const [finished, setFinished] = useState(false) // 已进入收尾流程：此后不接受回退
   const [busy, setBusy] = useState(false) // 注册请求进行中：锁选项与提交，防重复建号
   // ★ 2026-10-22 一致性核查修复（P1-3「一种错误位」）：
   //   方案 §四·3 原文：「错误一律卡内红字 `.auth-err`（AI 流保留 toast 但**必须同时**在卡内落一条）」。
@@ -252,88 +230,19 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
   ) : null
 
   // 步骤栈：每步记录其起始消息 id，返回时截断并重放（对齐 demo 的 stepRender）
-  const stepStack = useRef<{ idx: number; total: number | null; name: string; startId: number; render: (my: number) => void }[]>([])
-
-  // 追加消息后必须手动贴底：容器是 overflow-y:auto 的定高卡，浏览器不会替聊天流滚到底
-  const scrollBottom = useCallback(() => {
-    requestAnimationFrame(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight })
-  }, [])
-
-  // 消息入流并返回 id（后续打字/点亮都要按 id 定点更新这一条）
-  const addMsg = useCallback((m: Omit<Msg, 'id'>): number => {
-    const id = ++idRef.current
-    setMsgs((s) => [...s, { ...m, id }])
-    scrollBottom()
-    return id
-  }, [scrollBottom])
-
-  // 本异步链是否仍属当前代际（false=已被「上一步」或卸载作废，调用点必须立即 return）
-  const alive = (my: number) => my === genRef.current
-
-  // 打字机：ghost 占位撑高（visibility:hidden 同文本）+ 真身绝对定位，窄屏不跳高
-  const typeText = useCallback(async (id: number, text: string, my: number) => {
-    if (reduced) {
-      // 减少动效：直接写满文本并返回 true，保持调用方 `.then(ok => 下一步)` 的推进语义不变
-      setMsgs((s) => s.map((m) => (m.id === id ? { ...m, text, typing: false } : m)))
-      return true
-    }
-    // ★ 〇-Q：打字单元（CJK 逐字 / 拉丁逐词）与速度（chatTypingMs）按界面语种走，动效随语种变
-    const lang = getLang()
-    const unit = typingUnitOf(lang)
-    const step = chatTypingMs(lang)
-    if (unit === 'word') {
-      // 拉丁/西里尔/阿语：逐词推进——逐字母打会像乱码闪烁
-      const toks = text.split(/(\s+)/) // 保留空白 token，重建后文本与原文逐字符一致
-      let acc = ''
-      for (const tk of toks) {
-        if (!alive(my)) return false
-        acc += tk
-        setMsgs((s) => s.map((m) => (m.id === id ? { ...m, text: acc, typing: true } : m)))
-        scrollBottom()
-        await sleep(step)
-      }
-    } else {
-      for (let i = 0; i < text.length; i++) {
-        if (!alive(my)) return false
-        const slice = text.slice(0, i + 1)
-        setMsgs((s) => s.map((m) => (m.id === id ? { ...m, text: slice, typing: true } : m)))
-        scrollBottom()
-        await sleep(step)
-      }
-    }
-    if (!alive(my)) return false
-    setMsgs((s) => s.map((m) => (m.id === id ? { ...m, typing: false } : m)))
-    return true
-  }, [reduced, scrollBottom])
-
-  // 上一步按钮的可见性：首步（栈深 <=1）没有可回的地方，收尾后也不允许回退
-  const updateBack = useCallback(() => {
-    setBackHidden(finished || stepStack.current.length <= 1)
-  }, [finished])
-
-  // 渲染某一步：先清掉本步之后的消息（保证重放幂等），再追加本步内容
-  const stepRender = useCallback((idx: number, total: number | null, name: string, render: (my: number) => void) => {
-    const startId = idRef.current + 1 // 本步第一条消息的 id：goBack 时按它截断
-    stepStack.current.push({ idx, total, name, startId, render })
-    setMsgs((s) => s.filter((m) => m.id < startId))
-    setStepLabel(total ? tpl('auth.aiStepOf', { idx, total, name }) : tpl('auth.aiStepOnly', { idx, name }))
-    // 总步数要等分支问完才确定（个人 3 步 / 员工 4 步 / 管理员 5 步）：
-    // total 为 null 时按「已答步数 + 预估 2 步」给进度，别让它停在 0 看着像没动
-    setTrackPct(total ? (idx / total) * 100 : (idx / (idx + 2)) * 100)
-    render(genRef.current)
-    updateBack()
-  }, [updateBack])
-
-  const goBack = useCallback(() => {
-    if (finished || stepStack.current.length < 2) return
-    const my = ++genRef.current // 中断进行中的打字/回调
-    stepStack.current.pop() // 当前步作废
-    const prev = stepStack.current[stepStack.current.length - 1]
-    // 截断到上一步起点之前，再重放上一步
-    setMsgs((s) => s.filter((m) => m.id < prev.startId))
-    // 重放渲染函数而不是「缓存旧 DOM」：回退后的这一屏和首次进入时逐字一致（含打字动效）
-    if (prev.render) prev.render(my)
-  }, [finished])
+  // ★ 2026-11-06 H1：这套「消息流＋打字机＋步进栈＋代际」的状态机与外壳视图已抽到
+  //   components/guidedchat/（guidedChatMachine.ts ＋ GuidedChatFrame.tsx ＋ guidedChatStyles.ts），
+  //   由**注册引导／完善信息／引导建产品**三个场景共用一份。
+  //   本组件只留**注册业务**：话术映射、分支问答、表单与验证码接线。
+  //   刻意不在这里再造第二套打字机/步进栈——那正是本批要消灭的"同一动作两套语义"。
+  const flow = useGuidedChat<Msg>((idx, total, name) => (
+    total ? tpl('auth.aiStepOf', { idx, total, name }) : tpl('auth.aiStepOnly', { idx, name })
+  ))
+  const {
+    msgs, addMsg, patchMsg, typeText, stepRender, goBack, alive, reduced,
+    stepLabel, trackPct, setStepLabel, setTrackPct, backHidden, setFinished,
+    scrollBottom, genRef, idRef, chatRef, resetFlow,
+  } = flow
 
   // ---------- 步骤体 ----------
   // 每个步骤体都是「(my) => 追加气泡 → 等打完 → .then 里追加下一条」的链式结构：
@@ -417,7 +326,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
   // 收尾：检查点三连 + 完成摘要
   const finish = useCallback(async (my: number, kind:'personal'|'staff'|'admin', industryName?: string) => {
-    setFinished(true); setBackDisabled(true); setBackHidden(true)
+    setFinished(true); setBackDisabled(true) // backHidden 由状态机按「收尾」一并算，不在这里各写一遍
     // 三条分支各自的总步数（2026-09-19 起含角色问答一步）：管理员 6、员工 5、个人 4
     const total = kind ==='admin'? 6 : kind ==='staff'? 5 : 4
     setStepLabel(tpl('auth.aiStepOf', { idx: total, total, name: t(tk('auth.aiRegisterDone')) }))
@@ -454,7 +363,7 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     for (let i = 0; i < ckNames.length; i++) {
       await sleep(reduced ? 40 : 460)
       if (!alive(my)) return
-      setMsgs((s) => s.map((mm) => (mm.id === ckStart ? { ...mm, ckpts: ckNames.slice(0, i + 1) } : mm)))
+      patchMsg(ckStart, { ckpts: ckNames.slice(0, i + 1) } as Partial<Msg>)
       scrollBottom()
     }
     if (!reduced && ckEl) {
@@ -701,11 +610,10 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
 
   // 首个问题：账号类型（dedicatedRegister 直接走企业员工分支）
   // deps 只留挂载：面板每次挂上都是从第一步重来（不跨挂载续答），
-  // 所以先 bump 代际熄灭上一条异步链，再清消息流与步骤栈
+  // 所以先 bump 代际熄灭上一条异步链，再清消息流与步骤栈（这三件事收在状态机的 resetFlow 里，
+  //   场景不许自己摸 genRef/msgs/栈——那是"谁都能清一遍"的第二把尺子）
   useEffect(() => {
-    genRef.current++
-    setMsgs([])
-    stepStack.current = []
+    resetFlow()
     // 角色问答选项预取（公开接口，仅启用中角色）：失败保留本地兜底词库
     ;(async () => {
       try {
@@ -724,48 +632,12 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  return (
-    <div className="ar-root">
-      <style>{CSS_AR}</style>
-      <div className="ar-panel">
-      {/* 顶部栏 */}
-      <div className="ar-nav">
-        {/* ★ 2026-10-22：complete 模式的 × 不是「返回登录」而是「暂时跳过」
-            （用户已登录，关掉面板只是本轮不补资料，账号照用） */}
-        <button className="ar-close"type="button"aria-label={mode === 'complete' ? t('auth.skipForNow') : t('auth.backToLogin')} onClick={onClose}>
-          <svg width="16"height="16"viewBox="0 0 24 24"fill="none"stroke="currentColor"strokeWidth="1.9"strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-        <span className="ar-nav-t">{t(tk('auth.aiTitle'))}</span>
-        <span className="ar-online"><i />{t('auth.aiOnline')}</span>
-      </div>
-      {/* 进度（带名字） */}
-      <div className="ar-prog">
-        <div className="ar-prog-top">
-          <span className="ar-prog-label">{stepLabel}</span>
-          <button className="ar-back"type="button"hidden={backHidden} disabled={backDisabled} onClick={goBack}>{t('auth.aiBack')}</button>
-        </div>
-        {/* 进度条用整宽元素做负位移「填充」：transform 只走合成层，不像 width 那样每帧重排 */}
-        <div className="ar-track"><i style={{ transform: `translateX(${-(100 - trackPct)}%)` }} /></div>
-      </div>
-      {/* 聊天流 */}
-      <div className="ar-chat"ref={chatRef}>
-        {msgs.map((m) => (
-          <div key={m.id} className={`ar-msg ar-msg--${m.side}`}>
-            {m.side ==='ai'&& (
-              <div className="ar-who"><span className="ar-badge">AI</span><span>{branding.brandName || t(tk('auth.aiTitle'))}</span></div>
-            )}
-            <div className="ar-body">
-              {m.text !== undefined && (
-                <div className="ar-bubble">
-                  {m.full && m.text !== m.full ? (
-                    <span className="ar-type">
-                      <span className="ar-ghost">{m.full}</span>
-                      <span className="ar-real">{m.text}</span>
-                      {m.typing && <span className="ar-caret"/>}
-                    </span>
-                  ) : (m.full ?? m.text)}
-                </div>
-              )}
+  // 气泡之外的内容（选项组／账号表单／chips／检查点／摘要卡）由**本场景**投喂给外壳：
+  // 外壳不认识注册字段，注册面也不自己画卡片骨架——两边各管一层，加第三个场景不用改外壳。
+  // ★ 选项点击必须**现取** genRef.current 当世代，而不是渲染时的快照：
+  //   中途发生过「上一步」的话，旧渲染闭包里的 my 已作废，会把新点击误判成过期。
+  const renderMsgBody = (m: Msg) => (
+    <>
               {/* 选项气泡：点击时现取 genRef.current 作为代际，而不是渲染时的快照——
                   中途发生过「上一步」的话，旧渲染闭包里的 my 已经作废，会把新点击误判成过期 */}
               {m.opts && (
@@ -855,12 +727,29 @@ export default function AiRegisterFlow({ prefillUsername, dedicatedRegister, cap
                   <button className="lc-btn lc-btn--secondary lc-btn--block"type="button"onClick={() => { if (loggedUserRef.current) onDone(loggedUserRef.current) }}>{t('auth.enterApp')}</button>
                 </div>
               )}
-            </div>
-          </div>
-        ))}
-      </div>
-      </div>
-    </div>
+    </>
+  )
+
+  // closeLabel 按模式变：complete 是「暂时跳过」（用户已登录，关掉只是本轮不补资料，账号照用），
+  // register 才是「返回登录」——两个态共用一个 aria-label 会让人以为退出会丢账号。
+  return (
+    <GuidedChatFrame<Msg>
+      title={t(tk('auth.aiTitle'))}
+      onlineLabel={t('auth.aiOnline')}
+      closeLabel={mode === 'complete' ? t('auth.skipForNow') : t('auth.backToLogin')}
+      onClose={onClose}
+      stepLabel={stepLabel}
+      trackPct={trackPct}
+      backLabel={t('auth.aiBack')}
+      backHidden={backHidden}
+      backDisabled={backDisabled}
+      onBack={goBack}
+      badgeLabel="AI"
+      whoLabel={branding.brandName || t(tk('auth.aiTitle'))}
+      msgs={msgs}
+      renderBody={renderMsgBody}
+      chatRef={chatRef}
+    />
   )
 }
 
@@ -1037,116 +926,3 @@ function AccountFormBlock({
 }
 
 // ---------- 作用域样式（ar- 前缀，避免与组件库类名重名；§2.5） ----------
-const CSS_AR = `
-.ar-root{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.72);color:var(--lc-text);font-family:var(--lc-font);animation:lc-mo-fade var(--lc-mo-enter) var(--lc-mo-out) both;}
-/* ★ 比例按演示稿（demo-register-ai-motion.html 的 .phone）：竖版卡、
-   高 min(780, 100dvh-32)、圆角 28、居中 —— 不是全屏接管（2026-09-18 用户裁定）。
-   ★ 2026-10-21 IAM 重做 P1-2：宽 390 → 400，与三张认证卡同档（AuthCard 交付档 400）。
-   同一段注册流程里卡片宽度来回跳 10px，用户看到的是"面板换了一张"，
-   而交付稿的认证面本来就只有一档宽度。 */
-.ar-panel{width:400px;max-width:100%;height:min(780px,calc(100dvh - 32px));min-height:520px;display:flex;flex-direction:column;background:var(--lc-bg);border:1.2px solid var(--lc-border-card);border-radius:28px;overflow:hidden;box-shadow:0 24px 64px rgba(0,0,0,.55);animation:lc-mo-pop var(--lc-mo-enter) var(--lc-mo-out) both;--lc-mo-origin:50% 92%;}
-@media (max-width:640px){ /* ★ 批3 断点归一：480 → 640（S 档上缘） */
-  .ar-root{padding:0;background:var(--lc-bg);}
-  .ar-panel{width:100%;height:100dvh;min-height:0;border:0;border-radius:0;box-shadow:none;}
-}
-.ar-nav{height:52px;flex:none;display:flex;align-items:center;gap:12px;padding:0 16px;border-bottom:1px solid var(--lc-border-faint);}
-.ar-close{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;background:none;border:0;color:var(--lc-text);cursor:pointer;}
-.ar-nav-t{font-size:18px;font-weight:600;color:var(--lc-text);flex:1;}
-.ar-online{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--lc-text-3);}
-.ar-online i{width:7px;height:7px;border-radius:50%;background:var(--lc-text);box-shadow:0 0 0 3px rgba(255,255,255,.08);}
-.ar-prog{flex:none;display:flex;flex-direction:column;gap:9px;padding:14px 16px 12px;border-bottom:1px solid var(--lc-border-faint);}
-.ar-prog-top{display:flex;align-items:center;justify-content:space-between;gap:12px;}
-.ar-prog-label{font-size:14px;color:var(--lc-text-3);}
-.ar-prog-label b{color:var(--lc-text);font-weight:600;}
-.ar-back{flex:none;font-size:13px;padding:4px 11px;border-radius:999px;background:var(--lc-raised);border:1.2px solid var(--lc-border-pill);color:var(--lc-text-2);cursor:pointer;font-family:var(--lc-font);}
-.ar-back:active{transform:scale(.97);}
-.ar-back[disabled]{opacity:.5;cursor:not-allowed;}
-.ar-track{height:2px;border-radius:1px;background:var(--lc-border-faint);overflow:hidden;}
-.ar-track i{display:block;height:100%;width:100%;background:var(--lc-text-2);transform:translateX(-101%);transition:transform .5s cubic-bezier(.32,.72,.28,1);}
-.ar-chat{flex:1;min-height:0;overflow-y:auto;padding:20px 16px;display:flex;flex-direction:column;gap:20px;scrollbar-width:none;}
-.ar-chat::-webkit-scrollbar{display:none;}
-.ar-msg{display:flex;flex-direction:column;opacity:0;transform:translateY(8px);animation:ar-in .36s cubic-bezier(.32,.72,.28,1) forwards;}
-.ar-msg--user{align-items:flex-end;}
-.ar-who{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--lc-text-4);margin-bottom:8px;}
-.ar-badge{width:20px;height:20px;border-radius:7px;background:var(--lc-raised);border:1.2px solid var(--lc-border-card);display:flex;align-items:center;justify-content:center;font-family:var(--lc-font-mono);font-size:11px;font-weight:600;color:var(--lc-text);}
-.ar-body{display:flex;flex-direction:column;gap:10px;}
-.ar-msg--ai .ar-body{margin-inline-start:28px;}
-.ar-bubble{padding:12px 14px;border-radius:14px;font-size:15.5px;line-height:1.7;}
-.ar-msg--ai .ar-bubble{background:var(--lc-inset);border:1.2px solid var(--lc-border-card);color:var(--lc-text-2);border-top-left-radius:6px;align-self:stretch;}
-.ar-msg--user .ar-bubble{background:#FFFFFF;color:#000;font-weight:500;border-top-right-radius:6px;}
-.ar-type{position:relative;display:block;}
-.ar-type .ar-ghost{visibility:hidden;}
-.ar-type .ar-real{position:absolute;inset:0;}
-.ar-caret{display:inline-block;width:1px;height:1em;background:var(--lc-text-3);vertical-align:-.15em;margin-inline-start:2px;animation:ar-caret 1s steps(1) infinite;}
-@keyframes ar-caret{50%{opacity:0;}}
-.ar-opts{display:flex;flex-direction:column;gap:8px;}
-.ar-opt{display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:12px;text-align:start;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);cursor:pointer;font-family:var(--lc-font);
-  transition:border-color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out),opacity var(--lc-mo-sink) var(--lc-mo-out);}
-.ar-opt:hover:not(:disabled){border-color:var(--lc-border-pill);}
-.ar-opt:disabled{opacity:.6;cursor:not-allowed;}
-/* 选项确认：被点中的提亮并留在原位、其余压暗退场 —— 一次看得见的交代（原则 7） */
-.ar-opt--picked{border-color:var(--lc-fill-white);background:var(--lc-raised);}
-.ar-opts--locked{pointer-events:none;}
-.ar-opts--locked .ar-opt:not(.ar-opt--picked){opacity:.34;}
-.ar-opt-t{font-size:15px;font-weight:500;color:var(--lc-text);}
-.ar-opt-d{font-size:13px;color:var(--lc-text-4);line-height:1.5;}
-.ar-chips{display:flex;flex-wrap:wrap;gap:8px;}
-.ar-chip{display:flex;align-items:baseline;gap:6px;padding:7px 11px;border-radius:8px;background:var(--lc-raised);border:1.2px solid var(--lc-border-card);}
-.ar-chip-k{font-size:12.5px;color:var(--lc-text-4);}
-.ar-chip-v{font-size:14px;color:var(--lc-text);font-weight:500;}
-.ar-form{display:flex;flex-direction:column;gap:14px;padding:20px 16px;border-radius:14px;background:var(--lc-panel);border:1.2px solid var(--lc-border-card);box-shadow:var(--lc-panel-highlight);align-self:stretch;}
-.ar-fgroup{display:flex;flex-direction:column;gap:8px;}
-/* ★ P1-3：口令框 + 右端眼睛（与认证卡 .auth-pwd-eye 同形态同尺寸，只换定位方式） */
-.ar-pwd{position:relative;display:block;}
-.ar-pwd .lc-input{width:100%;padding-inline-end:38px;box-sizing:border-box;}
-.ar-pwd-eye{position:absolute;inset-inline-end:6px;top:50%;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;background:none;border:0;color:var(--lc-text-3);cursor:pointer;padding:4px;line-height:0;}
-.ar-pwd-eye:hover{color:var(--lc-text);}
-/* Turnstile 挂载容器：widget 固定 300px 宽，居中摆放；预留 65px 高度，
-   避免脚本晚到时表单内容突然下移（AI 面板是逐条追加的，跳动很显眼） */
-/* ★ D-02：widget 固有宽 300px，容器必须能收缩（选档失效时也不许把面板顶出横向滚动）；
-   装载提示占一行小字，用现成的次级文字档，不新造色。 */
-.ar-ts{display:flex;justify-content:center;min-height:65px;max-width:100%;overflow-x:auto;}
-.ar-ts-note{margin:0;color:var(--lc-text-3);font-size:14px;line-height:1.5;display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:center;}
-.ar-flabel{font-size:14px;color:var(--lc-text-3);}
-.ar-flabel i{font-style:normal;color:var(--lc-text-4);font-size:13px;}
-/* ★ 2026-10-21 IAM 重做 P1-4：协议勾选链接与登录/传统注册卡的 .auth-link 同档（次级文字色、悬停下划线） */
-.ar-link{background:none;border:0;color:var(--lc-text-3);font-size:14px;cursor:pointer;font-family:var(--lc-font);text-decoration:none;}
-.ar-link:hover{color:var(--lc-text);text-decoration:underline;}
-.ar-otp-row{display:flex;gap:8px;align-items:center;min-width:0;}
-.ar-otp-cells{display:flex;gap:7px;flex:1;min-width:0;}
-/* ★ min-width:0 必须给：<input> 的默认尺寸（size≈20 字符 ≈170px）来自内容，
-   flex 子项默认 min-width:auto 会拒绝收缩 —— 六格在 390 宽上直接撑破表单，
-   实测整行右缘溢出卡片 126px、页面出现横向滚动。 */
-.ar-otp{flex:1;min-width:0;width:100%;height:46px;border-radius:10px;background:var(--lc-inset);border:1.2px solid var(--lc-border-input);color:var(--lc-text);text-align:center;font-family:var(--lc-font-latin);font-size:18px;font-weight:600;
-  transition:border-color var(--lc-mo-release) var(--lc-mo-out),background var(--lc-mo-release) var(--lc-mo-out);}
-/* 窄屏：发送按钮让出整行，六格拿满宽度（390 下格子能到 ~44px，否则只有 24px 太挤） */
-@media (max-width: 640px){ /* ★ 批3 断点归一：480 → 640（S 档上缘） */
-  .ar-otp-row{flex-wrap:wrap;}
-  .ar-otp-cells{flex:1 1 100%;}
-  .ar-otp-row > .lc-btn{flex:1 1 100%;justify-content:center;}
-}
-.ar-otp:focus{outline:none;border-color:var(--lc-border-strong);}
-/* 已填格：描边提到完成态、底提一档，六格填满时整排能一眼读出来 */
-.ar-otp--filled{border-color:var(--lc-border-done);background:var(--lc-raised);}
-.ar-ckpts{display:flex;flex-direction:column;gap:10px;padding:14px;border-radius:12px;background:var(--lc-inset);border:1.2px solid var(--lc-border-card);}
-.ar-ckpt{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--lc-text-2);}
-.ar-ck{width:18px;height:18px;border-radius:50%;background:var(--lc-text);border:1.2px solid var(--lc-text);display:flex;align-items:center;justify-content:center;flex:none;}
-.ar-done{display:flex;flex-direction:column;gap:12px;padding:20px 16px;border-radius:14px;background:var(--lc-panel);border:1.2px solid var(--lc-border-done);box-shadow:var(--lc-panel-highlight);align-self:stretch;}
-.ar-done-t{font-size:15px;font-weight:600;color:var(--lc-text);}
-/* ★ B4-d（§6.5 第 4 条「受邀落地页告知」）：完成摘要卡里的「可切回个人身份」一句。
-   与 .ar-done 卡同色阶、只做次级说明，抬字号会抢过上面的身份/邮箱读数。 */
-.ar-done-note{font-size:14px;color:var(--lc-text-3);line-height:1.5;}
-.ar-kv{display:flex;gap:12px;font-size:14px;line-height:1.5;}
-.ar-kv-k{width:72px;flex:none;color:var(--lc-text-4);}
-.ar-kv-v{color:var(--lc-text-2);font-family:var(--lc-font-latin);}
-.ar-busy{color:var(--lc-text-2)!important;pointer-events:none;}
-.ar-spin{display:inline-block;width:12px;height:12px;border:1.2px solid var(--lc-border-faint);border-top-color:var(--lc-text-2);border-radius:50%;margin-inline-end:8px;vertical-align:-2px;animation:ar-spin .8s linear infinite;}
-@keyframes ar-spin{to{transform:rotate(360deg);}}
-@keyframes ar-in{to{opacity:1;transform:none;}}
-@media (prefers-reduced-motion: reduce){
-  .ar-msg{animation:none!important;opacity:1!important;transform:none!important;}
-  .ar-track i{transition:none!important;}
-  .ar-caret,.ar-spin{animation:none!important;}
-  .ar-root,.ar-panel{animation:none!important;}
-}
-`

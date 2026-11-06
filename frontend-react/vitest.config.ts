@@ -42,6 +42,10 @@ export const SCAN_TESTS = [
   // ★ 2026-11-06 一期收尾批：跨语言逐口现读（前端 product.ts 的 withQuery/postBody vs 后端
   //   handler 与助手的 URL.Query().Get／json 标签，还要花括号配平取体），是遍历型 ⇒ 180s 预算。
   'src/api/productQueryContract.lock.test.ts',
+  // ★ 2026-11-06 H1/H3 批：这两把都是"遍历 src 全集"的静态锁
+  //   （前者扫全部非测试源文件判"引导外壳是否只有一份实现"，后者跨文件现读 App.tsx 路由集 vs AiAssist 白名单）
+  //   ⇒ 必须吃 180s 预算；漏进这里就是"新锁没进调度名单"，慢机器上会以随机假红的形态出现。
+  'src/components/guidedchat/guidedChatSingleShell.lock.test.ts',
   'src/vitestScanLayout.lock.test.ts', // 本锁自己就是遍历型的（自指腿：不在名单里就会拿 30s 预算去扫全仓）
 ]
 

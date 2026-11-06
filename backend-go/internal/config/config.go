@@ -59,6 +59,13 @@ const (
 	//   走 model_routes/stage_models，运营可在管理台单独配一个便宜的小模型；
 	//   未配置时引擎回退全局主模型（同其它 stage 的既有口径）。
 	StageOcrFix = "ocr_fix"
+
+	// ★ 2026-11-07 引导页「自由描述 → 候选字段」判定档（一期产品面 X 组）。
+	//   ⚠️ 这一档**不适用**上面那句"未配置时回退全局主模型"：它的活是按 JSON 抽取，与 ③ 同形，
+	//   而 §21 的 ocr_fix 现网实证已经证明「拿全局**翻译**模型干判定题」= 全是 tokens:0 白等满预算。
+	//   所以 engine/onboard_draft.go 只认这一档的显式配置，没配就一次都不拨（fail-open 出空草稿）。
+	//   登记进本名单＝管理台读面/写面自动出现第 ⑨ 张卡（两份名单都从这一处派生，见 AllStages 注释）。
+	StageOnboardDraft = "onboard_draft"
 )
 
 // ★ R-1 修法 D（2026-10-04）：阶段键的**单一事实源**。
@@ -76,6 +83,7 @@ func AllStages() []string {
 	return []string{
 		StageKBMatch, StageAIInitial, StageKBEmbed,
 		StageInitialEvals, StageReview, StageReviewEvals, StageKBScreen, StageEvals, StageOcrFix,
+		StageOnboardDraft,
 	}
 }
 

@@ -95,6 +95,10 @@ func (s *Server) routesProduct() {
 	s.mux.HandleFunc("/api/product/readiness", s.handleProductReadiness)
 	s.mux.HandleFunc("/api/product/kb/phrases", s.handleProductKBPhrases)
 	s.mux.HandleFunc("/api/product/seo", s.handleProductSeo)
+	// ★ 2026-11-07 引导页「自由描述 → 候选字段」识别口（product_onboard_draft.go）。
+	//   单独成函数而不是往这里追加一行：这一口的接线、出栈清洗与路由全收在一个新文件里，
+	//   本函数只多一次委托（AGENTS §一·1「按域新建文件」的同一手法）。
+	s.registerProductOnboardDraftRoutes()
 }
 
 // handleProductList GET /api/product/list：本人租户的产品分页列表。

@@ -218,6 +218,8 @@ export const baseEn: Record<string,string> = {
   'models.s6KbScreenHint': 'Judges whether uploaded entries are shareable industry terms (before entering the review pool); leave empty to use the global model',
   'models.s7OcrFix': '⑧ OCR Text Arbitration Model',
   'models.s7OcrFixHint': 'Decides keep/fix/not_text only for low-confidence or anomalous OCR lines; leave empty to use the global model',
+  'models.s8OnboardDraft': '⑨ Onboarding Description Extraction Model',
+  'models.s8OnboardDraftHint': 'Extracts the free-text description pasted by the seller into form-field candidates (only four keys: name / tagline / use_case / target_langs); leave empty and this step fills nothing in',
   'models.stageConfigured': 'Configured',
   'models.stageApiKeyKeep': 'Leave empty to keep current key / inherit global key',
   'admin.platformRoot': 'LangCross (Platform)',

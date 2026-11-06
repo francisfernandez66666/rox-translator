@@ -21,7 +21,6 @@ export const zh: Record<string, string> = {
   'onboard.next': '下一步',
   'onboard.later': '稍后再说',
   'onboard.prompt': '这个账号还没有产品档案。备齐一次说法，之后每个语言都复用同一份。',
-  'onboard.prompt.cta': '用三分钟备第一份',
   'onboard.saveFailed': '这一步没能保存',
   'onboard.unknownTarget': '这一步的写口没有登记，已挡住（不替你猜要写哪张表）',
   'onboard.step.company': '公司与行业',
@@ -39,6 +38,19 @@ export const zh: Record<string, string> = {
   'onboard.field.targetLangs': '目标语言',
   'onboard.field.seoIndexable': '允许被搜索引擎收录',
   'onboard.field.seoIndexable.hint': '这一页会进 sitemap，爬虫能读到公开展示的内容。',
+  // —— H1/H2（2026-11-06 用户质疑引导形态后新增）：引导挂上对话式外壳后的气泡与整理腿话术 ——
+  //  ★ 这一族**只出候选、不落库**，所以文案里不许出现「已保存／已替你写好」这类完成态；
+  //  ★ 成本归平台承担（用户拍板），因此这里**不许**出现积分数字或「消耗」字样。
+  'onboard.ai.done': '这一份已经存好了。进详情页可以继续补事实项与物料。',
+  'onboard.ai.draft': '把资料贴进来，我整理成候选',
+  'onboard.ai.draftPlaceholder': '产品说明、报价单、详情页文字都行。这段只用来整理候选，不会替你写进档案。',
+  'onboard.ai.draftEmpty': '这次没整理出可用的字段，自己填也一样。',
+  'onboard.ai.draftDone': '候选已填进下面几栏，确认无误再点下一步。',
+  'onboard.langsUnset': '暂未设定',
+  // 答完那一步的回显（聊天流保留历史，所以已答步骤要收成一条用户气泡，见 Onboarding.tsx 的 echoAnswer）
+  'onboard.answer.confirmed': '已确认',
+  'onboard.answer.on': '允许收录',
+  'onboard.answer.off': '暂不收录',
   // —— X1 卖家写侧单页详情（2026-11-06 第四轮裁定）：建档／事实录入／物料审核／SEO 与对外链接 ——
   'product.detail.title': '产品详情',
   'product.detail.basic': '基本信息',
@@ -159,7 +171,6 @@ export const en: Record<string, string> = {
   'onboard.next': 'Next',
   'onboard.later': 'Later',
   'onboard.prompt': 'This account has no product yet. Set the wording once and every language reuses it.',
-  'onboard.prompt.cta': 'Prepare your first product',
   'onboard.saveFailed': 'This step was not saved',
   'onboard.unknownTarget': 'This step has no registered write target, so nothing was written',
   'onboard.step.company': 'Company and industry',
@@ -177,6 +188,18 @@ export const en: Record<string, string> = {
   'onboard.field.targetLangs': 'Target languages',
   'onboard.field.seoIndexable': 'Allow search indexing',
   'onboard.field.seoIndexable.hint': 'This page goes into the sitemap; crawlers can read what is shown publicly.',
+  // H1/H2 (2026-11-06): guided-chat shell bubbles and the draft leg. Candidates only — nothing saved here,
+  // so no completion wording; the cost is platform-borne, so no credits language either.
+  'onboard.ai.done': 'Saved. Open the detail page to keep adding facts and materials.',
+  'onboard.ai.draft': 'Paste your material and I will draft the fields',
+  'onboard.ai.draftPlaceholder': 'Spec sheet, price list or listing copy all work. This only drafts candidates — nothing is written to your profile yet.',
+  'onboard.ai.draftEmpty': 'Nothing usable came back this time. Filling it in yourself works just as well.',
+  'onboard.ai.draftDone': 'Candidates are filled in below. Check them, then choose Next.',
+  'onboard.langsUnset': 'Not set yet',
+  // Echo of an answered step (the chat keeps history, so an answered step collapses into a user bubble)
+  'onboard.answer.confirmed': 'Confirmed',
+  'onboard.answer.on': 'Indexing allowed',
+  'onboard.answer.off': 'Indexing off',
   // —— X1 卖家写侧单页详情（2026-11-06 第四轮裁定）：建档／事实录入／物料审核／SEO 与对外链接 ——
   'product.detail.title': 'Product detail',
   'product.detail.basic': 'Basics',

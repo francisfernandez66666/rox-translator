@@ -6169,6 +6169,99 @@ done
 T96LEFT=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE code IN ('uat_t96_langs','uat_t96_bare')" 2>/dev/null | tr -d '\r')")
 ckq T96-cleanup-gone 0 "${T96LEFT:-0}"
 
+# ============================================================================
+# T97 引导页「自由描述 → 候选字段」识别口（★ 2026-11-07 本批）
+#   这一段只钉**对外契约与钱**这两件"只有跑真 HTTP 才看得见"的东西：
+#     ① 无 token 401 —— 登录态口不许匿名可达（匿名可达＝任何人都能烧平台的判定成本）；
+#     ② 空描述 400 ＋ 文案点名"要贴什么"（§一·8：一律走统一错误出口，不是裸 500、也不是 200＋success:false）；
+#     ③ 正常一枪 200 ＋ draft 四键 ＋ target_langs 出 **[]**（Go 侧 nil slice 会出 null，
+#        每个消费方都得各判一次 —— AGENTS §一·5「空页在 HTTP 层必须归一成 []」同族）；
+#     ④ /api/pricing/meta 明出 points_onboard_draft=0（出栈缺席会被读成"字段没实现"，
+#        明出 0 才是在对外承诺"这一步不收钱"，§28）；
+#     ⑤ 三张产品表行数前后等值 ＋ usage_ledger 的 onboard_draft 留痕前后等值（**零写**：
+#        这一口只出候选，卖家确认之后才由 /api/product/save 那条既有腿落库）；
+#     ⑥ 余额 points_balance 与 usage_daily 前后等值（平台承担绝不进客户额度，§一·11）。
+#   ⚠️ 本段**不判抽取质量**，理由要写在这里而不是等人猜：UAT 实例没有配 onboard_draft 阶段模型，
+#     而这一腿按设计**一次上游都不拨**（AGENTS §21 的 ocr_fix 现网教训——回落全局**翻译**模型
+#     去干 JSON 判定题＝白等满预算、六次运行全是 tokens:0）。于是这里看到的是
+#     「success:true ＋ 草稿全空」，那是 fail-open 的**正确形态**，不是缺陷也不是"识别没用"。
+#     抽取质量、占位符清洗、以及"没配阶段档 ⇒ 零拨号"的可执行判据全在 Go 侧：
+#       internal/api/product_onboard_draft_gate_test.go（D1–D11 ＋ 源码级 W1–W6）
+#       internal/engine/onboard_draft_gate_test.go（A1 allowance 恒 0／A2 提示词单源／A3 解析七档／A4 零拨号／A5 健康词）
+#     ★ **防刷那一格（每人每日封顶／失败退格／没配阶段档不占格）也只在 Go 侧判**（D9–D11＋W6）：
+#       UAT 这一台压根不拨上游，拿它去证"越界不再拨"就是让一条空转的判据替真判据背书（AGENTS §三 那一族）。
+#       档位三级＝env ONBOARD_DRAFT_DAILY > system_config.onboard_draft_daily_limit > 默认 20，收 0 档（AGENTS §33 ⑥）。
+#     ★ 同理，⑤⑥ 里"零留痕行"在**这一台**上是"压根没拨"的结果，不是"记账链断了"的证据；
+#       配了阶段档之后同一判据会变成"恰好 +1 行留痕、余额与日额一分不动"，那一支由 Go 侧 D8 钉住
+#       （UAT 里不许为这一条去写 stage_models：它会盖住运营在管理台配的那一档）。
+#   本段零写库 ⇒ 段末只反验残留（按 task_type 数 onboard_draft 的行，必须仍是段前那一份）。
+# ============================================================================
+T97T=$(tok uatuser_a uatpass123); T97H="Authorization: Bearer $T97T"
+# ★ 按用户名取身份一律钉 is_home=1（AGENTS §18 那条：多身份批之后 users.username 不再唯一，
+#   无 ORDER BY 的 LIMIT 1 在 PG 上实测取到**非家行** ⇒ 夹具往 A 租户写、断言去 B 租户读，一片假红）。
+T97TID=$(sq "SELECT tenant_id FROM users WHERE username='uatuser_a' AND is_home=1 AND tenant_id>0 LIMIT 1" | tr -d '[:space:]')
+ckq T97-fixture-home-tenant-nonempty 1 "$( [ -n "$T97TID" ] && echo 1 || echo 0 )"
+
+# ---------- ① 鉴权 ----------
+ckq T97-anon-401 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 $B/api/product/onboard/draft -H "$J" -d '{"text":"我们月产 1200 台整机"}')"
+
+# ---------- ② 空描述：状态码与文案各取一次（同一次 curl 里混两个读数会把文案劈成两半） ----------
+T97ECODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 $B/api/product/onboard/draft -H "$T97H" -H "$J" -d '{"text":"   "}')
+ckq T97-empty-text-400 400 "${T97ECODE:-0}"
+ck T97-empty-text-names-the-field '描述' "$(curl -s --max-time 120 $B/api/product/onboard/draft -H "$T97H" -H "$J" -d '{"text":"   "}')"
+ckq T97-wrong-method-405 405 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 -X GET $B/api/product/onboard/draft -H "$T97H")"
+
+# ---------- 快照（③ 之前取，⑤⑥ 之后比） ----------
+T97BP=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+T97BF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id IN (SELECT id FROM products WHERE tenant_id=$T97TID)" 2>/dev/null | tr -d '\r')")
+T97BA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+T97BU=$(mny_norm "$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE tenant_id=$T97TID AND task_type='onboard_draft'" 2>/dev/null | tr -d '\r')")
+T97BD=$(mny_norm "$(dbq "SELECT COALESCE(SUM(total),0) FROM usage_daily WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+T97BAL0=$(mny_norm "$(curl -s --max-time 120 $B/api/me/package -H "$T97H" | pv '.get("points_balance",0)')")
+
+# ---------- ③ 正常一枪：出栈形状 ----------
+T97D=$(post "$T97H" '{"text":"我们月产 1200 台整机，客户主要在东南亚。","ui_lang":"zh"}' /api/product/onboard/draft)
+ckF T97-draft-success '"success":true' "$T97D"
+ckF T97-draft-object-shape '"draft":{"name"' "$T97D"
+ckF T97-draft-langs-array '"target_langs":[]' "$T97D"
+# ★ ckn（不是 ckF 的反向凑合）：反向断言必须把 grep rc=2 当判红，否则"正则非法"会被读成"没命中"＝这条锁空转。
+ckn T97-draft-langs-not-null '"target_langs":null' "$T97D"
+# 报文里零技术病因：reason 档名只进日志（§19「说得清是哪一族」的另一半＝不该说的别说）。
+for T97W in truncated unparsable empty_output no_stage_model upstream; do
+  ckn "T97-no-reason-leak-${T97W}" "${T97W}" "$T97D"
+done
+# 反向对照（AGENTS §一·5：负向锁必须配正向对照，否则"整包压根没内容"也会让上面几条一起绿）：
+# 同一条 ckn 读的那一份响应体里，必须同时读得到**它自己该在的那个键**——
+# 这样"响应体为空/被兜底页替换"会先在正向这条红，而不是把四条负向一起染成绿。
+ckF T97-draft-body-has-success-key '"success"' "$T97D"
+
+# ---------- ④ 对外算价面明出 0 ----------
+T97META=$(curl -s --max-time 120 $B/api/pricing/meta)
+ckF T97-meta-onboard-draft-zero '"points_onboard_draft":0' "$T97META"
+ckF T97-meta-knowledge-query-zero-positive-control '"points_knowledge_query":0' "$T97META"
+
+# ---------- ⑤ 零写库 ----------
+T97AP=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+T97AF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id IN (SELECT id FROM products WHERE tenant_id=$T97TID)" 2>/dev/null | tr -d '\r')")
+T97AA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+T97AU=$(mny_norm "$(dbq "SELECT COUNT(1) FROM usage_ledger WHERE tenant_id=$T97TID AND task_type='onboard_draft'" 2>/dev/null | tr -d '\r')")
+ckq T97-zero-write-products "${T97BP:-0}" "${T97AP:-0}"
+ckq T97-zero-write-facts "${T97BF:-0}" "${T97AF:-0}"
+ckq T97-zero-write-assets "${T97BA:-0}" "${T97AA:-0}"
+# 留痕行也不许多出来（这一台没配阶段档 ⇒ 没拨 ⇒ 一行都不该有；配了则必须是 +1 且不动钱，见段头 ⚠️）
+ckq T97-zero-platform-ledger-rows "${T97BU:-0}" "${T97AU:-0}"
+
+# ---------- ⑥ 零余额／零日额变动（平台承担绝不进客户额度，§一·11） ----------
+T97BAL1=$(mny_norm "$(curl -s --max-time 120 $B/api/me/package -H "$T97H" | pv '.get("points_balance",0)')")
+T97AD=$(mny_norm "$(dbq "SELECT COALESCE(SUM(total),0) FROM usage_daily WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")
+ckq T97-balance-unchanged "${T97BAL0:-0}" "${T97BAL1:-0}"
+ckq T97-daily-usage-unchanged "${T97BD:-0}" "${T97AD:-0}"
+
+# ---------- ⑦ 健康面：这一档只出状态词，绝不出端点/模型/Key（§一·12 同一口径） ----------
+T97H2=$(curl -s --max-time 120 $B/api/health)
+ck T97-health-onboard-draft-word 'onboard_draft.*(ok|degraded)' "$T97H2"
+ckn T97-health-onboard-draft-no-coordinates 'judge-model|sk-test' "$T97H2"
+
 DUR=$(( $(date +%s) - START ))
 echo "==T-PASS=$PASS FAIL=$FAIL DUR=${DUR}s=="
 exit 0

@@ -982,6 +982,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if s.Engine != nil {
 		ocrFixWord = s.Engine.OcrFixHealth(r.Context())
 	}
+	// 引导页草稿识别腿的状态词（★ 2026-11-07）：ok＝第 ⑨ 张卡配好了、这一腿会真拨；
+	// degraded＝没配（动作＝**去配**，界面此刻按手打走，一次上游都不拨）。
+	// 同 #42 口径：只出状态词，绝不出 base/model/Key（本端点匿名可达）。
+	onboardDraftWord := "degraded"
+	if s.Engine != nil {
+		onboardDraftWord = s.Engine.OnboardDraftHealthWord(r.Context())
+	}
 	// 结构腿读数一次取齐（内部有 TTL 缓存，但同一份响应里没必要拨两次）。
 	structureWord, structureEngine := fileproc.StructureHealthWord(r.Context())
 	writeJSON(w, 200, map[string]interface{}{
@@ -1018,6 +1025,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   off＝env 主动关（正常态）；degraded＝配了但取不到模型（该有人去修）；两者不许合成一个词。
 		//   同 #42 口径：只出状态词，不出 base/model/Key。
 		"ocr_fix": ocrFixWord,
+		// ★ 2026-11-07 引导页「自由描述 → 候选字段」判定腿（ok / degraded，两档动作不同）。
+		"onboard_draft": onboardDraftWord,
 		// ★ 2026-10-28 主方案 L2：轻量语种识别就绪位与引擎名（只服务报表/归因，翻译链零依赖）。
 		"lid_ready":  fileproc.LidReady(),
 		"lid_engine": fileproc.LidEngineName(),

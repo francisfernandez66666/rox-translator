@@ -68,9 +68,17 @@ type Product struct {
 	// ★ 2026-11-06 O 组裁定：这一维**只存产品行**，不建用户级/租户级默认档——
 	//   好处是 hreflang 集合、物料语种、引导第 3 步勾的那一份从此有同一个事实源；
 	//   代价是多产品要各勾一次（用户已接受）。禁止再在调用方拼"界面语种＝目标语种"的猜测。
-	TargetLangs string `json:"target_langs"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// 出栈形态只有这一个：数组（空＝[]，不是 null、不是 ""）。
+	// ★ 2026-11-06 e2e 抓到过一版"两副面孔"：/api/product/list 直接把这个 CSV 字符串吐出去，
+	//   而 /api/product/public 吐的是数组 ⇒ 同一个字段两种形状，消费方（前端、SDK、手写脚本）
+	//   要各判一次；更坏的是字符串 "en" 对上 .includes('n') 这种**看起来能用**的错用。
+	//   ⇒ 库内那一列仍按 CSV 存（迁移与既有读点不动），但**序列化只走 TargetLangsList**。
+	TargetLangs string `json:"-"`
+	// TargetLangsList 是 target_langs 的**唯一出栈形态**（语种码数组，顺序＝卖家提交顺序）。
+	// 由 fillLangsList 在扫描/构造后填；手工构造 Product 时若忘了填，出栈就是 []（不是脏值）。
+	TargetLangsList []string `json:"target_langs"`
+	CreatedAt       string   `json:"created_at"`
+	UpdatedAt       string   `json:"updated_at"`
 }
 
 // ProductInput 建档入参。Slug 为空时写侧生成兜底值（DDL 为 NOT NULL 无默认，绝不让空串落库）；
@@ -113,8 +121,17 @@ func scanProduct(row productScanner) (Product, error) {
 		&p.Audience, &p.UseCase, &p.StyleNotes, &p.BannedNotes, &p.Status, &p.Slug,
 		&p.TenantCode, &p.PageCode, &p.SeoIndexable, &p.TargetLangs, &p.CreatedAt, &p.UpdatedAt,
 	)
+	if err != nil {
+		return p, err
+	}
+	// 出栈形态在这里派生一次（见 TargetLangsList 的注释）：扫描口只有一个，所以数组不会漏填
+	p.fillLangsList()
 	return p, err
 }
+
+// fillLangsList 把库内 CSV 派生成出栈数组（**包内唯一写点**，扫描与构造两支各调一次）。
+// 参数：无；返回：无（就地改）。
+func (p *Product) fillLangsList() { p.TargetLangsList = splitLangs(p.TargetLangs) }
 
 // joinLangs 把语种切片拼成库内 CSV：去空白、去空项、去重、保持提交顺序（顺序给 hreflang 当主次用，不许排成字典序）。
 // 参数：langs=nil 视作空串；返回归一后的串。
@@ -149,7 +166,12 @@ func splitLangs(csv string) []string {
 
 // TargetLangList 出这个产品声明过的对外语言（未声明回空切片，**不回 nil**）。
 // 参数：无；返回语种码切片（顺序＝卖家提交顺序）。
-func (p Product) TargetLangList() []string { return splitLangs(p.TargetLangs) }
+func (p Product) TargetLangList() []string {
+	if p.TargetLangsList != nil {
+		return p.TargetLangsList
+	}
+	return splitLangs(p.TargetLangs)
+}
 
 // SplitTargetLangs 给 api 层用的同一把拆分尺子（读库外CSV形态时也必须走这里，不许各处 strings.Split）。
 // 参数：csv=库内 target_langs 值；返回语种码切片。
@@ -214,13 +236,16 @@ func (s *Store) CreateProduct(tid int64, in ProductInput) (Product, error) {
 	if err != nil {
 		return Product{}, fmt.Errorf("产品建档失败: %w", err)
 	}
-	return Product{
+	out := Product{
 		ID: id, TenantID: tid, UserID: in.UserID, Code: in.Code, Name: name,
 		Tagline: in.Tagline, IndustryCode: in.IndustryCode, Audience: in.Audience,
 		UseCase: in.UseCase, StyleNotes: in.StyleNotes, BannedNotes: in.BannedNotes,
 		Status: ProductStatusDraft, Slug: slug, TenantCode: tenantCode, PageCode: pageCode,
 		SeoIndexable: 1, TargetLangs: joinLangs(in.TargetLangs), CreatedAt: now, UpdatedAt: now,
-	}, nil
+	}
+	// 建档这一支没走 scanProduct，数组必须就地派生（否则前端刚建完读回的是 []）
+	out.fillLangsList()
+	return out, nil
 }
 
 // ListProducts 按租户分页列产品；脏参折回档位，空集返回非 nil 空切片（出栈 [] 而非 null）。

@@ -64,7 +64,7 @@ const RealDebitPred = "charge_kind IN ('','charge')"
 //
 //	internal/api/platform_cost_charge_test.go 的 TestPlatformCost08AD2_LabelListsAgree
 //	（改名式破坏——把标签改了名而谓词没跟上——必须当场红，否则平台成本会悄悄回到客户额度里）。
-const PlatformTaskTypeExclPred = "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals','domain_detect')"
+const PlatformTaskTypeExclPred = "task_type NOT IN ('kb_embed','system_task','pack_scrape','evals','domain_detect','onboard_draft')"
 
 // UnattributedTraceExclPred 客户面的第二条排除腿：没有归因到具体用户的留痕/结算行。
 // 这一档就是现网病灶的本体——「系统/后台任务」一行 337,819 积分全部落在 user_id=0，

@@ -80,6 +80,10 @@ func (s *Server) handlePricingMeta(w http.ResponseWriter, r *http.Request) {
 		// ★ 一期：知识层查询恒 0 积分。刻意不带 omitempty／不省略字段——
 		//   出栈缺席会被读成「字段没实现」，明出 0 才是在对外承诺「不收费」。
 		"points_knowledge_query": 0,
+		// ★ 2026-11-07 引导页草稿识别：同样**明出 0、不带 omitempty**（AGENTS §28 同一条口径——
+		//   出栈缺席会被读成「字段没实现」，出 0 才是在对外承诺「这一步不收钱」）。
+		//   这一档的模型 token 由平台承担（llm.PlatformOnboardDraft），卖家只确认、不付费。
+		"points_onboard_draft": 0,
 	})
 }
 

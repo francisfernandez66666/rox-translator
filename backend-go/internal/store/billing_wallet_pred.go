@@ -45,7 +45,7 @@ var CustomerVisibleFreeTaskTypes = []string{TaskTypeInstantFree}
 // platformTaskTypes 平台自己承担成本的用途标签（Go 侧唯一名单，SQL 谓词由它派生口径）。
 // ⚠️ 与 llm.Platform* 常量逐字同步（跨包锁在 api/platform_cost_charge_test.go）；
 // 本文件只负责让 Go 侧判定与 SQL 谓词**不再各抄一份**。
-var platformTaskTypes = []string{"kb_embed", "system_task", "pack_scrape", "evals", "domain_detect"}
+var platformTaskTypes = []string{"kb_embed", "system_task", "pack_scrape", "evals", "domain_detect", "onboard_draft"}
 
 // isDailyUsageExcluded 判某用途标签是否不累加日计数器（LogUsage／LogUsageBatch 的写点用它）。
 func isDailyUsageExcluded(taskType string) bool {

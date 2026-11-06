@@ -26,8 +26,11 @@ import { useT } from '@/i18n'
 
 /** 站内路由集合：route 类型按钮据此 SPA 跳转（其余按外链新开窗口）
  *  必须是白名单而不是「看起来像路径就 navigate」：后端配置的 url 由运营在管理台录入，
- *  写错的路径走 SPA 跳转会直接落到 404/空白页，而按外链新开至少还能看见真实地址。 */
-const ROUTE_PATHS = new Set(['/', '/tickets', '/editor', '/billing', '/packages', '/invites', '/pricing', '/register', '/my', '/admin'])
+ *  写错的路径走 SPA 跳转会直接落到 404/空白页，而按外链新开至少还能看见真实地址。
+ * ★ 2026-11-06 补 `/onboarding` 与 `/products`：这两页是"卖家第一公里"的落点，
+ *   缺它们时用户在对话里问「怎么建第一个产品」，那颗按钮**结构上跳不进去**（不报错，只是到不了）。
+ *   全集判据＝assistRouteWhitelist.lock.test.ts（新增 App.tsx 路由既不在白名单也不在豁免表 ⇒ 红）。 */
+const ROUTE_PATHS = new Set(['/', '/tickets', '/editor', '/billing', '/packages', '/invites', '/pricing', '/register', '/my', '/admin', '/onboarding', '/products'])
 
 // Bubble 挂件气泡：单条对话消息（role 区分用户/AI，actions 为推荐功能入口按钮）
 interface Bubble {

@@ -3,17 +3,20 @@
 // `fact_id`、SEO 口传 `indexable` 而后端读 `on`——三处同一类裂缝，而 vitest 全量 mock 掉了 api 层
 // ⇒ 类型对、构建过、单测绿，只有真打 HTTP 才现形（且 PG 矩阵撞出来时已经晚了一整个批次）。
 // 这道闸按**源码文本**比对两侧的名字（查询键＋JSON 体键），把这一类裂缝提到构建期。
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const ROOT = join(__dirname, '..', '..', '..')
 const FE = readFileSync(join(ROOT, 'frontend-react/src/api/product.ts'), 'utf8')
-const BE_FILES = [
-  'backend-go/internal/api/product_api.go',
-  'backend-go/internal/api/product_public_api.go',
-  'backend-go/internal/api/product_ssr.go',
-]
+// ★ 2026-11-06 改**派生**而不是手写清单：产品面新开一个文件（本轮 product_asset_file.go、
+//   product_onboard_draft.go 两次都是这样）时，写死的三行清单会**静默少读一个口**
+//   ⇒ 症状恰好是这条锁要防的那件事："前端调的是不存在的口"，而真凶只是清单没跟上。
+//   口径同 AGENTS §一·17「同步脚本刻意不枚举清单（忘记更新清单才是根因）」。
+const BE_FILES = readdirSync(join(ROOT, 'backend-go/internal/api'))
+  .filter((n) => /^product.*\.go$/.test(n) && !n.endsWith('_test.go'))
+  .sort()
+  .map((n) => `backend-go/internal/api/${n}`)
 const BE = BE_FILES.map((f) => readFileSync(join(ROOT, f), 'utf8')).join('\n')
 
 // 抽取前端每个 GET 口实际带的查询键：withQuery('/path', { a, b: x })
@@ -146,6 +149,8 @@ describe('前后端入参名同一把尺（§5.1／§9.1：查询键＋JSON 体�
   it('Q0 射程自证：前端 GET 口与后端注册口都必须扫得到（扫到 0 个＝闸门失明，不判绿）', () => {
     expect(pairs.length).toBeGreaterThanOrEqual(5)
     expect(routes.size).toBeGreaterThanOrEqual(10)
+    // 后端侧扫描面：派生清单必须真的读到产品面那批文件（读空＝本锁整体空转）
+    expect(BE_FILES.length, `只派生出 ${BE_FILES.length} 个 product*.go ⇒ 扫描面变了，不是"都过了"`).toBeGreaterThanOrEqual(4)
   })
 
   it('Q1 每个 GET 口的每个查询键，后端必须真的读它', () => {

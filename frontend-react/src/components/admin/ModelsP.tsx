@@ -74,6 +74,10 @@ export function ModelsP() {
     // ★ 2026-10-28 OCR 质量链：图片识别的 AI 判定补偿（低置信/异常行 keep·fix·not_text）。
     //   与后端 config.StageOcrFix 逐字一致；不加这一张卡＝运营看不见它（kb_match 当年的形态）。
     { key: 'ocr_fix', title: t('models.s7OcrFix'), hint: t('models.s7OcrFixHint') },
+    // ★ 2026-11-07 引导页「自由描述 → 候选字段」判定档（后端 config.StageOnboardDraft）。
+    //   与 ⑧ 同一族：这一档**没配就一次都不拨**——回落全局翻译模型去干 JSON 抽取＝白等满预算再全超时
+    //   （AGENTS §21 的 ocr_fix 现网实证）。⇒ 卡片缺席＝运营永远配不了＝向导那一步永远只出空草稿。
+    { key: 'onboard_draft', title: t('models.s8OnboardDraft'), hint: t('models.s8OnboardDraftHint') },
   ]
 
   // loadModels 拉取主模型/embedding/多供应商路由（密钥只回掩码，不回明文）

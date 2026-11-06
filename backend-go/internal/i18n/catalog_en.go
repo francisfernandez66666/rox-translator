@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（545 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（548 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -149,15 +149,16 @@ var exactEN = map[string]string{
 	"任务无可用译文产物，请重新提交":               "The task has no usable translation output; please resubmit",
 	"任务标题不能为空":                      "Task title must not be empty",
 	"企业成员建号不再录入初始口令：请留空 password，系统改为发送一次性专属邀请链接，由本人自行设置密码": "Company member accounts no longer take an initial password: leave password empty and the system sends a one-time invite link so the person can set their own password",
-	"你已在该企业中，可直接切换身份": "You already belong to this company; switch identity instead",
-	"保存单价失败: ":        "Failed to save unit price: ",
-	"保存失败: ":          "Save failed: ",
-	"保存失败（":           "Save failed (",
-	"保存开关失败: ":        "Failed to save switch: ",
-	"保存文件失败":          "Failed to save file",
-	"保存日封顶失败: ":       "Failed to save daily cap: ",
-	"候选不存在":           "Candidate not found",
-	"免费体验句数已发放":       "Free trial sentences granted",
+	"你已在该企业中，可直接切换身份":   "You already belong to this company; switch identity instead",
+	"保存单价失败: ":          "Failed to save unit price: ",
+	"保存失败: ":            "Save failed: ",
+	"保存失败（":             "Save failed (",
+	"保存开关失败: ":          "Failed to save switch: ",
+	"保存文件失败":            "Failed to save file",
+	"保存日封顶失败: ":         "Failed to save daily cap: ",
+	"候选不存在":             "Candidate not found",
+	"先把产品描述贴进来，再让系统认一遍": "Paste the product description first, then let the system read it.",
+	"免费体验句数已发放":         "Free trial sentences granted",
 	"免费体验额度已在新用户注册时自动发放，无需重复领取": "Free trial credit is granted automatically at sign-up; no need to claim it again",
 	"免费试用已用完，注册后继续使用":           "You have used all free trial sentences; register to keep going",
 	"兑换码无效或已过期，请重新发起 SSO 登录":    "Redemption code invalid or expired; restart the SSO login",
@@ -423,6 +424,7 @@ var exactEN = map[string]string{
 	"设置保存失败":            "Settings save failed",
 	"识别失败: ":            "Recognition failed: ",
 	"识别成功":              "Recognition succeeded",
+	"识别接口只支持 POST":      "This endpoint only supports POST",
 	"识别数据已过期，请重新上传识别":   "Recognition data expired; upload again",
 	"识别数据无效，请重新上传":      "Invalid recognition data; upload again",
 	"试用内容过长，注册后可翻译整篇文档": "The trial text is too long; register to translate whole documents",
@@ -525,6 +527,7 @@ var exactEN = map[string]string{
 	"还没有可用的 Cloudflare API Token（库内未配置，或密文解不开）":              "No usable Cloudflare API token yet (not configured, or the stored secret cannot be decrypted).",
 	"这批说法都没能导入：源文与译文都必须非空":                                   "None of these phrases were imported: both the source and the translation must be non-empty",
 	"这条物料没有附件，正文内容在物料详情里":                                    "This material has no attachment; its text is in the material details",
+	"这段描述太长了，先挑最核心的那段贴进来":                                    "This description is too long. Paste the most essential part first.",
 	"邀请开关保存失败: ":                                             "Failed to save referral switch: ",
 	"邀请码不存在":                                                 "Invite code not found",
 	"邀请码不能为空":                                                "Invite code must not be empty",

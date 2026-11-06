@@ -168,6 +168,14 @@ func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64,
 		minTokens += allow
 		maxTokens += allow
 	}
+	// ★ 2026-11-07 引导页「自由描述 → 候选字段」（第 7 支）：模型成本平台承担 ⇒ 客户侧恒 0，
+	//   但**仍然只在「各支相加」这一处相加**，不许在 handler 里另算（AGENTS §28 同一条委托锁）。
+	//   它答的是"卖家为一次还没确认的草稿该备多少钱"＝零；将来改成客户承担时，
+	//   改动点是 engine.OnboardDraftAllowanceTokens 一处，不是这里。
+	if allow := engine.OnboardDraftAllowanceTokens(); allow > 0 {
+		minTokens += allow
+		maxTokens += allow
+	}
 	return minTokens, maxTokens
 }
 

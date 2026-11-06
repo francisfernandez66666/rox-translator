@@ -15,6 +15,8 @@
 // ★ 对外页与知识问答是**免登录可达**面：不返 403、受控字段整段不进匿名响应（§5.6 V4）。
 // ============================================================================
 import { apiMsg, bizResp, request, authHeaders, type AdminResp } from './core'
+// ui_lang 取词只走 i18n 那一个入口（assist.ts 同形态先例）：提示词按界面语种分两套，不送就只能按中文量
+import { getLang } from '@/i18n'
 
 /** 产品档案（两段短码 tenant_code/page_code 创建即定、改名不改 URL，§2.1 H1） */
 export interface Product {
@@ -264,6 +266,20 @@ export async function seoGet(productId: string): Promise<SeoResp> {
 /** 显式设置单产品 SEO 索引开关（唯一写点；改名/live 翻转不许重新打开，§5.8 S4） */
 export async function seoSet(productId: string, indexable: boolean): Promise<SeoResp> {
   return bizResp(() => request('/api/product/seo', postBody({ product_id: productId, indexable })))
+}
+
+/**
+ * onboardDraft 把卖家贴进来的一段自由描述整理成**候选字段**（★ H2 模型整理腿，2026-11-06）。
+ *
+ * 三条口径（缺一条就会长成"看起来像 AI 自动填表"的另一个东西）：
+ *  ① 这里**只出候选、不落库**——返回的 draft 由引导页填进表单，用户点「下一步」才走原写口；
+ *  ② 成本归**平台承担**（用户拍板），因此这一枪不许出现在客户面的积分叙事里；
+ *  ③ 失败（上游没配／超时／回了坏形态）在接口侧收成**空 draft 而不是错误**，
+ *     引导页据此走"自己填也一样"，**不许**把这一枪挡住向导。
+ * `ui_lang` 必带：中英两套提示词长度不同，缺了就只能按中文那份量（AGENTS §一·5④ 同一条）。
+ */
+export async function onboardDraft(text: string): Promise<{ success: boolean; draft?: Record<string, unknown> }> {
+  return bizResp(() => request('/api/product/onboard/draft', postBody({ text, ui_lang: getLang() })))
 }
 
 /**

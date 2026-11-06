@@ -23,7 +23,16 @@ import { resolve } from 'path'
 const landingSrc = readFileSync(resolve(__dirname, 'Landing.tsx'), 'utf8')
 const leadSrc = readFileSync(resolve(__dirname, 'LeadForm.tsx'), 'utf8')
 const loginSrc = readFileSync(resolve(__dirname, 'Login.tsx'), 'utf8')
+// ★ 2026-11-06 H1 改形：`.ar-*` 这套样式已从 AiRegisterFlow.tsx 整段搬进
+//   components/guidedchat/guidedChatStyles.ts（引导外壳收成一份，注册面与引导建产品共用）。
+//   本锁问的是"AI 面板那枚容器有没有兜底"，**取值锚点跟着搬家**：
+//   改判据不改产品（AGENTS §三④「靶子搬家」那一族）——继续读 AiRegisterFlow.tsx 会结构性读空，
+//   而"读空"在这里的表现是 ② 判红，不是悄悄放行，所以这条必须一起搬。
 const aiSrc = readFileSync(resolve(__dirname, 'AiRegisterFlow.tsx'), 'utf8')
+// ② 判的是**样式**（容器兜底），那份样式 2026-11-06 起住在 guidedChatStyles.ts；
+// ③ 判的是**调用形态**（size 有没有传下去），那份仍在 AiRegisterFlow.tsx。
+// 两个锚点各读各的文件——把一份 src 变量同时喂两条判据，就会一条搬对了另一条搬错。
+const aiCssSrc = readFileSync(resolve(__dirname, 'guidedchat/guidedChatStyles.ts'), 'utf8')
 const libSrc = readFileSync(resolve(__dirname, '../lib/turnstile.ts'), 'utf8')
 
 // stripComments 剥掉 TS/JS 注释：说明注释里就写着 max-width/size/pickTurnstileSize 这些词，
@@ -88,7 +97,7 @@ describe('320 视口挂件宽度锁（选档唯一实现 ＋ 四处容器兜底�
       ['Landing .lc-lead-captcha', ruleBody(landingSrc, '.lc-lead-captcha')],
       ['Login #__ts_login_widget__', ruleBody(loginSrc, '#__ts_login_widget__')],
       ['Login #__ts_widget__', ruleBody(loginSrc, '#__ts_widget__')],
-      ['AiRegisterFlow .ar-ts', ruleBody(aiSrc, '.ar-ts')],
+      ['AiRegisterFlow .ar-ts', ruleBody(aiCssSrc, '.ar-ts')],
     ]
     for (const [name, body] of boxes) {
       expect(body, `锁失明：读不到 ${name} 的规则体`).not.toBe('')
@@ -126,7 +135,7 @@ describe('320 视口挂件宽度锁（选档唯一实现 ＋ 四处容器兜底�
   })
 
   it('反证 4：把 AI 面板的 .ar-ts 换成没有兜底的旧形态 → ② 判红', () => {
-    const mutated = aiSrc.replace('.ar-ts{display:flex;justify-content:center;min-height:65px;max-width:100%;overflow-x:auto;}', '.ar-ts{display:flex;justify-content:center;min-height:65px;}')
+    const mutated = aiCssSrc.replace('.ar-ts{display:flex;justify-content:center;min-height:65px;max-width:100%;overflow-x:auto;}', '.ar-ts{display:flex;justify-content:center;min-height:65px;}')
     expect(stripComments(mutated)).not.toBe(stripComments(aiSrc))
     expect(cssGuardOk(ruleBody(mutated, '.ar-ts'))).toBe(false)
   })

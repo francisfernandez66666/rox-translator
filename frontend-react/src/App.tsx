@@ -122,8 +122,9 @@ const ProductAnswers = lazy(() => import('./components/ProductAnswers'))
 const ProductDetail = lazy(() => import('./components/ProductDetail'))
 // Onboarding 引导页（★ O 组：步骤全部由 lib/onboardingSchema 驱动，本页不写死任何一步）
 const Onboarding = lazy(() => import('./components/Onboarding'))
-// OnboardingPrompt 登录后那条底部横幅（判据现读；单独一个 chunk，用独立 Suspense 包）
-const OnboardingPrompt = lazy(() => import('./components/Onboarding').then((m) => ({ default: m.OnboardingPrompt })))
+// OnboardingGate 登录后「确实没有产品档案」就直接把引导流开起来（★ 2026-11-06 用户令去掉横幅）
+//   判据现读、读失败不开；单独一个 chunk（它静态带 Onboarding，两者同片）
+const OnboardingGate = lazy(() => import('./components/OnboardingGate'))
 
 // 小组件保持静态导入（避免过度拆分）
 import { ReferralPanel, MyPackagePanel, AccountPanel } from './components/selfservice'
@@ -457,13 +458,15 @@ function FrontShell() {
               </Routes>
             </Suspense>
           </RouteBoundary>
-          {/* ★ O 组（2026-11-06）：登录后"确实一个产品都没有"才出现的底部横幅。
-              判据只认 productList 回 success 且数组为空；读失败一律不出，
-              免得把一次接口抖动读成"这人没产品"而把老用户一次次推进向导。
-              刻意挂在 RouteBoundary 之外并自带一层 Suspense：
-              不进主布局流（后台像素锁的几何档不因一条只有新用户看得见的横幅而翻红），
+          {/* ★ O 组 → 2026-11-06 用户令改形：登录后"确实一个产品都没有"**不再出横幅**，
+              而是直接开引导流（components/OnboardingGate：对话式外壳那份，横幅上那句话搬成第一句气泡）。
+              三条判据都在闸门里：① 只认 productList 回 success 且数组为空（读失败不开，
+              免得把一次接口抖动读成"这人没产品"而把老用户一次次推进向导）；
+              ② 不与 ProfileSetupGate 抢屏（两个全屏面板同屏＝「弹两次点了没反应」那一族观感）；
+              ③ 关掉只记本会话，完成判据仍不落库。
+              刻意挂在 RouteBoundary 之外并自带一层 Suspense：不进主布局流，
               也不与公司那个 Suspense 共担首屏。 */}
-<Suspense fallback={null}><OnboardingPrompt /></Suspense>
+<Suspense fallback={null}><OnboardingGate /></Suspense>
           </>
         )}
       </div>

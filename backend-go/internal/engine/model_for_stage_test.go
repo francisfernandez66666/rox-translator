@@ -193,6 +193,11 @@ func TestStageModelResolutionHasSingleThroat(t *testing.T) {
 		//   于是 `/api/health.ocr_fix` 恒 `ok`、而这条腿六次运行全是 `tokens:0 全 timeout`
 		//   ——每张图白等 45 秒且零收益，读数与事实相反。⇒ 只认 `ocr_fix` 这张卡自己配了没有。
 		"ocrFixStageModel": "ocr_fix：判定腿不是翻译腿，回落翻译模型必超时；没配就不拨（no_stage_model／degraded）",
+		// ★ 2026-11-07 引导页「自由描述 → 候选字段」判定腿：与 ③ 完全同形的一档。
+		//   它的活是按 JSON 抽取四个字段，`ai_initial`／全局那两份都是**翻译模型**——
+		//   走咽喉会把「回落到 ai_initial」报成 stageActive=true，于是健康面恒 ok、
+		//   而这条腿白等满预算再全超时（§21 现网实证）。⇒ 只认 onboard_draft 这张卡配了没有。
+		"onboardDraftStageModel": "onboard_draft：判定腿不是翻译腿，回落翻译模型＝白等满预算再 tokens:0；没配就不拨（no_stage_model／degraded）",
 	}
 	var got []string
 	for name, body := range funcs {
