@@ -40,6 +40,9 @@ UNMEASURED=0
 log(){ echo "[rel-h] $*"; }
 bad(){ echo "BAD   $*"; FAIL=$((FAIL+1)); }
 ok(){  echo "OK    $*"; }
+# 只登记、不判红也不判绿的第三类读数（缺这一档，"这段没跑"会被写成 bad 把发版判死，
+# 或被写成 ok 把"没测到"读成"通过"——两种都是 §一·5 §6.2 那族谎报）
+note(){ echo "NOTE  $*"; }
 
 # ---- 0. 三件交付物必须在位；sha 现读现比（禁止写死数字） ----
 [ -f "$TAR" ] || { echo "BAD 缺前端包 $TAR（顺序只有一种：vite build → precompress → tar → 本脚本）"; exit 1; }
@@ -128,7 +131,7 @@ if [ "$SWAP_RC" != 0 ] || ! printf '%s\n' "$SWAP_OUT" | grep -q 'SWAP_ALL_OK=1';
 fi
 ok "SWAP_ALL_OK=1"
 if [ "${SKIP_SWAP:-0}" = "1" ]; then
-  skip "CF_PURGE 读数本段没跑（SKIP_SWAP=1）；上一次落位那一跑的读数已记在《部署指南》§三十七"
+  note "CF_PURGE 读数本段没跑（SKIP_SWAP=1）；上一次落位那一跑的读数已记在《部署指南》§三十七"
 elif printf '%s\n' "$SWAP_OUT" | grep -Eq '^CF_PURGE='; then
   ok "执行体出了 CF_PURGE 那一行（$(printf '%s\n' "$SWAP_OUT" | grep -E '^CF_PURGE=' | head -1)）"
 else
