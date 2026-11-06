@@ -71,7 +71,7 @@ const productOnboardDraftTextMaxChars = 6000
 const (
 	onboardDraftDailyScope   = "onboard-draft:"
 	onboardDraftDailyDefault = 20
-	onboardDraftDailyWindow  = 86400
+	onboardDraftDailyWindow  = 86400 // ★ 滚动 24 小时，**不是 UTC 日切**（判据＝OnboardDraft 闸门的 D12；运营面文案必须同一口径）
 )
 
 // onboardDraftPlaceholders 模型"没抽到"时最常见的几种偷懒写法。

@@ -21,6 +21,10 @@
 //	D10 退格：拨了却没拨成（截断/垃圾回执）⇒ 格子退回，不许让一次上游抖动吃掉卖家当天的次数；
 //	   而**没配阶段档那一档压根不占格**（零支出的账记进 rate_limits＝运营翻到一本假账，
 //	   §一·11「读数要为事实背书」），这一条按 rate_limits 行数判，不靠注释。
+//	D12 窗语义：这一档是**滚动 24h**（`window_start > now-86400`），不是 UTC 日切——
+//	   文档与运营面都写"每日"，两者对"深夜用完、明早还能不能用"给不同答案，且没有任何现网症状。
+//	   判据＝行为两态成对（窗内达顶必须不拨／同样计数只是窗过期必须恢复并重置为 1），
+//	   单测任何一态都会给"窗永不恢复"或"每次都重置"那两种坏法放行（§三 成对判据那条）。
 //	W1–W5 源码级腿：路由注册、内联错误响应为零、身份入口唯一、allowance/meta 两处接线、
 //	语种清单跨侧等值（前端 LANG_OPTIONS 的每一项都必须落进 store.ProductLangs）。
 //	W6 接线位置腿：占格子必须排在真拨之前、退格必须排在拿到 reason 之后（顺序反了＝并发击穿）。
@@ -475,6 +479,21 @@ func odbRateRows(t *testing.T, db *sql.DB, scope string, uid int64) int64 {
 	return n
 }
 
+// odbRateSeedWindow 把某一 (scope,key) 摆成"计数已达顶、但窗起点是给定那一刻"的形态（D12 专用）。
+// 先删后插：这条腿要的是**窗语义**，不能受前面几枪留下的行影响；
+// `lock_until` 显式写 0——库里那一列是 NOT NULL 且有它自己的语义，留 NULL 会让 RateReserve 的回读直接扫失败。
+func odbRateSeedWindow(t *testing.T, db *sql.DB, scope string, uid, count, windowStart int64) {
+	t.Helper()
+	key := fmt.Sprintf("%d", uid)
+	if _, err := db.Exec("DELETE FROM rate_limits WHERE scope=? AND key=?", scope, key); err != nil {
+		t.Fatalf("清 rate_limits 夹具行失败: %v", err)
+	}
+	if _, err := db.Exec("INSERT INTO rate_limits(scope,key,count,window_start,lock_until) VALUES(?,?,?, ?,0)",
+		scope, key, count, windowStart); err != nil {
+		t.Fatalf("铺 rate_limits 夹具行失败: %v", err)
+	}
+}
+
 // TestOnboardDraftDailyQuota D9：这一口的钱由平台出 ⇒ 必须有格子；越界那一枪只是"不拨"，报文形状一字不变。
 //
 // 为什么上限 2 而不是照抄代码里的 20：判据要问的是**行为**（第 N+1 枪不拨），不是那个数字本身；
@@ -565,6 +584,48 @@ func TestOnboardDraftQuotaIdleWhenLegUnconfigured(t *testing.T) {
 	}
 	if n := odbRateRows(t, f.st.DB(), onboardDraftDailyScope, f.uid); n != 0 {
 		t.Fatalf("D11：这一腿压根没拨，却在 rate_limits 里留下了 %d 行 ⇒ 运营翻到的是一本零支出的假账（占格与退格各一次也算占过）", n)
+	}
+}
+
+// TestOnboardDraftQuotaWindowIsRolling D12：这一档的窗是**滚动 24 小时**，不是 UTC 日切。
+//
+// 为什么要有这条（不是抠字眼）：运营面与两份文档都写「每日」，而 `rate_limits` 的窗语义是
+// 「从这一档第一枪起滚 windowSec」（`store.RateReserve` 的条件是 `window_start > now-windowSec`）——
+// 两者对"昨天深夜用完 20 次，今早还能不能用"给的是**不同答案**（日切＝到 00:00 恢复，滚动＝等满 24h）。
+// 这个差别没有任何现网症状：界面只会少出一次候选，谁也不知道是窗没滚还是判据坏了。
+// ⇒ 写成**行为两态成对**（AGENTS §三「只验一个方向等于什么都没验」）：
+//
+//	① 窗内且已达顶 ⇒ 一次都不拨；② 计数相同但窗已过期 ⇒ 必须真恢复，且整行重置成「本窗第一笔」（不是 3）。
+//	只测② 会在"每次请求都把整行重置"这种坏法下照样绿；只测① 会在"窗永远不过期"下照样绿。
+func TestOnboardDraftQuotaWindowIsRolling(t *testing.T) {
+	t.Setenv("ONBOARD_DRAFT_DAILY", "2")
+	f := newOdbFixture(t)
+	f.setOnboardStage(t, true)
+	f.upstreamContent(`{"name":"整机 A9","tagline":"月产 1200 台"}`)
+	now := time.Now().Unix()
+
+	// ① 窗**内**已达顶：格子还在有效期内，这一枪必须不拨
+	odbRateSeedWindow(t, f.st.DB(), onboardDraftDailyScope, f.uid, 2, now-int64((24*time.Hour-time.Minute)/time.Second))
+	before := atomic.LoadInt64(f.hits)
+	if code, body := f.postDraft(t, f.tok, `{"text":"我们月产 1200 台整机。","ui_lang":"zh"}`); code != http.StatusOK {
+		t.Fatalf("D12①：窗内触顶那一枪也必须 200 空草稿，实得 %d body=%v", code, body)
+	}
+	if got := atomic.LoadInt64(f.hits) - before; got != 0 {
+		t.Fatalf("D12①：窗内且计数已达上限，这一枪必须一次都不拨（平台在为这一腿掏钱），实得 +%d", got)
+	}
+
+	// ② 同样的计数，只是窗**过期**：必须恢复成可用，且重置为「本窗第一笔」
+	//    window_start 取"恰好比窗老 1 秒"，这样它测的是窗语义本身，而不是"行不存在"那一支
+	odbRateSeedWindow(t, f.st.DB(), onboardDraftDailyScope, f.uid, 2, now-int64(24*time.Hour/time.Second)-1)
+	before = atomic.LoadInt64(f.hits)
+	if code, body := f.postDraft(t, f.tok, `{"text":"我们月产 1200 台整机。","ui_lang":"zh"}`); code != http.StatusOK {
+		t.Fatalf("D12②：窗过期那一枪也必须 200，实得 %d body=%v", code, body)
+	}
+	if got := atomic.LoadInt64(f.hits) - before; got != 1 {
+		t.Fatalf("D12②：窗过期后格子必须恢复（这一档是滚动 %d 秒，不是永久占死），实得 +%d", onboardDraftDailyWindow, got)
+	}
+	if n := odbRateCount(t, f.st.DB(), onboardDraftDailyScope, f.uid); n != 1 {
+		t.Fatalf("D12②：开新窗必须整行重置为 1，实得 %d（≥2 ⇒ 把上一窗的计数带进了新窗，上限被悄悄收紧）", n)
 	}
 }
 

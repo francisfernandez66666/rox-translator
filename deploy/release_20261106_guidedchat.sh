@@ -45,8 +45,8 @@ ok(){  echo "OK    $*"; }
 note(){ echo "NOTE  $*"; }
 
 # ---- 0. 三件交付物必须在位；sha 现读现比（禁止写死数字） ----
-[ -f "$TAR" ] || { echo "BAD 缺前端包 $TAR（顺序只有一种：vite build → precompress → tar → 本脚本）"; exit 1; }
-[ -f "$BIN" ] || { echo "BAD 缺后端件 $BIN（GOOS=linux go build -o …）"; exit 1; }
+[ -f "$TAR" ] || { echo "BAD 缺前端包 ${TAR}（顺序只有一种：vite build → precompress → tar → 本脚本）"; exit 1; }
+[ -f "$BIN" ] || { echo "BAD 缺后端件 ${BIN}（GOOS=linux go build -o …）"; exit 1; }
 [ -d 产品手册/pdf ] || { echo "BAD 缺 产品手册/pdf 目录"; exit 1; }
 TAR_SHA=$(shasum -a 256 "$TAR" | awk '{print $1}')
 BIN_SHA=$(shasum -a 256 "$BIN" | awk '{print $1}')
@@ -109,8 +109,8 @@ log "PDF 包 $(wc -c < "$PDFTAR" | tr -d ' ') B sha=$PDFTAR_SHA"
 #     它**不跳过**上传（铺库段要用服务器上的 PDF 包与清单），只跳过落位与重启。
 log "2/6 换源换件（两站 web＋二进制，含 CF purge 腿）"
 if [ "${SKIP_SWAP:-0}" = "1" ]; then
-  ok "SKIP_SWAP=1 ⇒ 本段跳过（现网保持在已落位的那一代，不重启、不再清边缘缓存）"
-  SWAP_OUT="SWAP_ALL_OK=1（skipped）"
+  note "SKIP_SWAP=1 ⇒ 本段跳过，不重启、不清缓存；本次不证明落位或重启窗口通过"
+  SWAP_OUT="SWAP_SKIPPED=1"
   SWAP_RC=0
 else
   SWAP_OUT=$(ssh -p "$PORT" "$HOST" \
@@ -118,18 +118,18 @@ else
   SWAP_RC=$?
   echo "$SWAP_OUT" | tail -25
 fi
-if [ "$SWAP_RC" != 0 ] || ! printf '%s\n' "$SWAP_OUT" | grep -q 'SWAP_ALL_OK=1'; then
+if [ "${SKIP_SWAP:-0}" != "1" ] && { [ "$SWAP_RC" != 0 ] || ! printf '%s\n' "$SWAP_OUT" | grep -q '^SWAP_ALL_OK=1$'; }; then
   # ★ 这条消息必须**分得开两种停手位置**（旧写法一律写"停在完整上一代"，而实际踩到的是
   #   「落位已完成、只有重启窗口探针判红」那一档 ⇒ 屏幕上的处置建议与现场完全两回事，
   #   下一位会按"现网还是旧代"去重跑换源，白付一遍两站重启窗口）
   if printf '%s\n' "$SWAP_OUT" | grep -q 'SWAP_ENTRY'; then
-    echo "RELEASE_H_ABORT=换源换件（rc=$SWAP_RC；**落位已完成**（见上面 SWAP_ENTRY 行），红的是重启窗口/复验那一条腿 ⇒ 现网已是新代，后续段用 SKIP_SWAP=1 复跑，别再跑一遍落位）"
+    echo "RELEASE_H_ABORT=换源换件（rc=${SWAP_RC}；**落位已完成**（见上面 SWAP_ENTRY 行），红的是重启窗口/复验那一条腿 ⇒ 现网已是新代，后续段用 SKIP_SWAP=1 复跑，别再跑一遍落位）"
   else
-    echo "RELEASE_H_ABORT=换源换件（rc=$SWAP_RC；备料段拒了＝现网停在完整上一代）"
+    echo "RELEASE_H_ABORT=换源换件（rc=${SWAP_RC}；备料段拒了＝现网停在完整上一代）"
   fi
   exit 1
 fi
-ok "SWAP_ALL_OK=1"
+if [ "${SKIP_SWAP:-0}" != "1" ]; then ok "SWAP_ALL_OK=1"; fi
 if [ "${SKIP_SWAP:-0}" = "1" ]; then
   note "CF_PURGE 读数本段没跑（SKIP_SWAP=1）；上一次落位那一跑的读数已记在《部署指南》§三十七"
 elif printf '%s\n' "$SWAP_OUT" | grep -Eq '^CF_PURGE='; then
@@ -272,14 +272,14 @@ for B in "$BASE_MAIN" "$BASE_DEMO"; do
   BASE="$B" bash deploy/smoke_manual_pdf.sh > "/tmp/rel_h_pdf_${tag}.log" 2>&1
   SM_RC=$?
   SM_UN=$(grep -c '^  ⏳' "/tmp/rel_h_pdf_${tag}.log" || true)
-  if [ "$SM_RC" = 0 ]; then
+  if [ "$SM_RC" = 0 ] && grep -q '^SMOKE_MANUAL_PDF_ALL_OK=1$' "/tmp/rel_h_pdf_${tag}.log"; then
     ok "smoke_manual_pdf 全绿：$B"
   elif [ "$SM_RC" = 2 ]; then
     log "smoke_manual_pdf 有 ${SM_UN:-?} 项没测到（exit 2）：$B ⇒ 复跑段 5，不判绿也不判成缺陷（详见 /tmp/rel_h_pdf_${tag}.log）"
     UNMEASURED=$((UNMEASURED + ${SM_UN:-1}))
   else
     tail -12 "/tmp/rel_h_pdf_${tag}.log"
-    bad "smoke_manual_pdf 判红：$B（详见 /tmp/rel_h_pdf_${tag}.log）"
+    bad "smoke_manual_pdf 判红：${B}（详见 /tmp/rel_h_pdf_${tag}.log）"
   fi
 done
 
@@ -290,7 +290,7 @@ echo "$PD_OUT" | tail -25
 PD_FAIL=$(printf '%s\n' "$PD_OUT" | grep -c '^FAIL' || true)
 PD_UN=$(printf '%s\n' "$PD_OUT" | grep -Ec '^⏳|UNMEASURED' || true)
 log "postdeploy rc=$PD_RC FAIL=${PD_FAIL:-0} UNMEASURED=${PD_UN:-0}"
-if [ "$PD_RC" != 0 ] || [ "${PD_FAIL:-0}" != 0 ]; then bad "postdeploy 有红项或没跑完（rc=$PD_RC）"; fi
+if [ "$PD_RC" != 0 ] || [ "${PD_FAIL:-0}" != 0 ]; then bad "postdeploy 有红项或没跑完（rc=${PD_RC}）"; fi
 if [ "${PD_UN:-0}" != 0 ]; then
   log "postdeploy 有 ${PD_UN} 项没测到 ⇒ 复跑一次再判（2 既不是通过也不是产品缺陷）"
   UNMEASURED=$((UNMEASURED+PD_UN))
@@ -298,7 +298,11 @@ fi
 
 echo "-----------------------------------------"
 if [ "$FAIL" = 0 ] && [ "${UNMEASURED:-0}" = 0 ]; then
-  echo "RELEASE_H_ALL_OK=1"
+  if [ "${SKIP_SWAP:-0}" = "1" ]; then
+    note "RELEASE_H_POSTCHECK_ALL_OK=1（不包含落位与重启窗口验收）"
+  else
+    echo "RELEASE_H_ALL_OK=1"
+  fi
   exit 0
 fi
 echo "RELEASE_H_DONE_WITH_ISSUES FAIL=$FAIL UNMEASURED=${UNMEASURED:-0}"

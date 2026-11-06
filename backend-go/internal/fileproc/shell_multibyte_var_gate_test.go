@@ -22,16 +22,19 @@
 //
 // ⚠️ 只判**非整行注释**且**不在单引号内**的位置（与改写脚本同口径）：注释不喂给 bash；
 // 单引号内 `$VAR` 与 `${VAR}` 都是字面量，改了反而是**改文案**（显示字节变了）。
-// 本文件只读仓库文本，绝不执行、不 ssh、不碰现网。
+// 读取仓库文本并运行使用假 curl 的手册自检；不 ssh、不访问现网。
 // ============================================================================
 package fileproc
 
 import (
+	"context"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // shellMultibyteVarScanRoots 射程＝仓库下这两个目录（相对仓库根）。
@@ -158,6 +161,24 @@ func collectShellScriptsUnder(t *testing.T, root string) []string {
 		}
 	}
 	return out
+}
+
+// Bash 3.2 可能在多字节展开失败后退 0，自检必须同时给出完成标记。
+func TestManualSmokeSelftestLocales(t *testing.T) {
+	root := findDispatchRepoRoot(t)
+	t.Setenv("SELFTEST", "0")
+	for _, locale := range []string{"C", "en_US.UTF-8"} {
+		t.Run(locale, func(t *testing.T) {
+			t.Setenv("LC_ALL", locale)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "bash", filepath.Join(root, "deploy/smoke_manual_pdf.sh"), "--selftest")
+			out, err := cmd.CombinedOutput()
+			if err != nil || !strings.Contains(string(out), "SMOKE_MANUAL_PDF_SELFTEST_ALL_OK=1") {
+				t.Fatalf("手册冒烟自检未完整通过：locale=%s err=%v\n%s", locale, err, out)
+			}
+		})
+	}
 }
 
 // TestShellScriptsBraceMultibyteAdjacentVars 主判据：射程内**每一份**脚本都过同一把尺子。

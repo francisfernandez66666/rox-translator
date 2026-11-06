@@ -14,7 +14,7 @@
 #   BASE=http://127.0.0.1:8787 bash deploy/smoke_manual_pdf.sh          # 打本地实例
 #   MIN_KB=8 bash deploy/smoke_manual_pdf.sh            # 覆盖体积下限（默认 20 KB）
 #
-# 退出码：0=全绿；1=有红项（红项逐条点名，不静默）。
+# 验收同时要求退出码 0 与 SMOKE_MANUAL_PDF_ALL_OK=1；1=红项，2=未测到。
 # ============================================================================
 set -euo pipefail
 
@@ -72,6 +72,13 @@ done
 [ -n "\$o" ] && : > "\$o"
 [ -n "\$d" ] && : > "\$d"
 case "\${STUB_MODE:-short}" in
+  good)
+    printf '%%PDF-1.7\\n' > "\$o"
+    head -c 2048 /dev/zero | tr '\\0' 'A' >> "\$o"
+    printf '\\n%%%%EOF\\n' >> "\$o"
+    n=\$(wc -c < "\$o" | tr -d ' ')
+    printf 'HTTP/1.1 200 OK\\r\\ncontent-type: application/pdf\\r\\ncontent-length: %s\\r\\n\\r\\n' "\$n" > "\$d"
+    printf '200 %s' "\$n"; exit 0 ;;
   short)
     head -c 1000 /dev/zero | tr '\\0' 'A' > "\$o"
     printf 'HTTP/1.1 200 OK\\r\\ncontent-type: application/pdf\\r\\ncontent-length: 5000\\r\\n\\r\\n' > "\$d"
@@ -94,7 +101,7 @@ STUB_SH
     local mode="$1" want_rc="$2" must="$3" mustnot="$4" want_calls="$5" out rc n
     : > "$CNT"
     set +e   # ★ 内层脚本**按设计**会退 1/2（那正是要判的三态）⇒ 不许让外层 set -e 在第一次红项就中止
-    out="$(PATH="$STUB:$PATH" STUB_MODE="$mode" BASE="http://stub" LANGS="zh" MIN_KB=1 RUN_NEG=0 \
+    out="$(PATH="$STUB:$PATH" SELFTEST=0 STUB_MODE="$mode" BASE="http://stub" LANGS="zh" MIN_KB=1 RUN_NEG=0 \
             bash "$SELFTEST_TARGET" 2>&1)"; rc=$?
     set -e
     n=$(wc -l < "$CNT" | tr -d ' ')
@@ -111,6 +118,7 @@ STUB_SH
   }
   # ★ 三条断言都问**那一腿自己的行**（前缀「  ⏳ zh」／「  ✗ zh」），不许问裸符号：
   #   红项那一段的排查提示里本来就写着"⏳"这个字（裸判据会被自己新写的文案喂饱＝假红，AGENTS §一·5 那一族真踩过两次）
+  run_stub good     0 'SMOKE_MANUAL_PDF_ALL_OK=1' '  ✗ zh' eq1
   run_stub short    2 '  ⏳ zh' '  ✗ zh' ge2
   run_stub html     1 '  ✗ zh'  '  ⏳ zh' eq1
   run_stub notfound 1 '  ✗ zh'  '  ⏳ zh' eq1
@@ -154,7 +162,7 @@ get_handed() {
   out="$(fetch_once "$url" "$body" "$hdr" "$MAX_TIME")"; rc="${out%% *}"; code="$(printf '%s' "$out" | awk '{print $2}')"
   bytes=$(wc -c < "$body" | tr -d ' ')
   if { [ "$rc" != "0" ] || [ "$code" = "000" ] || ! complete_p "$hdr" "$bytes"; } && [ "$code" != "400" ] && [ "$code" != "404" ]; then
-    note "    ↻ ${url##*/} 第一没收完（rc=$rc code=$code bytes=$bytes）⇒ 换 --http1.1 重拨一次"
+    note "    ↻ ${url##*/} 第一没收完（rc=$rc code=$code bytes=${bytes}）⇒ 换 --http1.1 重拨一次"
     out="$(fetch_once "$url" "$body" "$hdr" "$MAX_TIME" h1)"; rc="${out%% *}"; code="$(printf '%s' "$out" | awk '{print $2}')"
     bytes=$(wc -c < "$body" | tr -d ' ')
   fi
@@ -223,7 +231,7 @@ neg() { # $1=path $2=期望状态
   http_code="$G_CODE"
   if [ "$G_RC" != "0" ] || [ "$http_code" = "000" ]; then
     # 负向腿也一样：**链路抖动不许冒充"判据命中"**（那一行的处置是复跑，而不是去改期望状态码）
-    unk "负向 $path → 这一跳没走完（curl_rc=$G_RC），期望 $want 未测到"
+    unk "负向 $path → 这一跳没走完（curl_rc=${G_RC}），期望 $want 未测到"
     return
   fi
   if [ "$http_code" = "$want" ] && ! grep -q -i -E '<!doctype html' "$body"; then
@@ -256,4 +264,5 @@ if [ "$unmeasured" -ne 0 ]; then
   note "SMOKE_MANUAL_PDF_UNMEASURED=$unmeasured"
   exit 2
 fi
-note "手册 PDF 冒烟全绿：12 语种逐码 + 5 条负向路径"
+note "手册 PDF 冒烟全绿：本轮语种逐码完成（LANGS=${LANGS}，RUN_NEG=${RUN_NEG}）"
+note "SMOKE_MANUAL_PDF_ALL_OK=1"

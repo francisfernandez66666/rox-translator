@@ -33,7 +33,7 @@
 //	③ 每条负向都要配正对照：加引号的合法写法必须放行（G3），
 //	   否则下一次没人敢在批脚本里写读数腿，锁的归宿就是被摘掉。
 //
-// 本文件**只读仓库文本、只在临时目录里跑 bash -n**，绝不 ssh、绝不碰现网。
+// 本文件只读仓库文本，运行语法检查与假 ssh 分支，不访问现网。
 // ============================================================================
 package fileproc
 
@@ -77,6 +77,40 @@ func remoteFallbackRedirectProblems(rel string, content string) []string {
 			"或 ASCII 哨兵（`|| echo NOT_SET`）；本批实测崩在 deploy/release_20261102_cftoken.sh 的 6/6 读数段")
 	}
 	return problems
+}
+
+// 截取真实换源分支，以假 ssh 验证跳过不冒充执行成功。
+func TestGuidedReleaseSkippedSwapDoesNotClaimSuccess(t *testing.T) {
+	root := findDispatchRepoRoot(t)
+	b, err := os.ReadFile(filepath.Join(root, "deploy/release_20261106_guidedchat.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	start := strings.Index(src, `log "2/6 换源换件`)
+	end := strings.Index(src, "# ---- 3. 手册 PDF 铺库")
+	if start < 0 || end <= start {
+		t.Fatal("换源分支边界未找到")
+	}
+	for _, skip := range []string{"0", "1"} {
+		t.Run(skip, func(t *testing.T) {
+			setup := "set -eu\nPORT=1; HOST=stub; TAR_SHA=tar; BIN_SHA=bin\nSKIP_SWAP=" + skip + "\n" +
+				"log(){ :; }; note(){ printf '%s\\n' \"$*\"; }; ok(){ printf '%s\\n' \"$*\"; }; bad(){ exit 9; }\n" +
+				"ssh(){ printf 'SSH_CALLED\\nSWAP_ALL_OK=1\\nCF_PURGE=ok\\n'; }\n"
+			out, err := exec.Command("bash", "-c", setup+src[start:end]).CombinedOutput()
+			if err != nil {
+				t.Fatalf("换源分支执行失败：%v\n%s", err, out)
+			}
+			text := string(out)
+			if skip == "1" {
+				if strings.Contains(text, "SWAP_ALL_OK=1") || strings.Contains(text, "SSH_CALLED") || !strings.Contains(text, "SKIP_SWAP=1") {
+					t.Fatalf("跳过换源不得报告全绿或调用 ssh：%s", text)
+				}
+			} else if !strings.Contains(text, "SWAP_ALL_OK=1") || !strings.Contains(text, "SSH_CALLED") {
+				t.Fatalf("真实执行分支必须消费 ssh 成功读数：%s", text)
+			}
+		})
+	}
 }
 
 // TestReleaseScriptsHaveNoUnquotedRedirectFallback G1＋G2：射程自证 ＋ 全集判据。
