@@ -629,6 +629,7 @@ export const baseEn: Record<string,string> = {
   'mailTpl.vars': 'Available variables',
   'mailTpl.subject': 'Subject',
   'mailTpl.body': 'Body',
+  'mailTpl.bodyBySystem': 'The body of this email is generated automatically (recipient language + guide link); only the subject is set here.',
   'mailTpl.cc': 'CC (optional, comma-separated)',
   'mailTpl.ccPlaceholder': 'CC email, leave empty for none',
   'mailTpl.save': 'Save template',

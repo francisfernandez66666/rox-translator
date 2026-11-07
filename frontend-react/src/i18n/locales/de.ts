@@ -1959,6 +1959,7 @@ export const dict: Record<string, string> = {
   "login.username": "Benutzername",
   "login.verificationCode": "6-stelliger Code",
   "mailTpl.body": "Nachrichtentext",
+  "mailTpl.bodyBySystem": "Der Text dieser E-Mail wird automatisch erzeugt (Sprache des Empfängers + Guide-Link); hier wird nur der Betreff festgelegt.",
   "mailTpl.cc": "CC (optional, durch Komma getrennt)",
   "mailTpl.ccPlaceholder": "CC-E-Mail-Adresse, leer lassen für keine",
   "mailTpl.hint": "Vorlagen nach Verwendungszweck (nur Super-Admin; sofort nach dem Speichern wirksam). Unterstützt {var}-Platzhalter, die beim Senden ersetzt werden.",

@@ -1959,6 +1959,7 @@ export const dict: Record<string, string> = {
   "login.username": "사용자 이름",
   "login.verificationCode": "6자리 인증 코드",
   "mailTpl.body": "메일 본문",
+  "mailTpl.bodyBySystem": "이 메일의 본문은 수신자 언어와 사이트 안내 링크로 자동 생성되며, 여기서는 제목만 설정합니다.",
   "mailTpl.cc": "CC (선택, 여러 개는 쉼표로 구분)",
   "mailTpl.ccPlaceholder": "CC 이메일, 비우면 CC 없음",
   "mailTpl.hint": "용도별로 구분된 이메일 템플릿입니다 (슈퍼 관리자만 수정 가능, 저장 후 즉시 적용). {var} 플레이스홀더를 지원하며 발송 시 자동으로 대체됩니다.",

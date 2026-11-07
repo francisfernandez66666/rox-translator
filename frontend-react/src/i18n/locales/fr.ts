@@ -1959,6 +1959,7 @@ export const dict: Record<string, string> = {
   "login.username": "Nom d'utilisateur",
   "login.verificationCode": "Code à 6 chiffres",
   "mailTpl.body": "Corps du message",
+  "mailTpl.bodyBySystem": "Le corps de cet e-mail est généré automatiquement (langue du destinataire + lien du guide) ; seul l'objet se définit ici.",
   "mailTpl.cc": "Copie (facultative, séparée par des virgules)",
   "mailTpl.ccPlaceholder": "Adresse en copie, laissez vide pour aucune",
   "mailTpl.hint": "Modèles d'e-mail par usage (réservé au super-administrateur ; effet immédiat après l'enregistrement). Les espaces réservés {var} sont pris en charge et remplacés à l'envoi.",

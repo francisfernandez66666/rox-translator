@@ -1959,6 +1959,7 @@ export const dict: Record<string, string> = {
   "login.username": "使用者名稱",
   "login.verificationCode": "6 位驗證碼",
   "mailTpl.body": "郵件正文",
+  "mailTpl.bodyBySystem": "本信正文由系統依收件人語言與站內手冊連結自動產生，此處僅設定主旨。",
   "mailTpl.cc": "抄送（可選，多個用逗號分隔）",
   "mailTpl.ccPlaceholder": "抄送電子郵件，留空則不抄送",
   "mailTpl.hint": "按用途區分的多套郵件範本（僅超級管理員可改，儲存後即時生效）。支援 {var} 佔位符，發送時自動替換。",

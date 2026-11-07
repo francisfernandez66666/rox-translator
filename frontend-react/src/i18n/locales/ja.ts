@@ -1959,6 +1959,7 @@ export const dict: Record<string, string> = {
   "login.username": "ユーザー名",
   "login.verificationCode": "6桁の認証コード",
   "mailTpl.body": "本文",
+  "mailTpl.bodyBySystem": "このメールの本文は、受信者の言語とサイト内のガイドリンクから自動生成されます。ここでは件名のみ設定できます。",
   "mailTpl.cc": "CC（任意・カンマ区切り）",
   "mailTpl.ccPlaceholder": "CC のメールアドレス（空欄なら CC なし）",
   "mailTpl.hint": "用途別に使い分けるメールテンプレートです（スーパー管理者のみ編集可・保存後に即時反映）。{var} プレースホルダに対応し、送信時に自動的に置換されます。",

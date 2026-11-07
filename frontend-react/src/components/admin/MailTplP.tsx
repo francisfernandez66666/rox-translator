@@ -2,6 +2,7 @@
 // components/admin/MailTplP.tsx — 邮件模板配置（仅超管）
 // 职责：按用途区分的多个模板：注册验证码 / 找回密码 / 企业注册提醒 / 租户通知 / 系统告警。
 // 支持 {var} 占位符；模板内容存于服务端，超管可随时修改并即时生效。
+// ★ 例外：manual（注册欢迎手册）只可改主题——它的投递正文由后端按语种生成，正文编辑框已退役（见渲染区注释）。
 // ============================================================================
 import { useEffect, useState } from 'react'
 import { Button } from '@/ui/langcross/src'
@@ -100,7 +101,7 @@ export default function MailTplP() {
           {list.map((it) => {
             const d = draft[it.code] || it
             return (
-              <div key={it.code} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
+              <div key={it.code} data-testid={`mailtpl-card-${it.code}`} style={{ border: '1.2px solid var(--adm-line)', borderRadius: 8, padding: 14 }}>
                 {/* 模板标题与代码标识 */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                   <strong style={{ fontSize: 16 }}>{it.name}</strong>
@@ -120,10 +121,20 @@ export default function MailTplP() {
                     <div style={{ fontSize: 15, marginBottom: 4 }}>{t('mailTpl.subject')}</div>
                     <input className="lc-input" value={d.subject} onChange={(e) => setField(it.code, 'subject', e.target.value)} placeholder={it.subject} />
                   </div>
+                  {/* ★ 2026-11-07 用户拍板 B：manual（注册欢迎手册）的**投递正文从来不走这里的编辑框**——
+                      代码只用该模板的主题，正文由 manualGreeting 按收件人语种生成并自动挂站内手册链接。
+                      旧形态的正文框是"改了以为生效"的死字段（AGENTS §31 留的待裁口子，今日按 B 摘面）；
+                      保存链路仍**原样透传库里正文**（save() 读的是草稿里未动的值），摘框不等于抹空配置。 */}
+                  {it.code === 'manual' ? (
+                    <div data-testid="mailtpl-body-locked" style={{ fontSize: 14, color: 'var(--adm-hint)', background: 'var(--adm-soft)', border: '1.2px solid var(--adm-line)', borderRadius: 6, padding: '8px 10px' }}>
+                      {t('mailTpl.bodyBySystem')}
+                    </div>
+                  ) : (
                   <div>
                     <div style={{ fontSize: 15, marginBottom: 4 }}>{t('mailTpl.body')}</div>
                     <textarea className="lc-textarea" rows={4} value={d.body} onChange={(e) => setField(it.code, 'body', e.target.value)} placeholder={it.body} style={{ width: '100%', minHeight: 96, maxHeight: 260, resize: 'vertical' }} />
                   </div>
+                  )}
                   <div>
                     <div style={{ fontSize: 15, marginBottom: 4 }}>{t('mailTpl.cc')}</div>
                     <input className="lc-input" value={d.cc} onChange={(e) => setField(it.code, 'cc', e.target.value)} placeholder={t('mailTpl.ccPlaceholder')} />

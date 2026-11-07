@@ -636,6 +636,7 @@ export const baseZh: Record<string,string> = {
   'mailTpl.vars': '可用变量',
   'mailTpl.subject': '邮件主题',
   'mailTpl.body': '邮件正文',
+  'mailTpl.bodyBySystem': '本信正文由系统按收件人语言与站内手册链接自动生成，此处只设置主题。',
   'mailTpl.cc': '抄送（可选，多个用逗号分隔）',
   'mailTpl.ccPlaceholder': '抄送邮箱，留空则不抄送',
   'mailTpl.save': '保存此模板',
