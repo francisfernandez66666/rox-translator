@@ -467,6 +467,7 @@ export const baseEn: Record<string,string> = {
   'audit.action.safety_bulk_import': 'Bulk import safety phrases',
   'audit.action.safety_delete': 'Delete safety phrase',
   'audit.action.safety_status': 'Set safety phrase status',
+'audit.action.sales_draft_approve': 'Sales draft approved',
   'audit.action.tenant_delete': 'Delete tenant',
   'audit.action.tenant_erase': 'Erase tenant',
   'audit.action.tenant_quota_save': 'Save tenant quota',

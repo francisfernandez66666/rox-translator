@@ -361,6 +361,7 @@ export const baseZh: Record<string,string> = {
   'audit.action.safety_bulk_import': '批量导入安全短语',
   'audit.action.safety_delete': '删除安全短语',
   'audit.action.safety_status': '设置安全短语状态',
+'audit.action.sales_draft_approve': '说法草稿转正',
   'audit.action.tenant_delete': '删除租户',
   'audit.action.tenant_erase': '擦除租户',
   'audit.action.tenant_quota_save': '保存租户配额',

@@ -9,18 +9,19 @@ package store
 
 import (
 	"strings"
+
+	"translator/internal/db"
 )
 
-// IsUniqueViolation 判断是否唯一约束冲突（兼容 sqlite / postgres 两方言）。
+// IsUniqueViolation 判断是否唯一约束冲突（双方言）。
+// ★ 判据本体已下沉到 internal/db.IsUniqueViolation（AGENTS §一·3 通用能力下沉）：
+//
+//	本函数只保留薄委托，供 api/ 与 store/ 内既有调用点继续使用；
+//	禁止在此重建第二套字符串判定，否则 SQLite／PG 两把尺子会再度分叉。
+//
 // 参数：err=驱动或包装后的错误；返回 true 表示重复键。
 func IsUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "UNIQUE constraint failed") ||
-		strings.Contains(msg, "duplicate key value violates unique constraint") ||
-		strings.Contains(msg, "(23505)")
+	return db.IsUniqueViolation(err)
 }
 
 // DebriefDBError 驱动错误 → 用户安全文案。

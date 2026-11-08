@@ -55,6 +55,11 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.ProductMigrate(); err != nil {
 		return nil, err
 	}
+	// ★ 二期 S1：deal 域部分唯一索引必须排在 migrate() 之后（表要先存在），
+	//   失败直接中断启动；不静默降级成「应用侧查重」那第二把尺子。
+	if err := s.DealMigrate(); err != nil {
+		return nil, err
+	}
 	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
 	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）
@@ -717,6 +722,46 @@ func (s *Store) migrate() error {
 		`CREATE UNIQUE INDEX IF NOT EXISTS ux_fact ON product_facts(product_id, kind, key)`,
 		`CREATE INDEX IF NOT EXISTS idx_fact_tenant_updated ON product_facts(tenant_id, updated_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_asset_product_lang ON product_assets(product_id, lang, validity)`,
+		// ---------- 二期 S1：deal 域报价表（金额启用前置，管金额才接退款/对账/发票） ----------
+		// ★ total_cents 一律 INTEGER「分」（与 payments.amount_fen 同量纲），不许用 REAL「元」：
+		//   orders.amount_money 是元且同名不同单位，混用会让勾稽差 100 倍（C2 那笔旧账）。
+		// ★ 部分唯一索引 ux_quote_one_open_per_deal 单独放 DealMigrate()（照 ProductMigrate 先例），
+		//   双方言同一条 DDL，不许 PG 条件索引 / SQLite 应用侧查重两套尺子。
+		`CREATE TABLE IF NOT EXISTS deal_quotes (
+			id TEXT PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			deal_id TEXT NOT NULL,
+			total_cents BIGINT NOT NULL DEFAULT 0,
+			currency TEXT NOT NULL DEFAULT 'CNY',
+			status TEXT NOT NULL DEFAULT 'draft',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_quote_tenant_status ON deal_quotes(tenant_id, status, id)`,
+		// ---------- 二期 S2：D4 条件 INSERT 原子写原语（替代「先 Count 预检再 409」） ----------
+		// 唯一索引是并发正确性的兜底：PG 下 INSERT…WHERE NOT EXISTS 仍有竞态，
+		// 败方撞索引后由 db.IsUniqueViolation 判成「没抢到」而不是错误。
+		`CREATE TABLE IF NOT EXISTS sales_reservations (
+			tenant_id BIGINT NOT NULL,
+			kind TEXT NOT NULL,
+			code TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_sales_reservation ON sales_reservations(tenant_id, kind, code)`,
+		// ---------- 二期 S2：说法草稿池（挖掘产物只落草稿，人审后才可晋升） ----------
+		// ★ status 默认 draft：自动生成不许直接进「已批准说法」（§7 自学习边界）。
+		`CREATE TABLE IF NOT EXISTS sales_drafts (
+			id TEXT PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			anchor TEXT NOT NULL DEFAULT '',
+			source_text TEXT NOT NULL DEFAULT '',
+			suggested_text TEXT NOT NULL DEFAULT '',
+			attribution_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'draft',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sales_draft_tenant_status ON sales_drafts(tenant_id, status, id)`,
 	}
 	// 方言：以现有 SQLite DDL 为唯一真源，PostgreSQL 下经 db.ToDialect 自动改写
 	d := db.CurrentDialect()

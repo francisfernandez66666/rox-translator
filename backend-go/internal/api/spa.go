@@ -143,6 +143,9 @@ var spaClientExactRoutes = map[string]bool{
 	"/onboarding":       true,
 	"/products/facts":   true,
 	"/products/answers": true,
+	// ★ 二期 §9.4（2026-11-08）：说法草稿 inbox 是登录态卖家深链，
+	//   漏登记 ⇒ 钉钉/微信里转发的 /sales/drafts 由后端直出 404（本地 dev server 看不出来）。
+	"/sales/drafts": true,
 }
 
 // spaClientRoutePrefixes 带子树的前端路由（/admin 内的面板由本地 tab 态切换，但仍保守放行整棵子树）。

@@ -120,6 +120,8 @@ const ProductFacts = lazy(() => import('./components/ProductFacts'))
 const ProductAnswers = lazy(() => import('./components/ProductAnswers'))
 // ProductDetail 卖家写侧单页详情（★ X1：建档／事实录入／物料审核／SEO 与对外链接四段同一页）
 const ProductDetail = lazy(() => import('./components/ProductDetail'))
+// SalesDrafts 二期卖家面「说法草稿」inbox（§9.4：唯一写动作＝转正，懒加载分片）
+const SalesDrafts = lazy(() => import('./components/SalesDrafts'))
 // Onboarding 引导页（★ O 组：步骤全部由 lib/onboardingSchema 驱动，本页不写死任何一步）
 const Onboarding = lazy(() => import('./components/Onboarding'))
 // OnboardingGate 登录后「确实没有产品档案」就直接把引导流开起来（★ 2026-11-06 用户令去掉横幅）
@@ -453,6 +455,8 @@ function FrontShell() {
                 {/* ★ X1（2026-11-06）：?id= 选产品，不带 id 时页面自己取列表第一份；建不了档就没有「备好的物料」这一件商品 */}
                     <Route path="/products/detail" element={<FrontPage><ProductDetail /></FrontPage>} />
                     <Route path="/onboarding" element={<FrontPage><Onboarding /></FrontPage>} />
+                {/* ★ 二期 §9.4：说法草稿 inbox（数据源＝/api/sales/drafts 三口，唯一写动作＝转正） */}
+                <Route path="/sales/drafts" element={<FrontPage><SalesDrafts /></FrontPage>} />
                 {/* 前台兜底：壳内未匹配的路径一律 replace 回工作台，既不留空白页也不污染后退栈 */}
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>

@@ -9,8 +9,9 @@
 //
 // ★ tenant_code 按租户稳定：同租户第一个产品签发后，后续产品复用同一段，保证
 //
-//	/p/{tenantCode}/ 是同一个入口。现网 tenants.code 是否可枚举仍是实施前置，
-//	后续若收编到 tenants.public_code，只需换签发处、URL 形状不变。
+//	/p/{tenantCode}/ 是同一个入口。★ 2026-11-07 二期开工前置核实结案：
+//	tenantCodeFor 用 idgen.NewCode("") 独立签发不可枚举随机短码，全程不读 tenants.code，
+//	故「tenants.code 是否可枚举」与本 URL 无关，不再是实施前置；短码只由 products 表持有。
 //
 // ★ 解析口两段都做等值查询；ux_product_page(page_code) 全局唯一，因此
 //

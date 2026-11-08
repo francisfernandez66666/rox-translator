@@ -342,6 +342,10 @@ T = {
 "缺少券 ID": "Coupon ID missing",
 "缺少工单 id": "Ticket id missing",
 "缺少文件": "File missing",
+# 二期 §9.4 草稿 inbox（sales_api.go）：四条写死中文必须逐条进词条表，否则英文面原样吐中文
+"缺少草稿 id": "Draft id is required",
+"草稿不存在": "Draft not found",
+"草稿不存在或状态不允许转正": "Draft not found or not in a state that can be approved",
 "翻译技能未加载": "Translation skill not loaded",
 "翻译技能未加载（未传入 -kb）": "Translation skill not loaded (-kb not passed)",
 "行业 code 仅允许小写字母/数字/下划线": "Industry code allows lowercase letters/digits/underscore only",

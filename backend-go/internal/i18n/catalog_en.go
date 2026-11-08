@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（548 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（551 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -401,9 +401,12 @@ var exactEN = map[string]string{
 	"缺少录音文件":                           "No recording file was provided",
 	"缺少文件":                             "File missing",
 	"缺少目标语种":                           "Missing target language",
+	"缺少草稿 id":                          "Draft id is required",
 	"翻译技能未加载":                          "Translation skill not loaded",
 	"翻译技能未加载（未传入 -kb）":                 "Translation skill not loaded (-kb not passed)",
 	"自动开通失败: ":                         "Auto-provisioning failed: ",
+	"草稿不存在":                            "Draft not found",
+	"草稿不存在或状态不允许转正":                    "Draft not found or not in a state that can be approved",
 	"行业 code 仅允许小写字母/数字/下划线":           "Industry code allows lowercase letters/digits/underscore only",
 	"行业 code 已存在":                      "Industry code already exists",
 	"行业不存在":                            "Industry not found",

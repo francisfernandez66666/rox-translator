@@ -268,6 +268,8 @@ func (s *Server) routes() {
 	// ★ 一期《确定的多语言能力》：登录态产品面 + 免登录对外页/问答/sitemap
 	s.routesProduct()
 	s.routesProductPublic()
+	// ★ 二期 S2：销售引擎面（鉴权在函数体内取人，route_auth_gate 全集闸直接享）
+	s.routesSales()
 	// 兜底路由：前端 SPA 静态资源
 	s.mux.HandleFunc("/", s.handleSPA)
 }
