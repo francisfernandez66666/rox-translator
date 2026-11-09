@@ -762,6 +762,33 @@ func (s *Store) migrate() error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_sales_draft_tenant_status ON sales_drafts(tenant_id, status, id)`,
+		// ---------- 二期 S2：流程状态机（六包平移第二刀 state_machine） ----------
+		// ★ PK 用确定性 id（fsm_<tenant>_<flowInstance>），避开双方言自增序列差异；
+		// 业务唯一约束落在 (tenant_id, flow_instance_id)，**显式租户隔离**修复外仓
+		// 原「uniqueIndex 仅 on flow_instance_id」的跨租户污染坑。
+		`CREATE TABLE IF NOT EXISTS flow_state_machines (
+			id TEXT PRIMARY KEY,
+			tenant_id BIGINT NOT NULL,
+			one_id TEXT NOT NULL DEFAULT '',
+			flow_instance_id BIGINT NOT NULL,
+			current_node TEXT NOT NULL DEFAULT '',
+			state_json TEXT NOT NULL DEFAULT '',
+			heartbeat_ts TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'running',
+			version BIGINT NOT NULL DEFAULT 1,
+			last_event_id TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS ux_flow_sm_tenant_inst ON flow_state_machines(tenant_id, flow_instance_id)`,
+		// 流程实例（仅取终态收口所需列；state_machine 巡检据此把「流程已结束但状态机漏标」的脏数据收口）。
+		// ★ 主键必须是 (id, tenant_id) 复合：flow_instance_id 跨租户非全局唯一（终态收口靠
+		//   (instanceID, tenantID) 配对判定），若 id 单独立主键，同 id 不同租户会互相覆盖/冲突。
+		`CREATE TABLE IF NOT EXISTS flow_instances (
+			id BIGINT NOT NULL,
+			tenant_id BIGINT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'running',
+			PRIMARY KEY (id, tenant_id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_flow_instance_tenant ON flow_instances(tenant_id, status)`,
 	}
 	// 方言：以现有 SQLite DDL 为唯一真源，PostgreSQL 下经 db.ToDialect 自动改写
 	d := db.CurrentDialect()
