@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（551 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（560 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -186,6 +186,7 @@ var exactEN = map[string]string{
 	"包不存在或无权操作":        "Pack not found or no permission",
 	"升级单已创建但模拟入账失败（订单保留待支付）: ":       "Upgrade order created but mock settlement failed (order kept pending): ",
 	"升级单已含旧包余额抵扣，不再叠加优惠券（券适用于新购与充值）": "Upgrade already applies old-plan balance credit; coupons do not stack (coupons apply to new purchases and top-ups)",
+	"单档词表最多 200 条":            "A single lexicon entry may contain at most 200 words",
 	"原密码错误":                   "Incorrect current password",
 	"原邮箱验证码错误或已过期":            "Current-email verification code invalid or expired",
 	"参数格式错误":                  "Invalid parameter format",
@@ -247,6 +248,7 @@ var exactEN = map[string]string{
 	"平台上下文无订阅概念":                                           "Platform context has no subscription concept",
 	"平台存储未初始化":                                             "Platform storage not initialized",
 	"平台未初始化":                                               "Platform not initialized",
+	"平台默认词表仅超级管理员可补种":                                      "Only a super admin may reseed the platform-default lexicon",
 	"序列化失败":                                                "Serialization failed",
 	"开票失败（需订单已支付）: ":                                       "Invoicing failed (order must be paid): ",
 	"当前支付模式下不可选择模拟支付渠道":                                    "Mock payment channel is not selectable under the current payment mode",
@@ -430,6 +432,10 @@ var exactEN = map[string]string{
 	"识别接口只支持 POST":      "This endpoint only supports POST",
 	"识别数据已过期，请重新上传识别":   "Recognition data expired; upload again",
 	"识别数据无效，请重新上传":      "Invalid recognition data; upload again",
+	"词表删除格式错误":          "Invalid lexicon delete request",
+	"词表格式错误":            "Invalid lexicon format",
+	"词表档不存在或不属于本租户":     "Lexicon entry does not exist or does not belong to this tenant",
+	"词表档位不在场景/语种/类别全集里": "Lexicon entry's scene/language/kind is outside the allowed set",
 	"试用内容过长，注册后可翻译整篇文档": "The trial text is too long; register to translate whole documents",
 	"试用暂时不可用，请稍后再试或注册后使用完整功能":         "The trial is temporarily unavailable; try again later, or register for the full feature",
 	"试用标识不合法，请刷新页面后重试":                "Invalid trial identifier; refresh the page and try again",
@@ -554,6 +560,9 @@ var exactEN = map[string]string{
 	"部门管理员未绑定部门，无法生成邀请链接":              "Department admins have no bound department; cannot generate an invite link",
 	"重建正在进行中，请稍候":                      "Rebuild in progress; please wait",
 	"重置失败: ":                           "Reset failed: ",
+	"销售配置序列化失败":                        "Failed to serialize sales configuration",
+	"销售配置格式错误":                         "Invalid sales configuration format",
+	"销售配置解析失败":                         "Failed to parse sales configuration",
 	"静态收款码未配置，请联系管理员":                  "Static payment QR not configured; contact an administrator",
 	"静态收款码未配置，请联系管理员在套餐中心上传收款图片":       "Static payment QR not configured; ask an administrator to upload the payment image in the plan center",
 	"非 mock 模式禁止模拟支付":                  "Mock payment is disabled outside mock mode",

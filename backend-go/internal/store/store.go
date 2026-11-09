@@ -60,6 +60,22 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.DealMigrate(); err != nil {
 		return nil, err
 	}
+	// ★ 二期 S2 第三刀（2026-11-09）：attribution／mq／strategytypes 三个新域各自独立建表。
+	// 逐域幂等、失败即拒启——缺表时若静默降级，读路径会在运行期才炸，
+	// 而「生产 fail-fast 启动链」正是新表已落库的验收证据，不许绕过。
+	if err := s.SalesAttributionMigrate(); err != nil {
+		return nil, err
+	}
+	if err := s.SalesInboxMigrate(); err != nil {
+		return nil, err
+	}
+	if err := s.SalesLexiconMigrate(); err != nil {
+		return nil, err
+	}
+	// ★ 二期「前端可配」：租户级销售配置表与词表同批落（配置写口要求表在位，不许运行期才发现缺表）。
+	if err := s.SalesConfigMigrate(); err != nil {
+		return nil, err
+	}
 	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
 	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）

@@ -42,6 +42,7 @@ import { OpsP } from './panels_e'
 import { ReconcileP } from './ReconcileP' // ★ F9 对账视图
 import BillingHubP from './BillingHubP'
 import AssistP from './AssistP' // ★ autosales：AI 助手管理
+import SalesConfigP from './SalesConfigP' // ★ 二期：销售配置管理
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 // icon 为 16×16 SVG 图标名（UI-ANNOTATIONS §3.1-13 侧栏九项；§0.1：emoji 只是图标占位）
@@ -71,6 +72,8 @@ const ITEMS: Item[] = [
   //   菜单若放 minLevel 3 就是给租户管理员一条「看得见、点进去全线 403」的死路
   //   （2026-09-21 全量 UAT A5 红灯实证，非测试误报）。
   { key: 'assist', label: 'admin.menuAssist', minLevel: 4, icon: 'robot' }, // ★ autosales：AI 助手管理（仅超管）
+  // 租户管理员可配自己租户的销售模型／流程／策略；后端 requireTenantAdmin 同档把关。
+  { key: 'salesconfig', label: 'admin.menuSalesConfig', minLevel: 3, icon: 'gear' },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -105,6 +108,7 @@ function renderPanel(p: PanelKey) {
     case 'dataSources': return <DataSourcesP />
     case 'billing': return <BillingHubP /> // ★ Tab 精简：计费 Hub（套餐/租户/对账）
     case 'assist': return <AssistP /> // ★ autosales：AI 助手管理（原生面板，读写经主后台同源代理）
+    case 'salesconfig': return <SalesConfigP /> // ★ 二期：三段配置＋词表编辑器
     default: return null
   }
 }

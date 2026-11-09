@@ -51,6 +51,8 @@ func (s *Server) routesSales() {
 	s.mux.HandleFunc("/api/sales/drafts", s.handleSalesDrafts)
 	s.mux.HandleFunc("/api/sales/draft", s.handleSalesDraftDetail)
 	s.mux.HandleFunc("/api/sales/draft/approve", s.handleSalesDraftApprove)
+	// ★ 二期「能前端配置的都交给前端配置」：租户管理员的销售配置面（模型／流程引擎／策略／词表）。
+	s.routesSalesConfig()
 }
 
 // handleSalesCapability 返回当前租户两把闸的三态状态词（仅登录态可读）。

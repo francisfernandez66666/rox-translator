@@ -34,8 +34,10 @@ func BannedIndustryBranchTokens() []string {
 func RawLogToken() string { return "log." + "Printf(" }
 
 // ImportedPackageDirs 二期迁入包目录名（按全集枚举；目录尚不存在不算命中，
-// 后续 crm／attribution／talkmining／state_machine 一落地就自动进各道门禁射程）。
+// 后续 crm／flow／chatflow／strategy／service 一落地就自动进各道门禁射程）。
+// ★ 2026-11-09 第三刀：attribution／mq／strategytypes 三包落地，
+// 门禁射程同步扩到 7 项（漏登记＝新包不受 nogin/configbranch/importlog 三道闸约束）。
 // 返回：目录名全集。
 func ImportedPackageDirs() []string {
-	return []string{"salesflow", "crm", "attribution", "talkmining", "state_machine"}
+	return []string{"salesflow", "crm", "attribution", "talkmining", "state_machine", "mq", "strategytypes"}
 }

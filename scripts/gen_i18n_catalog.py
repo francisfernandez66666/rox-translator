@@ -436,6 +436,15 @@ T = {
 "验证码错误次数过多，请重新获取": "Too many wrong code attempts; request a new code",
 "默认租户不可删除": "The default tenant cannot be deleted",
 "默认租户不可清除": "The default tenant cannot be purged",
+"销售配置序列化失败": "Failed to serialize sales configuration",
+"词表格式错误": "Invalid lexicon format",
+"词表档位不在场景/语种/类别全集里": "Lexicon entry's scene/language/kind is outside the allowed set",
+"单档词表最多 200 条": "A single lexicon entry may contain at most 200 words",
+"词表删除格式错误": "Invalid lexicon delete request",
+"词表档不存在或不属于本租户": "Lexicon entry does not exist or does not belong to this tenant",
+"平台默认词表仅超级管理员可补种": "Only a super admin may reseed the platform-default lexicon",
+"销售配置解析失败": "Failed to parse sales configuration",
+"销售配置格式错误": "Invalid sales configuration format",
 }
 
 DYN = {
