@@ -46,6 +46,8 @@ export const SCAN_TESTS = [
   //   （前者扫全部非测试源文件判"引导外壳是否只有一份实现"，后者跨文件现读 App.tsx 路由集 vs AiAssist 白名单）
   //   ⇒ 必须吃 180s 预算；漏进这里就是"新锁没进调度名单"，慢机器上会以随机假红的形态出现。
   'src/components/guidedchat/guidedChatSingleShell.lock.test.ts',
+  // ★ 2026-11-11 三期 W1：A01 按目录枚举销售域页面全集（readdirSync），属遍历型 ⇒ 180s 预算。
+  'src/ui/langcross/langcrossUiConformance.lock.test.ts',
   'src/vitestScanLayout.lock.test.ts', // 本锁自己就是遍历型的（自指腿：不在名单里就会拿 30s 预算去扫全仓）
 ]
 

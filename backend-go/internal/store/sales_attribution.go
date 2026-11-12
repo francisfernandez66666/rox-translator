@@ -33,50 +33,52 @@ const attributionDefaultPageSize = 100
 // ReplyAttributionRow 回复归因的持久化行。
 // 终态列 ArrivedAt/DealtAt 保留但本层不写：到店/成交属后续自动化链路，一期只认可 inquiry。
 type ReplyAttributionRow struct {
-	ID             int64
-	TenantID       int64
-	MessageID      int64
-	ConversationID int64
-	CustomerID     int64
-	PackageID      string
-	Version        string
-	DraftID        string
-	AnchorType     int
-	RouteResult    string
-	Provider       string
-	ModelName      string
-	IntentBefore   float64
-	IntentAfter    float64
-	Hooked         int
-	LeadCaptured   int
-	PendingHuman   int
-	EvalScore      int
-	OutcomeStage   string
-	ArrivedAt      string
-	DealtAt        string
-	CreatedAt      string
-	UpdatedAt      string
+	ID             int64   `json:"id"`
+	TenantID       int64   `json:"tenant_id"`
+	MessageID      int64   `json:"message_id"`
+	ConversationID int64   `json:"conversation_id"`
+	CustomerID     int64   `json:"customer_id"`
+	PackageID      string  `json:"package_id"`
+	Version        string  `json:"version"`
+	DraftID        string  `json:"draft_id"`
+	AnchorType     int     `json:"anchor_type"`
+	RouteResult    string  `json:"route_result"`
+	Provider       string  `json:"provider"`
+	ModelName      string  `json:"model_name"`
+	IntentBefore   float64 `json:"intent_before"`
+	IntentAfter    float64 `json:"intent_after"`
+	Hooked         int     `json:"hooked"`
+	LeadCaptured   int     `json:"lead_captured"`
+	PendingHuman   int     `json:"pending_human"`
+	EvalScore      int     `json:"eval_score"`
+	OutcomeStage   string  `json:"outcome_stage"`
+	ArrivedAt      string  `json:"arrived_at"`
+	DealtAt        string  `json:"dealt_at"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 // PackStatRow 素材效果聚合快照行（9 个聚合列由 SyncPackStats 现算）。
 type PackStatRow struct {
-	TenantID         int64
-	PackageID        string
-	Version          string
-	DraftID          string
-	SampleCount      int64
-	HookRate         float64
-	LeadRate         float64
-	PendingHumanRate float64
-	ArriveRate       float64
-	DealRate         float64
-	AvgIntentDelta   float64
-	AvgEvalScore     float64
-	ComputedAt       string
+	TenantID         int64   `json:"tenant_id"`
+	PackageID        string  `json:"package_id"`
+	Version          string  `json:"version"`
+	DraftID          string  `json:"draft_id"`
+	SampleCount      int64   `json:"sample_count"`
+	HookRate         float64 `json:"hook_rate"`
+	LeadRate         float64 `json:"lead_rate"`
+	PendingHumanRate float64 `json:"pending_human_rate"`
+	ArriveRate       float64 `json:"arrive_rate"`
+	DealRate         float64 `json:"deal_rate"`
+	AvgIntentDelta   float64 `json:"avg_intent_delta"`
+	AvgEvalScore     float64 `json:"avg_eval_score"`
+	ComputedAt       string  `json:"computed_at"`
 }
 
 // RecordReply 幂等写一条回复归因；同一 (tenant_id, message_id) 重复时只刷新快照、不重复计数，
 // 也不动 eval_score、事件标记与终态列。
+// ★ 三期 W2：pending_human 随 INSERT 按 message_id 精确落行（assist 回避轮的主服务回写）；
+// 它是事件标记，幂等命中分支刻意不刷新——重复回写不许把已清零的标记重新立起。
 // 参数：row=归因行（TenantID/MessageID 必须有效）；返回：写库错误。
 func (s *Store) RecordReply(row ReplyAttributionRow) error {
 	if row.TenantID <= 0 || row.MessageID <= 0 {
@@ -87,11 +89,11 @@ func (s *Store) RecordReply(row ReplyAttributionRow) error {
 		`INSERT INTO reply_attributions
 		 (tenant_id, message_id, conversation_id, customer_id,
 		  package_id, version, draft_id, anchor_type, route_result, provider, model,
-		  intent_before, intent_after, eval_score, outcome_stage, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		  intent_before, intent_after, eval_score, outcome_stage, pending_human, created_at, updated_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		row.TenantID, row.MessageID, row.ConversationID, row.CustomerID,
 		row.PackageID, row.Version, row.DraftID, row.AnchorType, row.RouteResult, row.Provider, row.ModelName,
-		row.IntentBefore, row.IntentAfter, evalScoreUnknown, row.OutcomeStage, now, now)
+		row.IntentBefore, row.IntentAfter, evalScoreUnknown, row.OutcomeStage, row.PendingHuman, now, now)
 	if err == nil {
 		return nil
 	}

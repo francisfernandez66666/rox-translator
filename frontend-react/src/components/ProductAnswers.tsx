@@ -10,6 +10,7 @@ import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import { productList, answerProduct } from '@/api/product'
 import type { Product } from '@/api/product'
+import { Button, InlineBanner, Input, PageHeader } from '@/ui/langcross/src'
 
 /** 知识层问答面板（登录态）：带两段短码提问，出结果并点名缺项 */
 export default function ProductAnswers() {
@@ -45,20 +46,22 @@ export default function ProductAnswers() {
   }
 
   return (
-    <section>
-      <h2>{t('product.panel.answers')}</h2>
-      <input value={question} onChange={(e) => setQuestion(e.target.value)}
+    <>
+      <PageHeader title={t('product.panel.answers')} />
+      <Input value={question} onChange={(e) => setQuestion(e.target.value)}
              placeholder={t('product.panel.answerPlaceholder')} aria-label={t('product.panel.answerPlaceholder')} />
-      <button onClick={ask} disabled={!codes.tenantCode || !codes.pageCode}>{t('product.panel.answerSend')}</button>
+      <Button onClick={ask} disabled={!codes.tenantCode || !codes.pageCode}>{t('product.panel.answerSend')}</Button>
       {answer && (
-        <div>
-          <p data-testid="knowledge-answer">{answer}</p>
+        <InlineBanner tone="success">
+          <span data-testid="knowledge-answer">{answer}</span>
           <small>{t('product.panel.answerSource')}</small>
-        </div>
+        </InlineBanner>
       )}
       {missing.length > 0 && (
-        <p data-testid="answer-missing">{t('product.panel.answerMissing')}：{missing.join('、')}</p>
+        <InlineBanner tone="warn">
+          <span data-testid="answer-missing">{t('product.panel.answerMissing')}：{missing.join('、')}</span>
+        </InlineBanner>
       )}
-    </section>
+    </>
   )
 }

@@ -498,7 +498,7 @@ func (s *Server) handleGreeting(w http.ResponseWriter, r *http.Request) {
 	// history 恢复时看到好几条一模一样的开场白。已有消息的会话只回文本、不再落库。
 	if rows, _ := s.db.History(sid, 1); len(rows) == 0 {
 		// ★ 〇-AM：欢迎语落库时携带 auth/anon 上下文
-		_ = s.db.AddMessageWithAuth(sid, "assistant", text, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
+		_, _ = s.db.AddMessageWithAuth(sid, "assistant", text, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
 	}
 	writeJSON(w, 200, map[string]any{
 		"session":  sid,
@@ -566,7 +566,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	uiLang := normalizeUILang(req.Lang)
 	// 写入用户消息时携带 auth/anon 上下文
-	_ = s.db.AddMessageWithAuth(sid, "user", req.Message, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
+	_, _ = s.db.AddMessageWithAuth(sid, "user", req.Message, nil, authInfo.tenantID, authInfo.userID, anonymHash, "")
 	history, _ := s.db.History(sid, 12)
 
 	// ★ 2026-10-30 组7 §8.2：画像只随**本轮请求的 ctx** 进引擎（P-4 每轮现组装、不跨界缓存）。
@@ -576,8 +576,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if vp := s.visitorProfileFromRequest(r); vp != nil {
 		replyCtx = engine.WithVisitorProfile(replyCtx, vp)
 	}
+	// ★ 三期 W2（§0.4 第②段）：主服务签名下发的销售事实集 → 验签 → 注入本轮 ctx。
+	// 无头/验签失败 ⇒ ctx 里什么都没有 ⇒ W4 守卫按「无事实头」fail-closed 回避（不是放行）。
+	replyCtx = s.injectSalesFacts(replyCtx, r)
 	rep := s.eng.Respond(replyCtx, sid, req.Message, req.Page, uiLang, history)
-	_ = s.db.AddMessageWithAuth(sid, "assistant", rep.Content, actionMaps(rep.Actions), authInfo.tenantID, authInfo.userID, anonymHash, "")
+	msgID, _ := s.db.AddMessageWithAuth(sid, "assistant", rep.Content, actionMaps(rep.Actions), authInfo.tenantID, authInfo.userID, anonymHash, "")
 	_ = s.db.TouchSession(sid)
 
 	writeJSON(w, 200, map[string]any{
@@ -588,6 +591,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// ★ 082x：这一条答案是模型按访客语言写的，还是我们出站补翻的。
 		// 挂件不渲染它，但排障时必须有（没有它，「语言问题修好了」和「全靠补翻兜着」在界面上长一样）。
 		"lang_localized": rep.LangLocalized,
+		// ★ 三期 W2（§0.4 第③段）：归因元数据回吐主服务 writeBackAttribution 写 reply_attributions。
+		// 挂件不渲染这一段；message_id 是 assist 侧助手消息行 id（主库归因的唯一键维度）。
+		// ★ 三期 W6：补 session_id（assist 会话 id）——主库以 handoff_sessions 做会话映射，
+		//   待人工（pending_human）的 W6 回填按会话精确落位（v1.4 裁定），不再按「最近一条」找。
+		"attribution": map[string]any{
+			"message_id":    msgID,
+			"source":        rep.Source,
+			"model":         rep.Model,
+			"pending_human": rep.PendingHuman,
+			"session_id":    sid,
+		},
 	})
 }
 

@@ -323,3 +323,42 @@ func TestSalesAttributionConcurrentDuplicateMessageIDExactlyOne(t *testing.T) {
 		t.Fatalf("并发重复 message_id 必须恰好一条，实得 %d", count)
 	}
 }
+
+// TestAttributionNewEngineProductionAssembly A08（三期 W2 改判）：NewEngine 生产调用点 ≥1。
+// 扫描面＝internal/api/assist_open_proxy.go + internal/api/assist_sales_facts.go + internal/attribution
+// （原方案写 assist 目录是错的：assist 独立进程拿不到主库 *store.Store）。
+// 只数非测试、非注释行里的调用；func 定义不算调用；scanned<2 Fatal（射程空集自证）。
+// 反证：M0218 摘掉生产装配必红；M0219 把调用挪进注释（假调用）必红。
+func TestAttributionNewEngineProductionAssembly(t *testing.T) {
+	files := []string{"../api/assist_open_proxy.go", "../api/assist_sales_facts.go"}
+	more, err := filepath.Glob("../attribution/*.go")
+	if err != nil {
+		t.Fatalf("枚举 attribution 包失败: %v", err)
+	}
+	for _, f := range more {
+		if !strings.HasSuffix(f, "_test.go") {
+			files = append(files, f)
+		}
+	}
+	scanned, calls := 0, 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("扫描面文件缺失（锚点漂移不许静默）: %s: %v", f, err)
+		}
+		scanned++
+		for _, line := range strings.Split(string(b), "\n") {
+			trim := strings.TrimSpace(line)
+			if strings.HasPrefix(trim, "//") || strings.Contains(trim, "func NewEngine(") {
+				continue // 注释与定义都不算生产调用
+			}
+			calls += strings.Count(trim, "NewEngine(")
+		}
+	}
+	if scanned < 2 {
+		t.Fatalf("scanned=%d <2：扫描面空集，本锁今天没有牙", scanned)
+	}
+	if calls < 1 {
+		t.Fatalf("NewEngine 生产调用点=%d <1：归因引擎装了没接（组合根唯一装配点在代理层）", calls)
+	}
+}

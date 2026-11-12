@@ -233,6 +233,32 @@ func (s *Server) startWatchdog() {
 			s.runExclusive("reconcile-scan", time.Hour, s.runReconcileScan)
 		}
 	}()
+	// ★ 三期 W2（Q3 靶）：流程状态机巡检槽（每小时一轮）。
+	// 硬口径（二期 §9.2 :318 / §14，A05 锁定）：**不做 @startup 启动即跑**——
+	// 生产首跑由部署步显式拨一次，测试环境默认不注册该槽 ⇒ NewServer 后
+	// SweepOnce 调用计数恒 0。kill-switch＝sm_sweep_enabled（缺省关），
+	// 生产要开须显式配 1；requeue 另由 sm_sweep_requeue_enabled 控制（缺省仅记录）。
+	if s.smSweeper != nil {
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				s.runExclusive("sm-sweep", time.Hour, s.runSMSweepOnce)
+			}
+		}()
+	}
+	// ★ 三期 W5：外联序列拨轮槽（每小时一轮；不做 @startup 启动即跑，与 W2 sm-sweep 同形状）。
+	//   kill-switch＝outbound_enabled（缺省关，显式配 1 才跑），判据在 runOutboundSequenceOnce
+	//   内部、先于任何发送调用（A18 静态锁锚定）；生产首跑由部署步显式拨一次。
+	if s.Store != nil {
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				s.runExclusive("outbound", time.Hour, s.runOutboundSequenceOnce)
+			}
+		}()
+	}
 	// 泄漏日志（每日一轮：RSS/堆/goroutine 采样 + heap 快照留存；启动即采一次）
 	// 注：内存采样反映本实例进程，各实例独立执行是正确语义，不加分布式锁。
 	go func() {

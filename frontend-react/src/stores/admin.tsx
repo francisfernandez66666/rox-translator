@@ -35,6 +35,10 @@ export type PanelKey =
   | 'billing' | 'opsHub' // ★ Tab 精简（2026-09-15）：计费 Hub / 系统与运维 Hub
   | 'assist' // ★ autosales：AI 销售/客服助手管理（知识库/话术/流程/入口）
   | 'salesconfig' // ★ 二期：销售模型／流程引擎／销售策略的租户级配置面
+  | 'salesroles' // ★ 三期 W3：销售角色权限矩阵（RoleLevel × perm 行式三列）
+  | 'salesops' // ★ 三期 W3/W5：销售维护开关（事实注入/守卫/巡检/外联合规）
+  | 'salesinbox' // ★ 三期 W6：销售事件收件箱（幂等落账排障面）
+  | 'salesleads' // ★ 三期 W6：销售线索与待人工接管
 
 /** 根据角色 key 返回本地化展示名称（后台侧边栏展示，i18n）；未知角色返回普通用户
  * @param r - 角色标识字符串（如 super_admin / tenant_admin 等）

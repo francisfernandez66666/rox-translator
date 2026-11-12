@@ -15,6 +15,15 @@
 import json
 
 T = {
+"缺少 session_id": "Missing session_id",
+"退订通道未启用": "Unsubscribe channel is not enabled",
+"退订链接无效": "Invalid unsubscribe link",
+"频限必须是 1-1000 的整数": "Frequency cap must be an integer between 1 and 1000",
+"已退订，后续不再向您发送营销邮件": "You have been unsubscribed; no further marketing emails will be sent",
+"权限不足": "Insufficient permission",
+"权限项或角色等级不合法": "Invalid permission item or role level",
+"未登记的维护开关键": "Unregistered maintenance switch key",
+"开关值只能是 0 或 1": "Switch value must be 0 or 1",
 "仅支持 GET": "GET only",
 "识别接口只支持 POST": "This endpoint only supports POST",
 "先把产品描述贴进来，再让系统认一遍": "Paste the product description first, then let the system read it.",
@@ -335,6 +344,15 @@ T = {
 "组织名称不能为空": "Organization name must not be empty",
 "组织类型仅支持 org(组织)/dept(部门)": "Organization type supports org/dept only",
 "缺少 order_id": "order_id missing",
+"缺少 event_id": "event_id missing",
+# 三期 W2 报价/流程状态机管理面（sales_quote_api.go / sales_flow_api.go）
+"缺少 quote_id": "quote_id is required",
+"缺少 deal_id": "deal_id is required",
+"缺少 total_cents": "total_cents is required",
+"报价金额不能为负": "Quote amount cannot be negative",
+"请求体必须是 JSON": "Request body must be JSON",
+"缺少 fiid": "fiid is required",
+"fiid 必须是正整数": "fiid must be a positive integer",
 "缺少 package_id": "package_id missing",
 "缺少 temp_id": "temp_id missing",
 "缺少任务 id": "Task id missing",

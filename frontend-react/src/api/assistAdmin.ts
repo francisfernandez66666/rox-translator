@@ -70,6 +70,17 @@ export interface AssistStatusResp {
 /** LLM 连通测试结果 */
 export interface AssistLLMTestResp { ok: boolean; model?: string; ms?: number; sample?: string; error?: string }
 
+/** 系统现值体检（assist /api/assist/admin/system-values）：ok 以 fresh 非空为准；
+ *  cached_age_sec < 0 ＝对话链路还没取过一次；fresh 空＝两个口都没取到（软路径按设计不报数） */
+export interface AssistSystemValuesResp {
+  ok: boolean
+  base_url: string
+  cached: string
+  cached_age_sec: number
+  fresh: string
+  ms: number
+}
+
 /** 服务状态（面板挂载即调；不可达时面板直接给出处置指引而不是逐 tab 报「加载失败」）；返回形状＝AssistStatusResp 信封（含 success），走 bizResp */
 export async function assistAdminStatus(): Promise<AssistStatusResp> {
   // 与同文件其余接口一致过 guardBiz：面板调用点是 runGuarded(() => assistAdminStatus())，
@@ -134,4 +145,19 @@ export async function assistAdminLLMTest(): Promise<AssistLLMTestResp> {
     method: 'POST', headers: authHeaders(), body: '{}', timeoutMs: 35000,
   })))
   return d as AssistLLMTestResp
+}
+
+/** 系统现值现取一次（只读；上游 fresh 段约 3s 预算，代理 30s 超时，前端给 15s）；成功形＝{ok,base_url,fresh…} 裸对象，失败形＝{success:false} 信封 → 按失败形走 bizResp */
+export async function assistAdminSystemValues(): Promise<AssistSystemValuesResp> {
+  const d = guardBiz(await bizResp(() => request<any>('/api/admin/assist/system-values', {
+    headers: authHeaders(), timeoutMs: 15000,
+  })))
+  return {
+    ok: d?.ok === true,
+    base_url: String(d?.base_url ?? ''),
+    cached: String(d?.cached ?? ''),
+    cached_age_sec: Number(d?.cached_age_sec ?? -1),
+    fresh: String(d?.fresh ?? ''),
+    ms: Number(d?.ms ?? 0),
+  }
 }

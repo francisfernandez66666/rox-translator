@@ -24,7 +24,7 @@
 //   feature_links(key,name,description,url,ftype,icon,sort,enabled)
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Button, DataTable, Dialog, InlineBanner, StatusPill, Switch, Tabs } from '@/ui/langcross/src'
+import { Button, DataTable, InlineBanner, StatusPill, Tabs, Input, Textarea, Link, Toolbar } from '@/ui/langcross/src'
 import { confirmDialog } from '@/components/uiDialogs'
 import { toastError, toastSuccess, toastWarn } from '@/lib/toastBus'
 import { runGuarded } from '@/lib/runGuarded'
@@ -35,111 +35,51 @@ import { adminAssistToken, adminAssistTokenRotate } from '@/api'
 import type { AssistTokenResp } from '@/api'
 import {
   AssistBizError, assistAdminConfig, assistAdminConfigSet, assistAdminCreate, assistAdminDelete,
-  assistAdminLLMTest, assistAdminList, assistAdminSessions, assistAdminStatus, assistAdminUpdate,
+  assistAdminLLMTest, assistAdminList, assistAdminSessions, assistAdminStatus, assistAdminSystemValues,
+  assistAdminUpdate,
 } from '@/api/assistAdmin'
-import type { AssistArea, AssistRow, AssistSessionsResp } from '@/api/assistAdmin'
+import type { AssistArea, AssistRow, AssistSessionsResp, AssistSystemValuesResp } from '@/api/assistAdmin'
+import { AREAS, AreaTable, AreaDialog } from './sales/SalesAreaTable'
+import type { AreaDef, AreaFormState } from './sales/SalesAreaTable'
+
+/** 面板版式：设计变量一律取 tokens.css 的 --lc-*，不写内联布局样式、不写死色值。 */
+const ASSIST_CSS = `
+.lc-as-sub { font-size: 16px; color: var(--lc-text-2); margin-bottom: 10px; }
+.lc-as-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.lc-as-hint { font-size: 15px; color: var(--lc-text-3); }
+.lc-as-hint-mb { margin-bottom: 8px; }
+.lc-as-hint-sm { font-size: 14px; color: var(--lc-text-3); }
+.lc-as-mono { font-size: 14.5px; }
+.lc-as-mt8 { margin-top: 8px; }
+.lc-as-mt14 { margin-top: 14px; }
+.lc-as-stats { display: flex; gap: 26px; flex-wrap: wrap; font-size: 16px; }
+.lc-as-inline { display: inline-flex; align-items: center; gap: 8px; }
+.lc-as-sub2 { font-size: 16px; margin-bottom: 6px; }
+.lc-as-list { margin: 0; padding-left: 20px; font-size: 15px; line-height: 1.9; }
+.lc-as-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0 16px; }
+.lc-as-note { font-size: 14.5px; color: var(--lc-text-3); margin: 4px 0 10px; }
+.lc-as-cell { display: flex; align-items: center; gap: 8px; }
+.lc-as-ops { display: flex; gap: 12px; }
+.lc-input.lc-as-w420 { width: 420px; max-width: 100%; }
+.lc-input.lc-as-w240 { width: 240px; max-width: 100%; }
+.lc-input.lc-as-w140 { width: 140px; max-width: 100%; }
+.lc-input.lc-as-w300 { width: 300px; max-width: 460px; }
+.lc-input.lc-as-wide { width: 100%; max-width: 460px; }
+.lc-textarea.lc-as-ta { min-height: 56px; max-width: 620px; }
+.lc-textarea.lc-as-ta-lg { min-height: 88px; max-width: 620px; }
+.lc-textarea.lc-as-ta-md { min-height: 76px; }
+.lc-select.lc-as-sel { width: 200px; }
+.lc-as-svout { white-space: pre-wrap; font-size: 14.5px; color: var(--lc-text-3); margin-top: 10px; }
+`
 
 // 顾问管理台各面板共用的宽松记录别名（后端字段渐进增加，避免每加一列改一处类型）
 type Any = Record<string, any>
 
-/** 表单字段描述：kind 决定控件；options 仅 select 用（值 + 文案 i18n 键） */
-interface FormField {
-  field: string
-  labelKey: string
-  kind: 'text' | 'textarea' | 'number' | 'select'
-  options?: [string, string][]
-  wide?: boolean
-}
+// 区域定义与四类管理对象清单（AREAS）已抽到 ./sales/SalesAreaTable（W1 抽取，DOM 不变）；
+// 本面板只持有数据与读写动作，表格/弹窗渲染走 AreaTable/AreaDialog。
 
-/** 区域定义：列展示 + 表单字段 + 空值默认（与 assist 侧建表默认值一致，避免提交漏字段） */
-interface AreaDef {
-  area: AssistArea
-  tabKey: string
-  titleKey: string
-  cols: { field: string; labelKey: string; width: number; wide?: boolean }[]
-  fields: FormField[]
-  defaults: AssistRow
-}
-
-/** AREAS 四类管理对象的唯一事实源（新增一类只改这里，表格与表单自动跟随） */
-const AREAS: AreaDef[] = [
-  {
-    area: 'kb', tabKey: 'kb', titleKey: 'assist.tabKb',
-    cols: [
-      { field: 'key', labelKey: 'assist.colKey', width: 140 },
-      { field: 'category', labelKey: 'assist.fCategory', width: 100 },
-      { field: 'title', labelKey: 'assist.fTitle', width: 180, wide: true },
-      { field: 'keywords', labelKey: 'assist.fKeywords', width: 180, wide: true },
-      { field: 'priority', labelKey: 'assist.fPriority', width: 80 },
-    ],
-    fields: [
-      { field: 'category', labelKey: 'assist.fCategory', kind: 'text' },
-      { field: 'title', labelKey: 'assist.fTitle', kind: 'text' },
-      { field: 'content', labelKey: 'assist.fContent', kind: 'textarea', wide: true },
-      { field: 'keywords', labelKey: 'assist.fKeywords', kind: 'text', wide: true },
-      { field: 'link_keys', labelKey: 'assist.fLinkKeys', kind: 'text' },
-      { field: 'priority', labelKey: 'assist.fPriority', kind: 'number' },
-    ],
-    defaults: { category: 'usage', title: '', content: '', keywords: '', link_keys: '', priority: 5, enabled: 1 },
-  },
-  {
-    area: 'scripts', tabKey: 'scripts', titleKey: 'assist.tabScripts',
-    cols: [
-      { field: 'key', labelKey: 'assist.colKey', width: 140 },
-      { field: 'stype', labelKey: 'assist.fStype', width: 100 },
-      { field: 'title', labelKey: 'assist.fTitle', width: 160, wide: true },
-      { field: 'content', labelKey: 'assist.fContent', width: 240, wide: true },
-      { field: 'keywords', labelKey: 'assist.fKeywords', width: 160, wide: true },
-    ],
-    fields: [
-      { field: 'stype', labelKey: 'assist.fStype', kind: 'select', options: [['keyword', 'assist.stKeyword'], ['greeting', 'assist.stGreeting'], ['fallback', 'assist.stFallback']] },
-      { field: 'title', labelKey: 'assist.fTitle', kind: 'text' },
-      { field: 'content', labelKey: 'assist.fContent', kind: 'textarea', wide: true },
-      { field: 'keywords', labelKey: 'assist.fKeywords', kind: 'text', wide: true },
-      { field: 'link_keys', labelKey: 'assist.fLinkKeys', kind: 'text' },
-      { field: 'priority', labelKey: 'assist.fPriority', kind: 'number' },
-    ],
-    defaults: { stype: 'keyword', title: '', content: '', keywords: '', link_keys: '', priority: 5, enabled: 1 },
-  },
-  {
-    area: 'flows', tabKey: 'flows', titleKey: 'assist.tabFlows',
-    cols: [
-      { field: 'key', labelKey: 'assist.colKey', width: 140 },
-      { field: 'name', labelKey: 'assist.fName', width: 160, wide: true },
-      { field: 'trigger_keywords', labelKey: 'assist.fTrigger', width: 200, wide: true },
-      { field: 'steps_json', labelKey: 'assist.fSteps', width: 240, wide: true },
-    ],
-    fields: [
-      { field: 'name', labelKey: 'assist.fName', kind: 'text' },
-      { field: 'description', labelKey: 'assist.fDesc', kind: 'text', wide: true },
-      { field: 'trigger_keywords', labelKey: 'assist.fTrigger', kind: 'text', wide: true },
-      { field: 'steps_json', labelKey: 'assist.fSteps', kind: 'textarea', wide: true },
-    ],
-    defaults: { name: '', description: '', trigger_keywords: '', steps_json: '[]', enabled: 1 },
-  },
-  {
-    area: 'features', tabKey: 'features', titleKey: 'assist.tabFeatures',
-    cols: [
-      { field: 'key', labelKey: 'assist.colKey', width: 140 },
-      { field: 'name', labelKey: 'assist.fName', width: 160, wide: true },
-      { field: 'url', labelKey: 'assist.fUrl', width: 220, wide: true },
-      { field: 'ftype', labelKey: 'assist.fFtype', width: 100 },
-      { field: 'sort', labelKey: 'assist.fSort', width: 80 },
-    ],
-    fields: [
-      { field: 'name', labelKey: 'assist.fName', kind: 'text' },
-      { field: 'description', labelKey: 'assist.fDesc', kind: 'text', wide: true },
-      { field: 'url', labelKey: 'assist.fUrl', kind: 'text', wide: true },
-      { field: 'ftype', labelKey: 'assist.fFtype', kind: 'select', options: [['route', 'assist.ftRoute'], ['link', 'assist.ftLink']] },
-      { field: 'icon', labelKey: 'assist.fIcon', kind: 'text' },
-      { field: 'sort', labelKey: 'assist.fSort', kind: 'number' },
-    ],
-    defaults: { name: '', description: '', url: '', ftype: 'route', icon: '', sort: 50, enabled: 1 },
-  },
-]
-
-/** 对话配置六项 + LLM 四项：键名直接用 assist 侧真实配置键（运维排查时要能对上），文案只给说明 */
-const CHAT_CFG = ['welcome', 'persona', 'temperature', 'max_tokens', 'quick_chips']
+/** 对话配置七项 + LLM 四项：键名直接用 assist 侧真实配置键（运维排查时要能对上），文案只给说明 */
+const CHAT_CFG = ['welcome', 'persona', 'tone_rules', 'promise_rules', 'temperature', 'max_tokens', 'quick_chips']
 // LLM 配置四键的固定顺序：掩码回显与「留空不改」按这个序遍历
 const LLM_CFG = ['llm_base_url', 'llm_api_key', 'llm_model', 'llm_model_backup']
 
@@ -161,12 +101,16 @@ export default function AssistP() {
   const [sess, setSess] = useState<AssistSessionsResp | null>(null)
   // 数据类页签的行缓存与表单弹窗
   const [rowsMap, setRowsMap] = useState<Record<string, AssistRow[]>>({})
-  const [form, setForm] = useState<{ def: AreaDef; row: Any } | null>(null)
+  const [form, setForm] = useState<AreaFormState | null>(null)
   const [busy, setBusy] = useState(false)
   // 配置页签
   const [cfg, setCfg] = useState<Record<string, string>>({})
   const [testOut, setTestOut] = useState('')
   const [testing, setTesting] = useState(false)
+  // 系统现值（价格系数/语种数实时值）：只在点「现取一次」时拨，失败在面板内出声
+  const [sv, setSv] = useState<AssistSystemValuesResp | null>(null)
+  const [svBusy, setSvBusy] = useState(false)
+  const [svErr, setSvErr] = useState('')
 
   const refreshStatus = useCallback(async () => {
     const r = await runGuarded(() => assistAdminStatus())
@@ -324,11 +268,44 @@ export default function AssistP() {
     } catch (e) { bizFail(e) } finally { setTesting(false) }
   }
 
+  // saveMainBase 保存现值注入拨向的主服务地址（assist configs.main_base_url，60s 缓存后生效）
+  async function saveMainBase() {
+    try {
+      await assistAdminConfigSet('main_base_url', String(cfg.main_base_url ?? '').trim())
+      void toastSuccess(t('assist.svBaseSaved'))
+      await loadConfig()
+    } catch (e) { bizFail(e) }
+  }
+
+  // loadSystemValues 现取一次系统现值：ok/fresh 为空＝没取到（软路径按设计不报数），不是取到 0
+  async function loadSystemValues() {
+    if (svBusy) return
+    setSvBusy(true)
+    setSvErr('')
+    try {
+      setSv(await assistAdminSystemValues())
+    } catch (e) {
+      setSv(null)
+      setSvErr(e instanceof AssistBizError ? e.message : String((e as any)?.message || e))
+    } finally { setSvBusy(false) }
+  }
+
   const srcLabel = useMemo(() => {
     // 优先取 Token 接口自己的来源；拉不到时回落代理状态，两者口径同为 env/db/none
     const s = String(tokState?.source ?? status?.token_src ?? '')
     return s === 'env' ? t('assist.srcEnv') : s === 'db' ? t('assist.srcDb') : t('assist.srcNone')
   }, [status, tokState, t])
+
+  // 系统现值输出段：取数中 / 失败 / 还没取过 / 取到了 四态各说各的话（空＝没取到，不是取到 0）
+  const svOut = svBusy ? t('assist.svFetching')
+    : svErr ? svErr
+      : !sv ? t('assist.svOutIdle')
+        : (() => {
+          const age = sv.cached_age_sec < 0 ? t('assist.svAgeNever')
+            : t('assist.svAgeCached').replace('{sec}', String(Math.round(sv.cached_age_sec)))
+          const head = t('assist.svOutHead').replace('{base}', sv.base_url).replace('{ms}', String(sv.ms)).replace('{age}', age)
+          return `${head}\n\n${t('assist.svFreshLabel')}\n${sv.fresh || t('assist.svFreshEmpty')}`
+        })()
 
   const tabs = [
     { key: 'overview', label: t('assist.tabOverview') },
@@ -361,58 +338,62 @@ export default function AssistP() {
 
   return (
     <div>
+      <style>{ASSIST_CSS}</style>
       <Panel title={t('assist.title')} extra={
         <Button size="sm" variant="secondary" onClick={() => { void refreshStatus(); void refreshTok() }}>{t('assist.recheck')}</Button>
       }>
-        <div style={{ fontSize: 16, color: 'var(--adm-hint)', marginBottom: 10 }}>{t('assist.subtitle')}</div>
+        <div className="lc-as-sub">{t('assist.subtitle')}</div>
         <InlineBanner tone={bannerTone}>{bannerText}</InlineBanner>
 
         {/* ===== 管理 Token 区（★ 〇-LK：与 ModelsP 密钥区同一套范式） =====
             显示行只回掩码态；输入框刻意不回填任何已有值（后端也不下发），
             所以「打开面板 → 直接点保存」不可能把凭据清空，这与旧版 iframe 手填 Token 的体验断层是两回事。 */}
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+        <div className="lc-as-row">
           <StatusPill tone={tokState?.set ? 'success' : 'warn'}>
             {tokState?.set ? t('assist.tokenSet') : t('assist.tokenUnset')}
           </StatusPill>
-          <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{t('assist.tokenSrcLabel')}：{srcLabel}</span>
-          {tokState?.set && <code style={{ fontSize: 14.5 }}>{tokState.masked}</code>}
-          <span style={{ fontSize: 14, color: 'var(--adm-hint)' }}>{t('assist.tokenMaskNote')}</span>
+          <span className="lc-as-hint">{t('assist.tokenSrcLabel')}：{srcLabel}</span>
+          {tokState?.set && <code className="lc-as-mono">{tokState.masked}</code>}
+          <span className="lc-as-hint-sm">{t('assist.tokenMaskNote')}</span>
         </div>
         {tokState?.env_overridden && (
-          <div style={{ marginTop: 8 }}><InlineBanner tone="warn">{t('assist.tokenEnvLocked')}</InlineBanner></div>
+          <div className="lc-as-mt8"><InlineBanner tone="warn">{t('assist.tokenEnvLocked')}</InlineBanner></div>
         )}
-        <form onSubmit={(e) => { e.preventDefault(); void saveToken() }}
-          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+        {/* 组件库无 Form 容器：这一行改用 Toolbar 承载；保存走按钮 onClick，
+            回车提交由输入框 onKeyDown 兜住，行为与原生 form 一致。 */}
+        <Toolbar>
           {/* autoComplete="new-password"：屏蔽密码管理器对凭据框的自动填充/保存（与模型密钥框同口径） */}
-          <input
-            className="lc-input" type="password" autoComplete="new-password" aria-label={t('assist.tokenLabel')}
+          <Input
+            className="lc-as-w420" type="password" autoComplete="new-password" aria-label={t('assist.tokenLabel')}
             value={rotateVal} placeholder={t('assist.tokenPh')} disabled={rotating}
-            onChange={(e) => setRotateVal(e.target.value)} style={{ maxWidth: 420 }}
+            onChange={(e) => setRotateVal(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void saveToken() } }}
           />
-          <Button size="sm" variant="primary" type="submit" disabled={rotating || !rotateVal.trim()}>{t('assist.tokenSave')}</Button>
+          <Button size="sm" variant="primary" disabled={rotating || !rotateVal.trim()} onClick={() => void saveToken()}>{t('assist.tokenSave')}</Button>
           {tokState?.set && tokState?.source === 'db' && (
             <Button size="sm" variant="danger" disabled={rotating} onClick={() => void clearToken()}>{t('assist.tokenClear')}</Button>
           )}
-          <a className="lc-link" href={`${ASSIST_API}/assist/admin`} target="_blank" rel="noreferrer" style={{ fontSize: 15 }}>
+          {/* 备用管理台是外链：Link 为按钮语义，用 window.open 保持新标签页 + noreferrer 行为 */}
+          <Link onClick={() => { window.open(`${ASSIST_API}/assist/admin`, '_blank', 'noreferrer') }}>
             {t('assist.legacyAdmin')}
-          </a>
-        </form>
-        {bizErr && <div style={{ marginTop: 8 }}><InlineBanner tone="error">{bizErr}</InlineBanner></div>}
+          </Link>
+        </Toolbar>
+        {bizErr && <div className="lc-as-mt8"><InlineBanner tone="error">{bizErr}</InlineBanner></div>}
       </Panel>
 
       {/* data-testid 只给 e2e 用：侧边栏也有「知识库」等同类文案，页签必须限定在本面板内点击，
           否则 Playwright 的 .first() 会命中侧栏菜单并把面板切走（2026-09-21 A3 假失败根因） */}
-      <div style={{ marginTop: 14 }} data-testid="assist-tabs">
+      <div className="lc-as-mt14" data-testid="assist-tabs">
         <Tabs items={tabs} activeKey={tab} onChange={(k) => setTab(k as Tab)} />
       </div>
 
       {tab === 'overview' && (
         <Panel title={t('assist.tabOverview')}>
-          <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', fontSize: 16 }}>
+          <div className="lc-as-stats">
             <span>{t('assist.statSessions')}：<b>{sess?.total ?? '—'}</b></span>
             <span>{t('assist.statMessages')}：<b>{sess?.messages ?? '—'}</b></span>
             <span>{t('assist.statUnanswered')}：<b>{sess?.unanswered.length ?? '—'}</b></span>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span className="lc-as-inline">
               LLM
               <StatusPill tone={sess?.llm_mode === 'rule' ? 'warn' : 'success'}>
                 {sess?.llm_mode === 'env' ? t('assist.modeEnv') : sess?.llm_mode === 'db' ? t('assist.modeDb') : t('assist.modeRule')}
@@ -420,14 +401,14 @@ export default function AssistP() {
             </span>
           </div>
           {(sess?.unanswered.length ?? 0) > 0 && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ fontSize: 16, marginBottom: 6 }}>{t('assist.unansweredTitle')}</div>
-              <ul style={{ margin: 0, paddingLeft: 20, fontSize: 15, lineHeight: 1.9 }}>
+            <div className="lc-as-mt14">
+              <div className="lc-as-sub2">{t('assist.unansweredTitle')}</div>
+              <ul className="lc-as-list">
                 {sess!.unanswered.map((q, i) => <li key={i}>{q}</li>)}
               </ul>
             </div>
           )}
-          <div style={{ marginTop: 14 }}>
+          <div className="lc-as-mt14">
             <DataTable
               rowKey={(r) => String((r as Any).id)} rows={(sess?.sessions as Any[]) || []} emptyText={t('assist.noRows')}
               columns={[
@@ -443,121 +424,84 @@ export default function AssistP() {
       )}
 
       {tab === 'config' && (
-        <Panel title={t('assist.tabConfig')}>
-          <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.llmHint')}</div>
-          {LLM_CFG.map((k) => (
-            <Field key={k} label={k}>
-              <input
-                className="lc-input" style={{ width: 420 }} value={cfg[k] ?? ''}
-                type={k === 'llm_api_key' ? 'password' : 'text'} aria-label={k}
-                onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
+        <>
+          <Panel title={t('assist.tabConfig')}>
+            <div className="lc-as-hint lc-as-hint-mb">{t('assist.llmHint')}</div>
+            {LLM_CFG.map((k) => (
+              <Field key={k} label={k}>
+                <Input
+                  className="lc-as-w420" value={cfg[k] ?? ''}
+                  type={k === 'llm_api_key' ? 'password' : 'text'} aria-label={k}
+                  onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
+                />
+              </Field>
+            ))}
+            <div className="lc-as-actions">
+              <Button variant="primary" size="sm" onClick={() => void saveCfgKeys(LLM_CFG)}>{t('assist.llmSave')}</Button>
+              <Button variant="secondary" size="sm" disabled={testing} onClick={() => void testLLM()}>{t('assist.llmTest')}</Button>
+              {testOut && <span className="lc-as-hint">{testOut}</span>}
+            </div>
+            <div className="lc-as-hint lc-as-hint-mb">{t('assist.cfgHint')}</div>
+            {CHAT_CFG.map((k) => (
+              <Field key={k} label={k}>
+                <Textarea
+                  className="lc-as-ta" value={cfg[k] ?? ''}
+                  aria-label={k} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
+                />
+              </Field>
+            ))}
+            <Field label="synonyms">
+              <Textarea
+                className="lc-as-ta-lg" value={cfg.synonyms ?? ''}
+                placeholder={t('assist.synPh')} aria-label="synonyms"
+                onChange={(e) => setCfg({ ...cfg, synonyms: e.target.value })}
               />
             </Field>
-          ))}
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '6px 0 16px' }}>
-            <Button variant="primary" size="sm" onClick={() => void saveCfgKeys(LLM_CFG)}>{t('assist.llmSave')}</Button>
-            <Button variant="secondary" size="sm" disabled={testing} onClick={() => void testLLM()}>{t('assist.llmTest')}</Button>
-            {testOut && <span style={{ fontSize: 15, color: 'var(--adm-hint)' }}>{testOut}</span>}
+            <div className="lc-as-note">{t('assist.synHint')}</div>
+            <Button variant="primary" size="sm" onClick={() => void saveCfgKeys([...CHAT_CFG, 'synonyms'])}>{t('assist.cfgSave')}</Button>
+          </Panel>
+
+          {/* 系统现值（★ 081x 旧管理台差集补齐）：现值注入是「取不到就整段丢掉」的软路径，
+              失败时挂件界面与正常一模一样，所以这里必须能现取一次看真相；空＝没取到，不是取到 0。 */}
+          <div className="lc-as-mt14">
+            <Panel title={t('assist.svTitle')} extra={
+              sv ? <StatusPill tone={sv.ok ? 'success' : 'warn'}>{sv.ok ? t('assist.svOk') : t('assist.svMissing')}</StatusPill> : undefined
+            }>
+              <div className="lc-as-hint lc-as-hint-mb">{t('assist.svHint')}</div>
+              <Field label="main_base_url">
+                <Input
+                  className="lc-as-w420" value={cfg.main_base_url ?? ''}
+                  placeholder="http://127.0.0.1:8787" aria-label="main_base_url"
+                  onChange={(e) => setCfg({ ...cfg, main_base_url: e.target.value })}
+                />
+              </Field>
+              <div className="lc-as-note">{t('assist.svBaseHint')}</div>
+              <div className="lc-as-actions">
+                <Button variant="primary" size="sm" onClick={() => void saveMainBase()}>{t('assist.svSaveBase')}</Button>
+                <Button variant="secondary" size="sm" disabled={svBusy} onClick={() => void loadSystemValues()}>{t('assist.svFetch')}</Button>
+              </div>
+              <div className="lc-as-svout" data-testid="assist-sv-out">{svOut}</div>
+            </Panel>
           </div>
-          <div style={{ fontSize: 15, color: 'var(--adm-hint)', marginBottom: 8 }}>{t('assist.cfgHint')}</div>
-          {CHAT_CFG.map((k) => (
-            <Field key={k} label={k}>
-              <textarea
-                className="lc-textarea" style={{ minHeight: 56, width: '100%', maxWidth: 620 }} value={cfg[k] ?? ''}
-                aria-label={k} onChange={(e) => setCfg({ ...cfg, [k]: e.target.value })}
-              />
-            </Field>
-          ))}
-          <Field label="synonyms">
-            <textarea
-              className="lc-textarea" style={{ minHeight: 88, width: '100%', maxWidth: 620 }} value={cfg.synonyms ?? ''}
-              placeholder={t('assist.synPh')} aria-label="synonyms"
-              onChange={(e) => setCfg({ ...cfg, synonyms: e.target.value })}
-            />
-          </Field>
-          <div style={{ fontSize: 14.5, color: 'var(--adm-hint)', margin: '4px 0 10px' }}>{t('assist.synHint')}</div>
-          <Button variant="primary" size="sm" onClick={() => void saveCfgKeys([...CHAT_CFG, 'synonyms'])}>{t('assist.cfgSave')}</Button>
-        </Panel>
+        </>
       )}
 
       {tab !== 'overview' && tab !== 'config' && (() => {
         const def = AREAS.find((a) => a.tabKey === tab)!
         return (
-          <Panel title={t(def.titleKey)} extra={
-            <Button size="sm" variant="primary" onClick={() => setForm({ def, row: { ...def.defaults, id: 0, key: '', enabled: 1 } })}>
-              {t('assist.create')}
-            </Button>
-          }>
-            <DataTable
-              rowKey={(r) => String((r as Any).id)} rows={rowsMap[def.area] || []} emptyText={t('assist.noRows')}
-              columns={[
-                ...def.cols.map((c) => ({
-                  key: c.field, title: t(c.labelKey), width: c.width,
-                  render: (r: Any) => (c.wide ? String(r[c.field] ?? '') : <code>{String(r[c.field] ?? '')}</code>),
-                })),
-                {
-                  key: 'enabled', title: t('common.status'), width: 130, render: (r: Any) => (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <Switch checked={Number(r.enabled) === 1} onChange={(e) => void toggleRow(def, r as AssistRow, e.target.checked)} />
-                      <StatusPill tone={Number(r.enabled) === 1 ? 'success' : 'idle'}>
-                        {Number(r.enabled) === 1 ? t('assist.enabled') : t('ind.off')}
-                      </StatusPill>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'op', title: '', width: 150, render: (r: Any) => (
-                    <div style={{ display: 'flex', gap: 12 }}>
-                      <a className="lc-link" onClick={() => setForm({ def, row: { ...def.defaults, ...r } })}>{t('coupons.edit')}</a>
-                      <a className="lc-link" style={{ color: 'var(--lc-danger, #E5484D)' }} onClick={() => void removeRow(def, r as AssistRow)}>{t('common.delete')}</a>
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </Panel>
+          <AreaTable
+            def={def}
+            rows={rowsMap[def.area] || []}
+            onCreate={() => setForm({ def, row: { ...def.defaults, id: 0, key: '', enabled: 1 } })}
+            onEdit={(r) => setForm({ def, row: { ...def.defaults, ...r } })}
+            onToggle={(r, on) => void toggleRow(def, r, on)}
+            onRemove={(r) => void removeRow(def, r)}
+          />
         )
       })()}
 
       {form && (
-        <Dialog
-          open onCancel={() => setForm(null)} onConfirm={() => void saveRow()}
-          title={`${Number(form.row.id) > 0 ? t('assist.editTitle') : t('assist.create')}${t(form.def.titleKey)}`}
-          confirmText={t('common.save')} cancelText={t('common.cancel')}
-        >
-          <Field label={t('assist.colKey')}>
-            {/* key 是 assist 侧的唯一定位标识（话术/知识命中都按它），编辑时不允许改，避免断引用 */}
-            <input className="lc-input" style={{ width: 240 }} value={String(form.row.key ?? '')} aria-label={t('assist.colKey')}
-              disabled={Number(form.row.id) > 0} onChange={(e) => setForm({ ...form, row: { ...form.row, key: e.target.value } })} />
-          </Field>
-          {form.def.fields.map((f) => (
-            <Field key={f.field} label={t(f.labelKey)}>
-              {f.kind === 'textarea' && (
-                <textarea className="lc-textarea" style={{ minHeight: 76, width: '100%' }} aria-label={t(f.labelKey)}
-                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
-              )}
-              {f.kind === 'number' && (
-                <input className="lc-input" style={{ width: 140 }} type="number" min={0} aria-label={t(f.labelKey)}
-                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
-              )}
-              {f.kind === 'select' && (
-                <select className="lc-select" style={{ width: 200 }} aria-label={t(f.labelKey)}
-                  value={String(form.row[f.field] ?? f.options?.[0]?.[0] ?? '')}
-                  onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })}>
-                  {(f.options || []).map(([v, k]) => <option key={v} value={v}>{t(k)}</option>)}
-                </select>
-              )}
-              {f.kind === 'text' && (
-                <input className="lc-input" style={{ width: f.wide ? '100%' : 300, maxWidth: 460 }} aria-label={t(f.labelKey)}
-                  value={String(form.row[f.field] ?? '')} onChange={(e) => setForm({ ...form, row: { ...form.row, [f.field]: e.target.value } })} />
-              )}
-            </Field>
-          ))}
-          <Field label={t('assist.enabled')}>
-            <Switch checked={Number(form.row.enabled ?? 1) === 1}
-              onChange={(e) => setForm({ ...form, row: { ...form.row, enabled: e.target.checked ? 1 : 0 } })} />
-          </Field>
-        </Dialog>
+        <AreaDialog form={form} onChange={setForm} onSave={() => void saveRow()} onCancel={() => setForm(null)} />
       )}
     </div>
   )

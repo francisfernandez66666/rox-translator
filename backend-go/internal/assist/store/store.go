@@ -3,6 +3,7 @@
 package store
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"translator/internal/observability"
 )
 
 // DB 数据库句柄：封装 *sql.DB，所有表存取方法均挂在 DB 上。
@@ -160,6 +163,15 @@ func (d *DB) migrate() error {
 	colWhitelist["messages_base"] = []string{
 		"session_id", "role", "content", "actions",
 		"tenant_id", "user_id", "anonym_hash", "expires_at",
+	}
+
+	// ★ 三期 W4：kb_entries / scripts / flows 三表补 lang 列（原文语种，缺省 zh）。
+	//   W4 的销售声称守卫按语种取段（PickSegmentByLang），列不在位时按「全 zh」处理
+	//   也能工作，但迁移挂在这里能保证新列与库结构同刻在位，读侧不用每轮判列。
+	//   失败不挡启动（挂件侧纪律，与 migrateLegacyChatTables 同档）：缺列只回落 zh 档。
+	if err := d.KBLangMigrate(); err != nil {
+		// 观测留痕但不拒启：assist 是访客侧组件，为一列缺省 zh 的可选列整台起不来得不偿失。
+		observability.Warn(context.Background(), "assist 库 lang 列迁移跳过（不挡启动）", "err", err)
 	}
 
 	return nil
@@ -958,17 +970,22 @@ func (d *DB) AddMessage(sessionID, role, content string, actions []map[string]st
 
 // AddMessageWithAuth 追加消息并携带认证上下文（登录态填 tenant_id/user_id，匿名态填 anonym_hash + expires_at）。
 // ★ 〇-AM：用于已登录用户的会话挂钩。
-func (d *DB) AddMessageWithAuth(sessionID, msgRole, text string, actions []map[string]string, tenantID, userID int64, anonymHash, expiresAt string) error {
+// ★ 三期 W2：返回插入行 id（供主服务回写 reply_attributions 的 message_id）；插入失败回 0 与错误。
+func (d *DB) AddMessageWithAuth(sessionID, msgRole, text string, actions []map[string]string, tenantID, userID int64, anonymHash, expiresAt string) (int64, error) {
 	aj := "[]"
 	if len(actions) > 0 {
 		if b, err := json.Marshal(actions); err == nil {
 			aj = string(b)
 		}
 	}
-	_, err := d.sql.Exec(
+	res, err := d.sql.Exec(
 		"INSERT INTO messages_base(session_id,role,content,actions,tenant_id,user_id,anonym_hash,expires_at) VALUES(?,?,?, ?, ?, ?,?, ?)",
 		sessionID, msgRole, text, aj, tenantID, userID, anonymHash, expiresAt)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	id, _ := res.LastInsertId()
+	return id, nil
 }
 
 // History 取会话最近消息（正序），limit 为条数。

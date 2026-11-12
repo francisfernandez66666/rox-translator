@@ -42,6 +42,7 @@ import (
 	"translator/internal/fileproc"
 	"translator/internal/infra/redis"
 	"translator/internal/kb"
+	"translator/internal/mq"
 	"translator/internal/queue"
 	"translator/internal/service"
 	"translator/internal/store"
@@ -77,6 +78,10 @@ type Server struct {
 	startedAt time.Time
 	// SSO / OIDC 适配层（阶段六；nil=未启用）
 	SSO *sso.Manager
+	// ★ 三期 W2：进程内事件总线单例（组合根装配，见 sales_mq_wiring.go）。
+	MQBus *mq.Bus
+	// ★ 三期 W2：流程状态机巡检器（生产＝state_machine.Service；测试可注入计数桩）。
+	smSweeper smSweeper
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -102,6 +107,8 @@ func NewServer(cfg *config.Config, eng *engine.Engine, db *kb.KBDatabase, dist s
 		// ★ Token 计费一次性迁移（幂等）：存量句数余额按换算率折算充入 token 账户，
 		// 完成后置 billing_token_migrated=1，系统自动进入实费计费模式
 		billing.RunTokenMigration(st)
+		// ★ 三期 W2：进程内事件总线单例 + 收件箱消费者 + 状态机巡检器（组合根唯一装配点）。
+		s.wireSalesMQ()
 	}
 	// 工单服务装配：direct 队列（jobs 表）+ worker 池；启动时回收中断任务
 	if st != nil && eng != nil {

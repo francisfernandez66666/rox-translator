@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import { productList, factList, factConfirm, factWithdraw, type ProductFact } from '@/api/product'
+import { Button, DataTable, EmptyState, PageHeader, type TableColumn } from '@/ui/langcross/src'
 
 /** 事实项面板（登录态）：自动取首个产品，列出事实并提供确认／撤回两个写口 */
 export default function ProductFacts() {
@@ -44,40 +45,41 @@ export default function ProductFacts() {
     call.then(() => { if (productId) reload(productId) }).catch(() => { /* 写失败保留原态 */ })
   }
 
+  const columns: TableColumn<ProductFact>[] = [
+    { key: 'kind', title: t('product.panel.kind'), render: (f) => t(`facts.kind.${f.kind}`) },
+    { key: 'value', title: t('product.panel.value'), render: (f) => f.value },
+    {
+      key: 'status',
+      title: t('product.panel.status'),
+      render: (f) => (
+        <span data-testid={`fact-${f.status}`}>
+          {f.status === 'confirmed' ? t('product.panel.confirmed')
+            : f.status === 'withdrawn' ? t('product.panel.withdrawn')
+              : t('product.panel.unverified')}
+          {f.visibility === 'gated' && <em> · {t('product.panel.gatedBadge')}</em>}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      title: '',
+      render: (f) => (
+        <>
+          {f.status !== 'confirmed' && <Button onClick={() => act(f.id, 'confirm')}>{t('product.panel.confirm')}</Button>}
+          {f.status !== 'withdrawn' && <Button onClick={() => act(f.id, 'withdraw')}>{t('product.panel.withdraw')}</Button>}
+        </>
+      ),
+    },
+  ]
+
   return (
-    <section>
-      <h2>{t('product.panel.facts')}</h2>
+    <>
+      <PageHeader title={t('product.panel.facts')} />
       {facts.length === 0 ? (
-        <p>{t('product.panel.empty')}</p>
+        <EmptyState title={t('product.panel.empty')} />
       ) : (
-        <table>
-          <thead>
-            <tr>
-              <th>{t('product.panel.kind')}</th>
-              <th>{t('product.panel.value')}</th>
-              <th>{t('product.panel.status')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {facts.map((f) => (
-              <tr key={f.id} data-testid={`fact-${f.status}`}>
-                <td>{t(`facts.kind.${f.kind}`)}</td>
-                <td>{f.value}</td>
-                <td>
-                  {f.status === 'confirmed' ? t('product.panel.confirmed')
-                    : f.status === 'withdrawn' ? t('product.panel.withdrawn')
-                      : t('product.panel.unverified')}
-                  {f.visibility === 'gated' && <em> · {t('product.panel.gatedBadge')}</em>}
-                </td>
-                <td>
-                  {f.status !== 'confirmed' && <button onClick={() => act(f.id, 'confirm')}>{t('product.panel.confirm')}</button>}
-                  {f.status !== 'withdrawn' && <button onClick={() => act(f.id, 'withdraw')}>{t('product.panel.withdraw')}</button>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<ProductFact> columns={columns} rows={facts} rowKey={(f) => String(f.id)} />
       )}
-    </section>
+    </>
   )
 }

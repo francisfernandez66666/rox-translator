@@ -9,11 +9,17 @@
 // ============================================================================
 import { useEffect, useState } from 'react'
 import { runGuarded } from '@/lib/runGuarded'
-import { Button, DataTable, Dialog, Switch, StatusPill, Link } from '@/ui/langcross/src'
+import { Button, DataTable, Dialog, Switch, StatusPill, Link, Field, Input, PageHeader } from '@/ui/langcross/src'
 import { confirmDialog } from '@/components/uiDialogs'
 import { personas, personaCreate, personaUpdate, personaStatus, personaDelete, type PersonaItem } from '@/api/persona'
 import { useT } from '@/i18n'
 import { toastSuccess, toastError, toastWarn } from '@/lib/toastBus'
+
+/** 面板版式：只用 tokens.css 的 --lc-*，不写内联布局样式。 */
+const PANEL_CSS = `
+.lc-ps-ops { display: flex; gap: 10px; align-items: center; }
+.lc-ps-fields { display: flex; flex-direction: column; gap: 12px; }
+`
 
 /** Props 无入参（角色管理为自足组件） */
 type Props = Record<string, never>
@@ -98,10 +104,12 @@ export default function PersonasP(_props: Props) {
 
   return (
     <>
-      <div style={{ marginBottom: 10, fontSize: 15, color: 'var(--adm-hint)' }}>
-        {t('persona.hint')}
-      </div>
-      <Button variant="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('persona.new')}</Button>
+      <style>{PANEL_CSS}</style>
+      <PageHeader
+        title={t('persona.tab')}
+        desc={t('persona.hint')}
+        actions={<Button variant="primary" onClick={() => { setCode(''); setName(''); setDlg({ mode: 'create' }) }}>{t('persona.new')}</Button>}
+      />
       <DataTable<any> rowKey={(row) => String(row.id)} rows={rows}
              columns={[
                { key: 'id', title: 'ID', width: 50 },
@@ -113,7 +121,7 @@ export default function PersonasP(_props: Props) {
                ) },
                { key: 'created_at', title: t('persona.colCreated'), width: 100, render: (row) => shortTime(row.created_at) },
                { key: 'op', title: t('persona.colOp'), width: 260, render: (row) => (
-                 <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                 <div className="lc-ps-ops">
                    <Switch checked={row.enabled === 1}
                            onChange={(e) => void doToggle(row, e.target.checked ? 1 : 0)} />
                    <Link onClick={() => { setName(row.name); setDlg({ mode: 'edit', row }) }}>{t('persona.edit')}</Link>
@@ -124,22 +132,21 @@ export default function PersonasP(_props: Props) {
 
       {/* 新建角色弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'create'} onCancel={() => setDlg(null)} title={t('persona.newTitle')} onConfirm={doCreate}>
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.codeLabel')}</div>
-          <input className="lc-input" value={code} onChange={(e) => setCode(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
-        </div>
-        <div>
-          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
-          <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
+        <div className="lc-ps-fields">
+          <Field label={t('persona.codeLabel')}>
+            <Input value={code} onChange={(e) => setCode(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
+          </Field>
+          <Field label={t('persona.nameLabel')}>
+            <Input value={name} onChange={(e) => setName(String(e.target.value))} placeholder={t('persona.namePlaceholder')} />
+          </Field>
         </div>
       </Dialog>
 
       {/* 编辑角色名弹窗 */}
       <Dialog open={!!dlg && dlg.mode === 'edit'} onCancel={() => setDlg(null)} title={t('persona.editTitle')} onConfirm={doUpdate}>
-        <div>
-          <div style={{ marginBottom: 4, fontSize: 15, color: 'var(--adm-hint)' }}>{t('persona.nameLabel')}</div>
-          <input className="lc-input" value={name} onChange={(e) => setName(String(e.target.value))} />
-        </div>
+        <Field label={t('persona.nameLabel')}>
+          <Input value={name} onChange={(e) => setName(String(e.target.value))} />
+        </Field>
       </Dialog>
     </>
   )

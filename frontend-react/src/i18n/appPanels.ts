@@ -53,6 +53,8 @@ import * as pAssist from './panels/assist'
 import * as pInviteLink from './panels/invitelink'
 // ★ 一期：产品面板（物料货架／事实项／知识问答 + facts.kind 九值），懒加载档
 import * as pProduct from './panels/product'
+// ★ 三期 W3–W6：销售域四面板（角色/维护/收件箱/线索）词典
+import * as pSales from './panels/sales'
 
 /** 面板词条的统一形状：扁平 key → 译文（懒加载词典与入口词典共用同一形状） */
 type Dict = Record<string, string>
@@ -64,7 +66,7 @@ export const zh: Dict = {
   ...pBilling.zh, ...pUsage.zh, ...pAlerts.zh, ...pInvites.zh, ...pPackages.zh, ...pFeedback.zh,
   ...pReferral.zh, ...pTasks.zh, ...pOps.zh, ...pIndustries.zh, ...pPersonas.zh, ...pBrandterms.zh,
   ...pChatwin.zh, ...pDs.zh, ...pMybill.zh, ...pReconcile.zh, ...pCoupons.zh, ...pAssist.zh, ...pInviteLink.zh,
-  ...pProduct.zh,
+  ...pProduct.zh, ...pSales.zh,
 }
 
 /** 懒加载面板的英文词条（与 zh 同键，对等性由 parity.test.ts 管） */
@@ -74,5 +76,5 @@ export const en: Dict = {
   ...pBilling.en, ...pUsage.en, ...pAlerts.en, ...pInvites.en, ...pPackages.en, ...pFeedback.en,
   ...pReferral.en, ...pTasks.en, ...pOps.en, ...pIndustries.en, ...pPersonas.en, ...pBrandterms.en,
   ...pChatwin.en, ...pDs.en, ...pMybill.en, ...pReconcile.en, ...pCoupons.en, ...pAssist.en, ...pInviteLink.en,
-  ...pProduct.en,
+  ...pProduct.en, ...pSales.en,
 }

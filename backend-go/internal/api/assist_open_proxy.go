@@ -57,6 +57,8 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 	// ★ 2026-10-30 组7 §8.2（P-7）：入站同名画像头一律**先删再自赋**。
 	// 客户端自带一份伪造头时，这一步保证它到不了上游；真正的画像由本进程按已校验会话重签。
 	stripAssistProfileHeaders(r.Header)
+	// ★ 三期 W2（§0.4）：事实集头同族先删再自赋——伪造头到不了上游。
+	stripSalesFactsHeaders(r.Header)
 	up := strings.TrimPrefix(r.URL.Path, assistOpenPrefix)
 	if up == "" || up[0] != '/' {
 		up = "/" + up // 容错：/assist-apiapi/... 这类畸形路径不该被拼成合法上游
@@ -91,6 +93,8 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 	// ★ 2026-10-30 组7 §8.2（路 A′）：已登录会话 → 现组装画像 → HMAC 签名 → 三个内部头。
 	// 未登录/未配密钥时静默不发（匿名回落），assist 侧因此对所有人都能正常工作。
 	s.attachAssistProfile(req, r)
+	// ★ 三期 W2（§0.4 第①段）：登录会话 + 租户上下文 + 已配密钥 ⇒ 签名下发销售事实集。
+	s.attachSalesFacts(req, r)
 	resp, err := assistClient.Do(req)
 	if err != nil {
 		// 最常见原因是 assist-server 没起或基址配错：细节进日志，响应只给可自助的口径
@@ -110,4 +114,7 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(payload)
+	// ★ 三期 W2（§0.4 第③段）：先答客后回写（A04b/M0210 锁此顺序）——
+	// 归因回写 fire-and-forget，失败只 WARN，访客已拿到的字节一个不变。
+	s.writeBackAttribution(r.Context(), payload, r)
 }

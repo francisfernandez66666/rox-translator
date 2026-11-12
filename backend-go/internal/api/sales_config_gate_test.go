@@ -10,11 +10,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"translator/internal/auth"
 	"translator/internal/iam"
+	"translator/internal/store"
 )
 
 // salesConfigToken 在给定服务上签一个指定租户与角色的登录态。
@@ -160,5 +164,135 @@ func TestSalesConfigAndLexiconAreTenantScoped(t *testing.T) {
 	after := cfgBody()["lexicon"].([]interface{})
 	if len(before) != len(after) {
 		t.Fatalf("C3：重复补种不许增行，实得 %d → %d", len(before), len(after))
+	}
+}
+
+// ============ A11（W3 扩充）：销售域 handler 鉴权同源源码腿 ============
+// 判据：新建管理面 sales_role_api.go 的每个 handle* 函数体只允许经
+//   salesRoleGate / salesConfigAdmin 取鉴权，出现裸 authUser 即红；scanned==0 Fatal。
+// ★ 扫描面说明：sales_api.go 四端点由主 agent W3 同批收紧（见报告「4 行调用」清单），
+//   收紧后本锁扫描面可一并覆盖；本批先把「新管理面不许开第二套裸 authUser」钉死（M0227 靶）。
+// ================================================================
+
+// salesAuthSameSourceViolations 扫描一份源码里 handle* 函数体的鉴权来源（正反对照共用）。
+// 返回违规清单与扫描到的 handler 数。
+func salesAuthSameSourceViolations(src string) ([]string, int) {
+	re := regexp.MustCompile(`(?s)func \(s \*Server\) (handle\w+)\([^)]*\) \{(.*?)\n\}`)
+	var bad []string
+	scanned := 0
+	for _, m := range re.FindAllStringSubmatch(src, -1) {
+		scanned++
+		name, body := m[1], m[2]
+		if strings.Contains(body, "s.authUser(") {
+			bad = append(bad, name+": 出现裸 authUser")
+		}
+		if !strings.Contains(body, "s.salesConfigAdmin(") && !strings.Contains(body, "s.salesRoleGate(") {
+			bad = append(bad, name+": 未经 salesRoleGate/salesConfigAdmin")
+		}
+	}
+	return bad, scanned
+}
+
+// TestSalesConfigAuthSameSource A11：管理面 handler 鉴权同源 + M0227 反证 + 合法样本放行。
+func TestSalesConfigAuthSameSource(t *testing.T) {
+	raw, err := os.ReadFile("sales_role_api.go")
+	if err != nil {
+		t.Fatalf("A11 读 sales_role_api.go 失败: %v", err)
+	}
+	bad, scanned := salesAuthSameSourceViolations(string(raw))
+	if scanned == 0 {
+		t.Fatal("A11 射程自证失败：scanned==0，一个 handler 都没扫到")
+	}
+	if len(bad) != 0 {
+		t.Fatalf("A11：销售域 handler 鉴权不同源: %v", bad)
+	}
+	// M0227 反证：在 handler 里写一次裸 authUser，扫描器必须命中（不许恒绿）。
+	rogue := `func (s *Server) handleRogue(w http.ResponseWriter, r *http.Request) {
+	u := s.authUser(r)
+	_ = u
+}`
+	rogueBad, rogueScanned := salesAuthSameSourceViolations(rogue)
+	if rogueScanned != 1 || len(rogueBad) == 0 {
+		t.Fatalf("M0227 反证：裸 authUser 必须判红，实得 scanned=%d bad=%v", rogueScanned, rogueBad)
+	}
+	// 合法样本放行：只把鉴权改成统一助手的同形副本，违规应为空（防「一律判红」）。
+	good := `func (s *Server) handleGood(w http.ResponseWriter, r *http.Request) {
+	u, tid, ok := s.salesConfigAdmin(w, r)
+	_, _, _ = u, tid, ok
+}`
+	goodBad, goodScanned := salesAuthSameSourceViolations(good)
+	if goodScanned != 1 || len(goodBad) != 0 {
+		t.Fatalf("A11 正向对照：合法统一助手样本应放行，实得 scanned=%d bad=%v", goodScanned, goodBad)
+	}
+}
+
+// ============ A10（按本批登记改在 sales_config_gate_test.go 扩充）：四端点 × 四档全表 ============
+// 判据：四端点 × 四档角色 × 401/403/200 全表；期望值一律从 store.PermForEndpoint() +
+// store.DefaultSalesRoleAllowed() 现推，cases<16 Fatal；未登录独立 401；approve 单独钉死 ≥3。
+// ★ 独立性：直接调 s.salesRoleGate(w, r)（A09 收紧后的唯一鉴权入口），
+//   不依赖 sales_api.go 四端点是否已由主 agent 补 4 行调用——那部分由 A11 源码腿 + 报告清单收口。
+// ============================================================================
+
+// TestSalesRoleGateFourEndpointsFourRoles A10 全表：16 组 + 未登录 401。
+func TestSalesRoleGateFourEndpointsFourRoles(t *testing.T) {
+	srv, _ := adminGateServer(t)
+	paths := []string{
+		"/api/sales/capability",
+		"/api/sales/drafts",
+		"/api/sales/draft",
+		"/api/sales/draft/approve",
+	}
+	roles := []string{iam.RoleUser, iam.RoleDeptAdmin, iam.RoleTenantAdmin, iam.RoleSuperAdmin}
+
+	// M0226 靶：转正审批端点必须 ≥3，不许降到 2/1（独立于映射表，防改映射把期望一起带走）。
+	approvePerm := store.PermForEndpoint("/api/sales/draft/approve")
+	if !store.DefaultSalesRoleAllowed(3, approvePerm) || store.DefaultSalesRoleAllowed(2, approvePerm) {
+		t.Fatalf("A10：approve 端点必须 ≥3，不许降到 1/2（M0226 靶），实得 perm=%s", approvePerm)
+	}
+
+	cases := 0
+	for _, p := range paths {
+		perm := store.PermForEndpoint(p)
+		if perm == "" {
+			t.Fatalf("A10：端点 %s 未在 PermForEndpoint 登记，无法现推期望", p)
+		}
+		for _, role := range roles {
+			cases++
+			tok := salesConfigToken(t, srv, 1, role)
+			r := httptest.NewRequest(http.MethodGet, p, nil)
+			r.Header.Set("Authorization", "Bearer "+tok)
+			w := httptest.NewRecorder()
+			_, _, ok := srv.salesRoleGate(w, r)
+			want := store.DefaultSalesRoleAllowed(auth.RoleLevel(role), perm)
+			if want {
+				if !ok || w.Code != http.StatusOK {
+					t.Fatalf("A10：%s @ %s 应放行(200)，实得 ok=%v code=%d", p, role, ok, w.Code)
+				}
+			} else if ok || w.Code != http.StatusForbidden {
+				t.Fatalf("A10：%s @ %s 应 403，实得 ok=%v code=%d", p, role, ok, w.Code)
+			}
+		}
+	}
+	if cases < 16 {
+		t.Fatalf("A10 射程自证失败：cases<16，实得 %d", cases)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/sales/drafts", nil)
+	w := httptest.NewRecorder()
+	_, _, ok := srv.salesRoleGate(w, r)
+	if ok || w.Code != http.StatusUnauthorized {
+		t.Fatalf("A10：未登录必须 401，实得 ok=%v code=%d", ok, w.Code)
+	}
+}
+
+// TestSalesRoleGateUnknownEndpointFailClosed 未登记端点 fail-closed，不许猜默认权限放行。
+func TestSalesRoleGateUnknownEndpointFailClosed(t *testing.T) {
+	srv, _ := adminGateServer(t)
+	tok := salesConfigToken(t, srv, 1, iam.RoleSuperAdmin)
+	r := httptest.NewRequest(http.MethodGet, "/api/sales/not-registered", nil)
+	r.Header.Set("Authorization", "Bearer "+tok)
+	w := httptest.NewRecorder()
+	_, _, ok := srv.salesRoleGate(w, r)
+	if ok || w.Code != http.StatusForbidden {
+		t.Fatalf("A10：未登记端点必须 fail-closed 403，实得 ok=%v code=%d", ok, w.Code)
 	}
 }

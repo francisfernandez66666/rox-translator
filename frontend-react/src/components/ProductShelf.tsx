@@ -13,6 +13,7 @@ import { useT } from '@/i18n'
 import { useNav } from '@/lib/nav'
 import { productList, productReadiness, type ReadinessCell } from '@/api/product'
 import { copyText, type CopyAudience, type ExhaustReason } from '@/lib/productExhaustCopy'
+import { Button, DataTable, EmptyState, PageHeader, type TableColumn } from '@/ui/langcross/src'
 
 /** 额度耗尽态提示：两副面孔文案的**唯一渲染出口**（§8.5 X3；任何组件不得自造第三处文案） */
 export function ExhaustNotice({ reason, audience, resetsAt }: {
@@ -58,29 +59,24 @@ export default function ProductShelf() {
     return () => { alive = false }
   }, [productId])
 
+  const columns: TableColumn<ReadinessCell>[] = [
+    { key: 'kind', title: t('product.panel.kind'), render: (c) => `${c.asset_type} / ${c.lang}` },
+    { key: 'status', title: t('product.panel.status'), render: (c) => <span data-testid={`readiness-${c.worst}`}>{cellLabel(c.worst, t)}</span> },
+  ]
+
   return (
-    <section data-testid="product-shelf">
-      <h2>{t('product.panel.shelf')}</h2>
+    <>
       {/* ★ X1（2026-11-06）：货架只回答"缺什么"；这一颗钮把人送到能把缺的补上的那一页。
           旧形态这里连一个写侧入口都没有 ⇒ 客户看得到六个空格子，却没有任何一条路把内容填进去。 */}
-      <button data-testid="shelf-goto-detail" onClick={() => nav.navigate('/products/detail')}>{t('product.panel.gotoDetail')}</button>
+      <PageHeader
+        title={<span data-testid="product-shelf">{t('product.panel.shelf')}</span>}
+        actions={<Button data-testid="shelf-goto-detail" onClick={() => nav.navigate('/products/detail')}>{t('product.panel.gotoDetail')}</Button>}
+      />
       {cells.length === 0 ? (
-        <p>{t('product.panel.empty')}</p>
+        <EmptyState title={t('product.panel.empty')} />
       ) : (
-        <table>
-          <thead>
-            <tr><th>{t('product.panel.kind')}</th><th>{t('product.panel.status')}</th></tr>
-          </thead>
-          <tbody>
-            {cells.map((c, i) => (
-              <tr key={`${c.asset_type}:${c.lang}:${i}`} data-testid={`readiness-${c.worst}`}>
-                <td>{c.asset_type} / {c.lang}</td>
-                <td>{cellLabel(c.worst, t)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <DataTable<ReadinessCell> columns={columns} rows={cells} rowKey={(c, i) => `${c.asset_type}:${c.lang}:${i}`} />
       )}
-    </section>
+    </>
   )
 }

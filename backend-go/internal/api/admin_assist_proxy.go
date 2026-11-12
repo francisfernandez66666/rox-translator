@@ -62,24 +62,26 @@ const assistDefaultBaseURL = "http://127.0.0.1:8790"
 
 // assistProxyRoutes 白名单：主后台路径 → assist 服务路径。未登记的组合一律 404。
 var assistProxyRoutes = map[string]string{
-	"/api/admin/assist/config":   "/api/assist/admin/config",
-	"/api/admin/assist/kb":       "/api/assist/admin/kb",
-	"/api/admin/assist/scripts":  "/api/assist/admin/scripts",
-	"/api/admin/assist/flows":    "/api/assist/admin/flows",
-	"/api/admin/assist/features": "/api/assist/admin/features",
-	"/api/admin/assist/sessions": "/api/assist/admin/sessions",
-	"/api/admin/assist/llm-test": "/api/assist/admin/llm/test",
+	"/api/admin/assist/config":        "/api/assist/admin/config",
+	"/api/admin/assist/kb":            "/api/assist/admin/kb",
+	"/api/admin/assist/scripts":       "/api/assist/admin/scripts",
+	"/api/admin/assist/flows":         "/api/assist/admin/flows",
+	"/api/admin/assist/features":      "/api/assist/admin/features",
+	"/api/admin/assist/sessions":      "/api/assist/admin/sessions",
+	"/api/admin/assist/llm-test":      "/api/assist/admin/llm/test",
+	"/api/admin/assist/system-values": "/api/assist/admin/system-values",
 }
 
 // assistProxyAreas 主后台路径 → 区域名（审计 detail 用，避免把上游内部路径写进审计噪声）。
 var assistProxyAreas = map[string]string{
-	"/api/admin/assist/config":   "config",
-	"/api/admin/assist/kb":       "kb",
-	"/api/admin/assist/scripts":  "scripts",
-	"/api/admin/assist/flows":    "flows",
-	"/api/admin/assist/features": "features",
-	"/api/admin/assist/sessions": "sessions",
-	"/api/admin/assist/llm-test": "llm_test",
+	"/api/admin/assist/config":        "config",
+	"/api/admin/assist/kb":            "kb",
+	"/api/admin/assist/scripts":       "scripts",
+	"/api/admin/assist/flows":         "flows",
+	"/api/admin/assist/features":      "features",
+	"/api/admin/assist/sessions":      "sessions",
+	"/api/admin/assist/llm-test":      "llm_test",
+	"/api/admin/assist/system-values": "system_values",
 }
 
 // assistBaseURL 解析生效的上游基址：env > 库内配置 > 默认；非法 scheme 或空值回落默认。

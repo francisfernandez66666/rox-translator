@@ -16,6 +16,7 @@
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
 import { useT } from '@/i18n'
+import { Button, EmptyState, InlineBanner, PageHeader, Tabs } from '@/ui/langcross/src'
 import { salesCapability, salesDraft, salesDraftApprove, salesDrafts, type SalesDraft } from '@/api/sales'
 import { ExhaustNotice } from './ProductShelf'
 
@@ -91,8 +92,8 @@ export default function SalesDrafts() {
     s === 'draft' || s === 'approved' || s === 'rejected' ? t(`sales.drafts.status.${s}`) : s
 
   return (
-    <section data-testid="sales-drafts-page">
-      <h2>{t('sales.drafts.title')}</h2>
+    <div data-testid="sales-drafts-page">
+      <PageHeader title={t('sales.drafts.title')} />
       {/* 能力三态事实读数：off/half/on 各不同形；null 不渲染（fail-open）。
           data-state 把「这台此刻的后端状态词」原样带出来，供 e2e 做等值判据：
           译文会随语种变，拿文案做等值必然假绿，必须拿状态词本身比。 */}
@@ -101,29 +102,37 @@ export default function SalesDrafts() {
       )}
       {/* 引擎未开启那档的卖家面事实文案：只经一期 copyFor 单一出口（ExhaustNotice） */}
       {capState === 'off' && <ExhaustNotice reason="disabled" audience="owner" />}
-      <div role="tablist" aria-label={t('sales.drafts.title')}>
-        {FILTERS.map((f) => (
-          <button key={f || 'all'} role="tab" aria-selected={filter === f}
-                  onClick={() => setFilter(f)}>
-            {t(f ? `sales.drafts.filter.${f}` : 'sales.drafts.filter.all')}
-          </button>
-        ))}
+      <div aria-label={t('sales.drafts.title')}>
+        <Tabs
+          items={FILTERS.map((f) => ({
+            key: f || 'all',
+            label: t(f ? `sales.drafts.filter.${f}` : 'sales.drafts.filter.all'),
+          }))}
+          activeKey={filter || 'all'}
+          onChange={(k) => setFilter(k === 'all' ? '' : k)}
+        />
       </div>
-      {loadFailed && <p data-testid="sales-drafts-load-failed">{t('sales.drafts.loadFailed')}</p>}
-      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
-        <div style={{ flex: '1 1 280px', minWidth: 0 }} data-testid="sales-drafts-list">
-          {!loadFailed && list.length === 0 && <p>{t('sales.drafts.empty')}</p>}
+      {loadFailed && (
+        <div data-testid="sales-drafts-load-failed">
+          <InlineBanner tone="error">{t('sales.drafts.loadFailed')}</InlineBanner>
+        </div>
+      )}
+      {/* 两栏布局改用组件库 --lc-* 类名，不再写内联 style */}
+      <div className="lc-page-head">
+        <div className="lc-shell__main" data-testid="sales-drafts-list">
+          {!loadFailed && list.length === 0 && <EmptyState title={t('sales.drafts.empty')} />}
           {list.map((d) => (
             <div key={d.id} data-testid="sales-draft-row">
-              <button onClick={() => select(d.id)} aria-current={selected?.id === d.id}>
+              <Button variant="secondary" size="sm" onClick={() => select(d.id)}
+                aria-current={selected?.id === d.id}>
                 {d.suggested_text || d.source_text || d.id}
-              </button>
+              </Button>
               <small>{statusLabel(d.status)}</small>
             </div>
           ))}
         </div>
-        <div style={{ flex: '2 1 360px', minWidth: 0 }} data-testid="sales-draft-detail">
-          {!selected && <p>{t('sales.drafts.detailEmpty')}</p>}
+        <div className="lc-shell__main" data-testid="sales-draft-detail">
+          {!selected && <EmptyState title={t('sales.drafts.detailEmpty')} />}
           {selected && (
             <div>
               <p><strong>{t('sales.drafts.source')}</strong>：{selected.source_text}</p>
@@ -133,15 +142,19 @@ export default function SalesDrafts() {
               <p data-testid="sales-draft-status">{statusLabel(selected.status)}</p>
               {/* 唯一写动作：只在草稿态渲染；已转正/已拒绝没有可写按钮 */}
               {selected.status === 'draft' && (
-                <button data-testid="sales-approve-btn" onClick={approve} disabled={busy}>
+                <Button data-testid="sales-approve-btn" onClick={approve} disabled={busy}>
                   {t('sales.drafts.approve')}
-                </button>
+                </Button>
               )}
-              {approveFailed && <p data-testid="sales-approve-failed">{t('sales.drafts.approveFailed')}</p>}
+              {approveFailed && (
+                <div data-testid="sales-approve-failed">
+                  <InlineBanner tone="error">{t('sales.drafts.approveFailed')}</InlineBanner>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
-    </section>
+    </div>
   )
 }

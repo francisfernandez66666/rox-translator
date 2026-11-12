@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 	"translator/internal/store"
 )
 
@@ -367,6 +368,21 @@ func (s *Server) handleProductFactConfirm(w http.ResponseWriter, r *http.Request
 		return
 	}
 	s.Store.LogAudit(tid, u.ID, "fact_confirm", "product_facts", strconv.FormatInt(req.FactID, 10))
+	// ★ 三期 W4（§0.4 第 4 条）：确认即写时预生成 12 语种译文（热路径零 LLM——
+	//   注入面只读已落库译文）。预生成失败不阻断确认（确认已落库、审计已留痕）：
+	//   缺译文的键在注入读口按「无判据」处理 ⇒ 守卫 fail-closed 回避，安全侧无害；
+	//   但必须留 WARN，不许静默——静默会让运营以为译文已备好。
+	if f, err := s.factByID(tid, req.FactID); err == nil && strings.TrimSpace(f.Value) != "" {
+		// s.Engine 是类型化指针：直接塞接口会恒非 nil（server.go:988 同族坑），必须判nil后再传。
+		var tr store.FactTranslator
+		if s.Engine != nil {
+			tr = s.Engine
+		}
+		if err := s.Store.PreGenerateFactI18n(r.Context(), tid, req.FactID, f.Value, tr); err != nil {
+			observability.Warn(r.Context(), "产品事实译文预生成失败（确认已生效，译文缺省按无判据回避）",
+				"tenant_id", tid, "fact_id", req.FactID, "err", err)
+		}
+	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "status": store.FactStatusConfirmed})
 }
 

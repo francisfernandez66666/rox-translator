@@ -16,6 +16,7 @@ import (
 	"translator/internal/assist/llm"
 	"translator/internal/assist/store"
 	"translator/internal/observability"
+	"translator/internal/strategytypes"
 )
 
 // Action 回复附带的动作按钮（前端渲染为可点击跳转）
@@ -39,6 +40,10 @@ type Reply struct {
 	// 它随 /chat 响应回吐（assist/api/server.go），日志里也有一条 INFO（enforceReplyLang），
 	// 挂件不渲染这个字段——它服务的是排障与"补翻占比"统计，占比降不下来就说明语言段还得再修。
 	LangLocalized bool `json:"lang_localized,omitempty"`
+	// PendingHuman ★ 三期 W4：本轮答复触发「待人工接管」（销售声称守卫命中受控键/无判据时置真）。
+	// 随 /chat 响应的 attribution 段回吐，主服务 writeBackAttribution 据此写 reply_attributions.pending_human；
+	// 挂件不渲染它。W2 阶段恒 false（守卫 W4 才挂），W6 建 handoff_sessions 后消费。
+	PendingHuman bool `json:"pending_human,omitempty"`
 }
 
 // Engine 接待引擎
@@ -659,6 +664,11 @@ func (e *Engine) Respond(ctx context.Context, sessionID, input, pageURL, uiLang 
 	rep = e.guardReplyFabrication(ctx, answer, rep)
 	rep = e.guardReplyQuote(ctx, answer, rep) // 红腿二：剥掉模型自算的算式与复算不出的总额
 	rep = e.guardReplyBrand(ctx, answer, rep) // 红腿三：品牌名错形（拼音／「能与」）按语种档归一
+	// ★ 三期 W4（§0.4 第 7 条）：销售声称守卫，位置 brand 之后、recharge 之前（与知识层同段）。
+	//   命中受控键 / 无事实头 / 验签失败 / 事实集为空 / 声称锚点对不上 ⇒ 回避 + 转其他话题，
+	//   并在守卫命中时把 rep.PendingHuman 置真（主服务 writeBackAttribution 按 message_id 落行）。
+	//   灰度两把开关缺省关 / 半套不生效 ⇒ 逐字节等价放行；非销售页（翻译/客服老链路）零改动不误伤。
+	rep = e.guardSalesClaims(ctx, answer, pageURL, rep)
 	// ★ 一期《确定的多语言能力》§7.1：知识层答案守卫。
 	//   位置纪律：必须在 brand 之后、recharge 之前（先过反编造/报价/品牌三道，再谈充值意图）；
 	//   不许跨过下面的 observeVisitorAsides（那条只读不改，仍在 localizeActionNames 之后）。
@@ -1068,6 +1078,16 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 	if pb := visitorProfileBlock(ctx); pb != "" {
 		sb.WriteString(pb)
 		sb.WriteString("\n")
+	}
+	// ★ 三期 W2：销售路径决策**读腿**（生产者＝flow 引擎，W6 才落；本腿只读）——
+	// ctx 带非空 PromptDirective 才拼【销售路径】段，位置在【相关知识】之前、
+	// 【回复语言】段之前（与 persona/语气/现值各段同属"模型开口前读到的指令"）。
+	// 开关关闭/未挂载/空段时整段不出现，提示词逐字节等价（fail-open 零行为变化）。
+	if sp := strategytypes.SalesPathFromContext(ctx); sp != nil {
+		if dir := strings.TrimSpace(sp.PromptDirective); dir != "" {
+			sb.WriteString(dir)
+			sb.WriteString("\n\n")
+		}
 	}
 	if len(hits) > 0 {
 		sb.WriteString("【相关知识】\n")

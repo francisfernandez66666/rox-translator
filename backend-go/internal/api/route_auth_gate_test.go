@@ -173,6 +173,10 @@ var publicRouteAllowlist = map[string]string{
 	"/api/product/answer": "知识层问答：短码即凭据，零 LLM 调用、零 usage_ledger 写入，只回已备物料原文与公开事实（不返 403）",
 	"/api/product/lead":   "产品页匿名留资：蜜罐 + 独立 lead-product: 配额账（3/日、10s 间隔，与 lead:/lead-public: 不互扣）+ 归属只取产品行 tenant_id，不采信 ?tenant_id",
 	"/sitemap.xml":        "动态产品页 sitemap：只出 seo_indexable=1 且 status='live' 的 URL 字面，零受控字段、零租户内部数据",
+	// ★ 三期 W5（人工评审登记）：营销邮件匿名退订——收件人必须不登录就能退订（反垃圾邮件合规底线），
+	//   自保＝token 为 HMAC-SHA256(库内退订密钥, "tid|email")，坏 token/未配密钥一律 403/503
+	//   不区分失败档（不给枚举反馈）；退订动作只降权（置 opted_out + 入抑制名单），零读面。
+	"/api/public/marketing/unsubscribe": "营销邮件匿名退订：HMAC token 即凭据，动作只降权（opted_out+抑制名单），无任何读面",
 }
 
 // TestRouteAuthGate 静态断言：本包每条注册路由要么执行鉴权，要么在公开白名单里带理由。

@@ -12,6 +12,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import { useAdmin } from '@/stores/admin'
 import { confirmDialog } from '@/components/uiDialogs'
+import { Button, Checkbox, DataTable, EmptyState, InlineBanner, Input, PageHeader, Select, Textarea } from '@/ui/langcross/src'
+import { Field, Panel } from './parts'
 import {
   salesConfigGet, salesConfigSave, salesLexiconSave, salesLexiconDelete, salesLexiconSeed,
   type SalesConfig, type SalesLexiconRow,
@@ -113,131 +115,132 @@ export default function SalesConfigP() {
   }
 
   return (
-    <section data-testid="sales-config-page">
-      <h2>{t('sales.config.title')}</h2>
+    <div data-testid="sales-config-page">
+      <PageHeader title={t('sales.config.title')} />
       <p data-testid="sales-config-note">{t('sales.config.note')}</p>
-      {failed && <p data-testid="sales-config-failed">{t('common.fail')}</p>}
-      {saved && <p data-testid="sales-config-saved">{t('common.saved')}</p>}
-      {!cfg && !failed && <p>{t('common.noData')}</p>}
+      {failed && (
+        <div data-testid="sales-config-failed">
+          <InlineBanner tone="error">{t('common.fail')}</InlineBanner>
+        </div>
+      )}
+      {saved && (
+        <div data-testid="sales-config-saved">
+          <InlineBanner tone="success">{t('common.saved')}</InlineBanner>
+        </div>
+      )}
+      {!cfg && !failed && <EmptyState title={t('common.noData')} />}
 
       {cfg && (
         <>
-          <h3>{t('sales.config.model.title')}</h3>
-          <table data-testid="sales-config-model-table">
-            <thead><tr><th>{t('sales.config.model.stage')}</th><th>{t('sales.config.model.value')}</th></tr></thead>
-            <tbody>
-              {stages.map((s) => (
-                <tr key={s}>
-                  <td>{s}</td>
-                  <td>
-                    <input aria-label={s} value={cfg.model_stages?.[s] ?? ''}
-                           onChange={(e) => setCfg({ ...cfg, model_stages: { ...cfg.model_stages, [s]: e.target.value } })} />
-                  </td>
-                </tr>
+          <Panel title={t('sales.config.model.title')}>
+            <div data-testid="sales-config-model-table">
+              <DataTable
+                rows={stages.map((s) => ({ stage: s }))}
+                rowKey={(r) => r.stage}
+                columns={[
+                  { key: 'stage', title: t('sales.config.model.stage') },
+                  { key: 'value', title: t('sales.config.model.value'), render: (r: { stage: string }) => (
+                    <Input aria-label={r.stage} value={cfg.model_stages?.[r.stage] ?? ''}
+                      onChange={(e) => setCfg({ ...cfg, model_stages: { ...cfg.model_stages, [r.stage]: e.target.value } })} />
+                  ) },
+                ]}
+              />
+            </div>
+          </Panel>
+
+          <Panel title={t('sales.config.flow.title')}>
+            <Checkbox label={t('common.active')} checked={cfg.flow.enabled}
+              onChange={(e) => patchFlow('enabled', e.target.checked)} />
+            <Checkbox label={t('sales.config.flow.sweepRequeue')} checked={cfg.flow.sweep_requeue}
+              onChange={(e) => patchFlow('sweep_requeue', e.target.checked)} />
+            <Field label={t('sales.config.flow.maxSteps')}>
+              <Input type="number" min={1} max={100} value={cfg.flow.max_steps}
+                onChange={(e) => patchFlow('max_steps', Number(e.target.value))} />
+            </Field>
+            <Field label={t('sales.config.flow.scene')}>
+              <Select display={cfg.flow.default_scene} value={cfg.flow.default_scene}
+                onChange={(e) => patchFlow('default_scene', e.target.value)}>
+                {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            </Field>
+          </Panel>
+
+          <Panel title={t('sales.config.strategy.title')}>
+            <Field label={t('sales.config.strategy.scene')}>
+              <Select display={cfg.strategy.scene} value={cfg.strategy.scene}
+                onChange={(e) => patchStrategy('scene', e.target.value)}>
+                {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            </Field>
+            <Field label={t('sales.config.strategy.lang')}>
+              <Select display={cfg.strategy.lang} value={cfg.strategy.lang}
+                onChange={(e) => patchStrategy('lang', e.target.value)}>
+                {langs.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+            </Field>
+            <Field label={t('sales.config.strategy.minSamples')}>
+              <Input type="number" min={1} max={1000} value={cfg.strategy.min_samples}
+                onChange={(e) => patchStrategy('min_samples', Number(e.target.value))} />
+            </Field>
+            <Checkbox label={t('sales.config.strategy.draftEnabled')} checked={cfg.strategy.draft_enabled}
+              onChange={(e) => patchStrategy('draft_enabled', e.target.checked)} />
+            <Field label={t('sales.config.strategy.maxDrafts')}>
+              <Input type="number" min={0} max={1000} value={cfg.strategy.max_drafts_per_run}
+                onChange={(e) => patchStrategy('max_drafts_per_run', Number(e.target.value))} />
+            </Field>
+            <Field label={t('sales.config.strategy.windowDays')}>
+              <Input type="number" min={1} max={365} value={cfg.strategy.window_days}
+                onChange={(e) => patchStrategy('window_days', Number(e.target.value))} />
+            </Field>
+          </Panel>
+
+          <Panel title={t('sales.config.lexicon.title')}>
+            {rows.length === 0 && <EmptyState title={t('sales.config.lexicon.empty')} />}
+            <div data-testid="sales-config-lexicon-list">
+              {rows.map((r) => (
+                <div key={r.id} data-testid="sales-config-lexicon-row" data-tenant={r.tenant_id}>
+                  <span>{r.scene}/{r.lang}/{r.kind}</span>
+                  <span>{r.words.length}</span>
+                  {r.tenant_id === 0 && <small>{t('sales.config.lexicon.platform')}</small>}
+                  {r.tenant_id !== 0 && (
+                    <Button data-testid="sales-config-lexicon-delete" variant="danger" size="sm" disabled={busy}
+                      onClick={() => deleteLexicon(r.id)}>{t('common.delete')}</Button>
+                  )}
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+            <div data-testid="sales-config-lexicon-form">
+              <Select aria-label="scene" display={draft.scene} value={draft.scene}
+                onChange={(e) => setDraft({ ...draft, scene: e.target.value })}>
+                {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+              <Select aria-label="lang" display={draft.lang} value={draft.lang}
+                onChange={(e) => setDraft({ ...draft, lang: e.target.value })}>
+                {langs.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+              <Select aria-label="kind" display={draft.kind} value={draft.kind}
+                onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
+                {kinds.map((s) => <option key={s} value={s}>{s}</option>)}
+              </Select>
+              <Textarea aria-label={t('sales.config.lexicon.words')} value={draft.words}
+                placeholder={t('sales.config.lexicon.words')}
+                onChange={(e) => setDraft({ ...draft, words: e.target.value })} />
+              <Button data-testid="sales-config-lexicon-save" size="sm" disabled={busy} onClick={saveLexicon}>
+                {t('common.save')}
+              </Button>
+              {ad.isSuper && (
+                <Button data-testid="sales-config-lexicon-seed" size="sm" variant="secondary" disabled={busy} onClick={seedLexicon}>
+                  {t('sales.config.lexicon.seed')}
+                </Button>
+              )}
+            </div>
+          </Panel>
 
-          <h3>{t('sales.config.flow.title')}</h3>
-          <label>
-            <input type="checkbox" checked={cfg.flow.enabled}
-                   onChange={(e) => patchFlow('enabled', e.target.checked)} />
-            {t('common.active')}
-          </label>
-          <label>
-            <input type="checkbox" checked={cfg.flow.sweep_requeue}
-                   onChange={(e) => patchFlow('sweep_requeue', e.target.checked)} />
-            {t('sales.config.flow.sweepRequeue')}
-          </label>
-          <label>
-            {t('sales.config.flow.maxSteps')}
-            <input type="number" min={1} max={100} value={cfg.flow.max_steps}
-                   onChange={(e) => patchFlow('max_steps', Number(e.target.value))} />
-          </label>
-          <label>
-            {t('sales.config.flow.scene')}
-            <select value={cfg.flow.default_scene} onChange={(e) => patchFlow('default_scene', e.target.value)}>
-              {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-
-          <h3>{t('sales.config.strategy.title')}</h3>
-          <label>
-            {t('sales.config.strategy.scene')}
-            <select value={cfg.strategy.scene} onChange={(e) => patchStrategy('scene', e.target.value)}>
-              {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          <label>
-            {t('sales.config.strategy.lang')}
-            <select value={cfg.strategy.lang} onChange={(e) => patchStrategy('lang', e.target.value)}>
-              {langs.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          <label>
-            {t('sales.config.strategy.minSamples')}
-            <input type="number" min={1} max={1000} value={cfg.strategy.min_samples}
-                   onChange={(e) => patchStrategy('min_samples', Number(e.target.value))} />
-          </label>
-          <label>
-            {t('sales.config.strategy.draftEnabled')}
-            <input type="checkbox" checked={cfg.strategy.draft_enabled}
-                   onChange={(e) => patchStrategy('draft_enabled', e.target.checked)} />
-          </label>
-          <label>
-            {t('sales.config.strategy.maxDrafts')}
-            <input type="number" min={0} max={1000} value={cfg.strategy.max_drafts_per_run}
-                   onChange={(e) => patchStrategy('max_drafts_per_run', Number(e.target.value))} />
-          </label>
-          <label>
-            {t('sales.config.strategy.windowDays')}
-            <input type="number" min={1} max={365} value={cfg.strategy.window_days}
-                   onChange={(e) => patchStrategy('window_days', Number(e.target.value))} />
-          </label>
-
-          <h3>{t('sales.config.lexicon.title')}</h3>
-          {rows.length === 0 && <p>{t('sales.config.lexicon.empty')}</p>}
-          <div data-testid="sales-config-lexicon-list">
-            {rows.map((r) => (
-              <div key={r.id} data-testid="sales-config-lexicon-row" data-tenant={r.tenant_id}>
-                <span>{r.scene}/{r.lang}/{r.kind}</span>
-                <span>{r.words.length}</span>
-                {r.tenant_id === 0 && <small>{t('sales.config.lexicon.platform')}</small>}
-                {r.tenant_id !== 0 && (
-                  <button data-testid="sales-config-lexicon-delete" disabled={busy}
-                          onClick={() => deleteLexicon(r.id)}>{t('common.delete')}</button>
-                )}
-              </div>
-            ))}
-          </div>
-          <div data-testid="sales-config-lexicon-form">
-            <select aria-label="scene" value={draft.scene} onChange={(e) => setDraft({ ...draft, scene: e.target.value })}>
-              {scenes.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select aria-label="lang" value={draft.lang} onChange={(e) => setDraft({ ...draft, lang: e.target.value })}>
-              {langs.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <select aria-label="kind" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value })}>
-              {kinds.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-            <textarea aria-label={t('sales.config.lexicon.words')} value={draft.words}
-                      placeholder={t('sales.config.lexicon.words')}
-                      onChange={(e) => setDraft({ ...draft, words: e.target.value })} />
-            <button data-testid="sales-config-lexicon-save" disabled={busy} onClick={saveLexicon}>
-              {t('common.save')}
-            </button>
-            {ad.isSuper && (
-              <button data-testid="sales-config-lexicon-seed" disabled={busy} onClick={seedLexicon}>
-                {t('sales.config.lexicon.seed')}
-              </button>
-            )}
-          </div>
-
-          <button data-testid="sales-config-save" disabled={busy} onClick={saveConfig}>
+          <Button data-testid="sales-config-save" disabled={busy} onClick={saveConfig}>
             {t('common.save')}
-          </button>
+          </Button>
         </>
       )}
-    </section>
+    </div>
   )
 }

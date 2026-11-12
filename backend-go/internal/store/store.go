@@ -76,6 +76,26 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.SalesConfigMigrate(); err != nil {
 		return nil, err
 	}
+	// ★ 三期 W3：销售角色权限矩阵（RoleLevel × perm 行式三列），幂等、失败即拒启——
+	//   缺表会让 salesRoleGate 的权限判定在运行期才炸，启动链就是它的验收证据。
+	if err := s.SalesRoleMigrate(); err != nil {
+		return nil, err
+	}
+	// ★ 三期 W4：product_facts 补 lang/priority 列 + product_fact_i18n 译文表（写时预生成 12 语种，
+	//   热路径零 LLM）。幂等补列排在 migrate() 之后（EnsureColumns 对不存在的表报错）。
+	if err := s.ProductFactI18nMigrate(); err != nil {
+		return nil, err
+	}
+	// ★ 三期 W5：外联合规四表（订阅/抑制名单/序列/发送占位），ux_outbound_once 是多实例只发一次的
+	//   结构性防线——缺表会让占位静默失效，失败即拒启。
+	if err := s.MarketingConsentMigrate(); err != nil {
+		return nil, err
+	}
+	// ★ 三期 W6：CRM 域五表（会话映射/客户/线索/商机/流程实例）。缺表会让转人工回填与
+	//   漏斗扩段在运行期才炸，启动链就是它们的验收证据。
+	if err := s.SalesCRMMigrate(); err != nil {
+		return nil, err
+	}
 	s.feedbackMigrate()          // 老库补 replies 列（幂等，BBS 回复线程）
 	s.backfillAPIOwnership()     // ★ 历史 Key/任务强绑定回填（幂等）
 	s.backfillPaymentsFenC2()    // ★ C2 历史 payments.amount_money(分) → amount_fen 回填（幂等）

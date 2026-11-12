@@ -19,7 +19,7 @@
 //
 // 本文件由 App.tsx 的 FrontShell 路由 React.lazy 加载，禁止入口包静态 import。
 // ============================================================================
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useT } from '@/i18n'
 import { useNav } from '@/lib/nav'
 import { confirmDialog } from '@/components/uiDialogs'
@@ -28,6 +28,7 @@ import {
   factList, factUpsert, assetList, assetPut, assetReview, assetDownload, assetUploadFile, assetFileDownload,
   kbPhrases, kbPhraseSave, type Product, type ProductFact, type ProductAsset, type PhrasesResp,
 } from '@/api/product'
+import { Button, Field, Input, Textarea, Select, Checkbox } from '@/ui/langcross/src'
 
 /** 事实项 kind 九值（与 store.ProductFactKinds 同一份名单，译文走 facts.kind.*） */
 const FACT_KINDS = ['spec', 'material', 'price', 'moq', 'cert', 'capacity', 'warranty', 'usecase', 'other'] as const
@@ -55,7 +56,6 @@ export default function ProductDetail() {
   const [seoOn, setSeoOn] = useState(true)
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
-  const fileRef = useRef<HTMLInputElement | null>(null)
 
   // 基本信息表单（受控；保存时**整份**提交，避免"只发改过那一格"撞上 update 语义）
   const [form, setForm] = useState({ name: '', tagline: '', audience: '', use_case: '', style_notes: '', banned_notes: '' })
@@ -221,9 +221,9 @@ export default function ProductDetail() {
     <section data-testid="product-detail">
       <h2>{t('product.detail.title')}</h2>
       {products.length > 1 && (
-        <select data-testid="pd-switch" value={current ? String(current.id) : ''} onChange={(e) => nav.navigate(`/products/detail?id=${encodeURIComponent(e.target.value)}`)}>
+        <Select data-testid="pd-switch" display={current ? (current.name || String(current.id)) : ''} value={current ? String(current.id) : ''} onChange={(e) => nav.navigate(`/products/detail?id=${encodeURIComponent(e.target.value)}`)}>
           {products.map((p) => <option key={String(p.id)} value={String(p.id)}>{p.name || String(p.id)}</option>)}
-        </select>
+        </Select>
       )}
       {!current && <p data-testid="pd-empty">{t('product.detail.noProduct')}</p>}
       {notice && <p data-testid="pd-notice" role="status">{notice}</p>}
@@ -231,42 +231,41 @@ export default function ProductDetail() {
       {/* ── 段一：基本信息＋状态＋对外链接＋SEO ───────────────────────── */}
       <div data-testid="pd-basic">
         <h3>{t('product.detail.basic')}</h3>
-        <label>{t('product.detail.name')}
-          <input data-testid="pd-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('product.detail.namePh')} />
-        </label>
-        <label>{t('product.detail.tagline')}
-          <input value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
-        </label>
-        <label>{t('product.detail.audience')}
-          <input value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })} />
-        </label>
-        <label>{t('product.detail.useCase')}
-          <input value={form.use_case} onChange={(e) => setForm({ ...form, use_case: e.target.value })} />
-        </label>
-        <label>{t('product.detail.style')}
-          <input value={form.style_notes} onChange={(e) => setForm({ ...form, style_notes: e.target.value })} />
-        </label>
-        <label>{t('product.detail.banned')}
-          <input value={form.banned_notes} onChange={(e) => setForm({ ...form, banned_notes: e.target.value })} />
-        </label>
-        <button data-testid="pd-save" disabled={busy} onClick={() => void saveProduct()}>{current ? t('product.detail.save') : t('product.detail.createFirst')}</button>
+        <Field label={t('product.detail.name')}>
+          <Input data-testid="pd-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder={t('product.detail.namePh')} />
+        </Field>
+        <Field label={t('product.detail.tagline')}>
+          <Input value={form.tagline} onChange={(e) => setForm({ ...form, tagline: e.target.value })} />
+        </Field>
+        <Field label={t('product.detail.audience')}>
+          <Input value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })} />
+        </Field>
+        <Field label={t('product.detail.useCase')}>
+          <Input value={form.use_case} onChange={(e) => setForm({ ...form, use_case: e.target.value })} />
+        </Field>
+        <Field label={t('product.detail.style')}>
+          <Input value={form.style_notes} onChange={(e) => setForm({ ...form, style_notes: e.target.value })} />
+        </Field>
+        <Field label={t('product.detail.banned')}>
+          <Input value={form.banned_notes} onChange={(e) => setForm({ ...form, banned_notes: e.target.value })} />
+        </Field>
+        <Button data-testid="pd-save" disabled={busy} onClick={() => void saveProduct()}>{current ? t('product.detail.save') : t('product.detail.createFirst')}</Button>
 
         {current && (
           <>
             <p data-testid="pd-status">{t('product.detail.statusNow')}: {t(`product.detail.status.${statusOf}`)}</p>
             <div data-testid="pd-status-actions">
-              {statusOf !== 'draft' && <button onClick={() => void changeStatus('draft')}>{t('product.detail.toDraft')}</button>}
-              {statusOf !== 'live' && <button data-testid="pd-to-live" onClick={() => void changeStatus('live')}>{t('product.detail.toLive')}</button>}
-              {statusOf !== 'archived' && <button onClick={() => void changeStatus('archived')}>{t('product.detail.toArchive')}</button>}
+              {statusOf !== 'draft' && <Button variant="secondary" onClick={() => void changeStatus('draft')}>{t('product.detail.toDraft')}</Button>}
+              {statusOf !== 'live' && <Button data-testid="pd-to-live" onClick={() => void changeStatus('live')}>{t('product.detail.toLive')}</Button>}
+              {statusOf !== 'archived' && <Button variant="secondary" onClick={() => void changeStatus('archived')}>{t('product.detail.toArchive')}</Button>}
             </div>
             <p data-testid="pd-link">{t('product.detail.publicLink')}: <code>{publicPath}</code></p>
-            <button onClick={() => void copyLink()}>{t('product.detail.copyLink')}</button>
-            <label data-testid="pd-seo">
-              <input type="checkbox" checked={seoOn} onChange={() => void toggleSeo()} />
-              {t('product.detail.seoLabel')}
-            </label>
+            <Button variant="secondary" onClick={() => void copyLink()}>{t('product.detail.copyLink')}</Button>
+            <span data-testid="pd-seo">
+              <Checkbox checked={seoOn} onChange={() => void toggleSeo()} label={t('product.detail.seoLabel')} />
+            </span>
             <p>{t('product.detail.seoHint')}</p>
-            <button data-testid="pd-delete" onClick={() => void removeProduct()}>{t('product.detail.deleteBtn')}</button>
+            <Button data-testid="pd-delete" variant="danger" onClick={() => void removeProduct()}>{t('product.detail.deleteBtn')}</Button>
           </>
         )}
       </div>
@@ -274,21 +273,21 @@ export default function ProductDetail() {
       {/* ── 段二：事实项（只有 confirmed 才进对外内容；cert 只许人工来源确认）── */}
       <div data-testid="pd-facts">
         <h3>{t('product.panel.facts')}</h3>
-        <select value={factDraft.kind} onChange={(e) => setFactDraft({ ...factDraft, kind: e.target.value })}>
+        <Select display={t(`facts.kind.${factDraft.kind}`)} value={factDraft.kind} onChange={(e) => setFactDraft({ ...factDraft, kind: e.target.value })}>
           {FACT_KINDS.map((k) => <option key={k} value={k}>{t(`facts.kind.${k}`)}</option>)}
-        </select>
-        <input placeholder={t('product.detail.factKey')} value={factDraft.key} onChange={(e) => setFactDraft({ ...factDraft, key: e.target.value })} />
-        <input placeholder={t('product.detail.factValue')} value={factDraft.value} onChange={(e) => setFactDraft({ ...factDraft, value: e.target.value })} />
-        <select aria-label={t('product.detail.visibility')} value={factDraft.visibility} onChange={(e) => setFactDraft({ ...factDraft, visibility: e.target.value })}>
+        </Select>
+        <Input placeholder={t('product.detail.factKey')} value={factDraft.key} onChange={(e) => setFactDraft({ ...factDraft, key: e.target.value })} />
+        <Input placeholder={t('product.detail.factValue')} value={factDraft.value} onChange={(e) => setFactDraft({ ...factDraft, value: e.target.value })} />
+        <Select aria-label={t('product.detail.visibility')} display={factDraft.visibility === 'public' ? t('product.detail.visPublic') : t('product.detail.visGated')} value={factDraft.visibility} onChange={(e) => setFactDraft({ ...factDraft, visibility: e.target.value })}>
           <option value="gated">{t('product.detail.visGated')}</option>
           <option value="public">{t('product.detail.visPublic')}</option>
-        </select>
-        <select aria-label={t('product.detail.source')} value={factDraft.source} onChange={(e) => setFactDraft({ ...factDraft, source: e.target.value })}>
+        </Select>
+        <Select aria-label={t('product.detail.source')} display={factDraft.source === 'ocr' ? t('product.detail.srcOcr') : factDraft.source === 'external_ref' ? t('product.detail.srcExternal') : t('product.detail.srcManual')} value={factDraft.source} onChange={(e) => setFactDraft({ ...factDraft, source: e.target.value })}>
           <option value="manual">{t('product.detail.srcManual')}</option>
           <option value="ocr">{t('product.detail.srcOcr')}</option>
           <option value="external_ref">{t('product.detail.srcExternal')}</option>
-        </select>
-        <button data-testid="pd-fact-save" onClick={() => void saveFact()}>{t('product.detail.addFact')}</button>
+        </Select>
+        <Button data-testid="pd-fact-save" onClick={() => void saveFact()}>{t('product.detail.addFact')}</Button>
         <p>{t('product.detail.certHint')}</p>
         <ul>
           {facts.map((f) => (
@@ -296,7 +295,7 @@ export default function ProductDetail() {
               {t(`facts.kind.${f.kind}`)} · {f.key} · {f.value}
               {f.visibility === 'gated' && <em> · {t('product.panel.gatedBadge')}</em>}
               {f.source === 'external_ref' && <em> · {t('product.detail.refBadge')}</em>}
-              <button onClick={() => setFactDraft({ id: Number(f.id), kind: String(f.kind), key: String(f.key), value: String(f.value), visibility: String(f.visibility), source: String(f.source ?? 'manual') })}>{t('product.detail.edit')}</button>
+              <Button variant="secondary" onClick={() => setFactDraft({ id: Number(f.id), kind: String(f.kind), key: String(f.key), value: String(f.value), visibility: String(f.visibility), source: String(f.source ?? 'manual') })}>{t('product.detail.edit')}</Button>
             </li>
           ))}
         </ul>
@@ -305,29 +304,29 @@ export default function ProductDetail() {
       {/* ── 段三：物料货架（文本＋文件，审核三态，取回两个口）──────────── */}
       <div data-testid="pd-assets">
         <h3>{t('product.detail.assets')}</h3>
-        <select value={assetDraft.asset_type} onChange={(e) => setAssetDraft({ ...assetDraft, asset_type: e.target.value })}>
+        <Select display={t(`product.detail.type.${assetDraft.asset_type}`)} value={assetDraft.asset_type} onChange={(e) => setAssetDraft({ ...assetDraft, asset_type: e.target.value })}>
           {ASSET_TYPES.map((k) => <option key={k} value={k}>{t(`product.detail.type.${k}`)}</option>)}
-        </select>
-        <select aria-label={t('product.detail.lang')} value={assetDraft.lang} onChange={(e) => setAssetDraft({ ...assetDraft, lang: e.target.value })}>
+        </Select>
+        <Select aria-label={t('product.detail.lang')} display={assetDraft.lang} value={assetDraft.lang} onChange={(e) => setAssetDraft({ ...assetDraft, lang: e.target.value })}>
           {ASSET_LANGS.map((k) => <option key={k} value={k}>{k}</option>)}
-        </select>
-        <textarea data-testid="pd-asset-body" placeholder={t('product.detail.assetBody')} value={assetDraft.body} onChange={(e) => setAssetDraft({ ...assetDraft, body: e.target.value })} />
-        <select aria-label={t('product.detail.visibility')} value={assetDraft.visibility} onChange={(e) => setAssetDraft({ ...assetDraft, visibility: e.target.value })}>
+        </Select>
+        <Textarea data-testid="pd-asset-body" placeholder={t('product.detail.assetBody')} value={assetDraft.body} onChange={(e) => setAssetDraft({ ...assetDraft, body: e.target.value })} />
+        <Select aria-label={t('product.detail.visibility')} display={assetDraft.visibility === 'public' ? t('product.detail.visPublic') : t('product.detail.visGated')} value={assetDraft.visibility} onChange={(e) => setAssetDraft({ ...assetDraft, visibility: e.target.value })}>
           <option value="gated">{t('product.detail.visGated')}</option>
           <option value="public">{t('product.detail.visPublic')}</option>
-        </select>
-        <input ref={fileRef} data-testid="pd-asset-file" type="file" onChange={(e) => void pickFile(e.target.files?.[0])} />
+        </Select>
+        <Input data-testid="pd-asset-file" type="file" onChange={(e) => void pickFile(e.target.files?.[0])} />
         {assetDraft.artifact_ref && <span data-testid="pd-asset-ref">{assetDraft.file_name || assetDraft.artifact_ref}</span>}
-        <button data-testid="pd-asset-save" disabled={busy} onClick={() => void saveAsset()}>{assetDraft.id ? t('product.detail.save') : t('product.detail.addAsset')}</button>
+        <Button data-testid="pd-asset-save" disabled={busy} onClick={() => void saveAsset()}>{assetDraft.id ? t('product.detail.save') : t('product.detail.addAsset')}</Button>
         <ul>
           {assets.map((a) => (
             <li key={String(a.id)} data-testid={`pd-asset-${a.review_status}-${a.validity}`}>
               {t(`product.detail.type.${a.asset_type}`)} · {a.lang} · {t(`product.detail.review.${a.review_status}`)} · {t(`product.detail.validity.${a.validity}`)}
-              <button onClick={() => void assetReview(Number(a.id), 'approved')}>{t('product.detail.approve')}</button>
-              <button onClick={() => void assetReview(Number(a.id), 'rejected')}>{t('product.detail.reject')}</button>
-              <button onClick={() => void fetchAsset(a, 'body')}>{t('product.detail.viewBody')}</button>
-              {Boolean(a.artifact_ref) && <button data-testid="pd-asset-file-get" onClick={() => void fetchAsset(a, 'file')}>{t('product.detail.downloadFile')}</button>}
-              <button onClick={() => setAssetDraft({ id: Number(a.id), asset_type: String(a.asset_type), lang: String(a.lang), body: String(a.body), artifact_ref: String(a.artifact_ref || ''), visibility: String(a.visibility), file_name: '' })}>{t('product.detail.edit')}</button>
+              <Button variant="secondary" onClick={() => void assetReview(Number(a.id), 'approved')}>{t('product.detail.approve')}</Button>
+              <Button variant="secondary" onClick={() => void assetReview(Number(a.id), 'rejected')}>{t('product.detail.reject')}</Button>
+              <Button variant="secondary" onClick={() => void fetchAsset(a, 'body')}>{t('product.detail.viewBody')}</Button>
+              {Boolean(a.artifact_ref) && <Button variant="secondary" data-testid="pd-asset-file-get" onClick={() => void fetchAsset(a, 'file')}>{t('product.detail.downloadFile')}</Button>}
+              <Button variant="secondary" onClick={() => setAssetDraft({ id: Number(a.id), asset_type: String(a.asset_type), lang: String(a.lang), body: String(a.body), artifact_ref: String(a.artifact_ref || ''), visibility: String(a.visibility), file_name: '' })}>{t('product.detail.edit')}</Button>
             </li>
           ))}
         </ul>
@@ -337,12 +336,12 @@ export default function ProductDetail() {
       <div data-testid="pd-phrases">
         <h3>{t('product.detail.phrases')}</h3>
         <p>{t('product.detail.phraseHint')}</p>
-        <input placeholder={t('product.detail.phraseSrc')} value={phraseDraft.source_text} onChange={(e) => setPhraseDraft({ ...phraseDraft, source_text: e.target.value })} />
-        <input placeholder={t('product.detail.phraseTgt')} value={phraseDraft.target_text} onChange={(e) => setPhraseDraft({ ...phraseDraft, target_text: e.target.value })} />
-        <select aria-label={t('product.detail.lang')} value={phraseDraft.target_lang} onChange={(e) => setPhraseDraft({ ...phraseDraft, target_lang: e.target.value })}>
+        <Input placeholder={t('product.detail.phraseSrc')} value={phraseDraft.source_text} onChange={(e) => setPhraseDraft({ ...phraseDraft, source_text: e.target.value })} />
+        <Input placeholder={t('product.detail.phraseTgt')} value={phraseDraft.target_text} onChange={(e) => setPhraseDraft({ ...phraseDraft, target_text: e.target.value })} />
+        <Select aria-label={t('product.detail.lang')} display={phraseDraft.target_lang} value={phraseDraft.target_lang} onChange={(e) => setPhraseDraft({ ...phraseDraft, target_lang: e.target.value })}>
           {ASSET_LANGS.map((k) => <option key={k} value={k}>{k}</option>)}
-        </select>
-        <button data-testid="pd-phrase-save" onClick={() => void savePhrases()}>{t('product.detail.importBtn')}</button>
+        </Select>
+        <Button data-testid="pd-phrase-save" onClick={() => void savePhrases()}>{t('product.detail.importBtn')}</Button>
         <ul>
           {phrases.map((p, i) => <li key={`${p.source_text}-${i}`}>{p.source_text} → {p.target_text} <em>({String((p as { target_lang?: unknown }).target_lang ?? '')})</em></li>)}
         </ul>

@@ -13,8 +13,22 @@
 // ============================================================================
 import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
+import { Input, Button } from '@/ui/langcross/src'
 import { publicProduct, type PublicItem } from '@/api/product'
 import { copyText, type ExhaustReason } from '@/lib/productExhaustCopy'
+
+/** 公开页版式：设计变量一律取 tokens.css 的 --lc-*，不写死色值、不写内联布局样式。 */
+const PAGE_CSS = `
+.lc-pp-main { max-width: 960px; margin: 0 auto; padding: 24px 20px; color: var(--lc-text); }
+.lc-pp-title { font-size: 24px; font-weight: 600; color: var(--lc-text); }
+.lc-pp-tagline { color: var(--lc-text-2); }
+.lc-pp-note { font-size: 13px; color: var(--lc-text-3); }
+.lc-pp-facts { list-style: none; margin: 0; padding: 0; }
+.lc-pp-fact { padding: 10px 0; border-bottom: 1px solid var(--lc-border-card-dim); }
+.lc-pp-fact-key { margin-right: 12px; color: var(--lc-text-3); }
+.lc-pp-lead { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; }
+.lc-input.lc-pp-hp { position: absolute; left: -9999px; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; }
+`
 
 /** 对外公开页入参：两段不可枚举短码（创建即定、改名不改 URL，§2.1 H1）；耗尽原因可选注入 */
 export interface ProductPublicPageProps {
@@ -63,39 +77,45 @@ export default function ProductPublicPage({ tenantCode, pageCode, exhaustReason 
   const leadSource = `lead-product:${tenantCode}:${pageCode}`
 
   return (
-    <main style={{ maxWidth: 960, margin: '0 auto', padding: '24px 20px', color: '#E7E9EA' }}>
-      <h1 style={{ fontSize: 24, fontWeight: 600 }}>{name || t('product.public.title')}</h1>
-      {tagline && <p style={{ opacity: 0.8 }}>{tagline}</p>}
-      <p style={{ fontSize: 13, opacity: 0.6 }}>{t('product.public.seoNotice')}</p>
+    <>
+      <style>{PAGE_CSS}</style>
+      <main className="lc-pp-main">
+        <h1 className="lc-pp-title">{name || t('product.public.title')}</h1>
+        {tagline && <p className="lc-pp-tagline">{tagline}</p>}
+        <p className="lc-pp-note">{t('product.public.seoNotice')}</p>
 
-      {loaded && notFound && <p data-testid="public-not-found">{t('product.public.notFound')}</p>}
+        {loaded && notFound && <p data-testid="public-not-found">{t('product.public.notFound')}</p>}
 
-      <ul style={{ listStyle: 'none', padding: 0 }}>
-        {visible.map((f) => (
-          <li key={f.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--lc-border-card-dim)' }}>
-            <span style={{ marginRight: 12, opacity: 0.7 }}>{f.key}</span>
-            <span>{f.text}</span>
-          </li>
-        ))}
-      </ul>
+        <ul className="lc-pp-facts">
+          {visible.map((f) => (
+            <li key={f.id} className="lc-pp-fact">
+              <span className="lc-pp-fact-key">{f.key}</span>
+              <span>{f.text}</span>
+            </li>
+          ))}
+        </ul>
 
-      {/* 受控项整段不出：只出替身文案，绝不渲染 gated 行的 value（§5.6） */}
-      {gatedCount > 0 && <p data-testid="gated-tip">{t('product.public.gatedTip')}</p>}
-      {busyCopy && <p data-testid="visitor-exhaust">{busyCopy}</p>}
+        {/* 受控项整段不出：只出替身文案，绝不渲染 gated 行的 value（§5.6） */}
+        {gatedCount > 0 && <p data-testid="gated-tip">{t('product.public.gatedTip')}</p>}
+        {busyCopy && <p data-testid="visitor-exhaust">{busyCopy}</p>}
 
-      {/* 真实留资出口：复用 /api/lead/public 四道自保；蜜罐位移隐藏（不许 display:none） */}
-      <form action="/api/lead/public" method="post" autoComplete="off" data-testid="lead-form"
-            style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 24 }}>
-        <input type="text" name="company" required maxLength={100} placeholder="公司/团队名称" aria-label="公司/团队名称" />
-        <input type="email" name="email" required maxLength={120} placeholder="联系邮箱" aria-label="联系邮箱" />
-        <input type="text" name="site" value="" tabIndex={-1} autoComplete="off" aria-hidden="true" readOnly
-               style={{ position: 'absolute', left: -9999, width: 1, height: 1, opacity: 0 }} />
-        <input type="hidden" name="source" value={leadSource} />
-        <input type="hidden" name="tenant_code" value={tenantCode} />
-        <input type="hidden" name="page_code" value={pageCode} />
-        <input type="hidden" name="lead_source" value="lead-product:" />
-        <button type="submit">{t('product.public.leadCta')}</button>
-      </form>
-    </main>
+        {/* 公开面 SEO／留资契约的例外：后端只认 /api/lead/public 的浏览器原生表单 POST，
+            故保留 <form action=...> 原生提交（不挂 onSubmit、不 preventDefault），内部控件全部换成
+            组件库；蜜罐 site 仍走位移隐藏而非 display:none；受控字段与短码值不进 meta/JSON-LD/首屏。 */}
+        <form className="lc-pp-lead" action="/api/lead/public" method="post" autoComplete="off" data-testid="lead-form">
+          <Input type="text" name="company" required maxLength={100}
+                 placeholder={t('land.leadCompany')} aria-label={t('land.leadCompany')} />
+          <Input type="email" name="email" required maxLength={120}
+                 placeholder={t('land.leadEmail')} aria-label={t('land.leadEmail')} />
+          <Input className="lc-pp-hp" type="text" name="site" value="" tabIndex={-1}
+                 autoComplete="off" aria-hidden="true" readOnly />
+          <Input type="hidden" name="source" value={leadSource} />
+          <Input type="hidden" name="tenant_code" value={tenantCode} />
+          <Input type="hidden" name="page_code" value={pageCode} />
+          <Input type="hidden" name="lead_source" value="lead-product:" />
+          <Button type="submit">{t('product.public.leadCta')}</Button>
+        </form>
+      </main>
+    </>
   )
 }

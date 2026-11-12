@@ -43,6 +43,10 @@ import { ReconcileP } from './ReconcileP' // ★ F9 对账视图
 import BillingHubP from './BillingHubP'
 import AssistP from './AssistP' // ★ autosales：AI 助手管理
 import SalesConfigP from './SalesConfigP' // ★ 二期：销售配置管理
+import SalesRolesP from './SalesRolesP' // ★ 三期 W3：销售角色权限矩阵
+import SalesOpsP from './SalesOpsP' // ★ 三期 W3/W5：销售维护开关
+import SalesInboxP from './SalesInboxP' // ★ 三期 W6：销售事件收件箱
+import SalesLeadsP from './SalesLeadsP' // ★ 三期 W6：销售线索与待人工接管
 
 // 菜单项接口定义：key 对应 admin store 中的面板标识，minLevel 为可见最低角色等级
 // icon 为 16×16 SVG 图标名（UI-ANNOTATIONS §3.1-13 侧栏九项；§0.1：emoji 只是图标占位）
@@ -74,6 +78,12 @@ const ITEMS: Item[] = [
   { key: 'assist', label: 'admin.menuAssist', minLevel: 4, icon: 'robot' }, // ★ autosales：AI 助手管理（仅超管）
   // 租户管理员可配自己租户的销售模型／流程／策略；后端 requireTenantAdmin 同档把关。
   { key: 'salesconfig', label: 'admin.menuSalesConfig', minLevel: 3, icon: 'gear' },
+  // ★ 三期 W3–W6 销售域四面板：后端读写一律 ≥3（salesConfigAdmin / salesRoleGate 同档把关），
+  //   菜单 minLevel 与后端一致，不给部门管理员一条「看得见、点进去全线 403」的死路。
+  { key: 'salesroles', label: 'sales.roles.title', minLevel: 3, icon: 'lock' },
+  { key: 'salesops', label: 'sales.ops.title', minLevel: 3, icon: 'gear' },
+  { key: 'salesinbox', label: 'sales.inbox.title', minLevel: 3, icon: 'mail' },
+  { key: 'salesleads', label: 'sales.leads.title', minLevel: 3, icon: 'chart' },
 ]
 
 /** 根据当前选中的面板 key 返回对应组件（集中分发，避免在 JSX 中写长 switch） */
@@ -109,6 +119,11 @@ function renderPanel(p: PanelKey) {
     case 'billing': return <BillingHubP /> // ★ Tab 精简：计费 Hub（套餐/租户/对账）
     case 'assist': return <AssistP /> // ★ autosales：AI 助手管理（原生面板，读写经主后台同源代理）
     case 'salesconfig': return <SalesConfigP /> // ★ 二期：三段配置＋词表编辑器
+    // ★ 三期 W3–W6：销售域四面板（PanelKey 面板，不新增路由、不动 App.tsx/spa.go）
+    case 'salesroles': return <SalesRolesP />
+    case 'salesops': return <SalesOpsP />
+    case 'salesinbox': return <SalesInboxP />
+    case 'salesleads': return <SalesLeadsP />
     default: return null
   }
 }

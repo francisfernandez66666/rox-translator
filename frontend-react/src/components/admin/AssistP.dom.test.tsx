@@ -28,6 +28,7 @@ import { toastError } from '@/lib/toastBus'
 const m = vi.hoisted(() => ({
   status: vi.fn(), sessions: vi.fn(), list: vi.fn(), create: vi.fn(), update: vi.fn(),
   del: vi.fn(), config: vi.fn(), configSet: vi.fn(), llmTest: vi.fn(), rotate: vi.fn(), tokGet: vi.fn(),
+  systemValues: vi.fn(),
 }))
 
 vi.mock('@/api/assistAdmin', async (importOriginal) => {
@@ -43,6 +44,7 @@ vi.mock('@/api/assistAdmin', async (importOriginal) => {
     assistAdminConfig: m.config,
     assistAdminConfigSet: m.configSet,
     assistAdminLLMTest: m.llmTest,
+    assistAdminSystemValues: m.systemValues,
   }
 })
 
@@ -85,6 +87,7 @@ beforeEach(() => {
   ])
   m.configSet.mockResolvedValue({ ok: true })
   m.llmTest.mockResolvedValue({ ok: true, model: 'gpt-4o-mini', ms: 412 })
+  m.systemValues.mockResolvedValue({ ok: true, base_url: 'http://127.0.0.1:8787', cached: '旧缓存段', cached_age_sec: 12, fresh: '价格系数现值段', ms: 42 })
   // Token 读取：只回掩码态（后端已不下发明文），面板据此渲染「已配置 + 来源 + 掩码」
   m.tokGet.mockResolvedValue({ success: true, source: 'db', set: true, masked: 'abcd****wxyz', db_masked: 'abcd****wxyz', env_overridden: false })
   m.rotate.mockResolvedValue({ success: true, changed: true, pushed: true, source: 'db', set: true, masked: 'abcd****wxyz', db_masked: 'abcd****wxyz', env_overridden: false })
@@ -289,5 +292,61 @@ describe('AI 助手面板 · 配置与连通测试', () => {
     fireEvent.click(screen.getByText('测试连通'))
     await vi.waitFor(() => { expect(m.llmTest).toHaveBeenCalled() })
     await vi.waitFor(() => { expect(document.body.textContent).toMatch(/连通正常：gpt-4o-mini，耗时 412ms/) })
+  })
+})
+
+// ===== ⑥ 系统现值面板（三期 W1：旧管理台差集补齐，main_base_url + 现取一次） =====
+describe('AI 助手面板 · 系统现值', () => {
+  const gotoConfig = async () => {
+    render(<AssistP />)
+    await vi.waitFor(() => { expect(m.sessions).toHaveBeenCalled() })
+    fireEvent.click(tabBtn('配置'))
+    await vi.waitFor(() => { expect(m.config).toHaveBeenCalled() })
+  }
+  const svOut = () => document.querySelector('[data-testid="assist-sv-out"]') as HTMLElement
+
+  it('配置页签带出现值面板：main_base_url 可填、未取数时是引导文案而不是空白', async () => {
+    await gotoConfig()
+    expect(document.querySelector('input[aria-label="main_base_url"]')).toBeTruthy()
+    expect(svOut().textContent).toMatch(/点「现取一次」/)
+    expect(m.systemValues).not.toHaveBeenCalled() // 只在点按钮时拨，不随页签自动打上游
+  })
+
+  it('现取一次：回显拨向地址/耗时/缓存年龄与 fresh 段，徽标报「现值可用」', async () => {
+    await gotoConfig()
+    fireEvent.click(screen.getByText('现取一次'))
+    await vi.waitFor(() => { expect(m.systemValues).toHaveBeenCalledTimes(1) })
+    await vi.waitFor(() => { expect(document.body.textContent).toMatch(/现值可用/) })
+    expect(svOut().textContent).toMatch(/拨向 http:\/\/127\.0\.0\.1:8787/)
+    expect(svOut().textContent).toMatch(/42ms/)
+    expect(svOut().textContent).toMatch(/12 秒前的缓存/)
+    expect(svOut().textContent).toMatch(/价格系数现值段/)
+  })
+
+  it('ok=false：徽标报「没取到」，fresh 空有明确空态文案（不是取到 0）', async () => {
+    m.systemValues.mockResolvedValue({ ok: false, base_url: 'http://127.0.0.1:8787', cached: '', cached_age_sec: -1, fresh: '', ms: 7 })
+    await gotoConfig()
+    fireEvent.click(screen.getByText('现取一次'))
+    await vi.waitFor(() => { expect(document.body.textContent).toMatch(/没取到：挂件正按「不报数」口径回答/) })
+    expect(svOut().textContent).toMatch(/对话链路还没取过一次/)
+    expect(svOut().textContent).toMatch(/空＝两个口都没取到/)
+  })
+
+  it('保存地址：trim 后只写 main_base_url 一键，提示 60 秒生效口径', async () => {
+    const { toastSuccess } = await import('@/lib/toastBus')
+    await gotoConfig()
+    fireEvent.change(document.querySelector('input[aria-label="main_base_url"]') as HTMLInputElement, { target: { value: '  http://10.0.0.2:8787  ' } })
+    fireEvent.click(screen.getByText('保存地址'))
+    await vi.waitFor(() => { expect(m.configSet).toHaveBeenCalledWith('main_base_url', 'http://10.0.0.2:8787') })
+    expect(m.configSet).toHaveBeenCalledTimes(1)
+    expect(toastSuccess).toHaveBeenCalledWith(expect.stringContaining('60 秒'))
+  })
+
+  it('取数失败：面板内出声（ AssistBizError 的 message ），不静默吞成空态', async () => {
+    m.systemValues.mockRejectedValue(new AssistBizError('AI 助手服务不可达'))
+    await gotoConfig()
+    fireEvent.click(screen.getByText('现取一次'))
+    await vi.waitFor(() => { expect(svOut().textContent).toMatch(/AI 助手服务不可达/) })
+    expect(document.body.textContent).not.toMatch(/现值可用/)
   })
 })

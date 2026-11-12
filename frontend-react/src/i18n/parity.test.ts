@@ -56,6 +56,8 @@ import * as pReconcile from './panels/reconcile'
 import * as pCost from './panels/cost'
 // ★ 一期（2026-11-05）：产品面板（zh/en 两条腿），PANELS 表必须登记否则目录全量双向断言红
 import * as pProduct from './panels/product'
+// ★ 三期 W3–W6：销售域四面板（角色/维护/收件箱/线索）词典
+import * as pSales from './panels/sales'
 
 // 与 i18n/index.ts 保持同序的面板模块表（保证合并口径一致）
 const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<string, string> } }[] = [
@@ -85,6 +87,8 @@ const PANELS: { name: string; mod: { zh: Record<string, string>; en: Record<stri
   { name: 'invitelink', mod: pInviteLink },
   // ★ 一期：产品面板（与 appPanels.ts / allKeys.ts 的 import 同步，见文件头口径）
   { name: 'product', mod: pProduct },
+  // ★ 三期 W3–W6：销售域四面板（zh/en 对等 + 空值漏译闸）
+  { name: 'sales', mod: pSales },
 ]
 
 describe('i18n 中英词典键值对等性', () => {
