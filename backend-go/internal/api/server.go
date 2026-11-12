@@ -82,6 +82,9 @@ type Server struct {
 	MQBus *mq.Bus
 	// ★ 三期 W2：流程状态机巡检器（生产＝state_machine.Service；测试可注入计数桩）。
 	smSweeper smSweeper
+	// ★ 四期 W1：销售事实注入的作用域计数（只服务 /api/health 的 sales_facts 段，见
+	//   sales_facts_scope.go 的 salesFactsHealth）。口径同 #42：只出状态词与计数。
+	salesFactsStats salesFactsCounters
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -807,7 +810,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 请求方法/头（含租户切换与后台 Token 头）
 		w.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token, X-App-Lang")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Tenant-ID, X-Admin-Token, X-App-Lang, X-LangCross-Page")
 		// 来源校验：无 Origin 头（同源导航/非浏览器）直接放行。
 		// ★ /openapi/* 前缀无条件反射（评审整改 A2）：开放 API 全部为 Key 鉴权、
 		//   无 Cookie 会话面，CSRF 不成立——放行跨域以支持浏览器划词插件等第三方前端
@@ -1086,6 +1089,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   监听却可以一直 ok ⇒ 只靠 usdt_watch=ok 会把"今天恰好没被限流"写成对客承诺。
 		//   同样只出状态词，绝不出 Key、端点域名或命中次数。
 		"usdt_tron_quota": s.usdtTronQuotaWord(),
+		// ★ 四期 W1（§4.1.3-④）：销售事实注入的**状态词与计数**。
+		//   gate 答"两把开关开没开"（on/half/off），四个 scope_* 答"这些请求落在哪一档作用域"，
+		//   injected 答"实际下发过多少条事实"。同 #42/usdt_watch 口径：只出状态词与计数，
+		//   **绝不出事实值、产品名、租户名，也不出 product_id**（本端点匿名可达）。
+		//   ambiguous 长期不为 0 ⇒ 多产品租户没页面上下文（要么前端没送页面头，要么访客还没走到公开页）。
+		"sales_facts": s.salesFactsHealth(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

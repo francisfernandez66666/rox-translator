@@ -144,6 +144,16 @@ function noteAssistAuthFailure(status: number) {
   if (status === 401 || status === 403) setAssistSid('') // setAssistSid('') 同步清 tok，避免半对状态
 }
 
+/** 页面上下文头：让服务端把「访客在哪一页提问」解析成产品作用域（四期 W1）。
+ *
+ *  ★ 只有 greet/chat 送——history/features 不产生答复，注入事实无处可用（见下方豁免注释）。
+ *  ★ 服务端以**头为准**、取不到再回落 query/body 的 `page`：两处同值，但"头"是唯一正式通道
+ *    （body 是业务字段，未来若有人把它改名，头这条腿不该跟着一起断）。 */
+const PAGE_HEADER = 'X-LangCross-Page'
+function pageHeader(page: string): Record<string, string> {
+  return page ? { [PAGE_HEADER]: page } : {}
+}
+
 /** 开场引导：取欢迎词/会话 id+令牌/快捷提问（幂等；sid+tok 成对提交才复用，令牌缺失服务端会换新会话） */
 export async function assistGreet(page = ''): Promise<AssistGreet> {
   const sid = getAssistSid()
@@ -151,9 +161,11 @@ export async function assistGreet(page = ''): Promise<AssistGreet> {
   const q = new URLSearchParams()
   if (sid) q.set('session', sid)
   if (tok) q.set('tok', tok)
-  if (page) q.set('page', page)
+  if (page) q.set('page', page) // 老后端兼容：query 那份保持不动，新后端以头为准
   q.set('lang', getLang()) // ★ 082x：欢迎词与 chips 不走对话模型，只能靠这个字段翻成访客语言
-  const res = await fetch(`${ASSIST_API}/api/assist/greeting?${q.toString()}`)
+  const res = await fetch(`${ASSIST_API}/api/assist/greeting?${q.toString()}`, {
+    headers: pageHeader(page), // 四期 W1：产品作用域走正式通道
+  })
   noteAssistAuthFailure(res.status) // 401/403：清本地会话，调用方重走 greet（见上方豁免说明）
   if (!res.ok) throw new Error(`greeting ${res.status}`)
   return res.json()
@@ -163,12 +175,18 @@ export async function assistGreet(page = ''): Promise<AssistGreet> {
 export async function assistChat(session: string, message: string, page = ''): Promise<AssistChatResp> {
   const res = await fetch(`${ASSIST_API}/api/assist/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...pageHeader(page) }, // 四期 W1：body 的 page 保持不动，另加同值头
     body: JSON.stringify({ session, tok: getAssistTok(), message, page, lang: getLang() }),
   })
   if (!res.ok) { noteAssistAuthFailure(res.status); throw new Error(`chat ${res.status}`) }
   return res.json()
 }
+
+// ★ 四期 W1 的**豁免理由**（AGENTS §一·5「豁免必须留理由标记」同族）：
+//   `assistHistory` / `assistFeatures` **刻意不送** X-LangCross-Page。
+//   服务端抓页面头的调用点在 assist_open_proxy.go 的 handleAssistOpenProxy（四个端点都会经过），
+//   所以豁免不能靠"不调那段代码"，只能靠**作用域解析结果**：这两条没有页面上下文 ⇒ 落 denied 档 ⇒ 空集，
+//   零成本、零副作用。给它们补 page 的代价是"让人误以为历史接口也在用产品事实"，而收益为零。
 
 /** 恢复历史消息（刷新后回显）；401 视为令牌失效并清本地会话，返回空数组走重新 greet 路径 */
 export async function assistHistory(session: string, limit = 30): Promise<AssistMsg[]> {

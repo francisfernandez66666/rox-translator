@@ -33,29 +33,33 @@ const attributionDefaultPageSize = 100
 // ReplyAttributionRow 回复归因的持久化行。
 // 终态列 ArrivedAt/DealtAt 保留但本层不写：到店/成交属后续自动化链路，一期只认可 inquiry。
 type ReplyAttributionRow struct {
-	ID             int64   `json:"id"`
-	TenantID       int64   `json:"tenant_id"`
-	MessageID      int64   `json:"message_id"`
-	ConversationID int64   `json:"conversation_id"`
-	CustomerID     int64   `json:"customer_id"`
-	PackageID      string  `json:"package_id"`
-	Version        string  `json:"version"`
-	DraftID        string  `json:"draft_id"`
-	AnchorType     int     `json:"anchor_type"`
-	RouteResult    string  `json:"route_result"`
-	Provider       string  `json:"provider"`
-	ModelName      string  `json:"model_name"`
-	IntentBefore   float64 `json:"intent_before"`
-	IntentAfter    float64 `json:"intent_after"`
-	Hooked         int     `json:"hooked"`
-	LeadCaptured   int     `json:"lead_captured"`
-	PendingHuman   int     `json:"pending_human"`
-	EvalScore      int     `json:"eval_score"`
-	OutcomeStage   string  `json:"outcome_stage"`
-	ArrivedAt      string  `json:"arrived_at"`
-	DealtAt        string  `json:"dealt_at"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID             int64 `json:"id"`
+	TenantID       int64 `json:"tenant_id"`
+	MessageID      int64 `json:"message_id"`
+	ConversationID int64 `json:"conversation_id"`
+	CustomerID     int64 `json:"customer_id"`
+	// ProductID 本轮答复归属的产品主键（四期 W1，§4.1.3-⑥）。
+	// ★ 空串＝"未归因到产品"：存量行与"产品已删"同形处理，**不回填猜测**（猜错比空着坏）。
+	// 开闸粒度是"按产品"，没有这一列就答不了"哪个产品带来了这一条询盘"，漏斗在库层面断掉。
+	ProductID    string  `json:"product_id"`
+	PackageID    string  `json:"package_id"`
+	Version      string  `json:"version"`
+	DraftID      string  `json:"draft_id"`
+	AnchorType   int     `json:"anchor_type"`
+	RouteResult  string  `json:"route_result"`
+	Provider     string  `json:"provider"`
+	ModelName    string  `json:"model_name"`
+	IntentBefore float64 `json:"intent_before"`
+	IntentAfter  float64 `json:"intent_after"`
+	Hooked       int     `json:"hooked"`
+	LeadCaptured int     `json:"lead_captured"`
+	PendingHuman int     `json:"pending_human"`
+	EvalScore    int     `json:"eval_score"`
+	OutcomeStage string  `json:"outcome_stage"`
+	ArrivedAt    string  `json:"arrived_at"`
+	DealtAt      string  `json:"dealt_at"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
 }
 
 // PackStatRow 素材效果聚合快照行（9 个聚合列由 SyncPackStats 现算）。
@@ -87,11 +91,11 @@ func (s *Store) RecordReply(row ReplyAttributionRow) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		`INSERT INTO reply_attributions
-		 (tenant_id, message_id, conversation_id, customer_id,
+		 (tenant_id, message_id, conversation_id, customer_id, product_id,
 		  package_id, version, draft_id, anchor_type, route_result, provider, model,
 		  intent_before, intent_after, eval_score, outcome_stage, pending_human, created_at, updated_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		row.TenantID, row.MessageID, row.ConversationID, row.CustomerID,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		row.TenantID, row.MessageID, row.ConversationID, row.CustomerID, row.ProductID,
 		row.PackageID, row.Version, row.DraftID, row.AnchorType, row.RouteResult, row.Provider, row.ModelName,
 		row.IntentBefore, row.IntentAfter, evalScoreUnknown, row.OutcomeStage, row.PendingHuman, now, now)
 	if err == nil {
@@ -101,13 +105,19 @@ func (s *Store) RecordReply(row ReplyAttributionRow) error {
 		return fmt.Errorf("归因记录落库失败: %w", err)
 	}
 	// 幂等命中：只刷新快照列与 updated_at；eval_score、事件标记、终态列一律不动。
+	// ★ 四期 W1：product_id 用 CASE 保护——同一条 message 的第二次回写可能来自无作用域的路径
+	//   （历史回放 / 特征接口），直接覆盖会把漏斗维度静默洗成空串（AGENTS §一·11「读数为失败背书」）；
+	//   反过来，第一次没写上的行允许后续补上（`? <> ''` 那一支）。
 	_, err = db.Exec(s.db, db.CurrentDialect(),
 		`UPDATE reply_attributions
-		 SET conversation_id=?, customer_id=?, package_id=?, version=?, draft_id=?,
+		 SET conversation_id=?, customer_id=?,
+		     product_id = CASE WHEN ? = '' THEN product_id ELSE ? END,
+		     package_id=?, version=?, draft_id=?,
 		     anchor_type=?, route_result=?, provider=?, model=?,
 		     intent_before=?, intent_after=?, outcome_stage=?, updated_at=?
 		 WHERE tenant_id=? AND message_id=?`,
-		row.ConversationID, row.CustomerID, row.PackageID, row.Version, row.DraftID,
+		row.ConversationID, row.CustomerID, row.ProductID, row.ProductID,
+		row.PackageID, row.Version, row.DraftID,
 		row.AnchorType, row.RouteResult, row.Provider, row.ModelName,
 		row.IntentBefore, row.IntentAfter, row.OutcomeStage, now,
 		row.TenantID, row.MessageID)
@@ -312,7 +322,7 @@ func (s *Store) ListReplyAttributions(tid, limit, offset int64) ([]ReplyAttribut
 		offset = 0
 	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
-		`SELECT id, tenant_id, message_id, conversation_id, customer_id,
+		`SELECT id, tenant_id, message_id, conversation_id, customer_id, product_id,
 		        package_id, version, draft_id, anchor_type, route_result, provider, model,
 		        intent_before, intent_after, hooked, lead_captured, pending_human,
 		        eval_score, outcome_stage, arrived_at, dealt_at, created_at, updated_at
@@ -325,7 +335,7 @@ func (s *Store) ListReplyAttributions(tid, limit, offset int64) ([]ReplyAttribut
 	out := make([]ReplyAttributionRow, 0, 16)
 	for rows.Next() {
 		var r ReplyAttributionRow
-		if err := rows.Scan(&r.ID, &r.TenantID, &r.MessageID, &r.ConversationID, &r.CustomerID,
+		if err := rows.Scan(&r.ID, &r.TenantID, &r.MessageID, &r.ConversationID, &r.CustomerID, &r.ProductID,
 			&r.PackageID, &r.Version, &r.DraftID, &r.AnchorType, &r.RouteResult, &r.Provider, &r.ModelName,
 			&r.IntentBefore, &r.IntentAfter, &r.Hooked, &r.LeadCaptured, &r.PendingHuman,
 			&r.EvalScore, &r.OutcomeStage, &r.ArrivedAt, &r.DealtAt, &r.CreatedAt, &r.UpdatedAt); err != nil {

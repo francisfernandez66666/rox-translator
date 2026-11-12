@@ -28,6 +28,7 @@ func (s *Store) SalesAttributionMigrate() error {
 			message_id BIGINT NOT NULL,
 			conversation_id BIGINT NOT NULL DEFAULT 0,
 			customer_id BIGINT NOT NULL DEFAULT 0,
+			product_id TEXT NOT NULL DEFAULT '',
 			package_id TEXT NOT NULL DEFAULT '',
 			version TEXT NOT NULL DEFAULT '',
 			draft_id TEXT NOT NULL DEFAULT '',
@@ -74,6 +75,20 @@ func (s *Store) SalesAttributionMigrate() error {
 			return fmt.Errorf("归因域建表失败: %w\nSQL: %s", err, stmt)
 		}
 	}
-	observability.Info(context.Background(), "归因域迁移完成", "statements", len(stmts))
+	// ★ 四期 W1（§4.1.3-⑥ 施工口径 1）：存量库幂等补列 `product_id`（AGENTS §一·1 第 4 条：
+	//   禁止一次性 ALTER TABLE 直执行；两边方言各一份由 db.EnsureColumns 生成）。
+	//   存量行落 ''＝"未归因到产品"，读侧与"产品已删"同形，**不做回填**（按今天的单产品倒推会把历史多产品行填错）。
+	//   ⚠️ EnsureColumns 必须排在下面那条产品索引**之前**：PG 下给不存在的列建索引当场报错，
+	//   而 SQLite 的 `CREATE INDEX IF NOT EXISTS` 会静默建成一个空索引（更坏：看着绿的）。
+	if err := db.EnsureColumns(s.db, d, "reply_attributions",
+		map[string]string{"product_id": "TEXT NOT NULL DEFAULT ''"}); err != nil {
+		return fmt.Errorf("归因域补列失败（product_id）: %w", err)
+	}
+	// 漏斗查询的索引（"按产品看询盘"）；建在补列之后，见上一条注释。
+	if err := db.ExecDDL(s.db, d,
+		`CREATE INDEX IF NOT EXISTS idx_reply_attr_product ON reply_attributions(tenant_id, product_id, created_at)`); err != nil {
+		return fmt.Errorf("归因域建索引失败（idx_reply_attr_product）: %w", err)
+	}
+	observability.Info(context.Background(), "归因域迁移完成", "statements", len(stmts)+2)
 	return nil
 }

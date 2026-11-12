@@ -15,6 +15,7 @@ package api
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -40,7 +41,10 @@ type salesFactsUpstream struct {
 	gotTs      string
 	gotSig     string
 	gotVersion string
-	respBody   string
+	// gotPage 入站产品页上下文头：★ 四期 W1 起它**必须恒为空**——
+	// 本进程只把"解析出的作用域"折进签名事实集，页面头本身不许继续往下传（链路卫生）。
+	gotPage  string
+	respBody string
 }
 
 func (a *salesFactsUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -49,6 +53,7 @@ func (a *salesFactsUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.gotTs = r.Header.Get(mainengine.SalesFactsTsHeader)
 	a.gotSig = r.Header.Get(mainengine.SalesFactsSigHeader)
 	a.gotVersion = r.Header.Get(mainengine.SalesFactsVersionHeader)
+	a.gotPage = r.Header.Get(productPageHeader)
 	_, _ = io.Copy(io.Discard, r.Body)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(a.respBody))
@@ -132,9 +137,16 @@ func TestSalesFactsForgedHeadersStripped(t *testing.T) {
 }
 
 // TestSalesFactsSignedAndAttributionWritten 正向对照：签名头可验 + 空集协议跑通 + 归因精确落行。
+//
+// ★ 四期 W1 起，事实集头只在「作用域可注入」时下发（缺省态＝租户 1 无产品 ⇒ denied，连头都不发）。
+// 本对照要验"签名协议跑通"，必须把作用域拉到可注入档：开两把开关 + 给租户 1 一个唯一产品
+// （无页面上下文时 single_product 自动定档）。TenantID 仍是 effTenant=1、facts 仍为空集（无种子事实），
+// 与 W2 静态形态断言逐字兼容；只是"头现在只在可注入时才发"，由这一支显式制造可注入条件。
 func TestSalesFactsSignedAndAttributionWritten(t *testing.T) {
 	s, up, tok := newSalesFactsProxyFixture(t)
 	up.respBody = salesFactsAttrBody
+	setW1Gate(t, s.Store, true)
+	mustCreateProduct(t, s.Store, 1, "W1 单产品（logged-in 自动定档 single_product）", store.ProductStatusLive)
 	code, body := doSalesFactsChat(s, tok, nil)
 	if code != 200 || body != up.respBody {
 		t.Fatalf("登录转发应 200 且字节原样：code=%d body=%q", code, body)
@@ -213,6 +225,42 @@ func TestSalesFactsLimitTruncates(t *testing.T) {
 	}
 	if len(out2.Facts) > 0 && !out2.Truncated {
 		t.Fatalf("丢事实必须置 truncated=1")
+	}
+}
+
+// TestSalesFactsControlledKeysCarryNoValue F8：受控键只出 kind+key，事实值一个字节都不进下发载荷。
+//
+// ★ 扫描对象是**真正发出去的形态**（base64 解出的 JSON 字节），不是结构体字段：
+// 受控值若哪天被挪进任何新字段（比如给 ControlledKey 加 Value），这一腿照样抓得到。
+// 正向对照：那个唯一串确实在库里（否则"没出现"可能只是夹具没铺）。
+func TestSalesFactsControlledKeysCarryNoValue(t *testing.T) {
+	fx := newW1Fixture(t)
+	seedW1Facts(t, fx)
+
+	_, _ = w1DoProxy(fx.srv, "", map[string]string{productPageHeader: w1PagePath(fx.A)})
+	if fx.up.gotFacts == "" {
+		t.Fatal("匿名产品页没收到事实集——F8 的前提不成立（先看 F2）")
+	}
+	raw, err := base64.StdEncoding.DecodeString(fx.up.gotFacts)
+	if err != nil {
+		t.Fatalf("事实集载荷不是合法 base64: %v", err)
+	}
+	payload := string(raw)
+	if !strings.Contains(payload, `"retail_price"`) {
+		t.Fatalf("受控键未进入下发载荷（%s）——受控清单被整段丢了，守卫将无从回避", payload)
+	}
+	if strings.Contains(payload, "CTRL-A-SECRET") {
+		t.Fatalf("受控值出现在下发载荷里（M0275 的靶）：%s", payload)
+	}
+
+	// 正向对照：串真的在库里（准入侧看不见它，但写侧确实存着）。
+	var v string
+	if err := db.QueryRow(fx.srv.Store.DB(), db.CurrentDialect(),
+		`SELECT value FROM product_facts WHERE tenant_id=7 AND key='retail_price'`).Scan(&v); err != nil {
+		t.Fatalf("读受控事实失败: %v", err)
+	}
+	if v != "CTRL-A-SECRET" {
+		t.Fatalf("受控值正向对照失效：库里读到 %q（夹具没铺上，本锁空转）", v)
 	}
 }
 

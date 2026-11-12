@@ -313,7 +313,7 @@ func (s *Server) corsMW(next http.Handler) http.Handler {
 				}
 			}
 			w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-Assist-Admin")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type,X-Assist-Admin,X-LangCross-Page")
 			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == http.MethodOptions {

@@ -72,6 +72,15 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrMethodNotAllowed, "方法不支持"))
 		return
 	}
+	// ★ 四期 W1（§4.1.3-③）：页面上下文头**先捕获再删**——本进程只认自己解析出的作用域，
+	//   不把客户端带来的那份继续往下传（链路卫生，不是安全边界，见 sales_facts_scope.go 头 ③-c）。
+	//   捕获必须在 strip 之前，否则这里读到的就只剩 query/body 那份兼容通道了。
+	page := pageContextOf(r)
+	stripProductPageHeader(r.Header)
+	// ★ 作用域**只算一次**（§4.1.3-⑥ 施工口径 2），同一个 sc 传给事实注入与归因回写两条路径。
+	//   两处各算一次会在 TTL 窗口内给出两个答案（一次 product_page、一次 denied），
+	//   于是"事实按 A 产品注入、归因记成空产品"，而两条路径各自都"正常"。
+	sc := s.resolveSalesFactsScope(r, page)
 	var body io.Reader
 	if r.Method == http.MethodPost {
 		// 限长后再转发：不让浏览器侧的超大 body 直通内网上游
@@ -93,8 +102,9 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 	// ★ 2026-10-30 组7 §8.2（路 A′）：已登录会话 → 现组装画像 → HMAC 签名 → 三个内部头。
 	// 未登录/未配密钥时静默不发（匿名回落），assist 侧因此对所有人都能正常工作。
 	s.attachAssistProfile(req, r)
-	// ★ 三期 W2（§0.4 第①段）：登录会话 + 租户上下文 + 已配密钥 ⇒ 签名下发销售事实集。
-	s.attachSalesFacts(req, r)
+	// ★ 三期 W2（§0.4 第①段）：作用域可注入 ⇒ 签名下发销售事实集。
+	//   四期 W1：作用域已在上方算过一次（匿名产品页也在射程内），这里只消费，不再解析。
+	s.attachSalesFacts(req, r, sc)
 	resp, err := assistClient.Do(req)
 	if err != nil {
 		// 最常见原因是 assist-server 没起或基址配错：细节进日志，响应只给可自助的口径
@@ -116,5 +126,6 @@ func (s *Server) handleAssistOpenProxy(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(payload)
 	// ★ 三期 W2（§0.4 第③段）：先答客后回写（A04b/M0210 锁此顺序）——
 	// 归因回写 fire-and-forget，失败只 WARN，访客已拿到的字节一个不变。
-	s.writeBackAttribution(r.Context(), payload, r)
+	// 四期 W1：收同一个 sc（产品维度 + 匿名产品页放行一支都在它里面判）。
+	s.writeBackAttribution(r.Context(), payload, r, sc)
 }
