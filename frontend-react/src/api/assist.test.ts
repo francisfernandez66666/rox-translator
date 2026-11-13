@@ -15,7 +15,10 @@ vi.stubGlobal('localStorage', {
   removeItem: (k: string) => void store.delete(k),
 })
 
-import { getAssistSid, setAssistSid, loadAssistMsgs, saveAssistMsgs, assistGreet, assistChat } from '@/api/assist'
+import {
+  getAssistSid, setAssistSid, loadAssistMsgs, saveAssistMsgs,
+  assistGreet, assistChat, assistHistory as assistHistoryApi, assistFeatures as assistFeaturesApi,
+} from '@/api/assist'
 import { isHiddenPath, safeParse } from '@/components/AiAssist'
 
 beforeEach(() => {
@@ -168,5 +171,64 @@ describe('assist 请求随带访客界面语言', () => {
     const seen = captureFetch()
     await assistChat('s-1', '多少積分？', '/')
     expect(seen.chatBody?.lang).toBe('zh_hant')
+  })
+})
+
+// ---------- ★ 四期 W1：产品作用域走正式头，且只有产生答复的两条端点送 ----------
+// 服务端（assist_open_proxy.go）在**剥头之前**抓 X-LangCross-Page，用它解析产品作用域；
+// 前端不送 ⇒ 匿名产品页永远落 denied ⇒ 事实集恒空，而界面照常回答（零症状）。
+// 反向的半边同样要判：history/features 不产生答复，给它们补页面头只会让人误以为
+// 「历史接口也在用产品事实」——豁免理由写在 assist.ts 的注释里，这里用判据钉住。
+describe('assist 页面上下文头（四期 W1）', () => {
+  function captureHeaders() {
+    const seen: {
+      greet?: Record<string, string>
+      chat?: Record<string, string>
+      history?: Record<string, string>
+      features?: Record<string, string>
+    } = {}
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+      const u = String(url)
+      const h = (init?.headers ?? {}) as Record<string, string>
+      if (u.includes('/api/assist/greeting')) seen.greet = h
+      else if (u.includes('/api/assist/chat')) seen.chat = h
+      else if (u.includes('/api/assist/history')) seen.history = h
+      else if (u.includes('/api/assist/features')) seen.features = h
+      return {
+        ok: true, status: 200,
+        json: async () => (u.includes('/api/assist/greeting')
+          ? { session: 's-1', tok: 't-1', greeting: 'hi', chips: [] }
+          : u.includes('/api/assist/history')
+            ? { messages: [] }
+            : u.includes('/api/assist/features')
+              ? { features: [] }
+              : { reply: 'ok', actions: [] }),
+      }
+    }))
+    return seen
+  }
+
+  it('greet 与 chat 都送同一个页面头值', async () => {
+    const seen = captureHeaders()
+    await assistGreet('/p/acme/widget')
+    await assistChat('s-1', '介绍一下', '/p/acme/widget')
+    expect(seen.greet?.['X-LangCross-Page']).toBe('/p/acme/widget')
+    expect(seen.chat?.['X-LangCross-Page']).toBe('/p/acme/widget')
+  })
+
+  it('不传 page 时整条头缺席（空串不许占一个头位：服务端会把空值当"有页面但解析失败"）', async () => {
+    const seen = captureHeaders()
+    await assistGreet()
+    await assistChat('s-1', 'hi')
+    expect(seen.greet && 'X-LangCross-Page' in seen.greet).toBe(false)
+    expect(seen.chat && 'X-LangCross-Page' in seen.chat).toBe(false)
+  })
+
+  it('history / features 刻意不送页面头（豁免理由见 assist.ts 注释）', async () => {
+    const seen = captureHeaders()
+    await assistHistoryApi('s-1')
+    await assistFeaturesApi()
+    expect(seen.history && 'X-LangCross-Page' in seen.history).toBe(false)
+    expect(seen.features && 'X-LangCross-Page' in seen.features).toBe(false)
   })
 })
