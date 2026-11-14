@@ -22,8 +22,9 @@ const ContractVersion = "knowledge-contract-v1"
 // ---- 端点路径（§4.3.4 十六行十七路径，含一条健康面）----
 // client 的调用清单与 server 的路由清单都从 EndpointPaths 派生，不许另写字符串。
 const (
-	PathProductResolve = "/internal/knowledge/product/resolve"
-	PathProductsList   = "/internal/knowledge/products/list"
+	PathProductResolve        = "/internal/knowledge/product/resolve"
+	PathProductResolveByCodes = "/internal/knowledge/product/resolve-by-codes"
+	PathProductsList          = "/internal/knowledge/products/list"
 	PathProductsGet    = "/internal/knowledge/products/get"
 	PathProductsUpsert = "/internal/knowledge/products/upsert"
 	PathProductsDelete = "/internal/knowledge/products/delete"
@@ -34,6 +35,8 @@ const (
 	PathFactsUpsert    = "/internal/knowledge/facts/upsert"
 	PathFactsAdmitted  = "/internal/knowledge/facts/admitted"
 	PathAssetsList     = "/internal/knowledge/assets/list"
+	PathAssetsUpsert   = "/internal/knowledge/assets/upsert"
+	PathAssetsGet      = "/internal/knowledge/assets/get"
 	PathReadiness      = "/internal/knowledge/readiness"
 	PathI18nList       = "/internal/knowledge/i18n/list"
 	PathI18nUpsert     = "/internal/knowledge/i18n/upsert"
@@ -46,9 +49,9 @@ const (
 
 // EndpointPaths 全部契约路径（顺序稳定，供路由注册与客户端共用）。
 var EndpointPaths = []string{
-	PathProductResolve, PathProductsList, PathProductsGet, PathProductsUpsert,
+	PathProductResolve, PathProductResolveByCodes, PathProductsList, PathProductsGet, PathProductsUpsert,
 	PathProductsDelete, PathSitemapList, PathCorpusPublic, PathAnswer,
-	PathFactsList, PathFactsUpsert, PathFactsAdmitted, PathAssetsList,
+	PathFactsList, PathFactsUpsert, PathFactsAdmitted, PathAssetsList, PathAssetsUpsert, PathAssetsGet,
 	PathReadiness, PathI18nList, PathI18nUpsert, PathI18nByTenantLang, PathEntriesQuery, PathHealth,
 }
 

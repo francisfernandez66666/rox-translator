@@ -74,7 +74,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 		s.hI18nUpsert(w, r)
 	case contract.PathEntriesQuery:
 		s.hEntriesQuery(w, r)
-	case contract.PathProductsUpsert, contract.PathProductsDelete, contract.PathFactsUpsert:
+	case contract.PathProductResolveByCodes:
+		s.hProductResolveByCodes(w, r)
+	case contract.PathProductsUpsert, contract.PathProductsDelete, contract.PathFactsUpsert, contract.PathAssetsUpsert:
 		s.hWrite(w, r, r.URL.Path)
 	case contract.PathAnswer:
 		s.hAnswer(w, r)

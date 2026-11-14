@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"translator/internal/db"
+	"translator/internal/knowledge/contract"
 	"translator/internal/observability"
 )
 
@@ -96,6 +97,10 @@ func (s *Store) ProductFactI18nMigrate() error {
 //
 //	本函数不做二次判据，避免两处各写一把尺。
 //
+// ★ KN11：切读后译文落知识服务（:8791）；影子期/回滚落主库（product_fact_i18n 仍由
+//
+//	ProductFactI18nMigrate 在主库建表，不进 New 启动链，供回滚查证与单测）。
+//
 // 参数：row=译文行；返回错误。
 func (s *Store) UpsertFactI18n(row ProductFactI18nRow) error {
 	if row.Engine == "" {
@@ -103,6 +108,20 @@ func (s *Store) UpsertFactI18n(row ProductFactI18nRow) error {
 	}
 	if row.TranslatedAt == "" {
 		row.TranslatedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	if kc := s.kcCutover(); kc != nil {
+		_, o, err := kc.I18nUpsert(kcCtx(nil), contract.I18nUpsertRequest{
+			TenantID:   row.TenantID,
+			FactID:     row.FactID,
+			Lang:       row.Lang,
+			Value:      row.Value,
+			SourceHash: row.SourceHash,
+			Engine:     row.Engine,
+		})
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
 	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		`INSERT INTO product_fact_i18n(tenant_id, fact_id, lang, value, source_hash, translated_at, engine)
@@ -120,6 +139,25 @@ func (s *Store) UpsertFactI18n(row ProductFactI18nRow) error {
 // factI18nRow 按 (tenant_id, fact_id, lang) 取整行译文；未命中返回 ok=false。
 // 参数：tid=租户；factID=事实主键；lang=语种码；返回译文行、是否命中。
 func (s *Store) factI18nRow(tid, factID int64, lang string) (ProductFactI18nRow, bool) {
+	if kc := s.kcCutover(); kc != nil {
+		resp, o, err := kc.I18nByTenantLang(kcCtx(nil), tid, lang)
+		if err != nil || kcOutcomeErr(o) != nil {
+			return ProductFactI18nRow{}, false
+		}
+		for _, it := range resp.Items {
+			if it.FactID == factID && it.Lang == lang {
+				return ProductFactI18nRow{
+					TenantID:   tid,
+					FactID:     factID,
+					Lang:       lang,
+					Value:      it.Value,
+					SourceHash: it.SourceHash,
+					Engine:     it.Engine,
+				}, true
+			}
+		}
+		return ProductFactI18nRow{}, false
+	}
 	var r ProductFactI18nRow
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT tenant_id, fact_id, lang, value, source_hash, translated_at, engine

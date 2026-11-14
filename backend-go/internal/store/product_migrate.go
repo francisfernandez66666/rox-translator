@@ -35,14 +35,9 @@ import (
 func (s *Store) ProductMigrate() error {
 	d := db.CurrentDialect()
 
-	// ⓪ O 组（2026-11-06）：产品行的目标对外语言。
-	//   ★ 存量行补列后是空串（＝还没表态），读侧一律按"未设定"处理，
-	//     **不许**把空串当成"只支持中文"或"跟随界面语种"——那是拿缺省替客户决定他要说什么话。
-	if err := db.EnsureColumns(s.db, d, "products", map[string]string{
-		"target_langs": "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return fmt.Errorf("products 补 target_langs 列失败: %w", err)
-	}
+	// ⓪ 产品行的目标对外语言（target_langs）已迁知识侧：由 KnowledgeDomainMigrate 在
+	//   「主库仍有 products 表」的存量库上幂等补列（带 tableExists 保护，新库无表直接 nil）。
+	//   本函数不再碰 products 表——KN11 后主库零产品表是硬判据。
 
 	// ① 已批准说法复用 kb_packages：产品归属列。kbPkgCols 刻意不带它，89 处 SELECT 零改。
 	if err := db.EnsureColumns(s.db, d, "kb_packages", map[string]string{

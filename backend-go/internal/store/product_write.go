@@ -25,6 +25,17 @@ import (
 // GetProductScoped 按主键取产品（读侧与写侧共用 productExistsScoped 同一把尺子）。
 // 参数：tid=租户 ID，id=产品主键；返回产品、是否命中与错误。
 func (s *Store) GetProductScoped(tid int64, id string) (Product, bool, error) {
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.ProductGet(kcCtx(nil), tid, id)
+		if err != nil {
+			return Product{}, false, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return Product{}, false, e
+		}
+		p, ok := gatherProduct(items)
+		return p, ok, nil
+	}
 	p, err := scanProduct(db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT "+productCols+" FROM products WHERE tenant_id=? AND id=?", tid, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -39,6 +50,16 @@ func (s *Store) GetProductScoped(tid int64, id string) (Product, bool, error) {
 // DeleteProduct 删除产品档案（一期只删档案行；事实/物料由同租户后续清理，不跨租户蒸发）。
 // 参数：tid=租户 ID，id=产品主键；返回错误。
 func (s *Store) DeleteProduct(tid int64, id string) error {
+	if kc := s.kcCutover(); kc != nil {
+		if err := s.productExistsScoped(tid, id); err != nil {
+			return err
+		}
+		_, o, err := kc.ProductDelete(kcCtx(nil), tid, id)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	if err := s.productExistsScoped(tid, id); err != nil {
 		return err
 	}
@@ -50,6 +71,32 @@ func (s *Store) DeleteProduct(tid int64, id string) error {
 // UpdateProductProfile 更新产品资料（不含 name/slug/两段短码/seo_indexable）。
 // 参数：tid=租户 ID，id=产品主键，in=资料；返回错误。
 func (s *Store) UpdateProductProfile(tid int64, id string, in ProductInput) error {
+	if kc := s.kcCutover(); kc != nil {
+		if err := s.productExistsScoped(tid, id); err != nil {
+			return err
+		}
+		// ★ 只发 8 个资料列 + updated_at（target_langs 仅显式表态才带），绝不发 name/status/slug 等——
+		//   部分列 upsert，服务端不会触碰未传列，沿用库里现值（防"改简介⇒名字被清空"）。
+		row := map[string]any{
+			"id":            id,
+			"code":          in.Code,
+			"tagline":       in.Tagline,
+			"industry_code": in.IndustryCode,
+			"audience":      in.Audience,
+			"use_case":      in.UseCase,
+			"style_notes":   in.StyleNotes,
+			"banned_notes":  in.BannedNotes,
+			"updated_at":    deadlineNow(),
+		}
+		if in.TargetLangs != nil {
+			row["target_langs"] = joinLangs(in.TargetLangs)
+		}
+		_, o, err := kc.ProductUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	if err := s.productExistsScoped(tid, id); err != nil {
 		return err
 	}
@@ -76,6 +123,21 @@ func (s *Store) UpdateProductProfile(tid int64, id string, in ProductInput) erro
 // ★ 这是 seo_indexable 的唯一写点；UPDATE 语句里出现该列的地方只许这一处。
 // 参数：tid=租户 ID，id=产品主键，on=是否允许被搜索引擎收录；返回错误。
 func (s *Store) SetProductSeoIndexable(tid int64, id string, on bool) error {
+	if kc := s.kcCutover(); kc != nil {
+		if err := s.productExistsScoped(tid, id); err != nil {
+			return err
+		}
+		v := 0
+		if on {
+			v = 1
+		}
+		row := map[string]any{"id": id, "seo_indexable": v, "updated_at": deadlineNow()}
+		_, o, err := kc.ProductUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	if err := s.productExistsScoped(tid, id); err != nil {
 		return err
 	}
@@ -100,6 +162,33 @@ type SitemapProduct struct {
 // ★ SQL 硬带 seo_indexable=1 且 status='live'（§5.8 S1），受控字段一个都不出栈。
 // 参数：无；返回 URL 片段列表与错误。
 func (s *Store) ListSitemapProducts() ([]SitemapProduct, error) {
+	if kc := s.kcCutover(); kc != nil {
+		// ★ 服务端 SitemapList 返回该租户全部产品行，过滤（seo_indexable=1 AND status=live
+		//   且两段短码非空）在 Go 侧复刻主库 WHERE 条件；不泄露受控字段。
+		items, o, err := kc.SitemapList(kcCtx(nil))
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		out := []SitemapProduct{}
+		for _, it := range items {
+			if rawInt(it, "seo_indexable") != 1 {
+				continue
+			}
+			if rawStr(it, "status") != ProductStatusLive {
+				continue
+			}
+			tc := rawStr(it, "tenant_code")
+			pc := rawStr(it, "page_code")
+			if tc == "" || pc == "" {
+				continue
+			}
+			out = append(out, SitemapProduct{TenantCode: tc, PageCode: pc, UpdatedAt: rawStr(it, "updated_at")})
+		}
+		return out, nil
+	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT tenant_code, page_code, updated_at FROM products
 		 WHERE seo_indexable=1 AND status=? AND tenant_code<>'' AND page_code<>''
@@ -133,6 +222,14 @@ func (s *Store) SetFactVisibility(tid, id int64, v string) error {
 	if f.Kind == FactKindCert && v == VisibilityPublic {
 		return errors.New("认证声明只能受控展示")
 	}
+	if kc := s.kcCutover(); kc != nil {
+		row := map[string]any{"id": id, "visibility": v, "updated_at": deadlineNow()}
+		_, o, err := kc.FactUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	_, err = db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE product_facts SET visibility=?, updated_at=? WHERE tenant_id=? AND id=?",
 		v, time.Now().UTC().Format(time.RFC3339), tid, id)
@@ -147,6 +244,14 @@ func (s *Store) SetAssetVisibility(tid, id int64, v string) error {
 	}
 	if _, err := s.assetByIDScoped(tid, id); err != nil {
 		return err
+	}
+	if kc := s.kcCutover(); kc != nil {
+		row := map[string]any{"id": id, "visibility": v, "updated_at": deadlineNow()}
+		_, o, err := kc.AssetUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
 	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE product_assets SET visibility=?, updated_at=? WHERE tenant_id=? AND id=?",

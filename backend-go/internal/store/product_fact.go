@@ -22,6 +22,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,6 +132,21 @@ func validVisibility(v string) bool {
 // factByIDScoped 读侧与写侧共用的作用域助手：查不到一律 errProductNotFound（不返 403、不泄露他租户存在性）。
 // 参数：tid=租户 ID，id=事实项主键；返回事实项与错误。
 func (s *Store) factByIDScoped(tid, id int64) (ProductFact, error) {
+	if kc := s.kcCutover(); kc != nil {
+		rows, o, err := kc.FactsList(kcCtx(nil), tid, "")
+		if err != nil {
+			return ProductFact{}, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return ProductFact{}, e
+		}
+		for _, f := range rows {
+			if f.ID == id {
+				return factRowToFact(f), nil
+			}
+		}
+		return ProductFact{}, errProductNotFound
+	}
 	f, err := scanFact(db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT "+factCols+" FROM product_facts WHERE tenant_id=? AND id=?", tid, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -172,6 +188,9 @@ func (s *Store) UpsertFact(tid int64, in ProductFactInput) (ProductFact, error) 
 		return ProductFact{}, fmt.Errorf("非法的 visibility: %s", vis)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	if kc := s.kcCutover(); kc != nil {
+		return s.upsertFactKnowledge(tid, in, kind, key, vis, source, now)
+	}
 	existing, err := scanFact(db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT "+factCols+" FROM product_facts WHERE tenant_id=? AND product_id=? AND kind=? AND key=?",
 		tid, in.ProductID, kind, key))
@@ -240,6 +259,14 @@ func (s *Store) ConfirmFact(tid, id, userID int64) error {
 	//   ListSalesFactsForInjection 的准入条件是 locked=0；旧写法 locked=1 会让
 	//   「卖家在管理台确认过的事实」永远进不了注入集，而界面上毫无症状。
 	//   locked 只由 UpsertFact 的入参（受控事实）决定；撤回另有 WithdrawFact。
+	if kc := s.kcCutover(); kc != nil {
+		row := map[string]any{"id": id, "status": FactStatusConfirmed, "updated_at": time.Now().UTC().Format(time.RFC3339)}
+		_, o, err := kc.FactUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	_, err = db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE product_facts SET status=?, updated_at=? WHERE tenant_id=? AND id=?",
 		FactStatusConfirmed, time.Now().UTC().Format(time.RFC3339), tid, id)
@@ -255,6 +282,14 @@ func (s *Store) WithdrawFact(tid, id, userID int64) error {
 	if userID <= 0 {
 		return errors.New("撤回事实必须带有效操作人")
 	}
+	if kc := s.kcCutover(); kc != nil {
+		row := map[string]any{"id": id, "status": FactStatusWithdrawn, "updated_at": time.Now().UTC().Format(time.RFC3339)}
+		_, o, err := kc.FactUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE product_facts SET status=?, updated_at=? WHERE tenant_id=? AND id=?",
 		FactStatusWithdrawn, time.Now().UTC().Format(time.RFC3339), tid, id)
@@ -267,6 +302,21 @@ func (s *Store) WithdrawFact(tid, id, userID int64) error {
 func (s *Store) FactsByIDSet(tid int64, ids []int64) (map[int64]ProductFact, error) {
 	out := map[int64]ProductFact{}
 	if len(ids) == 0 {
+		return out, nil
+	}
+	if kc := s.kcCutover(); kc != nil {
+		rows, o, err := kc.FactsList(kcCtx(nil), tid, "")
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		for _, f := range rows {
+			if inInt64Set(ids, f.ID) {
+				out[f.ID] = factRowToFact(f)
+			}
+		}
 		return out, nil
 	}
 	args := make([]interface{}, 0, len(ids)+1)
@@ -297,6 +347,27 @@ func (s *Store) ListFacts(tid int64, productID string) ([]ProductFact, error) {
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return []ProductFact{}, err
 	}
+	if kc := s.kcCutover(); kc != nil {
+		rows, o, err := kc.FactsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		out := make([]ProductFact, 0, len(rows))
+		for _, f := range rows {
+			out = append(out, factRowToFact(f))
+		}
+		// 排序口径与主库一致：kind ASC, id ASC。
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].Kind != out[j].Kind {
+				return out[i].Kind < out[j].Kind
+			}
+			return out[i].ID < out[j].ID
+		})
+		return out, nil
+	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT "+factCols+" FROM product_facts WHERE tenant_id=? AND product_id=? ORDER BY kind, id",
 		tid, productID)
@@ -323,6 +394,41 @@ func (s *Store) ListPublicCorpus(tid int64, productID string) ([]PublicCorpusIte
 	out := []PublicCorpusItem{}
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return out, err
+	}
+	if kc := s.kcCutover(); kc != nil {
+		frows, o, err := kc.FactsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		for _, f := range frows {
+			if f.Visibility == VisibilityPublic && f.Status == FactStatusConfirmed {
+				out = append(out, PublicCorpusItem{
+					ID: f.ID, Source: "fact", Kind: f.Kind, Key: f.Key, Lang: "", Text: f.Value,
+				})
+			}
+		}
+		sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+		aitems, o2, err2 := kc.AssetsList(kcCtx(nil), tid, productID)
+		if err2 != nil {
+			return nil, err2
+		}
+		if e := kcOutcomeErr(o2); e != nil {
+			return nil, e
+		}
+		astart := len(out)
+		for _, it := range aitems {
+			if rawStr(it, "visibility") == VisibilityPublic && rawStr(it, "validity") == AssetValidityValid {
+				out = append(out, PublicCorpusItem{
+					ID: rawInt64(it, "id"), Source: "asset", Kind: rawStr(it, "asset_type"),
+					Lang: rawStr(it, "lang"), Text: rawStr(it, "body"),
+				})
+			}
+		}
+		sort.SliceStable(out[astart:], func(i, j int) bool { return out[astart+i].ID < out[astart+j].ID })
+		return out, nil
 	}
 	frows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT id, kind, key, '' , value FROM product_facts
@@ -374,6 +480,22 @@ func (s *Store) ListPublicCorpus(tid int64, productID string) ([]PublicCorpusIte
 func (s *Store) CountGatedFacts(tid int64, productID string) (int, error) {
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return 0, err
+	}
+	if kc := s.kcCutover(); kc != nil {
+		rows, o, err := kc.FactsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return 0, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return 0, e
+		}
+		n := 0
+		for _, f := range rows {
+			if f.Visibility == VisibilityGated {
+				n++
+			}
+		}
+		return n, nil
 	}
 	var n int
 	err := db.QueryRow(s.db, db.CurrentDialect(),

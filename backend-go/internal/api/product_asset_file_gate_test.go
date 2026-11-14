@@ -30,6 +30,7 @@ import (
 
 	"translator/internal/auth"
 	"translator/internal/config"
+	"translator/internal/db"
 	"translator/internal/fileproc"
 	"translator/internal/iam"
 	"translator/internal/store"
@@ -40,15 +41,18 @@ import (
 func newAssetFileServer(t *testing.T) (*Server, string, *sql.DB) {
 	t.Helper()
 	pinSqliteDialect(t)
-	conn, err := sql.Open("sqlite", ":memory:")
+	// ★ KN11：主库四表 DDL 已摘除，测试库需独立重建（走 kc=nil 主库回滚分支）。
+	//   用文件库而非 :memory:，规避内存库按连接各自独立导致的 no such table 假红。
+	conn, err := db.Open(db.Config{Driver: db.DriverSQLite, DSN: filepath.Join(t.TempDir(), "asset_file.db")})
 	if err != nil {
-		t.Fatalf("内存库起不来: %v", err)
+		t.Fatalf("文件库起不来: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	st, err := store.New(conn)
 	if err != nil {
 		t.Fatalf("store.New 失败: %v", err)
 	}
+	migrateProductTablesForTest(t, st)
 	u, err := st.CreateUser(1, "asset_file_user", auth.PasswordHash("pw123456"), "物料用户", iam.RoleUser, 0, 0)
 	if err != nil {
 		t.Fatalf("建用户失败: %v", err)

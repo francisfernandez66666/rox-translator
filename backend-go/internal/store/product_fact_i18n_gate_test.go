@@ -41,6 +41,9 @@ func newFactI18nStore(t *testing.T) (*Store, *sql.DB) {
 	if err != nil {
 		t.Fatalf("store.New 失败: %v", err)
 	}
+	// ★ KN11：主库四表已从生产启动链摘除，测试库需独立重建，ProductFactI18nMigrate 的
+	//   EnsureColumns(product_facts, lang/priority) 与建 product_fact_i18n 才能跑通。
+	migrateProductTablesTest(t, st)
 	if err := st.ProductFactI18nMigrate(); err != nil {
 		t.Fatalf("ProductFactI18nMigrate 失败: %v", err)
 	}

@@ -105,6 +105,8 @@ func newOdbFixture(t *testing.T) *odbFixture {
 	if err != nil {
 		t.Fatalf("store.New 失败: %v", err)
 	}
+	// ★ KN11：主库四表 DDL 已摘除，测试库需独立重建（走 kc=nil 主库回滚分支）。
+	migrateProductTablesForTest(t, st)
 	u, err := st.CreateUser(1, "onboard_draft_user", auth.PasswordHash("pw123456"), "建档卖家", iam.RoleUser, 0, 0)
 	if err != nil {
 		t.Fatalf("建用户失败: %v", err)

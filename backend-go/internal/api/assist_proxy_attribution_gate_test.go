@@ -63,6 +63,8 @@ func (a *salesFactsUpstream) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // ★ 用文件库不用 :memory:：连接池下 :memory: 每连接一库，DROP TABLE 故障注入会漂。
 func newSalesFactsProxyFixture(t *testing.T) (*Server, *salesFactsUpstream, string) {
 	t.Helper()
+	// ★ KN11：主库四表 DDL 已摘除，测试库需独立重建（走 kc=nil 主库回滚分支）。
+	pinSqliteDialect(t)
 	conn, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "main.db"))
 	if err != nil {
 		t.Fatalf("打开文件库失败: %v", err)
@@ -72,6 +74,7 @@ func newSalesFactsProxyFixture(t *testing.T) (*Server, *salesFactsUpstream, stri
 	if err != nil {
 		t.Fatalf("创建 Store 失败: %v", err)
 	}
+	migrateProductTablesForTest(t, st)
 	u, err := st.CreateUser(1, "u_sales", "hash-s", "销售租户用户", "user", 1, 0)
 	if err != nil || u == nil {
 		t.Fatalf("创建租户用户失败: %v", err)

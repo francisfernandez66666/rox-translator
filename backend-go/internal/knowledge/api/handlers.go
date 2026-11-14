@@ -177,12 +177,40 @@ func readPlan(path string, m map[string]any) (string, string, []interface{}) {
 			return contract.TableProductAssets, " AND product_id=?", []interface{}{pid}
 		}
 		return contract.TableProductAssets, "", nil
+	case contract.PathAssetsGet:
+		if id := strField(m, "id"); id != "" {
+			return contract.TableProductAssets, " AND id=?", []interface{}{id}
+		}
+		return contract.TableProductAssets, "", nil
 	case contract.PathCorpusPublic:
 		return contract.TableProductFacts, " AND visibility=?", []interface{}{contract.VisibilityPublic}
 	case contract.PathReadiness:
 		return contract.TableProductAssets, "", nil
 	}
 	return "", "", nil
+}
+
+// hProductResolveByCodes 全局按两段短码解析产品（tenant_code + page_code 全局唯一，
+// 无需 tenant_id）。这是 KN3 租户作用域的**唯一显式例外**，与主库 GetProductByCodes 同形，
+// 跨租户拼接取不到行，不泄露他租户存在性。供主服务对外页 / 留资解析口委托。
+func (s *Server) hProductResolveByCodes(w http.ResponseWriter, r *http.Request) {
+	m, _, err := decodeScope(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad_request", "")
+		return
+	}
+	tc := strField(m, "tenant_code")
+	pc := strField(m, "page_code")
+	if tc == "" || pc == "" {
+		writeErr(w, http.StatusBadRequest, "codes_required", "")
+		return
+	}
+	items, err := knowledgeStore.QueryByCodes(s.ks.DB(), s.ks.Dialect, contract.TableProducts, tc, pc)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "query_failed", "")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
 }
 
 // hRead 通用真 SQL 读口：所有查询硬带 tenant_id=?（KN3 fail-closed）。
@@ -224,6 +252,9 @@ func (s *Server) hWrite(w http.ResponseWriter, r *http.Request, path string) {
 	if path == contract.PathFactsUpsert {
 		table = contract.TableProductFacts
 	}
+	if path == contract.PathAssetsUpsert {
+		table = contract.TableProductAssets
+	}
 	if path == contract.PathProductsDelete {
 		id := strField(m, "id")
 		if id == "" {
@@ -240,19 +271,49 @@ func (s *Server) hWrite(w http.ResponseWriter, r *http.Request, path string) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n})
 		return
 	}
-	if err := s.upsertRow(table, tid, m); err != nil {
+	id, err := s.upsertRow(table, tid, m)
+	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "upsert_failed", "")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": id})
 }
 
-// upsertRow 白名单列 + 参数化的显式 id 幂等 upsert（表名/列名来自 contract 固定清单，值参数化 ⇒ 无注入）。
-func (s *Server) upsertRow(table string, tid int64, m map[string]any) error {
+// upsertRow 白名单列 + 参数化的幂等写（表名/列名来自 contract 固定清单，值参数化 ⇒ 无注入）。
+// 冲突目标按表分三态，复刻主库语义：
+//   - 产品：必须显式 id（主服务签发），ON CONFLICT(id)。
+//   - 事实：默认按自然键 (product_id, kind, key) 幂等（依赖 ux_fact 唯一索引）；
+//     若 body 已带显式 id 则改按 id 冲突——两者都安全，不重复行。
+//   - 物料：带 id ⇒ ON CONFLICT(id)（MarkAssetReview 改审核态）；不带 id ⇒ 纯插入新版本行
+//     （PutAsset 每次落新行，DB 自增主键），无冲突目标。
+// 返回受影响行的主键 id（事实/物料自增主键；产品为 TEXT 主键，调用方已知，恒返 0）。
+func (s *Server) upsertRow(table string, tid int64, m map[string]any) (int64, error) {
 	pk := contract.PrimaryKey(table)
-	if strField(m, pk) == "" && toInt64(m[pk]) <= 0 {
-		return fmt.Errorf("显式 %s 为必填（W3 期主服务签发产品 id，知识侧不代生成）", pk)
+	hasID := strField(m, pk) != "" || toInt64(m[pk]) > 0
+
+	var conflictCols []string
+	switch table {
+	case contract.TableProducts:
+		if !hasID {
+			return 0, fmt.Errorf("显式 %s 为必填（产品由主服务签发 id，知识侧不代生成）", pk)
+		}
+		conflictCols = []string{pk}
+	case contract.TableProductFacts:
+		if hasID {
+			conflictCols = []string{pk}
+		} else {
+			conflictCols = []string{"product_id", "kind", "key"}
+		}
+	case contract.TableProductAssets:
+		if hasID {
+			conflictCols = []string{pk}
+		} else {
+			conflictCols = nil // 插新版本行，无冲突目标
+		}
+	default:
+		return 0, fmt.Errorf("unsupported upsert table: %s", table)
 	}
+
 	cols := make([]string, 0)
 	vals := make([]interface{}, 0)
 	placeholders := make([]string, 0)
@@ -264,22 +325,71 @@ func (s *Server) upsertRow(table string, tid int64, m map[string]any) error {
 		if c == "tenant_id" {
 			v = tid // 强制以作用域为准，不信任 body 里的租户号
 		}
+		if c == pk && !hasID {
+			continue // 物料无显式 id：跳过该列，交给 DB 自增主键
+		}
 		cols = append(cols, c)
 		vals = append(vals, v)
 		placeholders = append(placeholders, "?")
 	}
-	setClauses := make([]string, 0, len(cols))
-	for _, c := range cols {
-		if c != pk {
+	if len(cols) == 0 {
+		return 0, fmt.Errorf("无可写入列")
+	}
+
+	var q string
+	if conflictCols == nil {
+		q = "INSERT INTO " + table + " (" + strings.Join(cols, ",") + ") VALUES (" +
+			strings.Join(placeholders, ",") + ")"
+	} else {
+		setClauses := make([]string, 0, len(cols))
+		for _, c := range cols {
+			isConflict := false
+			for _, cc := range conflictCols {
+				if c == cc {
+					isConflict = true
+					break
+				}
+			}
+			if isConflict {
+				continue
+			}
 			setClauses = append(setClauses, c+"=excluded."+c)
 		}
+		if len(setClauses) == 0 {
+			return 0, fmt.Errorf("无可更新列")
+		}
+		q = "INSERT INTO " + table + " (" + strings.Join(cols, ",") + ") VALUES (" +
+			strings.Join(placeholders, ",") + ") ON CONFLICT(" + strings.Join(conflictCols, ",") +
+			") DO UPDATE SET " + strings.Join(setClauses, ",")
 	}
-	if len(setClauses) == 0 {
-		return fmt.Errorf("无可更新列")
+	res, err := db.Exec(s.ks.DB(), s.ks.Dialect, q, vals...)
+	if err != nil {
+		return 0, err
 	}
-	q := "INSERT INTO " + table + " (" + strings.Join(cols, ",") + ") VALUES (" +
-		strings.Join(placeholders, ",") + ") ON CONFLICT(" + pk + ") DO UPDATE SET " +
-		strings.Join(setClauses, ",")
-	_, err := db.Exec(s.ks.DB(), s.ks.Dialect, q, vals...)
-	return err
+	// 受影响主键：产品为 TEXT 主键（调用方已知，恒返 0）；事实/物料为自增主键。
+	switch table {
+	case contract.TableProductFacts:
+		if hasID {
+			return toInt64(m["id"]), nil
+		}
+		// 自然键 upsert：回查刚落库的行 id。
+		var fid int64
+		if e := db.QueryRow(s.ks.DB(), s.ks.Dialect,
+			"SELECT id FROM "+table+" WHERE product_id=? AND kind=? AND key=?",
+			m["product_id"], m["kind"], m["key"]).Scan(&fid); e != nil {
+			return 0, fmt.Errorf("knowledge: 回查事实主键失败: %w", e)
+		}
+		return fid, nil
+	case contract.TableProductAssets:
+		if hasID {
+			return toInt64(m["id"]), nil
+		}
+		lid, e := res.LastInsertId()
+		if e != nil {
+			return 0, fmt.Errorf("knowledge: 取物料自增主键失败: %w", e)
+		}
+		return lid, nil
+	default:
+		return 0, nil
+	}
 }

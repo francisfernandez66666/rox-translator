@@ -73,6 +73,49 @@ func normalizeScalar(v interface{}) interface{} {
 	}
 }
 
+// QueryByCodes 全局按两段短码解析产品（tenant_code + page_code 全局唯一，无需 tenant_id）。
+// ★ 这是 KN3 租户作用域的**唯一显式例外**：两段短码本身即全局唯一标识，与主库
+//   GetProductByCodes 的 `WHERE tenant_code=? AND page_code=?`（不带 tenant_id）同形，
+//   跨租户拼接取不到任何行，不会泄露他租户存在性。其余读口一律走 QueryScoped 硬带 tenant_id。
+func QueryByCodes(conn *sql.DB, d db.Dialect, table string, tc, pc string) ([]map[string]any, error) {
+	if !IsKnowledgeTable(table) {
+		return nil, fmt.Errorf("knowledge: 非知识表 %q", table)
+	}
+	if strings.TrimSpace(tc) == "" || strings.TrimSpace(pc) == "" {
+		return []map[string]any{}, nil
+	}
+	cols := contract.ColumnsFor(table)
+	if len(cols) == 0 {
+		return nil, fmt.Errorf("knowledge: 表 %q 无列清单", table)
+	}
+	q := "SELECT " + strings.Join(cols, ",") + " FROM " + table + " WHERE tenant_code=? AND page_code=?"
+	rows, err := db.Query(conn, d, q, tc, pc)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge: 按码解析失败(%s): %w", table, err)
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		vals := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("knowledge: 行扫描失败(%s): %w", table, err)
+		}
+		m := make(map[string]any, len(cols))
+		for i, c := range cols {
+			m[c] = normalizeScalar(vals[i])
+		}
+		out = append(out, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("knowledge: 行迭代失败(%s): %w", table, err)
+	}
+	return out, nil
+}
+
 // CountWhere 作用域计数（带可信常量过滤片段），供 corpus/public、facts/admitted、readiness 等读数用。
 func CountWhere(conn *sql.DB, d db.Dialect, table string, tid int64, extraWhere string, args ...interface{}) (int, error) {
 	if !IsKnowledgeTable(table) {

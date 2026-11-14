@@ -61,6 +61,10 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.ProductMigrate(); err != nil {
 		return nil, err
 	}
+	// ★ 四期 W3/KN11：产品 target_langs 补列迁知识侧（带 tableExists 保护；主库无 products 表时直接 nil，不建知识表）。
+	if err := s.KnowledgeDomainMigrate(); err != nil {
+		return nil, err
+	}
 	// ★ 二期 S1：deal 域部分唯一索引必须排在 migrate() 之后（表要先存在），
 	//   失败直接中断启动；不静默降级成「应用侧查重」那第二把尺子。
 	if err := s.DealMigrate(); err != nil {
@@ -94,10 +98,9 @@ func New(db *sql.DB) (*Store, error) {
 		return nil, err
 	}
 	// ★ 三期 W4：product_facts 补 lang/priority 列 + product_fact_i18n 译文表（写时预生成 12 语种，
-	//   热路径零 LLM）。幂等补列排在 migrate() 之后（EnsureColumns 对不存在的表报错）。
-	if err := s.ProductFactI18nMigrate(); err != nil {
-		return nil, err
-	}
+	//   热路径零 LLM）。★ KN11：product_facts 补列与 product_fact_i18n 建表已迁知识侧
+	//   （knowledge/store.KnowledgeMigrate 在独立 DSN 上负责）；主库不再持有这两表，故不再调 ProductFactI18nMigrate。
+	//   （ProductFactI18nMigrate 本体保留为空壳以备回滚查证，不再进启动链。）
 	// ★ 三期 W5：外联合规四表（订阅/抑制名单/序列/发送占位），ux_outbound_once 是多实例只发一次的
 	//   结构性防线——缺表会让占位静默失效，失败即拒启。
 	if err := s.MarketingConsentMigrate(); err != nil {
@@ -709,67 +712,6 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_regattr_user ON registration_attribution(user_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_regattr_created ON registration_attribution(created_at)`,
-		// ---------- 一期《确定的多语言能力》：产品档案 / 事实项 / 物料货架 ----------
-		// ★ 两段短码与 slug 一律 NOT NULL 无默认：唯一索引会把空串也当一个值，
-		//   留 DEFAULT '' 会让第一行能建、第二行必撞 ux_product_page / ux_product_tenant_slug。
-		`CREATE TABLE IF NOT EXISTS products (
-			id TEXT PRIMARY KEY,
-			tenant_id BIGINT NOT NULL,
-			user_id INTEGER NOT NULL DEFAULT 0,
-			code TEXT NOT NULL DEFAULT '',
-			name TEXT NOT NULL,
-			tagline TEXT NOT NULL DEFAULT '',
-			industry_code TEXT NOT NULL DEFAULT '',
-			audience TEXT NOT NULL DEFAULT '',
-			use_case TEXT NOT NULL DEFAULT '',
-			style_notes TEXT NOT NULL DEFAULT '',
-			banned_notes TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'draft',
-			slug TEXT NOT NULL,
-			tenant_code TEXT NOT NULL,
-			page_code TEXT NOT NULL,
-			seo_indexable INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS product_facts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			tenant_id BIGINT NOT NULL,
-			product_id TEXT NOT NULL,
-			kind TEXT NOT NULL,
-			key TEXT NOT NULL,
-			value TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'unverified',
-			visibility TEXT NOT NULL DEFAULT 'gated',
-			source TEXT NOT NULL DEFAULT 'manual',
-			locked INTEGER NOT NULL DEFAULT 0,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS product_assets (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			tenant_id BIGINT NOT NULL,
-			product_id TEXT NOT NULL,
-			asset_type TEXT NOT NULL,
-			lang TEXT NOT NULL,
-			body TEXT NOT NULL,
-			artifact_ref TEXT NOT NULL DEFAULT '',
-			review_status TEXT NOT NULL DEFAULT 'unreviewed',
-			validity TEXT NOT NULL DEFAULT 'valid',
-			visibility TEXT NOT NULL DEFAULT 'gated',
-			fact_refs TEXT NOT NULL DEFAULT '[]',
-			source_kind TEXT NOT NULL DEFAULT 'model',
-			version INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_tenant_slug ON products(tenant_id, slug)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_codes ON products(tenant_code, page_code)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS ux_product_page ON products(page_code)`,
-		`CREATE INDEX IF NOT EXISTS idx_product_tenant ON products(tenant_id, status, id)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS ux_fact ON product_facts(product_id, kind, key)`,
-		`CREATE INDEX IF NOT EXISTS idx_fact_tenant_updated ON product_facts(tenant_id, updated_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_asset_product_lang ON product_assets(product_id, lang, validity)`,
 		// ---------- 二期 S1：deal 域报价表（金额启用前置，管金额才接退款/对账/发票） ----------
 		// ★ total_cents 一律 INTEGER「分」（与 payments.amount_fen 同量纲），不许用 REAL「元」：
 		//   orders.amount_money 是元且同名不同单位，混用会让勾稽差 100 倍（C2 那笔旧账）。

@@ -12,18 +12,19 @@
 package api
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"translator/internal/auth"
 	"translator/internal/config"
+	"translator/internal/db"
 	"translator/internal/iam"
 	"translator/internal/store"
 
@@ -35,15 +36,18 @@ import (
 func newProductAPIServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	pinSqliteDialect(t)
-	conn, err := sql.Open("sqlite", ":memory:")
+	// ★ KN11：主库四表 DDL 已摘除，测试库需独立重建（走 kc=nil 主库回滚分支测 API 行为）。
+	//   用文件库而非 :memory:，规避内存库按连接各自独立导致的 no such table 假红。
+	raw, err := db.Open(db.Config{Driver: db.DriverSQLite, DSN: filepath.Join(t.TempDir(), "product_api.db")})
 	if err != nil {
-		t.Fatalf("内存库起不来: %v", err)
+		t.Fatalf("文件库起不来: %v", err)
 	}
-	t.Cleanup(func() { _ = conn.Close() })
-	st, err := store.New(conn)
+	t.Cleanup(func() { _ = raw.Close() })
+	st, err := store.New(raw)
 	if err != nil {
 		t.Fatalf("store.New 失败: %v", err)
 	}
+	migrateProductTablesForTest(t, st)
 	u, err := st.CreateUser(1, "product_user", auth.PasswordHash("pw123456"), "产品用户", iam.RoleUser, 0, 0)
 	if err != nil {
 		t.Fatalf("建用户失败: %v", err)

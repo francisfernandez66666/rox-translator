@@ -7,13 +7,15 @@ package store
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"translator/internal/config"
+	"translator/internal/db"
 )
 
-// newProductTestStore 建一个自钉 SQLite 方言的测试 Store。
+// newProductTestStore 建一个自钉 SQLite 方言的测试 Store，并重建产品四表（回滚路径测主库行为）。
 func newProductTestStore(t *testing.T) *Store {
 	t.Helper()
 	old := config.C
@@ -21,7 +23,22 @@ func newProductTestStore(t *testing.T) *Store {
 	cfg.DatabaseDriver = "sqlite"
 	config.C = cfg
 	t.Cleanup(func() { config.C = old })
-	return newTestStore(t)
+
+	// ★ 用文件库而非 :memory:：内存 SQLite 按连接各自独立，New() 跑迁移（含 kb_packages）
+	//   与测试查询若分到不同连接会「no such table」；文件库多连接共享同一文件，天然规避。
+	//   （绝不设 SetMaxOpenConns(1)：New() 迁移里有嵌套查询，单连接会死锁。）
+	raw, err := db.Open(db.Config{Driver: db.DriverSQLite, DSN: filepath.Join(t.TempDir(), "product_store.db")})
+	if err != nil {
+		t.Fatalf("打开文件库失败: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	s, err := New(raw)
+	if err != nil {
+		t.Fatalf("创建测试 Store 失败: %v", err)
+	}
+
+	migrateProductTablesTest(t, s)
+	return s
 }
 
 // P1/P2：状态字面三值可流转，第四值写侧硬拒（不是靠数据库约束兜）。

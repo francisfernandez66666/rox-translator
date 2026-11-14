@@ -24,6 +24,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -181,6 +182,21 @@ func SplitTargetLangs(csv string) []string { return splitLangs(csv) }
 // tenantCodeFor 取该租户已签发的租户段；没有则新签一枚不可枚举短码。
 // 参数：tid=租户 ID；返回租户段与错误。
 func (s *Store) tenantCodeFor(tid int64) (string, error) {
+	if kc := s.kcCutover(); kc != nil {
+		items, _, o, err := kc.ProductsList(kcCtx(nil), tid, 0, 1)
+		if err != nil {
+			return "", err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return "", e
+		}
+		for _, it := range items {
+			if tc := rawStr(it, "tenant_code"); tc != "" {
+				return tc, nil
+			}
+		}
+		return idgen.NewCode("")
+	}
 	var code string
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT tenant_code FROM products WHERE tenant_id=? LIMIT 1", tid).Scan(&code)
@@ -225,6 +241,26 @@ func (s *Store) CreateProduct(tid int64, in ProductInput) (Product, error) {
 		slug = "p-" + pageCode[:12]
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	out := Product{
+		ID: id, TenantID: tid, UserID: in.UserID, Code: in.Code, Name: name,
+		Tagline: in.Tagline, IndustryCode: in.IndustryCode, Audience: in.Audience,
+		UseCase: in.UseCase, StyleNotes: in.StyleNotes, BannedNotes: in.BannedNotes,
+		Status: ProductStatusDraft, Slug: slug, TenantCode: tenantCode, PageCode: pageCode,
+		SeoIndexable: 1, TargetLangs: joinLangs(in.TargetLangs), CreatedAt: now, UpdatedAt: now,
+	}
+	// 建档这一支没走 scanProduct，数组必须就地派生（否则前端刚建完读回的是 []）
+	out.fillLangsList()
+	if kc := s.kcCutover(); kc != nil {
+		row := productToRow(out, nil)
+		_, o, werr := kc.ProductUpsert(kcCtx(nil), row)
+		if werr != nil {
+			return Product{}, werr
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return Product{}, e
+		}
+		return out, nil
+	}
 	_, err = db.Exec(s.db, db.CurrentDialect(),
 		`INSERT INTO products
 		(id, tenant_id, user_id, code, name, tagline, industry_code, audience,
@@ -237,15 +273,6 @@ func (s *Store) CreateProduct(tid int64, in ProductInput) (Product, error) {
 	if err != nil {
 		return Product{}, fmt.Errorf("产品建档失败: %w", err)
 	}
-	out := Product{
-		ID: id, TenantID: tid, UserID: in.UserID, Code: in.Code, Name: name,
-		Tagline: in.Tagline, IndustryCode: in.IndustryCode, Audience: in.Audience,
-		UseCase: in.UseCase, StyleNotes: in.StyleNotes, BannedNotes: in.BannedNotes,
-		Status: ProductStatusDraft, Slug: slug, TenantCode: tenantCode, PageCode: pageCode,
-		SeoIndexable: 1, TargetLangs: joinLangs(in.TargetLangs), CreatedAt: now, UpdatedAt: now,
-	}
-	// 建档这一支没走 scanProduct，数组必须就地派生（否则前端刚建完读回的是 []）
-	out.fillLangsList()
 	return out, nil
 }
 
@@ -257,6 +284,33 @@ func (s *Store) ListProducts(tid int64, page, pageSize int) ([]Product, int, err
 	}
 	if page <= 0 {
 		page = 1
+	}
+	if kc := s.kcCutover(); kc != nil {
+		items, _, o, err := kc.ProductsList(kcCtx(nil), tid, 0, 0)
+		if err != nil {
+			return nil, 0, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, 0, e
+		}
+		all := kcProducts(items)
+		// 排序口径与主库一致：created_at DESC, id DESC（RFC3339 串字典序即时间序）。
+		sort.SliceStable(all, func(i, j int) bool {
+			if all[i].CreatedAt != all[j].CreatedAt {
+				return all[i].CreatedAt > all[j].CreatedAt
+			}
+			return all[i].ID > all[j].ID
+		})
+		total := len(all)
+		start := (page - 1) * pageSize
+		if start >= total {
+			return []Product{}, total, nil
+		}
+		end := start + pageSize
+		if end > total {
+			end = total
+		}
+		return all[start:end], total, nil
 	}
 	var total int
 	if err := db.QueryRow(s.db, db.CurrentDialect(),
@@ -287,6 +341,17 @@ func (s *Store) GetProductByCodes(tenantCode, pageCode string) (Product, bool, e
 	if strings.TrimSpace(tenantCode) == "" || strings.TrimSpace(pageCode) == "" {
 		return Product{}, false, nil
 	}
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.ProductResolveByCodes(kcCtx(nil), tenantCode, pageCode)
+		if err != nil {
+			return Product{}, false, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return Product{}, false, e
+		}
+		p, ok := gatherProduct(items)
+		return p, ok, nil
+	}
 	p, err := scanProduct(db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT "+productCols+" FROM products WHERE tenant_code=? AND page_code=?",
 		tenantCode, pageCode))
@@ -302,6 +367,19 @@ func (s *Store) GetProductByCodes(tenantCode, pageCode string) (Product, bool, e
 // productExistsScoped 读侧与写侧共用的作用域助手：查不到一律同一个错误，不泄露他租户存在性。
 // 参数：tid=租户 ID，id=产品主键；返回错误。
 func (s *Store) productExistsScoped(tid int64, id string) error {
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.ProductGet(kcCtx(nil), tid, id)
+		if err != nil {
+			return err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return e
+		}
+		if len(items) == 0 {
+			return errProductNotFound
+		}
+		return nil
+	}
 	var one int
 	err := db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT 1 FROM products WHERE tenant_id=? AND id=?", tid, id).Scan(&one)
@@ -317,6 +395,17 @@ func (s *Store) UpdateProductName(tid int64, id, name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return errors.New("产品名不能为空")
+	}
+	if kc := s.kcCutover(); kc != nil {
+		if err := s.productExistsScoped(tid, id); err != nil {
+			return err
+		}
+		row := map[string]any{"id": id, "name": name, "updated_at": time.Now().UTC().Format(time.RFC3339)}
+		_, o, err := kc.ProductUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
 	}
 	if err := s.productExistsScoped(tid, id); err != nil {
 		return err
@@ -334,6 +423,17 @@ func (s *Store) SetProductStatus(tid int64, id, status string) error {
 	case ProductStatusDraft, ProductStatusLive, ProductStatusArchived:
 	default:
 		return fmt.Errorf("非法的产品状态: %s", status)
+	}
+	if kc := s.kcCutover(); kc != nil {
+		if err := s.productExistsScoped(tid, id); err != nil {
+			return err
+		}
+		row := map[string]any{"id": id, "status": status, "updated_at": time.Now().UTC().Format(time.RFC3339)}
+		_, o, err := kc.ProductUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
 	}
 	if err := s.productExistsScoped(tid, id); err != nil {
 		return err

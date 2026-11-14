@@ -56,6 +56,52 @@ type readinessRow struct {
 // 一行都没有＝missing（R2：缺读 missing，不是读 0）。
 // 参数：tid=租户 ID，productID=产品主键（只允许单产品）；返回矩阵与错误。
 func (s *Store) ReadinessFor(tid int64, productID string) ([]AssetReadiness, error) {
+	if kc := s.kcCutover(); kc != nil {
+		// ★ R5：仍只允许单产品；服务端返回该租户全部物料，这里按 product_id 前缀等值过滤后现算。
+		items, o, err := kc.AssetsList(kcCtx(nil), tid, "")
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		type agg struct{ count, valid, expired int }
+		byKey := map[string]agg{}
+		for _, it := range items {
+			if rawStr(it, "product_id") != productID {
+				continue
+			}
+			key := rawStr(it, "asset_type") + "|" + rawStr(it, "lang")
+			a := byKey[key]
+			a.count++
+			switch rawStr(it, "validity") {
+			case AssetValidityValid:
+				a.valid++
+			case AssetValidityExpired:
+				a.expired++
+			}
+			byKey[key] = a
+		}
+		out := make([]AssetReadiness, 0, len(ProductAssetTypes)*len(ProductLangs))
+		for _, at := range ProductAssetTypes {
+			for _, lang := range ProductLangs {
+				cell := AssetReadiness{AssetType: at, Lang: lang, Worst: ReadinessMissing}
+				if r, ok := byKey[at+"|"+lang]; ok {
+					cell.Count = r.count
+					switch {
+					case r.valid > 0:
+						cell.Worst = ReadinessValid
+					case r.expired > 0:
+						cell.Worst = ReadinessExpired
+					default:
+						cell.Worst = ReadinessMissing
+					}
+				}
+				out = append(out, cell)
+			}
+		}
+		return out, nil
+	}
 	// ★ R5：product_id = ? 是源码级判据的字面锚点，不许改成全租户聚合。
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT asset_type, lang, COUNT(*),

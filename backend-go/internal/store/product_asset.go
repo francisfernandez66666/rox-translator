@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -155,6 +156,21 @@ func validReviewStatus(s string) bool {
 // assetByIDScoped 读侧与写侧共用的作用域助手；查不到一律 errProductNotFound（不返 403）。
 // 参数：tid=租户 ID，id=物料主键；返回物料与错误。
 func (s *Store) assetByIDScoped(tid, id int64) (ProductAsset, error) {
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.AssetsList(kcCtx(nil), tid, "")
+		if err != nil {
+			return ProductAsset{}, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return ProductAsset{}, e
+		}
+		for _, it := range items {
+			if rawInt64(it, "id") == id {
+				return rawToAsset(it), nil
+			}
+		}
+		return ProductAsset{}, errProductNotFound
+	}
 	a, err := scanAsset(db.QueryRow(s.db, db.CurrentDialect(),
 		"SELECT "+assetCols+" FROM product_assets WHERE tenant_id=? AND id=?", tid, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -197,6 +213,28 @@ func (s *Store) PutAsset(tid int64, in ProductAssetInput) (ProductAsset, error) 
 		return ProductAsset{}, fmt.Errorf("非法的物料来源: %s", srcKind)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	if kc := s.kcCutover(); kc != nil {
+		// 不带 id ⇒ 服务端纯插入新版本行（DB 自增主键），返回新建行 id。
+		row := assetToRow(ProductAsset{
+			TenantID: tid, ProductID: in.ProductID, AssetType: in.AssetType, Lang: in.Lang,
+			Body: in.Body, ArtifactRef: in.ArtifactRef, ReviewStatus: review,
+			Validity: AssetValidityValid, Visibility: vis, FactRefs: in.FactRefs,
+			SourceKind: srcKind, Version: 1, CreatedAt: now, UpdatedAt: now,
+		})
+		resp, o, err := kc.AssetUpsert(kcCtx(nil), row)
+		if err != nil {
+			return ProductAsset{}, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return ProductAsset{}, e
+		}
+		return ProductAsset{
+			ID: kcRespID(resp), TenantID: tid, ProductID: in.ProductID, AssetType: in.AssetType,
+			Lang: in.Lang, Body: in.Body, ArtifactRef: in.ArtifactRef, ReviewStatus: review,
+			Validity: AssetValidityValid, Visibility: vis, FactRefs: in.FactRefs,
+			SourceKind: srcKind, Version: 1, CreatedAt: now, UpdatedAt: now,
+		}, nil
+	}
 	id, err := db.InsertID(s.db, db.CurrentDialect(), "id",
 		`INSERT INTO product_assets
 		(tenant_id, product_id, asset_type, lang, body, artifact_ref, review_status,
@@ -219,6 +257,14 @@ func (s *Store) MarkAssetReview(tid, id int64, status string) error {
 	if _, err := s.assetByIDScoped(tid, id); err != nil {
 		return err
 	}
+	if kc := s.kcCutover(); kc != nil {
+		row := map[string]any{"id": id, "review_status": status, "updated_at": time.Now().UTC().Format(time.RFC3339)}
+		_, o, err := kc.AssetUpsert(kcCtx(nil), row)
+		if err != nil {
+			return err
+		}
+		return kcOutcomeErr(o)
+	}
 	_, err := db.Exec(s.db, db.CurrentDialect(),
 		"UPDATE product_assets SET review_status=?, updated_at=? WHERE tenant_id=? AND id=?",
 		status, time.Now().UTC().Format(time.RFC3339), tid, id)
@@ -230,6 +276,37 @@ func (s *Store) MarkAssetReview(tid, id int64, status string) error {
 // ★ A2：只按传入的 factID 命中，未变更的事实不触发 ⇒ 不会误伤同产品下引用别的事实项的物料。
 // 参数：tid=租户 ID，factID=被改动的事实项主键，productID=产品主键；返回作废行数与错误。
 func (s *Store) ExpireAssetsByFactChange(tid int64, factID int64, productID string) (int, error) {
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.AssetsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return 0, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return 0, e
+		}
+		now := deadlineNow()
+		expired := 0
+		for _, it := range items {
+			if rawStr(it, "validity") != AssetValidityValid {
+				continue
+			}
+			for _, fid := range parseFactRefsFromAny(it["fact_refs"]) {
+				if fid == factID {
+					row := map[string]any{"id": rawInt64(it, "id"), "validity": AssetValidityExpired, "updated_at": now}
+					_, o2, err2 := kc.AssetUpsert(kcCtx(nil), row)
+					if err2 != nil {
+						return expired, err2
+					}
+					if e2 := kcOutcomeErr(o2); e2 != nil {
+						return expired, e2
+					}
+					expired++
+					break
+				}
+			}
+		}
+		return expired, nil
+	}
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return 0, err
 	}
@@ -285,6 +362,27 @@ func (s *Store) ListAssets(tid int64, productID string) ([]ProductAsset, error) 
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return []ProductAsset{}, err
 	}
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.AssetsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		out := kcAssets(items)
+		// 排序口径与主库一致：asset_type ASC, lang ASC, id ASC。
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].AssetType != out[j].AssetType {
+				return out[i].AssetType < out[j].AssetType
+			}
+			if out[i].Lang != out[j].Lang {
+				return out[i].Lang < out[j].Lang
+			}
+			return out[i].ID < out[j].ID
+		})
+		return out, nil
+	}
 	rows, err := db.Query(s.db, db.CurrentDialect(),
 		"SELECT "+assetCols+" FROM product_assets WHERE tenant_id=? AND product_id=? ORDER BY asset_type, lang, id",
 		tid, productID)
@@ -309,6 +407,35 @@ func (s *Store) ListAssets(tid int64, productID string) ([]ProductAsset, error) 
 func (s *Store) ListAssetsForAnswer(tid int64, productID, lang string) ([]ProductAsset, error) {
 	if err := s.productExistsScoped(tid, productID); err != nil {
 		return []ProductAsset{}, err
+	}
+	if kc := s.kcCutover(); kc != nil {
+		items, o, err := kc.AssetsList(kcCtx(nil), tid, productID)
+		if err != nil {
+			return nil, err
+		}
+		if e := kcOutcomeErr(o); e != nil {
+			return nil, e
+		}
+		out := []ProductAsset{}
+		for _, it := range items {
+			if rawStr(it, "validity") != AssetValidityValid {
+				continue
+			}
+			if rawStr(it, "review_status") != AssetReviewApproved {
+				continue
+			}
+			if strings.TrimSpace(lang) != "" && rawStr(it, "lang") != lang {
+				continue
+			}
+			out = append(out, rawToAsset(it))
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].AssetType != out[j].AssetType {
+				return out[i].AssetType < out[j].AssetType
+			}
+			return out[i].ID < out[j].ID
+		})
+		return out, nil
 	}
 	q := `SELECT ` + assetCols + ` FROM product_assets
 		WHERE tenant_id=? AND product_id=? AND validity=? AND review_status=?`

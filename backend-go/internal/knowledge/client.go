@@ -191,3 +191,111 @@ func (c *Client) FactsList(ctx context.Context, tid int64, productID string) ([]
 	}
 	return rows, o, nil
 }
+
+// ---- KN11：主服务 store 委托知识服务所用的读/写入口（§4.3.4 / KN11）----
+// 服务端 hRead 返回「列名键 map 数组」，主服务（store 包）拿到后按本仓 store 类型转换，
+// 以此正确还原 target_langs(CSV) / fact_refs(JSON) 等在库里的非 JSON 标量形态，不靠 JSON 反序列化猜类型。
+
+// listResponse 通用读口响应形态（服务端 hRead 统一返回）。
+type listResponse struct {
+	Items []map[string]any `json:"items"`
+	Total int              `json:"total"`
+}
+
+// RawList 通用读口：返回原始列名键行 + 总数 + 四档 Outcome。
+// 切读后（ServiceRead=on）服务不可达 ⇒ Outcome.HTTPStatus=503，绝不回落空结果。
+func (c *Client) RawList(ctx context.Context, path string, req map[string]any) ([]map[string]any, int, Outcome, error) {
+	var raw listResponse
+	o, err := c.Call(ctx, path, req, &raw)
+	if err != nil {
+		return nil, 0, o, err
+	}
+	return raw.Items, raw.Total, o, nil
+}
+
+// RawWrite 通用写口：返回服务端 JSON 响应 map + 四档 Outcome。
+func (c *Client) RawWrite(ctx context.Context, path string, body map[string]any) (map[string]any, Outcome, error) {
+	var raw map[string]any
+	o, err := c.Call(ctx, path, body, &raw)
+	return raw, o, err
+}
+
+// ProductsList 列产品档案（tenant 作用域，服务端不翻页，主服务本地翻页）。
+func (c *Client) ProductsList(ctx context.Context, tid int64, page, limit int) ([]map[string]any, int, Outcome, error) {
+	return c.RawList(ctx, contract.PathProductsList, map[string]any{"tenant_id": tid, "page": page, "limit": limit})
+}
+
+// ProductResolve 由两段短码解析产品（ tenant_code + page_code ）。
+func (c *Client) ProductResolve(ctx context.Context, tid int64, tc, pc string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathProductResolve, map[string]any{"tenant_id": tid, "tenant_code": tc, "page_code": pc})
+	return items, o, err
+}
+
+// ProductGet 按主键取产品。
+func (c *Client) ProductGet(ctx context.Context, tid int64, id string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathProductsGet, map[string]any{"tenant_id": tid, "product_id": id})
+	return items, o, err
+}
+
+// ProductResolveByCodes 全局按两段短码解析产品（无 tenant_id；codes 全局唯一，与主库 GetProductByCodes 同形）。
+func (c *Client) ProductResolveByCodes(ctx context.Context, tc, pc string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathProductResolveByCodes, map[string]any{"tenant_code": tc, "page_code": pc})
+	return items, o, err
+}
+
+// CorpusPublic 取公开语料（visibility=public 的事实/物料），主服务本地组装 PublicCorpusItem。
+func (c *Client) CorpusPublic(ctx context.Context, tid int64, productID string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathCorpusPublic, map[string]any{"tenant_id": tid, "product_id": productID})
+	return items, o, err
+}
+
+// AssetsList 按产品列物料。
+func (c *Client) AssetsList(ctx context.Context, tid int64, productID string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathAssetsList, map[string]any{"tenant_id": tid, "product_id": productID})
+	return items, o, err
+}
+
+// AssetGet 按主键取单条物料（文件取回口）。
+func (c *Client) AssetGet(ctx context.Context, tid int64, id int64) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathAssetsGet, map[string]any{"tenant_id": tid, "id": id})
+	return items, o, err
+}
+
+// ReadinessList 取物料齐备度行（product_assets 全量）。
+func (c *Client) ReadinessList(ctx context.Context, tid int64, productID string) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathReadiness, map[string]any{"tenant_id": tid, "product_id": productID})
+	return items, o, err
+}
+
+// SitemapList 跨租户公开产品页（seo_indexable=1 AND status=live 由主服务本地过滤）。
+func (c *Client) SitemapList(ctx context.Context) ([]map[string]any, Outcome, error) {
+	items, _, o, err := c.RawList(ctx, contract.PathSitemapList, map[string]any{})
+	return items, o, err
+}
+
+// ProductUpsert 产品档案写（主服务签发 id；含 target_langs 以 CSV 串入参）。
+func (c *Client) ProductUpsert(ctx context.Context, row map[string]any) (map[string]any, Outcome, error) {
+	return c.RawWrite(ctx, contract.PathProductsUpsert, row)
+}
+
+// ProductDelete 删除产品档案（带 tenant_id，无尾随 LIMIT）。
+func (c *Client) ProductDelete(ctx context.Context, tid int64, id string) (map[string]any, Outcome, error) {
+	return c.RawWrite(ctx, contract.PathProductsDelete, map[string]any{"tenant_id": tid, "id": id})
+}
+
+// FactUpsert 事实项写（自然键幂等；主服务在 body 里带全部列）。
+func (c *Client) FactUpsert(ctx context.Context, row map[string]any) (map[string]any, Outcome, error) {
+	return c.RawWrite(ctx, contract.PathFactsUpsert, row)
+}
+
+// AssetUpsert 物料写（带 id 改审核态 / 不带 id 插新版本行）。
+func (c *Client) AssetUpsert(ctx context.Context, row map[string]any) (map[string]any, Outcome, error) {
+	return c.RawWrite(ctx, contract.PathAssetsUpsert, row)
+}
+
+// I18nUpsert 事实译文回写（零模型）。
+func (c *Client) I18nUpsert(ctx context.Context, req contract.I18nUpsertRequest) (contract.I18nUpsertResponse, Outcome, error) {
+	var out contract.I18nUpsertResponse
+	o, err := c.Call(ctx, contract.PathI18nUpsert, req, &out)
+	return out, o, err
+}

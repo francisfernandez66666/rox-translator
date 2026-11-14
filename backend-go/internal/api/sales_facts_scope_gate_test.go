@@ -69,6 +69,8 @@ func newW1Fixture(t *testing.T) *w1Fixture {
 	if err != nil {
 		t.Fatalf("store.New 失败: %v", err)
 	}
+	// ★ KN11：主库四表 DDL 已摘除，测试库需独立重建（走 kc=nil 主库回滚分支）。
+	migrateProductTablesForTest(t, st)
 
 	fx := &w1Fixture{srv: &Server{Store: st}}
 
