@@ -15,7 +15,8 @@ import { useEffect, useState } from 'react'
 import { useT } from '@/i18n'
 import { Input, Button } from '@/ui/langcross/src'
 import { publicProduct, type PublicItem } from '@/api/product'
-import { copyText, type ExhaustReason } from '@/lib/productExhaustCopy'
+import { type ExhaustReason } from '@/lib/productExhaustCopy'
+import { publicExhaustText } from '@/lib/productPublicExhaust'
 
 /** 公开页版式：设计变量一律取 tokens.css 的 --lc-*，不写死色值、不写内联布局样式。 */
 const PAGE_CSS = `
@@ -73,7 +74,9 @@ export default function ProductPublicPage({ tenantCode, pageCode, exhaustReason 
   }, [tenantCode, pageCode])
 
   const visible = publicOnly(facts)
-  const busyCopy = exhaustReason === 'exhausted_today' ? copyText('exhausted_today', 'visitor') : ''
+  // ★ 四期 W2：耗尽态统一走 publicExhaustText → copyFor（唯一文案表），
+  //   不再把 audience 写死在组件里；公开页当前身份恒为 visitor，卖家面由管理台预览口选 owner。
+  const busyCopy = publicExhaustText({ reason: exhaustReason, audience: 'visitor' })
   const leadSource = `lead-product:${tenantCode}:${pageCode}`
 
   return (

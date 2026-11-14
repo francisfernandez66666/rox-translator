@@ -23,6 +23,7 @@ package engine
 
 import (
 	"context"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -66,6 +67,21 @@ var salesPageSegs = map[string]bool{
 	"industry": true, "industries": true,
 }
 
+// salesProductPageShape 托管产品页 /p/{tenantCode}/{pageCode} 的形状（四期 W2 新增）。
+// ★ 这是**形状判据**，刻意不往 salesPageSegs 里塞 "p"：
+//   - 单字母段 "p" 一旦进整词表，任何形如 /x/p/y（翻译工作台、工单等 app 路径）都会
+//     命中整词表被判成销售轮 ⇒ 守卫把老链路改写成回避话术（误伤付费主链）。
+//   - 旧整词表还含 "demo"/"shop"/"product"/"sales" 等词，租户短码恰好叫这些的
+//     /p/demo/x 会「按短码抽奖」被判销售页、叫 acme 的反而漏判——形状按首段锚定，与短码取值无关。
+// 形态 ^/p/[^/]+/[^/]+$：首段为 p，后两段非空且不含 '/'（恰好两段短码）。
+var salesProductPageShape = regexp.MustCompile(`^/p/[^/]+/[^/]+$`)
+
+// isProductPagePath 判纯路径（已去协议/查询串/锚点）是否 /p/{tc}/{pc} 托管产品页形状。
+// 参数：path=归一化后的纯路径；返回是否命中形状。
+func isProductPagePath(path string) bool {
+	return salesProductPageShape.MatchString(path)
+}
+
 // isSalesPageURL 判页面 URL 是否属销售页（路径段命中，或显式 ?sales=1 标记）。
 // 参数：pageURL=挂件送来的当前页（可为完整 href 或纯路径）；返回是否销售页。
 func isSalesPageURL(pageURL string) bool {
@@ -96,6 +112,11 @@ func isSalesPageURL(pageURL string) bool {
 		} else {
 			s = "/"
 		}
+	}
+	// ★ 四期 W2：/p/{tenantCode}/{pageCode} 托管产品页按形状判销售页（放在整词表之前，
+	//   与租户短码取值无关；形状判据绝不误伤 /x/p/y，见 salesProductPageShape 注释）。
+	if isProductPagePath(s) {
+		return true
 	}
 	for _, seg := range strings.Split(s, "/") {
 		if salesPageSegs[strings.TrimSpace(seg)] {

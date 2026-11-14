@@ -236,8 +236,12 @@ func (s *Store) ConfirmFact(tid, id, userID int64) error {
 	if userID <= 0 {
 		return errors.New("确认事实必须带有效操作人")
 	}
+	// ★ 四期 W1 收尾：确认（status）与锁定（locked）是两个维度，不许一并写。
+	//   ListSalesFactsForInjection 的准入条件是 locked=0；旧写法 locked=1 会让
+	//   「卖家在管理台确认过的事实」永远进不了注入集，而界面上毫无症状。
+	//   locked 只由 UpsertFact 的入参（受控事实）决定；撤回另有 WithdrawFact。
 	_, err = db.Exec(s.db, db.CurrentDialect(),
-		"UPDATE product_facts SET status=?, locked=1, updated_at=? WHERE tenant_id=? AND id=?",
+		"UPDATE product_facts SET status=?, updated_at=? WHERE tenant_id=? AND id=?",
 		FactStatusConfirmed, time.Now().UTC().Format(time.RFC3339), tid, id)
 	return err
 }

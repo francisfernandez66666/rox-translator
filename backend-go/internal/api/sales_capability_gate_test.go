@@ -15,7 +15,9 @@ import (
 
 // TestSalesCapabilityThreeStatesAreDistinct 两把闸三态 + 未登录 401。
 func TestSalesCapabilityThreeStatesAreDistinct(t *testing.T) {
-	srv, tok := adminGateServer(t)
+	// 业务正向用租户管理员；adminGateServer 返回的普通会员留作权限反向对照。
+	srv, lowTok := adminGateServer(t)
+	tok := salesGateAdminToken(t, srv)
 	set := func(k, v string) {
 		t.Helper()
 		if err := srv.Store.SetConfig(k, v); err != nil {
@@ -37,6 +39,11 @@ func TestSalesCapabilityThreeStatesAreDistinct(t *testing.T) {
 
 	if code, _ := probe(""); code != http.StatusUnauthorized {
 		t.Fatalf("未登录必须 401，实得 %d", code)
+	}
+	// ★ 反向对照（三期 W3 权限收紧）：普通会员等级 1 读 capability 必须 403。
+	//   夹具从普通会员换成管理员之后，这条是唯一还钉着「不得因夹具升级放宽权限闸」的腿。
+	if code, _ := probe(lowTok); code != http.StatusForbidden {
+		t.Fatalf("普通会员应 403，实得 %d", code)
 	}
 
 	cases := []struct {

@@ -34,6 +34,7 @@ import (
 	"translator/internal/evals"
 	"translator/internal/fileproc"
 	"translator/internal/kb"
+	"translator/internal/knowledge"
 	"translator/internal/llm"
 	"translator/internal/observability"
 	"translator/internal/sensitive"
@@ -390,6 +391,16 @@ func main() {
 
 	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
+
+	// ★ 四期 W3 KN9/KN11：装配知识服务客户端（:8791）。
+	//   LoadConfig 缺省只补 addr/baseURL/driver，绝不补 DSN；未配 KNOWLEDGE_* 时客户端存在但不可达，
+	//   健康面据此报 unavailable（真实可见），不会因「没配就假装绿」掩盖依赖缺失。
+	//   同一客户端既用于 /api/health 探针，也用于数据层切读（ServiceRead=on 时销售事实等读口改走它）。
+	kc := knowledge.NewClient(knowledge.LoadConfig())
+	srv.KnowledgeClient = kc
+	if st != nil {
+		st.SetKnowledgeClient(kc)
+	}
 
 	// ★ 边工作边计费：将实时扣费钩子挂到引擎的 LLM 客户端。
 	// 每次 chat/embed 调用产生真实 token 用量后立即扣减租户余额，余额不足即中止翻译，

@@ -42,6 +42,7 @@ import (
 	"translator/internal/fileproc"
 	"translator/internal/infra/redis"
 	"translator/internal/kb"
+	"translator/internal/knowledge"
 	"translator/internal/mq"
 	"translator/internal/queue"
 	"translator/internal/service"
@@ -85,6 +86,9 @@ type Server struct {
 	// ★ 四期 W1：销售事实注入的作用域计数（只服务 /api/health 的 sales_facts 段，见
 	//   sales_facts_scope.go 的 salesFactsHealth）。口径同 #42：只出状态词与计数。
 	salesFactsStats salesFactsCounters
+	// ★ 四期 W3 KN9：主服务持有的知识服务客户端（:8791）。仅用于 /api/health 探针，
+	//   不承载业务读（业务读走 KN11 重构后的知识服务调用链）。nil＝未装配（健康面报 not_configured）。
+	KnowledgeClient *knowledge.Client
 }
 
 // NewServer 创建 HTTP 服务：初始化计费服务、注册路由并启动看门狗。
@@ -1095,6 +1099,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   **绝不出事实值、产品名、租户名，也不出 product_id**（本端点匿名可达）。
 		//   ambiguous 长期不为 0 ⇒ 多产品租户没页面上下文（要么前端没送页面头，要么访客还没走到公开页）。
 		"sales_facts": s.salesFactsHealth(),
+		// ★ 四期 W3 KN9：知识服务（:8791）可达性与契约版本三态（ok/degraded/unavailable/not_configured）。
+		//   这是「知识服务挂了主服务还全绿」那类事故的探照灯——主服务健康面必须看得见这个依赖。
+		//   同 #42 口径：只出状态词，绝不暴露 token/主机/路径。
+		"knowledge": s.knowledgeHealth(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

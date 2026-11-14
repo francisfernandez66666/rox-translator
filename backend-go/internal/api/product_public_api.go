@@ -404,10 +404,18 @@ func (s *Server) handleProductLead(w http.ResponseWriter, r *http.Request) {
 	}
 	content := "【产品页线索】" + strings.TrimSpace(req.Company) + "｜" +
 		strings.TrimSpace(req.Email) + "｜" + strings.TrimSpace(req.Message)
-	if _, err := s.Store.CreateProductLead(ctx, content, req.Langs); err != nil {
+	leadID, err := s.Store.CreateProductLead(ctx, content, req.Langs)
+	if err != nil {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "提交失败，请稍后再试"))
 		return
 	}
+	// ★ 四期 W2：这条留资必须同时出现在卖家收件箱（inbox_events），否则线索落了库
+	//   而卖家在收件箱永远看不见（两表分离、界面零症状）。属旁路能力：写失败只 WARN，
+	//   绝不拿已成功的留资主链交押金。租户号只取产品行，绝不采信 req.TenantID（V6）。
+	productLeadSource := leadSourceProductPrefix + ctx.TenantCode + ":" + ctx.PageCode
+	eventID := LeadCapturedInboxEventID(productLeadSource, leadID)
+	_ = s.bridgeLeadCapturedToInbox(r.Context(), ctx.Product.TenantID, eventID,
+		strconv.FormatInt(leadID, 10))
 	s.regGuard.record(leadProductGuardPrefix + ip)
 	writeJSON(w, 200, map[string]interface{}{"success": true, "found": true})
 }

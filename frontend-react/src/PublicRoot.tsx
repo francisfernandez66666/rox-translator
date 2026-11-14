@@ -141,6 +141,8 @@ function PublicRoutes() {
     return (
       <MarketingShell>
         <ProductPublicPage tenantCode={tenantCode} pageCode={pageCode} />
+        {/* ★ 四期 W2：/p/ 托管产品页常驻 AI 接待挂件，与三支营销页同形态（同一 MarketingShell 内） */}
+        <AiAssist />
       </MarketingShell>
     )
   }

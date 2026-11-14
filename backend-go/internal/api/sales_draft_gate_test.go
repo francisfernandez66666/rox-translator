@@ -21,7 +21,9 @@ import (
 
 // TestSalesDraftInboxIsTenantScopedAndAudited 草稿 inbox 三口行为＋审计留痕。
 func TestSalesDraftInboxIsTenantScopedAndAudited(t *testing.T) {
-	srv, tok := adminGateServer(t)
+	// 业务正向用租户管理员；adminGateServer 返回的普通会员留作权限反向对照。
+	srv, lowTok := adminGateServer(t)
+	tok := salesGateAdminToken(t, srv)
 
 	// 本租户两条草稿＋别的租户一条（跨租户靶子）。
 	mine1, err := srv.Store.CreateSalesDraft(1, "price-anchor", "原话一", "说法一", "attr-1")
@@ -64,6 +66,11 @@ func TestSalesDraftInboxIsTenantScopedAndAudited(t *testing.T) {
 		if code, _, _ := call(probe.method, probe.path, "", probe.body); code != http.StatusUnauthorized {
 			t.Fatalf("未登录 %s 必须 401，实得 %d", probe.path, code)
 		}
+	}
+	// ★ 反向对照（三期 W3 权限收紧）：普通会员等级 1 读草稿必须 403。
+	//   夹具换成管理员之后，这条钉住「权限闸没被顺手放宽」。
+	if code, _, _ := call(http.MethodGet, "/api/sales/drafts", lowTok, ""); code != http.StatusForbidden {
+		t.Fatalf("普通会员列草稿应 403，实得 %d", code)
 	}
 
 	// 列表只出本租户；空过滤集出 []（不是 null）。

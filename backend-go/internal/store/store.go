@@ -22,6 +22,7 @@ import (
 
 	"translator/internal/db"
 	"translator/internal/iam"
+	"translator/internal/knowledge"
 
 	_ "modernc.org/sqlite"
 )
@@ -40,6 +41,11 @@ type Store struct {
 	// 判据/口径见 systemconfig.go 的 GetConfig/SetConfig。
 	sysCfgMu    sync.Mutex
 	sysCfgCache map[string]sysCfgCacheEntry
+
+	// knowledgeClient 四期 W3：主服务数据层访问独立知识服务的客户端（:8791）。
+	// 仅当 ServiceRead=on（切读/KN11）时，销售事实等读口改走它；其余时候走主库直读（影子期回落）。
+	// 切读后该客户端不可达必须 503，不许回落成空结果（由 knowledge.DecideReadOutcome 单一真值判定）。
+	knowledgeClient *knowledge.Client
 }
 
 // New 创建 Store 并确保全部表存在（幂等迁移）。
@@ -67,6 +73,12 @@ func New(db *sql.DB) (*Store, error) {
 		return nil, err
 	}
 	if err := s.SalesInboxMigrate(); err != nil {
+		return nil, err
+	}
+	// ★ 四期 W4：outbox 域三表（event_outbox / event_inbox / lead_captured_inbox）幂等建表。
+	//   DDL 走 store/outbox_migrate.go → outbox.Migrate（db.ExecDDL/EnsureColumns 唯一入口）；
+	//   建表本身不产生任何投递动作，relay 槽另由显式开关控制（默认关）。
+	if err := s.OutboxMigrate(); err != nil {
 		return nil, err
 	}
 	if err := s.SalesLexiconMigrate(); err != nil {

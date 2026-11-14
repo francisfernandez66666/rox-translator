@@ -8,14 +8,16 @@
 //
 // 三条硬口径：
 //  1. **组合根唯一**：attribution.NewEngine / RecordReply / SyncPackStats 的生产装配点
-//     只在本文件（A08 扫描面）。MarkPendingHuman 留待 W6 有 conversation_id 后在同点装配——
-//     它按「会话/客户最近一条 + draft_id 非空」定位，W2 的行没有会话映射，调它结构性空转；
-//     pending_human 在 W2 由 RecordReply 的 INSERT 按 message_id 精确落行（幂等刷新不动事件列）。
+//     只在本文件（A08 扫描面）。pending_human 由 RecordReply 的 INSERT 按 message_id
+//     精确落行（幂等刷新不动事件列）；登录档另有 MarkPendingHumanBySession 按
+//     conversation_id 精确回填（三期 W6），不按「最近一条」猜行。
 //  2. **先答客后回写**：w.Write(payload) 必须先于 writeBackAttribution（A04b/M0210 源码序锁）——
 //     回写再慢再坏，访客拿到的字节一个都不变。
-//  3. **W2 事实集＝已准入的静态空集**：准入读口 ListSalesFactsForInjection 与译文预生成是 W4；
-//     本批把 header 协议/签名/限长一次定死，buildSalesFactsSet 的事实内容 W4 替换。
-//     未登录/平台上下文/未配密钥 ⇒ 静默不发（匿名是合法回落，与画像同口径）。
+//  3. **事实集＝按作用域准入的真值**（四期 W1 起）：buildSalesFactsSet 用
+//     resolveSalesFactsScope 解析出的 (TenantID, ProductID, Lang) 调
+//     ListSalesFactsForInjection；productID 绝不传空串（三期那行会读出整租户事实＝串台）。
+//     匿名产品页是合法作用域（product_page_anon），不是「未登录静默不发」；
+//     平台上下文 / 无作用域 / 多产品 ambiguous / 未配密钥 ⇒ fail-closed 不发。
 //
 // 安全：入站同名头由 stripSalesFactsHeaders 先删再自赋（P-7 同族）；头只走内网，
 // 不进日志、不进错误信封；受控键在类型层就没有 Value 字段（internal/engine/sales_facts.go）。
