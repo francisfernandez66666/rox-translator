@@ -31,39 +31,58 @@ EXPECT_CV=${EXPECT_CONTRACT_VERSION:-knowledge-contract-v2}
 EXPECT_ITEM_KEY=${EXPECT_ITEM_KEY:-}
 CURL_MAX_TIME=${CURL_MAX_TIME:-10}
 FAIL=0
+UNMEASURED=0
 
-say_bad() { echo "BAD $*"; FAIL=1; }
+say_bad()  { echo "BAD $*"; FAIL=$((FAIL + 1)); }
+say_skip() { echo "⏳   $*"; UNMEASURED=$((UNMEASURED + 1)); }
 
-# payload_ok 真件判别力：items 必须是非空数组；给了 EXPECT_ITEM_KEY 还必须命中。
-# ★ 正反两条都在 --selftest 里喂同一个函数，避免「校验器恒真」这种空转锁。
-payload_ok() {
+# payload_state 三态判据（★ 2026-11-15 现网发版后修正）：
+#   ok   ＝ items 非空数组，且给了 EXPECT_ITEM_KEY 时命中真件；
+#   skip ＝ items 为空数组 —— 知识库四表 0 行时这是**合法空态**，属「没测到真件」
+#          而不是产品缺陷。旧形态把空数组一律判 BAD，会让空库部署恒红，等于逼运维造脏数据；
+#   bad  ＝ 不是 JSON／缺 items／items 不是数组／真件键未命中 ⇒ 契约面真坏了。
+# ★ 三种形态都在 --selftest 里喂同一个函数，避免校验器恒真或恒红。
+payload_state() {
   printf '%s' "$1" | EXPECT_ITEM_KEY="$EXPECT_ITEM_KEY" python3 -c '
 import sys, json, os
-d = json.load(sys.stdin)
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    print("bad: 不是 JSON: %s" % e); sys.exit(0)
 items = d.get("items")
 if not isinstance(items, list):
-    raise SystemExit("items 不是数组")
+    print("bad: items 不是数组"); sys.exit(0)
 if len(items) == 0:
-    raise SystemExit("items 为空（形状探针不可判绿）")
+    print("skip: 知识库空态（四表 0 行时属合法缺数据，不判缺陷、也不冒充测到真件）"); sys.exit(0)
 key = os.environ.get("EXPECT_ITEM_KEY", "").strip()
 if key:
     blob = json.dumps(items, ensure_ascii=False)
     if key not in blob:
-        raise SystemExit("真件未命中: " + key)
+        print("bad: 真件未命中: " + key); sys.exit(0)
+print("ok")
 ' 2>/dev/null
 }
 
-# ---- --selftest：纯本地，不连服务、不写任何数据 ----
+# ---- --selftest：纯本地，不连服务、不写数据 ----
 if [ "${1:-}" = "--selftest" ]; then
   echo "STATE=selftest（校验器判别力，不连服务）"
-  payload_ok '{"items":[]}' && say_bad "selftest：空数组被判绿 ⇒ 校验器失明"
-  payload_ok '{"items":{}}' && say_bad "selftest：items 是对象被判绿 ⇒ 校验器失明"
-  payload_ok '{"status":"ok"}' && say_bad "selftest：缺 items 被判绿 ⇒ 校验器失明"
-  payload_ok '{"items":[{"key":"fixture-1"}]}' || say_bad "selftest：真件数组被判红 ⇒ 校验器过严"
-  EXPECT_ITEM_KEY=fixture-1 payload_ok '{"items":[{"key":"fixture-1"}]}' \
-    || say_bad "selftest：EXPECT_ITEM_KEY 命中却被判红"
-  EXPECT_ITEM_KEY=missing-key payload_ok '{"items":[{"key":"fixture-1"}]}' \
-    && say_bad "selftest：EXPECT_ITEM_KEY 未命中却被判绿 ⇒ 真件腿是假的"
+  sf_state() { # <说明> <期望状态> <载荷> [EXPECT_ITEM_KEY]
+    local label="$1" want="$2" body="$3" key="${4:-}" got state
+    got=$(EXPECT_ITEM_KEY="$key" payload_state "$body")
+    state=${got%%:*}
+    if [ "$state" = "$want" ]; then
+      echo "OK  selftest $label"
+    else
+      echo "BAD selftest $label（期望 ${want}，实得 ${got}）"
+      FAIL=$((FAIL + 1))
+    fi
+  }
+  sf_state '正常真件数组判 ok'            ok   '{"items":[{"key":"fixture-1"}]}'
+  sf_state '空数组判 skip（不冒充通过）'  skip '{"items":[]}'
+  sf_state 'items 是对象判 bad'           bad  '{"items":{}}'
+  sf_state '缺 items 判 bad'              bad  '{"status":"ok"}'
+  sf_state '命中真件键判 ok'              ok   '{"items":[{"key":"fixture-1"}]}' fixture-1
+  sf_state '未命中真件键判 bad'           bad  '{"items":[{"key":"fixture-1"}]}' missing-key
   if [ "$FAIL" -ne 0 ]; then
     echo "KNOWLEDGE_FACE_SELFTEST_OK=0"
     exit 1
@@ -93,10 +112,11 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-# probe：POST 契约端点，必须 200 且 items 为非空数组（给了真件键还必须命中）。
+# probe：POST 契约端点，必须 200；响应按 payload_state 三态分派。
+# 「空态」只记没测到，不冒充通过也不判缺陷（见文件头的现网修正说明）。
 probe() {
   local path="$1" body="$2" label="$3"
-  local out code payload
+  local out code payload state msg
   out=$(curl -sS -m "$CURL_MAX_TIME" -w $'\n%{http_code}' \
     -H "Content-Type: application/json" \
     -H "X-Knowledge-Token: $TOKEN" \
@@ -107,20 +127,28 @@ probe() {
     say_bad "$label HTTP=${code}（契约端点必须 200，不许静默空/假装）"
     return
   fi
-  if ! payload_ok "$payload"; then
-    say_bad "$label 响应缺真件（items 空/不是数组/EXPECT_ITEM_KEY 未命中，疑似静默空结果）"
-    return
-  fi
-  echo "OK  $label 真件 200+非空 items"
+  msg=$(payload_state "$payload")
+  state=${msg%%:*}
+  case "$state" in
+    ok)   echo "OK  $label 真件 200+非空 items" ;;
+    skip) say_skip "$label ${msg#skip: }" ;;
+    bad)  say_bad  "$label ${msg#bad: }" ;;
+    *)    say_bad  "$label 校验器无输出（响应解析失败，判红不判通过）" ;;
+  esac
 }
 
 probe /internal/knowledge/i18n/list    '{"tenant_id":1,"fact_id":1}'              "i18n/list(translation 域)"
 probe /internal/knowledge/corpus/public '{"tenant_id":1,"product_id":"p1"}'        "corpus/public(公开页/SSR)"
 probe /internal/knowledge/facts/admitted '{"tenant_id":1,"product_id":"p1"}'       "facts/admitted(销售接待)"
 
-if [ "$FAIL" -eq 0 ]; then
-  echo "KNOWLEDGE_FACE_ALL_OK=1"
-  exit 0
+echo "KNOWLEDGE_FACE_FAIL=${FAIL} UNMEASURED=${UNMEASURED}"
+if [ "$FAIL" -ne 0 ]; then
+  echo "KNOWLEDGE_FACE_ALL_OK=0"
+  exit 1
 fi
-echo "KNOWLEDGE_FACE_ALL_OK=0"
-exit 1
+if [ "$UNMEASURED" -ne 0 ]; then
+  echo "KNOWLEDGE_FACE_UNMEASURED=1（知识库空态：结构正常但没测到真件，不冒充全绿、也不判缺陷）"
+  exit 2
+fi
+echo "KNOWLEDGE_FACE_ALL_OK=1"
+exit 0
