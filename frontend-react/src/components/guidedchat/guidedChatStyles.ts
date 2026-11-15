@@ -8,6 +8,7 @@
 // ⇒ 新场景（引导建产品）复用这一份，**禁止**再造第二套 ar-/gc- 样式。
 // ============================================================================
 
+// 引导外壳的样式常量；集中放定位与层级，避免各组件各写一份 z-index 导致浮层互相遮挡。
 export const CSS_GUIDED = `
 .ar-root{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:16px;background:rgba(0,0,0,.72);color:var(--lc-text);font-family:var(--lc-font);animation:lc-mo-fade var(--lc-mo-enter) var(--lc-mo-out) both;}
 /* ★ 比例按演示稿（demo-register-ai-motion.html 的 .phone）：竖版卡、

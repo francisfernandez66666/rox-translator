@@ -7,7 +7,7 @@
 //     独立知识库，主库默认无 products 表；本函数供迁移/回滚期对「存量同构库」显式调用，
 //     用 tableExists 做存在性保护：表不在就直接返回 nil。
 //     ⇒ 既不会因「对不存在的表 EnsureColumns」让主服务启动即失败（§4.3.3「不拆就起不来」），
-//       也不会在空主库里建出知识表（KN11）。
+//     也不会在空主库里建出知识表（KN11）。
 //     ⚠️ 它**不挂** store.New() 启动链；新库的目标语言列由知识侧 CREATE TABLE 直接带。
 //
 // ★ 唯一迁移入口＝ db.EnsureColumns / db.ExecDDL；双方言兼容。
@@ -37,7 +37,9 @@ func (s *Store) SalesDomainMigrate() error {
 
 // KnowledgeDomainMigrate 知识域补列：products.target_langs（目标对外语言）。
 // ★ 表不存在（W3 起主库常态）直接返回 nil；只有存量同构库显式调用时才补列。
-//   「存量行补列后是空串＝还没表态」，读侧按「未设定」处理，不许当成「只支持中文」。
+//
+//	「存量行补列后是空串＝还没表态」，读侧按「未设定」处理，不许当成「只支持中文」。
+//
 // 本函数不挂 store.New()：主库零知识表是 KN11 的硬判据。
 func (s *Store) KnowledgeDomainMigrate() error {
 	d := db.CurrentDialect()

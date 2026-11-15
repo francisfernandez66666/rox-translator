@@ -17,14 +17,22 @@ import (
 	"translator/internal/db"
 )
 
-// TryProcessInboxEvent 幂等抢占：首次调用返回 true（调用方去处理），重复或并发败方返回 false。
+// TryProcessInboxEvent 幂等抢占（薄委托到 Tx 版，连接＝s.db）。
 // 参数：tid=显式租户；eventID=事件幂等键；oneID=用户主键；topic=主题；返回：是否抢到与错误。
 func (s *Store) TryProcessInboxEvent(tid int64, eventID, oneID, topic string) (bool, error) {
+	return s.TryProcessInboxEventTx(s.db, tid, eventID, oneID, topic)
+}
+
+// TryProcessInboxEventTx 与 TryProcessInboxEvent 同一条 SQL / 同一套冲突判据，
+// 只是执行器换成**调用方的事务**（W4 双写：inbox_events 与 event_outbox 必须同 tx）。
+// ★ 不在 api 层复制这段 SQL：两份「幂等抢账」迟早漂成不同形状（AGENTS §三 单一真值）。
+// 参数：exec=事务或连接；其余同 TryProcessInboxEvent；返回：是否抢到与错误。
+func (s *Store) TryProcessInboxEventTx(exec db.Execer, tid int64, eventID, oneID, topic string) (bool, error) {
 	if tid <= 0 || strings.TrimSpace(eventID) == "" {
 		return false, errors.New("收件箱抢占必须带有效租户与事件幂等键")
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := db.Exec(s.db, db.CurrentDialect(),
+	res, err := db.Exec(exec, db.CurrentDialect(),
 		`INSERT INTO inbox_events (tenant_id, event_id, one_id, topic, status, created_at, processed_at)
 		 SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (
 			SELECT 1 FROM inbox_events WHERE tenant_id=? AND event_id=?)`,

@@ -25,6 +25,7 @@ export interface SalesFlowStateRow {
   last_event_id: string
 }
 
+// 单条流程状态机读口返回体；found=false 表示实例不存在且 state 缺省，调用方不得把缺省态当初始态。
 export interface SalesFlowStateResp extends AdminResp {
   found?: boolean
   state?: SalesFlowStateRow

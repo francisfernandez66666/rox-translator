@@ -108,6 +108,7 @@ export const zh: Record<string, string> = {
   'sales.leads.handoff': '转人工',
 }
 
+// 销售域面板英文词条；键集必须与 zh 逐键等值，由 parity 闸门机械核对，不许单边加键。
 export const en: Record<string, string> = {
   // ── sales.roles.* ──
   'sales.roles.title': 'Sales Role Permissions',

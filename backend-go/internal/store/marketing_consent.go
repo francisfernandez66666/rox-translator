@@ -5,8 +5,10 @@
 // 绝不先 COUNT 预检、绝不按冲突字符串分支（与 sales_attribution.go 同一口径）。
 //
 // ★ 合规四件套的读口在这里、判序在 sendOne（api 层唯一出口）：
-//  ① ConsentStatus（opt-in/opt-out）② InSuppression ③ DailySendCount（freq_cap_per_day）
-//  ④ 序列节点由调用方按 delay_hours 选——store 只存取，不做业务判。
+//
+//	① ConsentStatus（opt-in/opt-out）② InSuppression ③ DailySendCount（freq_cap_per_day）
+//	④ 序列节点由调用方按 delay_hours 选——store 只存取，不做业务判。
+//
 // ================================================
 package store
 
@@ -291,7 +293,9 @@ func (s *Store) ListOptedInEmails(tid, limit int64) ([]string, error) {
 // 擦除策略随 W5 同批落，不拖到法务）：删该客户在租户内的全部外联留痕——
 // outbound_sends（发送占位/结果，含邮箱明文）与 marketing_consents（订阅状态）。
 // ★ 只擦「这个客户、这个租户」的行；suppression_list 的抑制记录**保留**（它恰恰是
-//   「别再联系此人」的证据，删了反而会让下游重新外联）；控制列名不经拼接。
+//
+//	「别再联系此人」的证据，删了反而会让下游重新外联）；控制列名不经拼接。
+//
 // 参数：tid=租户；email=客户邮箱；返回：删除行数与错误。
 func (s *Store) PurgeCustomerOutboundTrail(tid int64, email string) (int64, error) {
 	email = strings.ToLower(strings.TrimSpace(email))

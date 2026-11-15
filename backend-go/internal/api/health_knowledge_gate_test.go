@@ -21,9 +21,9 @@ import (
 // TestHealthKnowledgeSegmentPresent KN9：/api/health 必须含 knowledge 段（知识服务可见）。
 func TestHealthKnowledgeSegmentPresent(t *testing.T) {
 	s := &Server{KnowledgeClient: &knowledge.Client{
-		BaseURL:     "http://127.0.0.1:1", // 不可达地址
-		Token:       "x",
-		HTTPClient:  &http.Client{Timeout: 150 * time.Millisecond},
+		BaseURL:    "http://127.0.0.1:1", // 不可达地址
+		Token:      "x",
+		HTTPClient: &http.Client{Timeout: 150 * time.Millisecond},
 	}}
 	rec := httptest.NewRecorder()
 	s.handleHealth(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))

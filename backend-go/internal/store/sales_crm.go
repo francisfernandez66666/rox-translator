@@ -4,10 +4,12 @@
 // 时间一律 UTC RFC3339；金额一律「分」。
 //
 // ★ pending_human 的 W6 回填口径（v1.4 裁定，A24/M0263）：
-//   RecordReply 的 INSERT 已按 message_id 精确落位（W2）；W6 只做两件事——
-//   ① EnsureHandoffSession 补「assist 会话 → conversation_id」映射（幂等，行 id 即会话维度）；
-//   ② MarkPendingHumanBySession 按 conversation_id **精确** UPDATE 归因行（pending_human=0 的行才动），
-//     不按「最近一条」找（并发下会标错行）、不重复写标记（重复回写只刷新映射不翻标记）。
+//
+//	RecordReply 的 INSERT 已按 message_id 精确落位（W2）；W6 只做两件事——
+//	① EnsureHandoffSession 补「assist 会话 → conversation_id」映射（幂等，行 id 即会话维度）；
+//	② MarkPendingHumanBySession 按 conversation_id **精确** UPDATE 归因行（pending_human=0 的行才动），
+//	  不按「最近一条」找（并发下会标错行）、不重复写标记（重复回写只刷新映射不翻标记）。
+//
 // ================================================
 package store
 

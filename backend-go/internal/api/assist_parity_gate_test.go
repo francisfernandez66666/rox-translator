@@ -10,7 +10,7 @@
 //
 // ★ 不是空转锁：新链路的 ctx 由本仓 D 文件的 s.localFactsContext 真实产出，
 //
-//	且事实集经过 A 文件同款 Encode→Decode 保形。M0298 把 localFactsContext
+//	且事实集经过 A 文件同款 Encode→Decode 保形。M0335 把 localFactsContext
 //	的 WithSalesFacts 摘掉 ⇒ SalesFactsFromContext 失明 ⇒ 守卫改写分叉 ⇒ 红。
 //
 // 反证：① 30 条语料逐条比对；② 两个 ctx 里的事实集 ok 与 JSON 必须相等；
@@ -108,7 +108,7 @@ func TestA1AssistParityReplyByteEqual(t *testing.T) {
 	oldSet, okOld := mainengine.SalesFactsFromContext(oldCtx)
 	newSet, okNew := mainengine.SalesFactsFromContext(newCtx)
 	if okOld != okNew {
-		t.Fatalf("A1 事实集注入 ok 分叉：迁移前=%v 迁移后=%v（M0298 摘掉 WithSalesFacts 必红）", okOld, okNew)
+		t.Fatalf("A1 事实集注入 ok 分叉：迁移前=%v 迁移后=%v（M0335 摘掉 WithSalesFacts 必红）", okOld, okNew)
 	}
 	bOld, _ := json.Marshal(oldSet)
 	bNew, _ := json.Marshal(newSet)
@@ -137,7 +137,7 @@ func TestA1AssistParityReplyByteEqual(t *testing.T) {
 	changedCtx := s.localFactsContext(context.Background(), changed)
 	gotChanged, okChanged := mainengine.SalesFactsFromContext(changedCtx)
 	if !okChanged {
-		t.Fatal("A1 反证失明：localFactsContext 没有把事实集放进 ctx（M0298 摘掉 WithSalesFacts 必红）")
+		t.Fatal("A1 反证失明：localFactsContext 没有把事实集放进 ctx（M0335 摘掉 WithSalesFacts 必红）")
 	}
 	bc, _ := json.Marshal(gotChanged)
 	if bytes.Equal(bc, bNew) {

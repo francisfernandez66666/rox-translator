@@ -1,9 +1,11 @@
 // ============ sales_crm_gate_test.go · 职责说明 ============
 // 三期 W6 CRM 域的落库锁（真 SQLite 文件库）：
-//   A24/M0263：pending_human 按会话精确回填——只动 conversation_id 匹配且 pending_human=0 的
-//     归因行（重复回填不翻已置位标记、不误伤他人会话的行）；resolve 只动会话行。
-//   A20：线索阶段单向推进（回退事件被忽略）；漏斗五段计数互不污染。
-//   续跑闭环：TouchFlowInstanceByOneID 对无 running 行 0 行即正常。
+//
+//	A24/M0263：pending_human 按会话精确回填——只动 conversation_id 匹配且 pending_human=0 的
+//	  归因行（重复回填不翻已置位标记、不误伤他人会话的行）；resolve 只动会话行。
+//	A20：线索阶段单向推进（回退事件被忽略）；漏斗五段计数互不污染。
+//	续跑闭环：TouchFlowInstanceByOneID 对无 running 行 0 行即正常。
+//
 // ================================================
 package store
 

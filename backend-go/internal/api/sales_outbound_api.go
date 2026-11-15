@@ -277,7 +277,8 @@ func smtpLive() bool {
 // sendOne 外发的**唯一出口**（A17）：合规四件套 → 先占位 → SMTP → 终态回写。
 // 返回 (result, reason)：result ∈ sent / failed / skipped。
 // ★ 顺序硬口径：占位（ux_outbound_once）成功后才允许碰 SMTP；合规不过也必须占位（skip 终态），
-//   保证该 (客户,节点) 不会被下一轮重复尝试。
+//
+//	保证该 (客户,节点) 不会被下一轮重复尝试。
 func (s *Server) sendOne(ctx context.Context, tid int64, email, nodeKey, subject, body string) (string, string) {
 	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" || nodeKey == "" {

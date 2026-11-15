@@ -30,7 +30,7 @@ func TestKN7BudgetPositiveAndEnforced(t *testing.T) {
 		BaseURL:     "http://127.0.0.1:1",
 		ServiceRead: false, // 影子期：不可达应回落直读
 		HTTPClient:  &http.Client{Transport: knHangingTransport{}, Timeout: RequestBudget},
-		DirectRead: func(context.Context, string, any) (any, error) { return nil, nil },
+		DirectRead:  func(context.Context, string, any) (any, error) { return nil, nil },
 	}
 	start := time.Now()
 	o, err := c.Call(context.Background(), contract.PathI18nList,

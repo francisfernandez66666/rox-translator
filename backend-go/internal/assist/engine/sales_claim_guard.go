@@ -73,6 +73,7 @@ var salesPageSegs = map[string]bool{
 //     命中整词表被判成销售轮 ⇒ 守卫把老链路改写成回避话术（误伤付费主链）。
 //   - 旧整词表还含 "demo"/"shop"/"product"/"sales" 等词，租户短码恰好叫这些的
 //     /p/demo/x 会「按短码抽奖」被判销售页、叫 acme 的反而漏判——形状按首段锚定，与短码取值无关。
+//
 // 形态 ^/p/[^/]+/[^/]+$：首段为 p，后两段非空且不含 '/'（恰好两段短码）。
 var salesProductPageShape = regexp.MustCompile(`^/p/[^/]+/[^/]+$`)
 

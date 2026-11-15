@@ -24,6 +24,7 @@ const WAIT_MINUTES: Record<WaitTier, number> = { text: 1, document: 3, image: 6,
 
 /** ticketWaitTier 按件名判档：无扩展名一律按文本单（最保守的那一档）。
     参数 name: 工单标题——文件工单的标题就是上传件原名（含中文与空格都可能）。 */
+// 把工单等待时长映射成展示档位；只影响文案不改变真实排队顺序，边界值向上归档。
 export function ticketWaitTier(name?: string): WaitTier {
   const raw = String(name || '').trim().toLowerCase()
   if (!raw) return 'text'

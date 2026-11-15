@@ -74,6 +74,7 @@ export function turnstileLoadState(): TurnstileLoadState {
 
 /** retryTurnstile 用户点「重试」的唯一入口：摘掉失败那份脚本、重新起表（不整页刷新）。
     这是 D-02 的出路那一半——旧形态没有出路，红字永远指着一个永远不会自己出现的框。 */
+// 重试人机验证脚本装载；只在通道处于失败态时生效，成功态重复调用不重新插入脚本。
 export function retryTurnstile(): void {
   channel.retry()
 }
@@ -92,6 +93,7 @@ export function loadTurnstile(
 
 /** pickTurnstileSize 尺寸选档的**唯一实现**：容器放不下 normal 或视口过窄 → compact。
     判据按容器（不是按视口），理由同 AGENTS §一·5「宽度不由视口决定的自适应件不许用 vw」那一族。 */
+// 按容器宽度与视口宽度挑验证组件尺寸；两者任一过窄即用 compact，避免 320 档横向溢出。
 export function pickTurnstileSize(el?: HTMLElement | null): TurnstileSize {
   const w = el?.clientWidth ?? 0
   const vw = typeof window !== 'undefined' ? window.innerWidth : 0
@@ -136,6 +138,7 @@ export function reexecTurnstile(id: string | number | null): void {
 
 /** removeTurnstile 销毁组件（跨档重挂用）：remove 后容器清空，token 一并作废。
     与 reexec 的区别是"换尺寸"而非"换令牌"，因此**不许**在这里顺带 execute。 */
+// 销毁指定验证组件实例；组件已卸载或 SDK 缺席时静默跳过，销毁失败不阻断重挂。
 export function removeTurnstile(id: string | number | null): void {
   const ts = typeof window !== 'undefined' ? window.turnstile : undefined
   if (!ts || id === null) return

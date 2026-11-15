@@ -7,7 +7,9 @@
 //   - 日志走 internal/observability（JSON + trace_id），与 assist-server 同口径。
 //
 // ⚠️ 本进程**不**持有主库连接：DB_DSN 只在 LoadConfig 里作为「断言比较的字符串」读入，
-//    不打开、不查询。主服务那侧的读写一律经 internal/knowledge/client。
+//
+//	不打开、不查询。主服务那侧的读写一律经 internal/knowledge/client。
+//
 // ================================================
 package main
 
@@ -17,8 +19,8 @@ import (
 	"os"
 
 	"translator/internal/knowledge"
-	"translator/internal/knowledge/contract"
 	kapi "translator/internal/knowledge/api"
+	"translator/internal/knowledge/contract"
 	knowledgeStore "translator/internal/knowledge/store"
 	"translator/internal/observability"
 

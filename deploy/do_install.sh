@@ -52,7 +52,7 @@ else
   if [ -n "$UNIT_TOK" ]; then
     KNOWLEDGE_TOKEN="$UNIT_TOK"
     printf 'KNOWLEDGE_TOKEN=%s\n' "$KNOWLEDGE_TOKEN" >> "$SECRETS"
-    echo "REUSE KNOWLEDGE_TOKEN from $UNIT_MAIN，已回写 secrets.env"
+    echo "REUSE KNOWLEDGE_TOKEN from ${UNIT_MAIN}，已回写 secrets.env"
   else
     KNOWLEDGE_TOKEN=$(openssl rand -hex 32)
     sed -i.bak '/^KNOWLEDGE_TOKEN=/d' "$SECRETS"

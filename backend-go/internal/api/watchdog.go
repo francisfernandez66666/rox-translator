@@ -259,6 +259,29 @@ func (s *Server) startWatchdog() {
 			}
 		}()
 	}
+	// ★ 四期 W4 收口（2026-11-15）：outbox relay 槽（每 5 秒拨一轮，多实例单跑者化）。
+	//   旧形态：relay.go 文件头声称「由 watchdog 槽 runExclusive('outbox-relay', 5s, …) 拨」，
+	//   而这个槽根本不存在 ⇒ event_outbox 恒空、E1–E6 全绿但产品上零事件（审计 §3.4）。
+	//   ★ 关着时一行都不碰：RelayOnce 在 enabled=false 时立即返回（E6 只积压不丢）。
+	//   ★ 指针每轮现取：本槽在 NewServer 内启动，组合根随后才 InstallOutboxRelay，
+	//     启动时捕获 nil 会让这条腿永久空转——这是「有槽没拨」最容易复发的形态。
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			s.runExclusive("outbox-relay", 30*time.Second, func() {
+				relay := CurrentOutboxRelay()
+				if relay == nil {
+					return
+				}
+				relay.SetEnabled(s.outboxRelaySwitch())
+				if err := relay.RelayOnce(context.Background()); err != nil {
+					observability.Warn(context.Background(), "outbox-relay 本轮失败（事件原地积压，下轮重试）",
+						"error", err.Error())
+				}
+			})
+		}
+	}()
 	// 泄漏日志（每日一轮：RSS/堆/goroutine 采样 + heap 快照留存；启动即采一次）
 	// 注：内存采样反映本实例进程，各实例独立执行是正确语义，不加分布式锁。
 	go func() {

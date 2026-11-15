@@ -18,6 +18,7 @@
 //  2. **装载失败不吞**：DB 读错就是读错，绝不按「本轮无样本」静默跳过——
 //     否则库故障会伪装成「今天没挖到东西」；
 //  3. **只有 draft 态产物**：出稿统一走 DraftTemplates，job 不认 approve/auto-enable。
+//
 // ================================================
 package talkmining
 
@@ -54,10 +55,10 @@ type Job struct {
 
 // JobStat 一轮作业的排障读数（过程量不许静默吞：装载几条、成簇几条、出稿几条）。
 type JobStat struct {
-	Loaded   int        // 装载到的样本条数
-	Clusters int        // Mine 产出的候选簇条数
-	Draft    DraftStat  // DraftTemplates 的出稿账目
-	Skipped  bool       // 归纳函数未注入导致整轮跳过（离线增强能力缺它主链零影响）
+	Loaded   int       // 装载到的样本条数
+	Clusters int       // Mine 产出的候选簇条数
+	Draft    DraftStat // DraftTemplates 的出稿账目
+	Skipped  bool      // 归纳函数未注入导致整轮跳过（离线增强能力缺它主链零影响）
 }
 
 // RunOnce 单轮：装载 → 聚类 → 出稿。任一环失败即返回错误，绝不把故障写成空账。

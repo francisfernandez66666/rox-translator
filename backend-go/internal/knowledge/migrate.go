@@ -7,6 +7,7 @@
 //   - 双向指纹：行数 + 每表「COALESCE 拼接哈希」（全量列，独立于搬迁列清单）。
 //     指纹不等 ⇒ 返回 error，绝不静默宣称成功。
 //   - 列清单唯一真值＝ contract.TableColumns；少搬一列会让目标库该列落默认值 ⇒ 指纹不等 ⇒ 红。
+//
 // ================================================
 package knowledge
 
@@ -183,7 +184,8 @@ func fingerprintBoth(src *sql.DB, srcD db.Dialect, dst *sql.DB, dstD db.Dialect)
 
 // fingerprint 单表指纹：行数 + 「COALESCE 拼接哈希」。
 // ★ 用 contract 全量列清单（独立于搬迁时的列切片），按主键排序逐行拼接，
-//   nil 按 "" 处理（COALESCE 语义），不依赖 SQL 的 ||（PG 下 int||text 会报类型错）。
+//
+//	nil 按 "" 处理（COALESCE 语义），不依赖 SQL 的 ||（PG 下 int||text 会报类型错）。
 func fingerprint(conn *sql.DB, d db.Dialect, table string) (int, string, error) {
 	cols := contract.ColumnsFor(table)
 	q := "SELECT " + strings.Join(cols, ",") + " FROM " + table + " ORDER BY " + contract.PrimaryKey(table)

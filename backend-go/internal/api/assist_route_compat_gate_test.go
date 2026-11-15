@@ -2,7 +2,7 @@
 // 四期 §4.5.3 **A3**：/assist-api 四端点路由/方法/错误码不变。
 // 线上挂件是缓存包，路由不能删（§4.5.2 步骤 4）。
 //
-// 反证（M0300）：删/改一个白名单项 ⇒ 本地白名单与旧代理白名单不再逐项相等 ⇒ 红。
+// 反证（M0336）：删/改一个白名单项 ⇒ 本地白名单与旧代理白名单不再逐项相等 ⇒ 红。
 // ================================================
 package api
 
@@ -39,7 +39,7 @@ func a3Read(t *testing.T, name string) string {
 func TestA3AssistRouteCompat(t *testing.T) {
 	// ① 本地白名单与旧代理白名单**运行时逐项相等**（不是各写一份清单）。
 	if !a3PathsEqual(assistOpenPaths, localAssistOpenPaths) {
-		t.Fatalf("A3 本地白名单与 /assist-api 旧白名单不等值：old=%v local=%v（M0300 删一项必红）",
+		t.Fatalf("A3 本地白名单与 /assist-api 旧白名单不等值：old=%v local=%v（M0336 删一项必红）",
 			assistOpenPaths, localAssistOpenPaths)
 	}
 	if len(localAssistOpenPaths) != 4 {
@@ -54,15 +54,20 @@ func TestA3AssistRouteCompat(t *testing.T) {
 		}
 	}
 
-	// ② /assist-api 前缀与路由登记仍在（兼容层不许被摘）。
+	// ② /assist-api 前缀仍在；路由**必须**指向本地分发器（A3 收敛判据）。
+	//    ★ 2026-11-15 收口：旧形态写成「旧 handler 或 新 handler 任一在即绿」，
+	//      「没收敛」与「收敛了」同形 ⇒ 结构性测不到 W5 有没有发生（审计 §3.3/§4.6）。
+	//      现在必须是 handleAssistOpen，并另加一条负向锁钉住旧代理不得再被登记。
 	proxySrc := a3Read(t, "assist_open_proxy.go")
 	if !strings.Contains(proxySrc, `const assistOpenPrefix = "/assist-api"`) {
 		t.Fatal("A3 /assist-api 前缀常量被改：线上缓存包会全量落 SPA 兜底")
 	}
 	serverSrc := a3Read(t, "server.go")
-	if !strings.Contains(serverSrc, `s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpenProxy)`) &&
-		!strings.Contains(serverSrc, `s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpen)`) {
-		t.Fatal("A3 /assist-api/* 的路由登记不在位（或指向了未知 handler）：兼容层被删")
+	if !strings.Contains(serverSrc, `s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpen)`) {
+		t.Fatal("A3 收敛未完成：/assist-api/* 没有指向本地分发器 handleAssistOpen")
+	}
+	if strings.Contains(serverSrc, `s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpenProxy)`) {
+		t.Fatal("A3 负向锁：旧跨进程代理仍被路由登记（W5 收敛被回退）")
 	}
 
 	// ③ 本地转调仍做白名单/方法/限长/剥前缀四道守卫（错误码不变的形态保证）。

@@ -4,6 +4,7 @@
 //   - 所有 SELECT 硬带 tenant_id=?（KN3 fail-closed）；列名取自 contract 固定清单、
 //     表名走白名单、过滤值一律参数化 ⇒ 无 SQL 注入面。
 //   - 返回 []map[string]any：端点据此组装契约响应，零 LLM、零跨域计算。
+//
 // ================================================
 package store
 
@@ -75,8 +76,9 @@ func normalizeScalar(v interface{}) interface{} {
 
 // QueryByCodes 全局按两段短码解析产品（tenant_code + page_code 全局唯一，无需 tenant_id）。
 // ★ 这是 KN3 租户作用域的**唯一显式例外**：两段短码本身即全局唯一标识，与主库
-//   GetProductByCodes 的 `WHERE tenant_code=? AND page_code=?`（不带 tenant_id）同形，
-//   跨租户拼接取不到任何行，不会泄露他租户存在性。其余读口一律走 QueryScoped 硬带 tenant_id。
+//
+//	GetProductByCodes 的 `WHERE tenant_code=? AND page_code=?`（不带 tenant_id）同形，
+//	跨租户拼接取不到任何行，不会泄露他租户存在性。其余读口一律走 QueryScoped 硬带 tenant_id。
 func QueryByCodes(conn *sql.DB, d db.Dialect, table string, tc, pc string) ([]map[string]any, error) {
 	if !IsKnowledgeTable(table) {
 		return nil, fmt.Errorf("knowledge: 非知识表 %q", table)

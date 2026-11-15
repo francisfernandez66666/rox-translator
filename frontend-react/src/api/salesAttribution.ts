@@ -56,10 +56,12 @@ export interface SalesPackStatRow {
   computed_at: string
 }
 
+// 归因回复读口的返回体；只含当前租户可见的归因行，产品维度用于回答「哪条产品带来询盘」。
 export interface SalesAttributionRepliesResp extends AdminResp {
   rows?: SalesAttributionRow[]
 }
 
+// 销售事实包统计返回体；计数是管理台口径（含草稿），不可直接当对外可注入事实数。
 export interface SalesPackStatsResp extends AdminResp {
   /** 未物化时为 null（不是错误）：聚合现算留给写侧，读口只取快照 */
   stats?: SalesPackStatRow | null

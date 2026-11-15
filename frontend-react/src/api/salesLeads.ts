@@ -24,6 +24,7 @@ export interface SalesLeadRow {
   updated_at: string
 }
 
+// 线索列表返回体；分页游标由后端给，前端不得用本地数组长度推总数。
 export interface SalesLeadsResp extends AdminResp {
   rows?: SalesLeadRow[]
 }
@@ -47,10 +48,12 @@ export interface HandoffSessionRow {
   created_at: string
 }
 
+// 转人工交接返回体；conversation_id 即 handoff_sessions 行 id，归因回填按它精确匹配会话。
 export interface SalesHandoffResp extends AdminResp {
   rows?: HandoffSessionRow[]
 }
 
+// 列出转人工记录；只读取当前租户的交接行，供销售台按会话号定位线索。
 export async function salesHandoffList(pending: boolean, limit = 100): Promise<SalesHandoffResp> {
   return bizResp(() => request(`/api/admin/sales/handoff?pending=${pending ? 1 : 0}&limit=${limit}`, { headers: authHeaders() }))
 }
@@ -69,6 +72,7 @@ export interface SalesFunnelResp extends AdminResp {
   counts?: Record<string, number>
 }
 
+// 漏斗五段计数；含待人工段，平台漏斗零改动，数值为空时段位仍须保留键。
 export async function salesFunnelCounts(): Promise<SalesFunnelResp> {
   return bizResp(() => request('/api/admin/sales/funnel', { headers: authHeaders() }))
 }
@@ -84,6 +88,7 @@ export interface SalesInboxEventRow {
   processed_at: string
 }
 
+// 收件箱列表返回体；items 为空是合法空态，探针不得把空数组当服务不可用。
 export interface SalesInboxListResp extends AdminResp {
   rows?: SalesInboxEventRow[]
 }

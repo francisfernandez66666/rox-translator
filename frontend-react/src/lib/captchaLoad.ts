@@ -17,6 +17,7 @@ export type CaptchaLoadState = 'loading' | 'ready' | 'unavailable'
 
 /** LoadChannelCfg 通道入参：脚本地址＋注入标记＋"API 到手"判据，三者共同定义一家提供方。
     T＝那家提供方的全局 API 形状（各家自己声明，本文件不认识任何具体 API）。 */
+// 人机验证脚本装载通道配置；决定用哪个 CDN 与超时档，缺失时 fail-closed 不放行登录。
 export interface LoadChannelCfg<T> {
   url: string // 完整脚本 src（含 query）
   injectedFlag: string // window 上的"已注入"标记名（全局只注入一份的判据）
@@ -44,6 +45,7 @@ export const EXTEND_MS = 2_000
 
 /** loadDeadlineMs 按链路给截止：`navigator.connection` 报慢／省流量 → 30s，否则 12s。
     读不到 connection（Safari／旧内核）按默认档，不许因"读不到"就抬到上限。 */
+// 装载截止毫秒；超过即判超时并回落可行动文案，绝不无限等待第三方脚本。
 export function loadDeadlineMs(): number {
   const c = (navigator as unknown as {
     connection?: { effectiveType?: string; saveData?: boolean }
@@ -56,6 +58,7 @@ export function loadDeadlineMs(): number {
 
 /** createLoadChannel 建一家提供方的装载通道：注入一次、轮询到点、放弃出声、重试重拨。
     内部状态只活在闭包里（不落全局变量），所以两家提供方各建一条互不影响。 */
+// 创建一次性验证脚本装载通道；并发调用共享同一轮装载，避免重复插入 script 标签。
 export function createLoadChannel<T>(cfg: LoadChannelCfg<T>): LoadChannel<T> {
   const urlRoot = cfg.url.split('?')[0] // Resource Timing 按去掉 query 的地址前缀认这一跳
   let loadState: CaptchaLoadState = 'loading'

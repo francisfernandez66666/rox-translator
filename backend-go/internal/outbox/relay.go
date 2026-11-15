@@ -1,6 +1,10 @@
 // ============ relay.go · 职责说明 ============
 // W4 relay：由 watchdog 槽 runExclusive('outbox-relay', 5s, ...) 每 5 秒拨一轮（周期与多实例互斥
 // 归组合根/watchdog，本包不启协程、不注册全局单例）。
+// ★ 2026-11-15 收口：该槽已真实落地（internal/api/watchdog.go），relay/consumer 由
+//
+//	cmd/server 经 api.InstallOutboxRelay 装配。此前这行注释声称的装配**并不存在**，
+//	是审计 §3.4「闸门绿着而产品那条腿不存在」的样本；现在注释与事实一致。
 //
 // ★ 硬口径 4「relay 只做投递、不做业务」：RelayOnce 只做三件传输动作——
 //

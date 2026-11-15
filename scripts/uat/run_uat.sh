@@ -420,6 +420,18 @@ if [ -n "$PW_SKIP_LIST" ]; then
   log "⏳ 前端 E2E 跳过 ${PW_SKIP_CNT} 条（点名＋各自理由）：${PW_SKIP_LIST}"
 fi
 
+# ---------- 6.95 四期收口批判据自证（★ 2026-11-15：今天新接的五条腿不许只在部署后才被测到） ----------
+# 只跑 --selftest：主 UAT 起的是本地 mock 后端，没有独立知识服务 :8791，
+# 真跑 T3 会把「本地没有这个依赖」误判成产品缺陷。现网 T1–T7 由部署后单独跑完整脚本。
+CLOSEOUT_FAIL=0
+CLOSEOUT_OUT=$(bash scripts/uat/four_phase_closeout_uat.sh --selftest 2>&1)
+if printf '%s' "$CLOSEOUT_OUT" | grep -q 'FOUR_PHASE_UAT_SELFTEST_ALL_OK=1'; then
+  log "四期收口判据自证：6/6 绿（health assist 段／契约 v2／正反反证）"
+else
+  log "四期收口判据自证 FAIL：$(printf '%s' "$CLOSEOUT_OUT" | tail -3 | tr '\n' ' ')"
+  CLOSEOUT_FAIL=1
+fi
+
 # ---------- 7. 汇总 ----------
 DUR=$(( $(date +%s) - T0 ))
 log "=============================="
@@ -428,11 +440,12 @@ log "后端 API UAT（A/B 主链路）：PASS=${API_PASS:-0} FAIL=${API_FAIL:-0}
 log "后端交易专项 UAT（T 套件）：PASS=${TXN_PASS:-0} FAIL=${TXN_FAIL:-0}"
 log "前端 E2E UAT：exit=${PW_EXIT:-?}（FAIL=${PW_FAIL:-1}，跳过=${PW_SKIP_CNT:-?}）；明细见 pixel_uat.log（截图：frontend-react/artifacts/）"
 log "产品对外页 e2e 夹具：$([ "$PROD_FIXTURE_OK" = "1" ] && echo '就绪（三条 PRODUCT_* 判据真跑）' || echo '未就绪（那三条今天没测到 ⇒ 计入闸门，不等于通过）')"
+log "四期收口判据自证：CLOSEOUT_FAIL=${CLOSEOUT_FAIL:-?}（0＝判据自证全绿；现网 T1–T7 另跑 four_phase_closeout_uat.sh）"
 # ★ 夹具未就绪＝那三条判据整段跳过。"跳过"在这条链上不是中性读数：
 #   它是本批专门要堵的"有代码无调度"（AGENTS §三 第二层），所以抬进闸门而不是只留一行 WARN。
 [ "${PROD_FIXTURE_OK:-0}" != "1" ] && PW_FAIL=1
 log "日志目录：$WORK"
 log "=============================="
 [ "${KEEP:-0}" != "1" ] && { kill $SERVER_PID $MOCK_PID $CHAIN_PID $ASSIST_PID 2>/dev/null || true; }
-[ "${API_FAIL:-1}${TXN_FAIL:-1}${PW_FAIL:-1}" = "000" ] || exit 1
+[ "${API_FAIL:-1}${TXN_FAIL:-1}${PW_FAIL:-1}${CLOSEOUT_FAIL:-1}" = "0000" ] || exit 1
 exit 0

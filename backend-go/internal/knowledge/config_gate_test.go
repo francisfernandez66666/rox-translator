@@ -4,7 +4,8 @@ import "testing"
 
 // KN12 双 DSN 必须不等：空 / 相等 / 归一化后相等一律拒；真正不等才放行。
 // ★ 「相等必 err」与「不等必 nil」两条腿都在：
-//   把断言改成 `if false`（M0315）⇒ 相等档红；改成永不放过 ⇒ 不等档红。
+//
+//	把断言改成 `if false`（M0315）⇒ 相等档红；改成永不放过 ⇒ 不等档红。
 func TestKN12AssertDistinct(t *testing.T) {
 	cases := []struct {
 		name    string

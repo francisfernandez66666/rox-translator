@@ -5,8 +5,10 @@
 // 任何一处漏列都会让指纹不等 ⇒ 迁移返回 error（KN8/KN10 的判别力来源）。
 //
 // ★ 列顺序＝主键优先；products.id 是 TEXT（显式 id），其余三表 id 是自增整型。
-//   lang/priority（product_facts）与 target_langs（products）原本是后补列，
-//   知识侧 CREATE TABLE 直接带，旧库由 db.EnsureColumns 幂等补齐（§4.3.3 第 4 条）。
+//
+//	lang/priority（product_facts）与 target_langs（products）原本是后补列，
+//	知识侧 CREATE TABLE 直接带，旧库由 db.EnsureColumns 幂等补齐（§4.3.3 第 4 条）。
+//
 // ================================================
 package contract
 

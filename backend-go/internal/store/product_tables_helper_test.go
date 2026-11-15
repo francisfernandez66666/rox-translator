@@ -20,11 +20,24 @@ import (
 
 // migrateProductTablesTest 在测试库重建产品四表（products / product_facts /
 // product_assets / product_fact_i18n）。参数：t=测试句柄，s=测试 Store；失败直接 t.Fatalf。
+//
+// ★ 2026-11-15 收口：生产侧 store.New() 在影子期（KNOWLEDGE_SERVICE_READ=off）已经会
+// 建好四表（internal/store/product_fallback.go），所以这里的 CREATE 已是 no-op。
+// 本助手仍然保留并**先 DROP 再建**，理由是它建的是一份**故意缺 lang/priority 的旧形态**——
+// 那正是 ProductFactI18nMigrate / EnsureColumns「存量库补列」这条腿要测的现场。
+// 不先 DROP，那条腿就再也走不到（IF NOT EXISTS 让新建表直接带着两列，补列永远是空转）。
+// ⚠️ 生产 DDL 的**唯一事实源**是 internal/knowledge/schema，本文件只服务测试现场，别往里加新列。
 func migrateProductTablesTest(t *testing.T, s *Store) {
 	t.Helper()
 	// ★ 调用方已用文件库（多连接共享同一文件，无 :memory: 分裂问题），故无需
 	//   SetMaxOpenConns(1)；且该调用会令 New() 迁移里的嵌套查询死锁，故不设。
 	d := db.CurrentDialect()
+	// 先清掉生产兜底已建好的完整形态，回到「存量旧库」现场。
+	for _, tbl := range productTableNames {
+		if err := db.ExecDDL(s.db, d, "DROP TABLE IF EXISTS "+tbl); err != nil {
+			t.Fatalf("测试库重置产品表 %s 失败: %v", tbl, err)
+		}
+	}
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS products (
 			id TEXT PRIMARY KEY,

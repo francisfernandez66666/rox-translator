@@ -11,8 +11,8 @@
 //
 // 为什么装配点用包级 atomic.Pointer 而不是 Server 结构体字段：
 //
-//	W5 硬纪律禁止改 server.go（组合根文件），所以本文件提供 InstallAssistLocal
-//	供组合根在 NewServer 之后一次装配（接线见 /tmp/w5_wiring.md）。生产单实例；
+//	组合根在 NewServer 之后一次装配（cmd/server/assist_local_wiring.go 的
+//	installAssistLocal），server.go 不新增字段。生产单实例；
 //	测试可用 serveAssistOpenLocal 直接传 la，不依赖这个单例。
 //
 // parity（A1）：本地链路把事实集/画像直接注入 r.Context()，注入条件与旧代理
@@ -48,7 +48,7 @@ type localAssist struct {
 // 并发请求读取之间无数据竞争（-race 口径）。
 var assistLocalPtr atomic.Pointer[localAssist]
 
-// InstallAssistLocal 组合根唯一装配入口（接线见 /tmp/w5_wiring.md）。
+// InstallAssistLocal 组合根唯一装配入口（cmd/server/assist_local_wiring.go 调用）。
 // eng 与 h 必须来自同一个 *assist/store.DB（sessKey／会话数据同源），否则
 // greet 下发的 tok 与 history 的校验会对不上——这是本地链路唯一不能错的一处。
 func InstallAssistLocal(eng *assistengine.Engine, h http.Handler) {
@@ -71,7 +71,7 @@ func AssistLocalEngine() *assistengine.Engine {
 func currentAssistLocal() *localAssist { return assistLocalPtr.Load() }
 
 // localAssistOpenPaths 本地链路的访客端点白名单（与 assistOpenPaths 逐项同形）。
-// A3 锁以运行时 map 比对钉住它与旧白名单一致；删一项即判红（M0300）。
+// A3 锁以运行时 map 比对钉住它与旧白名单一致；删一项即判红（M0336）。
 var localAssistOpenPaths = map[string]bool{
 	"/api/assist/greeting": true,
 	"/api/assist/chat":     true,
@@ -87,6 +87,7 @@ type assistLocalResponseCapture struct {
 	buf bytes.Buffer
 }
 
+// Write 把字节同时留给归因回写缓冲区与真实 ResponseWriter；留痕不改变访客拿到的字节，也不改状态码。
 func (c *assistLocalResponseCapture) Write(b []byte) (int, error) {
 	c.buf.Write(b) // 留痕；bytes.Buffer.Write 永不返回错误，不影响访客字节
 	return c.ResponseWriter.Write(b)

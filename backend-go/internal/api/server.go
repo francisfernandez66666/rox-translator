@@ -266,7 +266,9 @@ func (s *Server) routes() {
 	// ★ 2026-09-22：C 端挂件访客端点的同源转发（/assist-api/*）。此前该前缀只存在于 vite dev
 	//   proxy 与生产 Caddy，「主服务直出 dist」的形态（单二进制本地跑、run_uat 发布闸门）下
 	//   挂件全部落进 SPA 兜底 → 助手永远「联系不上」，链路根本没被验过。白名单见 assist_open_proxy.go。
-	s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpenProxy)
+	// ★ 四期 W5 收口：/assist-api/* 改指本地分发器（内部按 ASSIST_LINK / 装配状态回落旧代理）。
+	//   旧代码一字未删，回滚只需 ASSIST_LINK=remote；A3 负向锁钉住「旧代理不得再被路由登记」。
+	s.mux.HandleFunc(assistOpenPrefix+"/", s.handleAssistOpen)
 	// 翻译核心（聊天/文件/下载/语言/KB 统计）
 	s.routesTranslate()
 	// ★ SaaS 租户管理（管理后台）
@@ -1103,6 +1105,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		//   这是「知识服务挂了主服务还全绿」那类事故的探照灯——主服务健康面必须看得见这个依赖。
 		//   同 #42 口径：只出状态词，绝不暴露 token/主机/路径。
 		"knowledge": s.knowledgeHealth(),
+		// ★ 四期 W5（§4.5.5 验收第 3 条）：assist 并进程的**唯一现网读数**。
+		//   mode=local/proxy/off + ready 布尔；没有这一段，收敛成功与否在部署机上不可证。
+		//   同族口径：只出状态词，绝不出 assist 库路径 / token / 端点清单。
+		"assist": s.assistHealth(),
 		// ★ #40（2026-09-21）：分布式能力口径——redis=跨实例聚合可用；
 		//   in-process=未配 REDIS_ADDR（仅单副本安全）；unreachable=配了但探活失败（逐次降级）。
 		//   监控/巡检可直接对该字段做告警，不再依赖翻启动日志；

@@ -286,6 +286,7 @@ func (s *Server) hWrite(w http.ResponseWriter, r *http.Request, path string) {
 //     若 body 已带显式 id 则改按 id 冲突——两者都安全，不重复行。
 //   - 物料：带 id ⇒ ON CONFLICT(id)（MarkAssetReview 改审核态）；不带 id ⇒ 纯插入新版本行
 //     （PutAsset 每次落新行，DB 自增主键），无冲突目标。
+//
 // 返回受影响行的主键 id（事实/物料自增主键；产品为 TEXT 主键，调用方已知，恒返 0）。
 func (s *Server) upsertRow(table string, tid int64, m map[string]any) (int64, error) {
 	pk := contract.PrimaryKey(table)

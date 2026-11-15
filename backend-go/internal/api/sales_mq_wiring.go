@@ -12,6 +12,7 @@
 //     不许绕过幂等抢账直接干活。
 //  3. **SweepOnce 的发布侧同点装配**：state_machine 的 requeue 事件经
 //     mq.NewFlowDrivePublisher 投回本总线（同进程 fan-out 到收件箱消费者）。
+//
 // ================================================
 package api
 

@@ -392,6 +392,19 @@ func main() {
 	// 创建 HTTP 服务
 	srv := api.NewServer(cfg, eng, db, distDir, st, ts)
 
+	// ★ 四期 W4 收口（2026-11-15）：把 outbox relay + consumer 装进组合根。
+	//   NewRelay/NewConsumer 此前只在测试里出现（审计 §3.4「买了引擎没装到车上」）。
+	//   初始恒关，watchdog 的 "outbox-relay" 槽每轮按 OUTBOX_RELAY / system_config 拨开关。
+	//   装配放在 NewServer 之后没问题：槽每轮现取指针，不在启动时捕获。
+	if st != nil {
+		api.InstallOutboxRelay(st.DB())
+	}
+
+	// ★ 四期 W5 收口（2026-11-15）：assist 接待引擎并进主服务进程。
+	//   InstallAssistLocal 此前零调用者（审计 §3.3「并进程没有发生」）。
+	//   装配失败只 WARN：/assist-api/* 由 handleAssistOpen 回落旧代理，主站照常启动。
+	installAssistLocal()
+
 	// ★ 四期 W3 KN9/KN11：装配知识服务客户端（:8791）。
 	//   LoadConfig 缺省只补 addr/baseURL/driver，绝不补 DSN；未配 KNOWLEDGE_* 时客户端存在但不可达，
 	//   健康面据此报 unavailable（真实可见），不会因「没配就假装绿」掩盖依赖缺失。

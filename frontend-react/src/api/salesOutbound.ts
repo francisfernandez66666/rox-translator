@@ -54,6 +54,7 @@ export interface OutboundSendsResp extends AdminResp {
   rows?: OutboundSendRow[]
 }
 
+// 外联发送记录只读列表；outbound 按裁定恒关，本读口只用于审计留痕，不触发任何发信。
 export async function outboundSendsList(limit = 100): Promise<OutboundSendsResp> {
   return bizResp(() => request(`/api/admin/sales/outbound/sends?limit=${limit}`, { headers: authHeaders() }))
 }

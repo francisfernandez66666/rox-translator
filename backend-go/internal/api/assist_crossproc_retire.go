@@ -6,8 +6,8 @@
 // 它们既是回滚档，也是 A1 逐字等值的对照面。本文件只做三件事：
 //  1. 让本地链路成为默认（assistLinkIsLocal），显式 ASSIST_LINK=remote 或本地装配
 //     未就绪时才回落旧代理 handleAssistOpenProxy；
-//  2. 提供 /assist-api/* 的唯一分发入口 handleAssistOpen（组合根把 routes() 里
-//     那一行改指向它，见 /tmp/w5_wiring.md）；
+//  2. 提供 /assist-api/* 的唯一分发入口 handleAssistOpen（server.go 的
+//     routes() 已改指向它）；
 //  3. 事实集直接 WithSalesFacts(ctx, sc) —— 跨进程的
 //     Encode→HMAC→Header.Set→回环验签→Decode 整段消失（localFactsContext）。
 //
@@ -40,7 +40,7 @@ func assistLinkIsLocal() bool {
 	return os.Getenv(assistLinkLocalEnv) != "remote"
 }
 
-// handleAssistOpen /assist-api/* 的唯一入口（组合根接线见 /tmp/w5_wiring.md）。
+// handleAssistOpen /assist-api/* 的唯一入口（server.go 已把路由登记改指向本函数）。
 // 本地为默认；remote 或未装配时回落旧代理 handleAssistOpenProxy（旧代码零改动）。
 func (s *Server) handleAssistOpen(w http.ResponseWriter, r *http.Request) {
 	if assistLinkIsLocal() {

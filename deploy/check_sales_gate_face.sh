@@ -145,6 +145,45 @@ sql_lit_ok() {
   esac
 }
 
+# ---- --selftest（方案 §6.2）：纯本地，不连生产库、不改任何配置、不写测试数据 ----
+# 用上面三个形状守卫喂「合法值必须放行 / 危险值必须拒绝」两组样本，双向自证判据不是空转；
+# 再加一条静态腿：D4 的「成对恢复」锚点必须还在（探针唯一的写动作不许被摘掉恢复那一半）。
+# 判绿只认末行 SALES_GATE_FACE_SELFTEST_OK=1。
+if [ "${1:-}" = "--selftest" ]; then
+  SF_FAIL=0
+  sf_expect() { # <说明> <期望 ok|no> <函数> [参数...]
+    local label="$1" want="$2"; shift 2
+    local got=ok
+    "$@" >/dev/null 2>&1 || got=no
+    if [ "${got}" != "${want}" ]; then
+      echo "BAD selftest ${label}（期望 ${want}，实得 ${got}）"
+      SF_FAIL=$((SF_FAIL + 1))
+    else
+      echo "OK  selftest ${label}"
+    fi
+  }
+  sf_expect 'is_num 放行 0'                ok is_num 0
+  sf_expect 'is_num 拒绝 NOT_SET'          no is_num NOT_SET
+  sf_expect 'is_num 拒绝负数'              no is_num -1
+  sf_expect 'code_shape_ok 放行 acme'      ok code_shape_ok acme
+  sf_expect 'code_shape_ok 拒绝分号'       no code_shape_ok 'a;b'
+  sf_expect 'sql_lit_ok 放行 UTC 时间戳'   ok sql_lit_ok '2026-11-15T00:00:00Z'
+  sf_expect 'sql_lit_ok 拒绝单引号'        no sql_lit_ok "a'b"
+  sf_expect 'sql_lit_ok 拒绝空串'          no sql_lit_ok ''
+  if ! grep -qF '成对恢复' "$0"; then
+    echo "BAD selftest D4 成对恢复锚点不在位（删掉恢复那一半会把灰度永久关掉）"
+    SF_FAIL=$((SF_FAIL + 1))
+  else
+    echo "OK  selftest D4 成对恢复锚点在位"
+  fi
+  if [ "${SF_FAIL}" -ne 0 ]; then
+    echo "SALES_GATE_FACE_SELFTEST_OK=0"
+    exit 1
+  fi
+  echo "SALES_GATE_FACE_SELFTEST_OK=1"
+  exit 0
+fi
+
 # face_curl <方法> <url> [curl 参数...]：一次请求，rc / http_code / body 落到 FACE_*。
 # 完整性判据（AGENTS §一·5 ⑤）：rc≠0 或 code=000 ＝「这一跳没走完」⇒ 换 --http1.1 再拨一次；
 # 4xx/5xx 与"内容不对"**一律不重拨**——摇绿灯就是把缺陷藏起来。

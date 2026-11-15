@@ -1,10 +1,12 @@
 // ============ sales_outbound_gate_test.go · 职责说明 ============
 // 三期 W5 外联域的静态锁（A16–A18，靶真实存在，反证可入 M0246–M0255）：
-//   A16：sendOne 是全仓唯一发送出口（定义恰 1）；SMTP 在位性判据先于占位。
-//   A17：先占位后发送——ClaimOutboundSend 必须排在 mailer().Send 之前（多实例只发一次的序）。
-//   A18：runOutboundSequenceOnce 的 kill-switch（outbound_enabled）先于任何 sendOne 调用，
-//        且不做 @startup 启动即跑（watchdog.go 里 runOutboundSequenceOnce 恰 1 次且只在 ticker 循环里）。
-//   A2/M0247：外联频限独立——本文件不出现 salesflow.DailyFreeLimit（那是 AI 免费额度）。
+//
+//	A16：sendOne 是全仓唯一发送出口（定义恰 1）；SMTP 在位性判据先于占位。
+//	A17：先占位后发送——ClaimOutboundSend 必须排在 mailer().Send 之前（多实例只发一次的序）。
+//	A18：runOutboundSequenceOnce 的 kill-switch（outbound_enabled）先于任何 sendOne 调用，
+//	     且不做 @startup 启动即跑（watchdog.go 里 runOutboundSequenceOnce 恰 1 次且只在 ticker 循环里）。
+//	A2/M0247：外联频限独立——本文件不出现 salesflow.DailyFreeLimit（那是 AI 免费额度）。
+//
 // ================================================
 package api
 
@@ -40,7 +42,8 @@ func TestSendOneSingleOutlet(t *testing.T) {
 
 // TestOutboundClaimBeforeSend A17：先占位再发送的顺序锁。
 // ★ 锚必须带 `rowID, first, err :=` 前缀形态——④ 分支（smtp_disabled 的 skip 占位）也有一次
-//   ClaimOutboundSend 调用且天然靠前，裸串判据会把「合规 skip 占位」当成主路径占位（M0248 首跑实证）。
+//
+//	ClaimOutboundSend 调用且天然靠前，裸串判据会把「合规 skip 占位」当成主路径占位（M0248 首跑实证）。
 func TestOutboundClaimBeforeSend(t *testing.T) {
 	src := readNonTestSource(t, "sales_outbound_api.go")
 	body := src[strings.Index(src, "func (s *Server) sendOne("):]

@@ -2,14 +2,15 @@
 // 三期 W3 销售角色设置 / 维护页的**管理面**（/api/admin/sales/roles*、/api/admin/sales/ops*）。
 //
 // ★ 与 sales_api.go 的分工（硬口径 3）：本文件**不碰** sales_api.go 四端点，
-//   而是把 A09 收紧实现为「store 侧鉴权真值 + 本文件导出可调用的鉴权助手 salesRoleGate」，
-//   由主 agent 在 sales_api.go 四端点函数体开头各补一行调用（函数签名与插入位置见报告）。
+//
+//	而是把 A09 收紧实现为「store 侧鉴权真值 + 本文件导出可调用的鉴权助手 salesRoleGate」，
+//	由主 agent 在 sales_api.go 四端点函数体开头各补一行调用（函数签名与插入位置见报告）。
 //
 // 鉴权口径：
-//  - 管理面四条路由一律 ≥3（salesConfigAdmin → requireTenantAdmin，唯一强闸入口，
-//    与 A07 的 4 层 BFS 同源，不新开第二套）；
-//  - salesRoleGate 的权限项从 store.PermForEndpoint(r.URL.Path) **现推**，api 侧零角色/权限字面，
-//    杜绝散落多份 if；未登记路径 fail-closed 拒绝。
+//   - 管理面四条路由一律 ≥3（salesConfigAdmin → requireTenantAdmin，唯一强闸入口，
+//     与 A07 的 4 层 BFS 同源，不新开第二套）；
+//   - salesRoleGate 的权限项从 store.PermForEndpoint(r.URL.Path) **现推**，api 侧零角色/权限字面，
+//     杜绝散落多份 if；未登记路径 fail-closed 拒绝。
 //
 // 错误一律 apierrors.New；日志只用 observability.Info / Warn；中文错误串原文已登记（见报告）。
 // ================================================
@@ -28,10 +29,11 @@ import (
 
 // salesOpsConfigKeys 维护页开关绑定的后端**真实配置键**全集（A12 双向比对的后端半边）。
 // ★ W5 收口校准（改方案留痕）：键名必须与各能力**实际读的键**逐字一致，不许两套名字——
-//   W4 守卫读 sales_facts_injection_enabled / sales_claim_guard_enabled（assist_sales_facts.go:99），
-//   W5 外联读 outbound_enabled（sales_outbound_api.go）；freq_cap_per_day 是数值型，
-//   走 /api/admin/sales/outbound/config 的专用白名单（本面只收 0/1 布尔键）。
-//   既有两把闸 sales_engine_enabled / billing_enforced 沿用二期。
+//
+//	W4 守卫读 sales_facts_injection_enabled / sales_claim_guard_enabled（assist_sales_facts.go:99），
+//	W5 外联读 outbound_enabled（sales_outbound_api.go）；freq_cap_per_day 是数值型，
+//	走 /api/admin/sales/outbound/config 的专用白名单（本面只收 0/1 布尔键）。
+//	既有两把闸 sales_engine_enabled / billing_enforced 沿用二期。
 var salesOpsConfigKeys = []string{
 	"sales_engine_enabled", "billing_enforced",
 	"sales_facts_injection_enabled", "sales_claim_guard_enabled",

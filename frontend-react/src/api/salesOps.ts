@@ -45,6 +45,7 @@ export const OPS_SWITCH_DEFS: OpsSwitchDef[] = [
 
 /** 各批次已到（W0–W6 全部落地）：两项都允许呈现 on */
 export const W5_ON_KEYS = ['sales_engine_enabled', 'billing_enforced', 'outbound_enabled']
+// W6 灰度开关白名单；键名必须与后端真实功能键逐字对齐，新增键要同步后端否则探针恒读不到。
 export const W6_ON_KEYS = ['sales_facts_injection_enabled', 'sales_claim_guard_enabled']
 
 /** 开关三态 */

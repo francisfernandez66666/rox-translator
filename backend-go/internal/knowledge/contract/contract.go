@@ -16,30 +16,43 @@ import (
 	"sort"
 )
 
-// ContractVersion 契约版本；W3-1 冻结，之后每次不兼容改动必须抬版本并过 KN1。
-const ContractVersion = "knowledge-contract-v1"
+// ContractVersion 契约版本；之后每次不兼容改动必须抬版本并过 KN1。
+//
+// ★ 2026-11-15 抬到 v2（四期收口批）。抬版本的理由是**行为不兼容**，不是「判据改了」：
+//
+//	W5 把 KB 四表搬进知识库之后，entries/query 从「恒 503 + reason=not_owned_until_w5」
+//	变成**真答 200**。同一个路径、同一个 DTO，返回码与语义都变了 ⇒ 老客户端按 503 分支写的
+//	降级逻辑会失效，必须让健康面把「对面是哪一代」判得出来（ClassifyHealth 就是那条判据）。
+//	两侧都从本常量取，抬一处即全动；deploy/check_knowledge_face.sh 的期望版本同批改。
+const ContractVersion = "knowledge-contract-v2"
 
-// ---- 端点路径（§4.3.4 十六行十七路径，含一条健康面）----
+// ---- 端点路径（§4.3.4：21 条，含一条健康面）----
 // client 的调用清单与 server 的路由清单都从 EndpointPaths 派生，不许另写字符串。
+// ★ 每次往这里加一条，都必须同批在 internal/knowledge/api 里有对应的 dispatch 分支 ——
+//
+//	Handler() 的循环会无条件注册路由，漏了 dispatch 就是「注册了但没人认」，请求 404
+//	而三方等值照旧全绿（KN1 的 TestKN1ServerRoutesCoverEveryEndpointPath 就是拦这个的）。
+//
+// 后补的两条：PathI18nByTenantLang（W1 热路径批量取译文）、PathEntriesQuery（W5 接管 KB 问答）。
 const (
 	PathProductResolve        = "/internal/knowledge/product/resolve"
 	PathProductResolveByCodes = "/internal/knowledge/product/resolve-by-codes"
 	PathProductsList          = "/internal/knowledge/products/list"
-	PathProductsGet    = "/internal/knowledge/products/get"
-	PathProductsUpsert = "/internal/knowledge/products/upsert"
-	PathProductsDelete = "/internal/knowledge/products/delete"
-	PathSitemapList    = "/internal/knowledge/sitemap/list"
-	PathCorpusPublic   = "/internal/knowledge/corpus/public"
-	PathAnswer         = "/internal/knowledge/answer"
-	PathFactsList      = "/internal/knowledge/facts/list"
-	PathFactsUpsert    = "/internal/knowledge/facts/upsert"
-	PathFactsAdmitted  = "/internal/knowledge/facts/admitted"
-	PathAssetsList     = "/internal/knowledge/assets/list"
-	PathAssetsUpsert   = "/internal/knowledge/assets/upsert"
-	PathAssetsGet      = "/internal/knowledge/assets/get"
-	PathReadiness      = "/internal/knowledge/readiness"
-	PathI18nList       = "/internal/knowledge/i18n/list"
-	PathI18nUpsert     = "/internal/knowledge/i18n/upsert"
+	PathProductsGet           = "/internal/knowledge/products/get"
+	PathProductsUpsert        = "/internal/knowledge/products/upsert"
+	PathProductsDelete        = "/internal/knowledge/products/delete"
+	PathSitemapList           = "/internal/knowledge/sitemap/list"
+	PathCorpusPublic          = "/internal/knowledge/corpus/public"
+	PathAnswer                = "/internal/knowledge/answer"
+	PathFactsList             = "/internal/knowledge/facts/list"
+	PathFactsUpsert           = "/internal/knowledge/facts/upsert"
+	PathFactsAdmitted         = "/internal/knowledge/facts/admitted"
+	PathAssetsList            = "/internal/knowledge/assets/list"
+	PathAssetsUpsert          = "/internal/knowledge/assets/upsert"
+	PathAssetsGet             = "/internal/knowledge/assets/get"
+	PathReadiness             = "/internal/knowledge/readiness"
+	PathI18nList              = "/internal/knowledge/i18n/list"
+	PathI18nUpsert            = "/internal/knowledge/i18n/upsert"
 	// PathI18nByTenantLang：按（tenant_id, lang）批量回该租户全部事实的译文（带 fact_id），
 	// 供主服务 W1 热路径「一次取齐、按 fact_id 匹配」（避免逐 fact 调 i18n/list 的 N 次往返）。
 	PathI18nByTenantLang = "/internal/knowledge/i18n/by_tenant_lang"
@@ -229,6 +242,8 @@ type I18nListRequest struct {
 	TenantID int64 `json:"tenant_id"`
 	FactID   int64 `json:"fact_id"`
 }
+
+// I18nListResponse 是 i18n/list 的返回体；Items 只含该事实已生成的译文，空数组表示无译文而非请求失败。
 type I18nListResponse struct {
 	Items []I18nItem `json:"items"`
 }
@@ -242,6 +257,8 @@ type I18nUpsertRequest struct {
 	SourceHash string `json:"source_hash"`
 	Engine     string `json:"engine"`
 }
+
+// I18nUpsertResponse 是 i18n/upsert 的确认体；OK 只表示译文已落库，不代表已通过事实准入（准入另由 admitted 读口判）。
 type I18nUpsertResponse struct {
 	OK bool `json:"ok"`
 }
@@ -263,6 +280,8 @@ type I18nByTenantLangRequest struct {
 	TenantID int64  `json:"tenant_id"`
 	Lang     string `json:"lang"`
 }
+
+// I18nByTenantLangResponse 按（tenant_id, lang）一次回该租户全部事实译文；每条带 fact_id，主服务按它匹配，避免逐事实 N 次往返。
 type I18nByTenantLangResponse struct {
 	Items []I18nByTenantLangItem `json:"items"`
 }
@@ -273,6 +292,8 @@ type EntriesQueryRequest struct {
 	Kinds    []string `json:"kinds"`
 	Query    string   `json:"query"`
 }
+
+// EntriesQueryResponse 是 entries/query 的返回体；W3 期服务恒回 503+not_owned_until_w5，W5 接管后才真出 Items，客户端不得把 503 当空结果。
 type EntriesQueryResponse struct {
 	Items []map[string]any `json:"items"`
 }

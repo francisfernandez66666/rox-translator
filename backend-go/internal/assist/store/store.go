@@ -53,6 +53,14 @@ func Open(path string) (*DB, error) {
 // Close 关闭数据库
 func (d *DB) Close() error { return d.sql.Close() }
 
+// SQL 返回底层 *sql.DB（供跨库迁移 CLI 做只读计数与显式 id 搬迁）。
+// ★ 刻意只读、不提供替换入口：调用方拿它必须走同一份连接配置（WAL + 单写者），
+//
+//	另开一条 sql.Open 会在 SQLite 上撞写锁，正是本项目 600s 超时事故的根因形态。
+//
+// 参数：无；返回：底层句柄。
+func (d *DB) SQL() *sql.DB { return d.sql }
+
 // migrate 建表（CREATE IF NOT EXISTS，幂等可重复执行）
 func (d *DB) migrate() error {
 	// 原始建表语句：仅对新实例有效，存量实例靠后续 ALTER TABLE 补列。

@@ -3,9 +3,9 @@
 //
 // 留资写点在**业务事务内**调 EmitLeadCapturedInTx(tx, ...) 或 WriteLeadCaptured(...)，
 // 即可把「INSERT 业务行 + INSERT event_outbox(topic='lead.captured')」绑进同一事务（硬口径 1）。
-// 本文件是 W2 留资落库点与 outbox 包之间的唯一适配缝：W2 agent 正在做「留资进收件箱」，
-// 可能与本生产者同区域 —— 故刻意不 import 也不修改任何现有 lead 文件，挂点统一写
-// /tmp/w4_wiring.md 由主代理落。
+// 本文件是留资落库点与 outbox 包之间的唯一适配缝；生产挂点在
+// api/sales_lead_inbox_bridge.go 的 bridgeLeadCapturedToInbox（W4 收口已接线：
+// 同一个业务事务内写 inbox_events + event_outbox）。
 //
 // 信封必带 tenant_id（硬口径 3）：构造走 mq.NewEnvelope（tid<=0 拒收），落库再经
 // outbox.InsertOutboxEvent 的 mq.UnmarshalEnvelope 复核，两道 fail-closed。

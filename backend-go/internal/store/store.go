@@ -61,6 +61,13 @@ func New(db *sql.DB) (*Store, error) {
 	if err := s.ProductMigrate(); err != nil {
 		return nil, err
 	}
+	// ★ 四期 W3/KN11 收口（2026-11-15）：切读开关 off 时主库自建产品四表（影子期/回滚档）。
+	//   必须在 KnowledgeDomainMigrate 之前：后者带 tableExists 保护，表已存在才会去补列。
+	//   切读态（ServiceRead=on）本函数直接 nil，主库保持零产品表（KN11 终态）。
+	//   ⚠️ 这一段不是可选优化：缺了它，全新部署在 off 档第一条产品查询就是 no such table。
+	if err := s.ProductTablesFallback(); err != nil {
+		return nil, err
+	}
 	// ★ 四期 W3/KN11：产品 target_langs 补列迁知识侧（带 tableExists 保护；主库无 products 表时直接 nil，不建知识表）。
 	if err := s.KnowledgeDomainMigrate(); err != nil {
 		return nil, err

@@ -184,6 +184,7 @@ const EST_FIELD_LABEL_KEYS: Record<EstTokenField, string> = {
 // 套餐与定价管理面（超管）。★ 2026-11-01 起"预估系数"六个输入框的名单与标签都派生自 EST_TOKEN_FIELDS
 //（名单一份、标签映射一份 exhaustive Record，缺任何一个键 TS 与闸门都会当场拦——DEF-P3-08 的机械修法）。
 
+// 管理台套餐与账单页；负责套餐档位／余额／订单的展示与操作入口，金额走统一格式化，不自行换算积分。
 export function PlansP() {
   const ad = useAdmin()
   const [, t, tpl] = useT()

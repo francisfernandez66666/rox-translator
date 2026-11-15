@@ -42,7 +42,8 @@ func openKnSQLite(t *testing.T, tag string) *sql.DB {
 
 // seedKnFourTables 四表各插一行。
 // ★ product_facts.priority=7 是 KN10「反向脚本故意漏一列」的非默认值哨兵：
-//   漏列 ⇒ 目标库落 DEFAULT 0 ⇒ 指纹按全量列算不等 ⇒ 反向搬迁返回 error ⇒ 判红。
+//
+//	漏列 ⇒ 目标库落 DEFAULT 0 ⇒ 指纹按全量列算不等 ⇒ 反向搬迁返回 error ⇒ 判红。
 func seedKnFourTables(t *testing.T, conn *sql.DB, tid int64) {
 	t.Helper()
 	must := func(q string, args ...interface{}) {

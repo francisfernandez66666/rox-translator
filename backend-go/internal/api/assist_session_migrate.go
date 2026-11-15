@@ -112,6 +112,20 @@ func pgSafeDDL(sqlText string, d db.Dialect) string {
 	return sqlText
 }
 
+// AssistChatTableNames 返回本文件迁移的两张会话表名（单一真值）。
+// ★ 供 cmd/knowledge-migrate --sessions 做「src 行数 vs dst 行数」只读预检，
+//
+//	禁止在 CLI 里再手抄一份表名清单（两份清单迟早漂成不同形状）。
+//
+// 参数：无；返回：表名切片（顺序同 chatMigrateSpecs）。
+func AssistChatTableNames() []string {
+	out := make([]string, 0, len(chatMigrateSpecs))
+	for _, spec := range chatMigrateSpecs {
+		out = append(out, spec.name)
+	}
+	return out
+}
+
 // MigrateAssistSessionsToMain 把 assist 库的两张会话/消息表搬进主库。
 // mainDB=主库句柄（s.Store.DB()）；assistDB=assist 独立库句柄；d=目标库方言。
 // 可重复调用（幂等）；任何一步失败返回 error，已提交的事务不回滚（下一次重跑补齐）。

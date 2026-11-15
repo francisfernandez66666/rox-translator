@@ -1,14 +1,15 @@
 // ============ watchdog_startup_quiet_gate_test.go · 职责说明 ============
 // 三期 W2 A05「Q3 静默」锁（二期 §9.2 :318 / §14；施工_三期 §4.2 A05 行）：
 // 流程状态机巡检（sm-sweep）必须"缺省完全不发生"，三条腿一起钉：
-//   1) 静态腿·槽位形态：startWatchdog 体里 s.runSMSweepOnce 恰 1 次，且必须落在
-//      for range ticker.C 之后——**禁止 @startup 启动即跑**（生产首跑由部署步显式拨，
-//      测试环境构造后计数恒 0；本仓批任务「测试环境也先烧一遍」的惯病在此收口）；
-//   2) 静态腿·顺序与开关：runSMSweepOnce 必须先问 kill-switch（smSweepEnabled）
-//      再拨 SweepOnce；smSweepEnabled 只认显式配 "1"（缺省关是判据的一半）；
-//   3) 行为腿：测试库不配键 ⇒ 构造后与拨动后 SweepOnce 调用计数恒 0；
-//      显式 SetConfig("sm_sweep_enabled","1") 才真拨，且心跳超时档 = 15 分钟；
-//      配 "0" 必须仍不拨（"0" 是显式关，不许被翻成真）。
+//  1. 静态腿·槽位形态：startWatchdog 体里 s.runSMSweepOnce 恰 1 次，且必须落在
+//     for range ticker.C 之后——**禁止 @startup 启动即跑**（生产首跑由部署步显式拨，
+//     测试环境构造后计数恒 0；本仓批任务「测试环境也先烧一遍」的惯病在此收口）；
+//  2. 静态腿·顺序与开关：runSMSweepOnce 必须先问 kill-switch（smSweepEnabled）
+//     再拨 SweepOnce；smSweepEnabled 只认显式配 "1"（缺省关是判据的一半）；
+//  3. 行为腿：测试库不配键 ⇒ 构造后与拨动后 SweepOnce 调用计数恒 0；
+//     显式 SetConfig("sm_sweep_enabled","1") 才真拨，且心跳超时档 = 15 分钟；
+//     配 "0" 必须仍不拨（"0" 是显式关，不许被翻成真）。
+//
 // 反证＝变异体 M0211（把 @startup 加回 ⇒ 静态腿 1 红）、M0212（缺省档翻 true ⇒
 // 行为腿"缺省恒 0"红），由 gate_mutants 执行器在 worktree 里真跑红在本文件消息上。
 // 纯静态腿复用 watchdog_remain_batch_gate_test.go 的 watchdogFuncBody 样板与

@@ -10,6 +10,7 @@
 // ============================================================================
 import { bizResp, request, authHeaders, type AdminResp } from './core'
 
+// 收件箱单事件返回体；按 tenant_id 隔离，跨租户查询必须回空而不是报错。
 export interface SalesInboxEventResp extends AdminResp {
   found?: boolean
   status?: string

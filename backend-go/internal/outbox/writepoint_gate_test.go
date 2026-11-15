@@ -90,24 +90,62 @@ func TestWritepointSameTxRollsBackBoth(t *testing.T) {
 	if iCall < 0 || iCommit < 0 || iCall > iCommit {
 		t.Fatal("E1 源码：事件写必须排在 tx.Commit() 之前，才与业务写同事务")
 	}
-	// 现算写点清单：扫 outbox 包 + api 适配层 + store 迁移，禁止把名单硬编码进测试。
-	scan := []string{
-		filepath.Join(dir, "writepoint.go"),
-		filepath.Join(dir, "outbox.go"),
-		filepath.Join(dir, "..", "api", "lead_captured_outbox.go"),
-		filepath.Join(dir, "..", "store", "outbox_migrate.go"),
+	// ★ 现算写点清单（2026-11-15 收口，审计第 11 条）：
+	//   原形态是四条**硬编码路径**（writepoint.go / outbox.go / api/lead_captured_outbox.go /
+	//   store/outbox_migrate.go）——注释写着「现算」，实际是「只测已登记的那几个点」，
+	//   新增写点只要落在别的文件里就完全在射程之外。
+	//   现改成遍历 backend-go/internal 全树统计三个写入函数，并强制返回扫描文件数（射程自证）。
+	root := filepath.Join(dir, "..") // backend-go/internal
+	var defs, calls, files int
+	var writeCalls int
+	walkErr := filepath.WalkDir(root, func(p string, e os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if e.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+			return nil
+		}
+		files++
+		src := readSrc(t, p)
+		defs += strings.Count(src, "func InsertOutboxEvent(")
+		calls += strings.Count(src, "InsertOutboxEvent(")
+		writeCalls += strings.Count(src, "WriteLeadCaptured(") + strings.Count(src, "EmitLeadCapturedInTx(")
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("E1 扫描 backend-go/internal 失败: %v", walkErr)
 	}
-	callSites, topicRefs := 0, 0
-	for _, f := range scan {
-		src := readSrc(t, f)
-		callSites += strings.Count(src, "InsertOutboxEvent(")
-		topicRefs += strings.Count(src, "TopicLeadCaptured")
+	// 下界 400：现读 internal 非测试 .go 恰 494 个（2026-11-15 实测）。
+	// 方案 §2.2 写的 ≥800 出自施工前的 900+ 快照，镜像旧数字会让本锁恒红；
+	// 这里按「比现状短一大截」重取探测器，只拦扫描面塌了，不拦合法的文件增删。
+	// 它只拦「扫描面塌了」，不拦合法的文件增删（同 AGENTS §一·14：这是探测器，不是镜像）。
+	if files < 400 {
+		t.Fatalf("E1 射程失明：只扫到 %d 个非测试 .go 文件（下界 400）—— 写点清单是假的", files)
 	}
-	if callSites < 2 { // 至少含 1 个定义 + 1 个真实调用点，防止只测已登记的那几个点＝给新写点放假
-		t.Fatalf("E1 源码：现算写点清单射程不足（InsertOutboxEvent 出现 %d 次）", callSites)
+	if defs != 1 {
+		t.Fatalf("E1 源码：InsertOutboxEvent 定义点应为 1 处，实得 %d（重复定义或定义被删）", defs)
 	}
-	if topicRefs == 0 || len(RegisteredTopics) == 0 {
-		t.Fatal("E1 下界自证失败：登记白名单为空或在源码里零引用（登记被架空）")
+	if calls-defs < 1 {
+		t.Fatalf("E1 源码：InsertOutboxEvent 真实调用点为 0（定义之外至少要有 1 个写点）")
+	}
+	if writeCalls == 0 {
+		t.Fatalf("E1 源码：WriteLeadCaptured／EmitLeadCapturedInTx 在整棵 internal 树里零引用 —— 写点被架空")
+	}
+	// ★ 2026-11-15 收口补腿：上面那个计数会被**函数定义与注释**凑满（审计 §4.3 指出
+	//   「框架级正确 ≠ 链路级生效」）。真正要问的是「生产挂点有没有真的调它」：
+	//   留资桥接必须在一个业务事务里同时写 inbox_events 与 event_outbox。
+	bridge := readSrc(t, filepath.Join(root, "api", "sales_lead_inbox_bridge.go"))
+	if !strings.Contains(bridge, "WriteLeadCaptured(ctx, s.Store.DB()") {
+		t.Fatal("E1 生产写点被摘：留资桥接不再调用 WriteLeadCaptured ⇒ event_outbox 会重新恒空")
+	}
+	if !strings.Contains(bridge, "TryProcessInboxEventTx(tx,") {
+		t.Fatal("E1 生产写点不在业务事务内：inbox_events 与 event_outbox 不再同生共死")
+	}
+	if len(RegisteredTopics) == 0 {
+		t.Fatal("E1 下界自证失败：登记白名单为空（登记被架空）")
 	}
 	// 名单外的写点为零：未登记主题必须被 InsertOutboxEvent 运行时拒收（真写入，非桩）。
 	outsider := testStoredEvent(t, testEnv(t, "topic.not.registered", "ev-outside", 7, "tr-out"))

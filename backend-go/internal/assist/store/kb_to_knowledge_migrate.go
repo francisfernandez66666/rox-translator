@@ -16,7 +16,7 @@
 // 契约引用（按名字，不硬 import 尚未落地的包）：
 //
 //	目标库由 W3 的 knowledge.KnowledgeMigrate() 契约建好四张表后的独立 DSN 提供，
-//	组合根把它作为参数传进 (d *DB).MigrateKBToKnowledge（接线见 /tmp/w5_wiring.md）。
+//	由 cmd/knowledge-migrate --kb --apply 显式调用（默认 dry-run），不进任何启动链。
 //	本包刻意不对 translator/internal/knowledge 产生编译期依赖——那个包由另一个
 //	agent 并行施工，本文件只按契约名引用，避免两边同时落地时互相卡住编译。
 //	常量 KnowledgeMigrateContract 就是这个契约名在搬迁侧的唯一留痕。
@@ -147,6 +147,17 @@ func kbPgSafeDDL(sqlText string, d db.Dialect) string {
 		return strings.ReplaceAll(sqlText, "DATETIME", "TIMESTAMP")
 	}
 	return sqlText
+}
+
+// KBTableNames 返回本文件搬迁的四张 KB 表名（单一真值）。
+// ★ 供 cmd/knowledge-migrate --kb 做只读计数预检，禁止在 CLI 里手抄表名。
+// 参数：无；返回：表名切片（顺序同 kbMigrateSpecs）。
+func KBTableNames() []string {
+	out := make([]string, 0, len(kbMigrateSpecs))
+	for _, spec := range kbMigrateSpecs {
+		out = append(out, spec.name)
+	}
+	return out
 }
 
 // MigrateKBToKnowledge 把四张 KB 表从 assist 库跨库拷贝进知识库。

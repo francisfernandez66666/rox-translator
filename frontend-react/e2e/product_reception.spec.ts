@@ -9,8 +9,19 @@
 //
 // 需要真后端 + 真短码 + 真产品事实 + 已构建 dist（夹具见 run_uat.sh 的「5.9 产品对外页」段）。
 // 短码与事实串一律由环境提供，不写死、不猜、不依赖外部域名；未纳入 vitest、不在 tsc include 内。
+//
+// ★ 四期收口 G3.5（2026-11-15）：把施工图 R5「320 档对外页挂件+留资表单不横向溢出」落到本文件。
+//   旧形态是这条腿**根本不存在**：`e2e/pixel_uat.spec.ts` 里对整个文件 grep `.na-fab` / `/p/` / `AiAssist`
+//   都是 0 命中（审计 §4.5 的实测读数），而 pixel_uat 的溢出判据只问 `documentElement`
+//   ——那在「浮层撑破某个中间容器」的形态下**结构性恒真**（AGENTS §一·5 那条纪律的原话：
+//   「页面整体没有横向溢出」是一句不完整的话，必须问**是哪个容器**）。
+//   本文件本来就有 `/p/` 的真夹具与 `.na-fab`（AiAssist 在 PublicRoot 的 /p/ 分支里与
+//   ProductPublicPage 同处一个 MarketingShell），所以判据搬到这里才有靶子。
 // ==============================================================================
 import { expect, test } from '@playwright/test'
+// ★ R5 度量函数单一真值：运行时量测（本文件）与 vitest 判据锁
+//   （src/api/assistOverflow.lock.test.ts，M0359）共用同一份实现。
+import { TOL_PX, overflowProblems, type Rect } from '../src/api/assistOverflow'
 
 const TENANT = process.env.PRODUCT_TENANT_CODE || ''
 const PAGE = process.env.PRODUCT_PAGE_CODE || ''
@@ -66,3 +77,116 @@ test.describe('R3 /p/ 托管页接待闭环（真链路）', () => {
       .not.toContain(OTHER_FACT)
   })
 })
+
+// ============ R5：320 / 390 档对外页不横向溢出（挂件浮球 + 留资表单）============
+// 判据形态照 AGENTS §一·5「按右边界点名越界后代」：
+//   ① 遍历浮球与表单的**滚动祖先**逐层判 scrollWidth <= clientWidth（只问 documentElement 是空转）；
+//   ② 浮球四边夹进视口；表单内每个后代按右边界点名（越界要指名到 tag.class[left,right]）。
+test.describe('R5 度量函数自证（不依赖后端，永不被 skip）', () => {
+  test('正常读数放行 + 越界读数必须被点名', () => {
+    // 正向：320×740 档，56px 浮球贴右下（right=306 / bottom=716），祖先未撑宽 ⇒ 零问题。
+    const ok = overflowProblems(
+      320,
+      740,
+      [{ label: '.na-fab', rect: { left: 250, right: 306, top: 660, bottom: 716 } }],
+      [{ label: 'html', scrollWidth: 320, clientWidth: 320 }],
+    )
+    expect(ok, `正常读数却被判越界 ⇒ 判据过严（${ok.join('；')}）`).toEqual([])
+    // 反证①：右边界越出视口 26px（本批要抓的就是这一形态）。
+    const badRight = overflowProblems(
+      320,
+      740,
+      [{ label: '.na-fab', rect: { left: 290, right: 346, top: 660, bottom: 716 } }],
+      [],
+    )
+    expect(badRight.length, '反证失效：right 越界却没被点名 ⇒ 本锁空转').toBeGreaterThan(0)
+    // 反证②：某个滚动祖先被撑宽（「页面整体没溢出、中间容器溢出」那一族）。
+    const badScroll = overflowProblems(320, 740, [], [{ label: '.lc-pp-lead', scrollWidth: 348, clientWidth: 320 }])
+    expect(badScroll.length, '反证失效：容器被撑宽却没被点名 ⇒ 本锁空转').toBeGreaterThan(0)
+  })
+})
+
+for (const vw of [320, 390]) {
+  test.describe(`R5 ${vw} 档对外页横向溢出（挂件浮球 + 留资表单）`, () => {
+    test.skip(!TENANT || !PAGE, '需 PRODUCT_TENANT_CODE / PRODUCT_PAGE_CODE 真夹具')
+
+    test(`@${vw} 滚动祖先逐层不越界 + 浮球四边夹进视口`, async ({ page }) => {
+      await page.setViewportSize({ width: vw, height: 740 })
+      await page.goto(URL)
+
+      // 靶子先在位：表单是 /p/ 页的静态件，浮球来自 AiAssist（懒加载 chunk）——
+      // 两者缺一，下面的量测都是空转（AGENTS §一·5「挂件没真渲染出来时量的无溢出是空转」）。
+      await expect(page.locator('[data-testid="lead-form"]'),
+        '/p/ 页没渲染留资表单 ⇒ R5 靶子不在，量测将空转').toBeVisible({ timeout: 20000 })
+      await page.locator('.na-fab').waitFor({ state: 'visible', timeout: 20000 })
+
+      const m = await page.evaluate((tol: number) => {
+        const fab = document.querySelector('.na-fab') as HTMLElement | null
+        const form = document.querySelector('[data-testid="lead-form"]') as HTMLElement | null
+        const rectOf = (el: Element | null) => {
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+        }
+        const labelOf = (el: Element) =>
+          el.tagName.toLowerCase() + (el.className ? '.' + String(el.className).trim().split(/\s+/)[0] : '')
+
+        // ① 滚动祖先：从浮球与表单各自往上，逐层收 overflow 不是 visible 的那些（去重）。
+        const ancestors: Array<{ label: string; scrollWidth: number; clientWidth: number }> = []
+        const seen = new Set<Element>()
+        for (const start of [fab, form]) {
+          for (let el: Element | null = start ? start.parentElement : null; el; el = el.parentElement) {
+            if (seen.has(el)) break
+            seen.add(el)
+            const cs = getComputedStyle(el)
+            if (!/(auto|scroll|hidden)/.test(cs.overflowX) && !/(auto|scroll|hidden)/.test(cs.overflowY)) continue
+            ancestors.push({
+              label: el === document.documentElement ? 'html' : el === document.body ? 'body' : labelOf(el),
+              scrollWidth: el.scrollWidth,
+              clientWidth: el.clientWidth,
+            })
+          }
+        }
+
+        // ② 表单内后代按右边界点名（越界要指名到 tag.class[left,right]，别只说"有溢出"）。
+        const spillers: string[] = []
+        if (form) {
+          for (const n of Array.from(form.querySelectorAll('*')).slice(0, 400)) {
+            const r = n.getBoundingClientRect()
+            if (r.width === 0 && r.height === 0) continue
+            if (r.right > window.innerWidth + tol || r.left < -tol) {
+              spillers.push(`${labelOf(n)}[${Math.round(r.left)},${Math.round(r.right)}]`)
+            }
+          }
+        }
+
+        return {
+          vw: window.innerWidth,
+          vh: window.innerHeight,
+          fab: rectOf(fab),
+          form: rectOf(form),
+          ancestors,
+          spillers,
+          docOver: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        }
+      }, TOL_PX)
+
+      expect(m.fab, '浮球量不到边界（本档判据会空转）').not.toBeNull()
+      expect(m.form, '留资表单量不到边界（本档判据会空转）').not.toBeNull()
+
+      const problems = overflowProblems(
+        m.vw,
+        m.vh,
+        [
+          { label: `.na-fab`, rect: m.fab as Rect },
+          { label: '[data-testid=lead-form]', rect: m.form as Rect },
+        ],
+        m.ancestors,
+      )
+      expect(problems, `${vw} 档横向溢出（逐层滚动祖先 + 四边夹边）：${problems.join('；')}`).toEqual([])
+      expect(m.spillers, `${vw} 档留资表单内有后代越出视口右边界（指名）：${m.spillers.join('；')}`).toEqual([])
+      // 文档级读数只作**辅助**（它单独恒真，不当唯一判据，仅用来在红时区分"整体"还是"局部"）。
+      expect(m.docOver, `${vw} 档文档级横向可滚动 ${m.docOver}px`).toBeLessThanOrEqual(TOL_PX)
+    })
+  })
+}

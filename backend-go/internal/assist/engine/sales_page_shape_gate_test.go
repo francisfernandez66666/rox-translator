@@ -1,8 +1,9 @@
 // ============ sales_page_shape_gate_test.go · 职责说明 ============
 // 四期 W2 · R8（施工图 §4.2.2 第 0 条 / §4.2.3 / §5）：/p/{tc}/{pc} **算销售页**，
-// 且**不误伤** /x/p/y 与工作台路径。两条腿各配一枚互不覆盖的变异体：
-//   - M0306（腿①）：删掉形状判据 ⇒ /p/acme/... 不再判销售页 ⇒ 腿① 红、腿② 仍绿；
-//   - M0308（腿②）：把 "p" 塞进 salesPageSegs ⇒ /x/p/y 被误判 ⇒ 腿② 红、腿① 仍绿。
+// 且**不误伤** /x/p/y 与工作台路径。两条腿的台账现值（2026-11-15 复核，编号以 gate_mutants.tsv 为准）：
+//   - 腿①＝M0344：删掉形状判据 ⇒ /p/acme/... 不再判销售页 ⇒ 腿① 红、腿② 仍绿；
+//   - 腿②**尚无登记变异体**：目前只有本文件里的进程内反证，属审计 §0.3 第 8 条登记的缺口，
+//     补登记前不得对外宣称「两腿各配一枚互不覆盖的变异体」。
 //
 // ★ 夹具口径（施工图 §4.2.3 / §4.2.2-0）：租户短码一律用 **acme**（非整词）。
 //
@@ -17,7 +18,7 @@ package engine
 import "testing"
 
 // TestSalesPageShapeProductPathJudgedSales R8 腿①：/p/{tc}/{pc} 必须判销售页（声称守卫真会跑）。
-// 变异 M0306（摘掉形状判据）会让这两条 URL 全部回落 false ⇒ 本腿判红。
+// 变异 M0344（摘掉形状判据）会让这两条 URL 全部回落 false ⇒ 本腿判红。
 func TestSalesPageShapeProductPathJudgedSales(t *testing.T) {
 	// 射程自证：夹具 acme 必须**不在**整词表、demo 必须在——否则「修复前」旧判据也能命中，本腿空转。
 	if salesPageSegs["acme"] {
@@ -38,7 +39,8 @@ func TestSalesPageShapeProductPathJudgedSales(t *testing.T) {
 }
 
 // TestSalesPageShapeNoFalsePositiveOnAppPaths R8 腿②：非销售页（含 /x/p/y 与工作台）不许被判销售页。
-// 变异 M0308（把 "p" 塞进 salesPageSegs）会让 /x/p/y 命中整词表 ⇒ 本腿判红。
+// 反证：把 "p" 塞进 salesPageSegs 会让 /x/p/y 命中整词表 ⇒ 本腿判红
+// （腿②目前只有这条进程内反证，台账无登记变异体，见文件头）。
 func TestSalesPageShapeNoFalsePositiveOnAppPaths(t *testing.T) {
 	cases := []string{
 		"/x/p/y",             // 单字母段 p 出现在中间：塞 "p" 进整词表就会被误判成销售页

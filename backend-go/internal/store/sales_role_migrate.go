@@ -4,8 +4,10 @@
 // 唯一键前三列天然防重复、逐项可审计、无整行 JSON 并发覆盖（施工图 §3 W3 设计裁定）。
 //
 // ★ 签名固定为 func (s *Store) SalesRoleMigrate() error；本文件**不挂** New() 域链
-//   （store.go 由主 agent 统一装配），故迁移入口自带一次 SCRM 映射自检，
-//   保证「表建好了但映射被改坏」不会静默过。
+//
+//	（store.go 由主 agent 统一装配），故迁移入口自带一次 SCRM 映射自检，
+//	保证「表建好了但映射被改坏」不会静默过。
+//
 // 双方言：db.ExecDDL 建表 / db.EnsureColumns 幂等补列；observability.Info 留痕，零裸 log.Printf。
 // ================================================
 package store

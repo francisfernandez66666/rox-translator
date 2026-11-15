@@ -1,14 +1,15 @@
 // ============ sales_quote_gate_test.go · 职责说明 ============
 // 三期 W2 A06 锁（施工_三期 §4.2 A06 行）：报价域的三条硬口径一起钉——
-//   1) **AcceptQuote 是唯一转正写口**（静态腿）：剥注释后全 backend-go 非测试源码里
-//      `AcceptQuote(` 恰 2 处＝store/deal_quote.go 定义 + sales_quote_api.go 唯一
-//      handler 调用；`/api/admin/sales/quote/accept` 注册恰 1 次。多一处＝第二写口
-//      （M0213 靶），「一单两转正」没有任何闸门看得见。
-//   2) **金额只有「分」一个量纲**（静态腿 + 行为反证）：sales_quote_api.go 里不许出现
-//      `*100`/`/100`（分↔元换算是 C2「同名不同单位」旧账）；行为腿建 1500 分读回
-//      仍 1500（M0215 靶：任何一侧 ×100 都会红）。
-//   3) **跨租户不可串**（行为腿）：租户 2 直调 store.AcceptQuote(2, 租户1报价) 必须
-//      ErrQuoteNotFound（M0214 靶：摘 WHERE 的 tenant_id 即红）。
+//  1. **AcceptQuote 是唯一转正写口**（静态腿）：剥注释后全 backend-go 非测试源码里
+//     `AcceptQuote(` 恰 2 处＝store/deal_quote.go 定义 + sales_quote_api.go 唯一
+//     handler 调用；`/api/admin/sales/quote/accept` 注册恰 1 次。多一处＝第二写口
+//     （M0213 靶），「一单两转正」没有任何闸门看得见。
+//  2. **金额只有「分」一个量纲**（静态腿 + 行为反证）：sales_quote_api.go 里不许出现
+//     `*100`/`/100`（分↔元换算是 C2「同名不同单位」旧账）；行为腿建 1500 分读回
+//     仍 1500（M0215 靶：任何一侧 ×100 都会红）。
+//  3. **跨租户不可串**（行为腿）：租户 2 直调 store.AcceptQuote(2, 租户1报价) 必须
+//     ErrQuoteNotFound（M0214 靶：摘 WHERE 的 tenant_id 即红）。
+//
 // 行为腿另覆盖 401/403/200 分档、create→get→accept→accepted→再 accept 404、
 // 同 deal 第二张 409（部分唯一索引 → ErrQuoteOneOpenPerDeal → writeQuoteStoreError）。
 // 复用既有夹具：adminGateServer（全量路由表＋普通会员 token）/ salesConfigToken /

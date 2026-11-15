@@ -26,6 +26,7 @@ export interface SalesQuoteRow {
   updated_at: string
 }
 
+// 报价窄面返回体；只出可公开的价格档，受控事实不出栈，空态由调用方渲染。
 export interface SalesQuoteResp extends AdminResp {
   quote?: SalesQuoteRow
 }

@@ -9,7 +9,9 @@
 //
 // KN12 三层判定：空 / 相等 / 归一化后相等（去尾 `/`、大小写、host:port、localhost↔127.0.0.1）。
 // ⚠️ 归一化**不许**宽到把 localhost 与 127.0.0.1 判成不同：那两个在本机是同一个库，
-//    「看着不同、实际同库」正是这条闸要拦的东西（§4.3.5）。
+//
+//	「看着不同、实际同库」正是这条闸要拦的东西（§4.3.5）。
+//
 // ================================================
 package knowledge
 
@@ -105,7 +107,13 @@ func AssertDistinct(mainDSN, knowledgeDSN string) error {
 }
 
 // StartupGuard 启动期一次性校验：双 DSN 不等 + 切读档位日志所需信息齐备。
-// 主服务与知识服务两站启动链都要调用（接线清单见 /tmp/w3_wiring.md）。
+//
+// ★ 只有**持有知识库连接的那两个进程**调用它：cmd/knowledge-server 与 cmd/knowledge-migrate。
+//
+//	⚠️ 主服务（cmd/server）**不调用**——它不打开知识库、也不要求配 KNOWLEDGE_DB_DSN
+//	（切读开关 off 时才允许「知识服务没部署」这种形态存在，而那正是默认档）。
+//	历史注释写「主服务与知识服务两站启动链都要调用」是不成立的：那会让默认 off 档
+//	因为没有 KNOWLEDGE_DB_DSN 而拒启，等于把「影子期」这条设计路径删掉。
 func StartupGuard(cfg Config) error {
 	return AssertDistinct(cfg.MainDSN, cfg.KnowledgeDSN)
 }
