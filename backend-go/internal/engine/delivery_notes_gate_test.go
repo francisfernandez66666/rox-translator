@@ -41,7 +41,12 @@ func TestDeliveryNotesCoverBothMouths(t *testing.T) {
 		t.Fatalf("应恰好导出 2 条未译段（空段不计、已译段不计），实得 %+v", notes)
 	}
 	if notes[0].Line != 2 || notes[0].Source != "第二段说明。" {
-		t.Errorf("清单必须点名行号与原文（客户要能定位到具体那一段），实得 %+v", notes[0])
+		t.Errorf("清单必须点名序号与原文（客户要能定位到具体那一段），实得 %+v", notes[0])
+	}
+	// P4（2026-11-20）：texts 是可译片段数组（非物理行），行号不可靠时诚实写"段"，
+	// 不再把片段序号冒充物理行号（现网"第211行"但全文204行的根因）。
+	if notes[0].Unit != "段" {
+		t.Errorf("未译段应标 Unit=段（不能冒充物理行号），实得 %+v", notes[0])
 	}
 	if notes[1].Line != 3 {
 		t.Errorf("失败占位那一行没进清单 ⇒ 判据没在拦占位，实得 %+v", notes[1])
@@ -61,8 +66,8 @@ func TestDeliveryNotesCoverBothMouths(t *testing.T) {
 		t.Fatalf("追加那一节: %v", err)
 	}
 	body := string(readGateFileForDelivery(t, p))
-	if !strings.Contains(body, "## 未译出内容（共 2 行）") {
-		t.Errorf("交付文档文末缺那一节，实得 %q", body)
+	if !strings.Contains(body, "## 未译出内容（共 2 段）") {
+		t.Errorf("交付文档文末缺那一节（P4 起按'段'点名，不再冒充物理行号），实得 %q", body)
 	}
 	if !strings.Contains(body, "第三段说明。") {
 		t.Errorf("未译段的原文必须在清单里（.md 按原文兜底，客户要能认出是哪一段），实得 %q", body)
@@ -140,4 +145,51 @@ func readGateFileForDelivery(t *testing.T, p string) []byte {
 		t.Fatalf("读 %s: %v", p, err)
 	}
 	return b
+}
+
+// TestUntranslatedPhysicalLineMap P4：有物理行号映射时写"第 N 行"，
+// 一行表格拆多片段要归并到同一物理行；无映射时回退"第 N 段"（不冒充行号）。
+func TestUntranslatedPhysicalLineMap(t *testing.T) {
+	md := "标题\n| 指标 | 值 |\n| 覆盖率 | 40% |\n结尾"
+	dir := t.TempDir()
+	p := filepath.Join(dir, "src.md")
+	if err := os.WriteFile(p, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟 ExtractTexts 从表格行拆出的两个片段（同一物理行 3）
+	texts := []string{"覆盖率", "40%", "结尾"}
+	lm := buildMdPhysicalLineMap(p, ".md", texts)
+	if lm["覆盖率"] != 3 || lm["40%"] != 3 {
+		t.Fatalf("同一表格行的两个片段应归并到物理行 3，实得 %v", lm)
+	}
+	if lm["结尾"] != 4 {
+		t.Fatalf("结尾段应在物理行 4，实得 %v", lm)
+	}
+	notes := untranslatedNotesFromSegments(texts, map[string]string{}, lm)
+	if len(notes) != 3 {
+		t.Fatalf("应导出 3 条，实得 %+v", notes)
+	}
+	for _, n := range notes {
+		if n.Unit != "行" {
+			t.Errorf("有映射时应标 Unit=行，实得 %+v", n)
+		}
+	}
+	if notes[0].Line != 3 || notes[1].Line != 3 {
+		t.Errorf("表格两片段应同为物理行 3，实得 %+v", notes[:2])
+	}
+	// 无映射：回退"第 N 段"
+	noMap := untranslatedNotesFromSegments(texts, map[string]string{})
+	for _, n := range noMap {
+		if n.Unit != "段" {
+			t.Errorf("无映射时应标 Unit=段，实得 %+v", n)
+		}
+	}
+	// 非 .md 扩展名：不建映射
+	txt := filepath.Join(dir, "src.txt")
+	if err := os.WriteFile(txt, []byte(md), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := buildMdPhysicalLineMap(txt, ".txt", texts); got != nil {
+		t.Errorf("非 .md 不应建映射，实得 %v", got)
+	}
 }

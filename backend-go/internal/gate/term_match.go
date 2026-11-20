@@ -14,7 +14,10 @@
 // ============================================
 package gate
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // hasLatinLetter 判断字符串里是否有 a-z/A-Z。
 // 只用于决定「是否走大小写不敏感比较」，不参与任何其它字符分类。
@@ -37,4 +40,52 @@ func termContains(text, term string) bool {
 		return strings.Contains(strings.ToLower(text), strings.ToLower(term))
 	}
 	return strings.Contains(text, term)
+}
+
+// CheckTermConsistency 术语一致性后检（2026-11-20 P3）：同一源术语在全篇译文里
+// 译出多种写法即判失败。用于高频词表（非 KB 词）——KB 词由 ForceTerms/RunWithTerms 强制管，
+// 不进本检查（调用方只传 FromHighfreq=true 的词）。
+//
+// 参数：
+//
+//	source      —— 源文（判断哪些术语适用）
+//	translation —— 全篇译文（必须整篇传，逐段看不到跨段分歧）
+//	snapshot    —— 高频词统一译法表（每条 FromHighfreq=true，Target 为建议译法、Aliases 为合法变体）
+//
+// 返回：不一致的术语各一条 Check（Pass=false，Detail 列出所有实际出现的变体）。
+// 无快照/源文不含该词 → 跳过（fail-open，与 glossary 纪律一致）。
+func CheckTermConsistency(source, translation string, snapshot []TermRequirement) []Check {
+	var out []Check
+	if strings.TrimSpace(translation) == "" || len(snapshot) == 0 {
+		return out
+	}
+	for _, tm := range snapshot {
+		if !tm.FromHighfreq || strings.TrimSpace(tm.Source) == "" || strings.TrimSpace(tm.Target) == "" {
+			continue
+		}
+		srcCount := strings.Count(source, tm.Source)
+		if srcCount == 0 {
+			continue
+		}
+		// 合法译法集合：主译法 + 别名（大小写不敏感）。
+		// 判据：源词在源文出现 N 次，译文里"合法译法"的出现次数应 >= N；
+		// 不足说明有一部分源词被译成了别的写法（漂移）或残留了源词。
+		legal := append([]string{tm.Target}, tm.Aliases...)
+		legalHits := 0
+		for _, l := range legal {
+			if l == "" {
+				continue
+			}
+			cnt := strings.Count(strings.ToLower(translation), strings.ToLower(l))
+			legalHits += cnt
+		}
+		sourceResidue := strings.Count(translation, tm.Source)
+		if legalHits < srcCount || sourceResidue > 0 {
+			out = append(out, Check{Name: "术语一致性", Pass: false,
+				Detail: strings.TrimSpace(fmt.Sprintf("「%s」在源文出现 %d 次，译文仅 %d 处用统一译法「%s」%s（应统一为 %s）",
+					tm.Source, srcCount, legalHits, tm.Target,
+					map[bool]string{true: "，且有源词残留", false: ""}[sourceResidue > 0], tm.Target))})
+		}
+	}
+	return out
 }

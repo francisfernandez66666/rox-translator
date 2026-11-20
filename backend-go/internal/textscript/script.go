@@ -297,6 +297,107 @@ func IsLoneForeign(s string, p Profile) bool {
 	return p.IsRare(first)
 }
 
+// ===== 目标语言脚本一致性（翻译产出侧闸门用，2026-11-20 新增） =====
+//
+// 为什么放在 textscript 而不是 engine/gate：Script/Of/Share 的单一真源在这里；
+// 产出侧的字符污染判据（译文混入非目标语言脚本）与画像判档共用同一套脚本分类，
+// 不许在调用方再写第二份"语言→脚本"映射（项目反复踩的"多把尺子"）。
+
+// LangToScript 语言码 → 目标书写体系（单一真源）。
+// 合并原先散在 postprocess.scriptMap（字符串档）与 review_purity.purityTargetScripts 的两份映射。
+// 未覆盖的语言返回 Other —— fail-soft：不认识就不判，绝不因为缺映射误杀正常译文。
+// 注意 zh/zh_hant 归 Han（简体繁体同体系）；ja 也归 Han 为主（日文含假名，但纯度判据只问
+// "有没有目标体系的字母"，Han 命中即放行，假名不额外计数不影响结论）。
+func LangToScript(lang string) Script {
+	switch lang {
+	case "zh", "zh_hant", "ja", "yue", "bo":
+		return Han
+	case "ko":
+		return Hangul
+	case "he":
+		return Hebrew
+	case "ru", "kk", "uk", "mn":
+		return Cyrillic
+	case "ar", "fa", "ur", "ug":
+		return Arabic
+	case "th":
+		return Thai
+	case "el":
+		return Greek
+	case "hi", "gu", "mr", "bn", "te", "ta":
+		return Devanagari // 印度诸语在 Unicode Script 上分属不同块；此处仅作"非拉丁目标"的粗分类
+	case "my":
+		return Other // 缅甸文 Script 枚举未覆盖，fail-soft 不判
+	case "km", "lo":
+		return Other // 高棉/老挝文未覆盖
+	case "en", "es", "pt", "fr", "de", "vi", "ms", "id", "id_lang", "it", "pl", "sv", "nl", "tr", "tl", "fil":
+		return Latin
+	default:
+		return Other
+	}
+}
+
+// TargetConsistency 判断一段译文的书写体系是否与目标语言一致。
+// 参数：
+//
+//	text            —— 待判文本（译文）
+//	want            —— 目标书写体系（LangToScript 得到）
+//	minWantShare    —— 目标体系字母占比下限（低于即判不一致）
+//	maxForeignShare —— 任一外来体系字母占比上限（高于即判污染）
+//
+// 口径：
+//   - 分母＝所有 unicode.IsLetter 字母（数字/标点/空白不进分母，与 Share 一致）；
+//   - 空文本/无字母（纯数字符号）→ true（不判，交给别的判据，fail-open）；
+//   - want==Other（未知语言）→ true（fail-soft，缺映射不误杀）；
+//   - 拉丁字母不进"外来体系"计数——品牌名/技术词（Facebook/API/CDP）合法保留，
+//     且 D3 定案"按原文动态放行"由调用方单独处理，这里只管非拉丁外来脚本。
+//
+// 返回 true 表示"脚本一致或不适用"，false 表示"检出目标体系缺失或外来脚本污染"。
+func TargetConsistency(text string, want Script, minWantShare, maxForeignShare float64) bool {
+	if want == Other {
+		return true
+	}
+	counts := Share(text)
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	if total == 0 {
+		return true
+	}
+	// CJK 目标（Han）把假名家族算作目标的一部分：日文是 Han+平假名+片假名混排，
+	// 把假名判成"外来污染"会误杀全部正常日文（"こんにちは世界"这类）。
+	// 简体中文同理——中文正文里偶发假名是另一类质量问题，不属本判据的字符污染范畴。
+	isTarget := func(s Script) bool {
+		if s == want || s == Latin || s == Other {
+			return true // 拉丁白名单 + Other（数字/符号不进分母，理论上不出现）
+		}
+		if want == Han && s.Kana() {
+			return true
+		}
+		return false
+	}
+	wantCount := 0
+	for s, n := range counts {
+		if isTarget(s) && s != Other && (s == want || s != Latin) {
+			// want==Latin 时 Latin 计入目标；want 非拉丁时 Latin 是白名单、不计入目标占比分子
+			wantCount += n
+		}
+	}
+	if float64(wantCount)/float64(total) < minWantShare {
+		return false
+	}
+	for s, n := range counts {
+		if isTarget(s) {
+			continue
+		}
+		if float64(n)/float64(total) > maxForeignShare {
+			return false
+		}
+	}
+	return true
+}
+
 // Hash 返回画像的稳定指纹（供缓存/日志判定"这份画像变了没有"）。
 // 只包含判档与占比，不含 Isolated（它只在 glyph_set 用，且会放大日志体积）。
 func (p Profile) Hash() string {

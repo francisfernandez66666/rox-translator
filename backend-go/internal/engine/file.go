@@ -172,12 +172,45 @@ func writebackDelivery(ext string) string {
 //  3. 与文本逐行链同一个**上游断早停**：连续 N 段补译都拿不回东西 ⇒ 判上游不通，
 //     剩余段不再逐行烧调用（客户白等白扣），但**仍逐段计入未译出**，交付面一行都不藏。
 //
+// buildMdPhysicalLineMap 为 .md 源文建立"可译片段 → 物理行号(1起)"映射（P4，2026-11-20）。
+// 为什么能对上：ExtractTexts(".md") 的片段是源行的子串（抹掉空白/结构前缀后），
+// 用 strings.Index 在源文里定位即可；一行表格拆多片段时它们会落到同一物理行——正是修复目标。
+// 非 .md / 读不到源文 ⇒ 返回 nil，调用方回退"第 N 段"（诚实，不冒充行号）。
+func buildMdPhysicalLineMap(srcPath, srcExt string, texts []string) map[string]int {
+	if strings.ToLower(srcExt) != ".md" && strings.ToLower(filepath.Ext(srcPath)) != ".md" {
+		return nil
+	}
+	b, err := os.ReadFile(srcPath)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(string(b), "\n")
+	out := make(map[string]int, len(texts))
+	for _, t := range texts {
+		if t == "" || out[t] != 0 {
+			continue
+		}
+		for i, line := range lines {
+			if strings.Contains(line, t) {
+				out[t] = i + 1
+				break
+			}
+		}
+	}
+	return out
+}
+
 // untranslatedNotesFromSegments 从「按提取顺序的段」与「原文→译文」映射里导出未译出段清单。
-// 参数：texts=提取顺序的原文段（决定行号口径）；tr=该语言译文映射（缺失/空/失败占位都算未译出）。
-// 返回：交付文档文末那一节的素材；全部译出 ⇒ **空切片**（调用方据此连标题都不写）。
+// 参数：texts=提取顺序的原文段（决定序号口径）；tr=该语言译文映射；
+//      lineMap=可选的"片段→物理行号"映射（P4：有则写"第 N 行"、无则写"第 N 段"）。
+// 返回：交付文档文末那一节的素材；全部译出 ⇒ **空切片**。
 // 与图片那一口共用同一个 `fileproc.UntranslatedItem` 结构与同一份追加函数——
 // 两个交付口各写一份"什么算没译出"，迟早一边松一边紧（本仓「多把尺子」那一族）。
-func untranslatedNotesFromSegments(texts []string, tr map[string]string) []fileproc.UntranslatedItem {
+func untranslatedNotesFromSegments(texts []string, tr map[string]string, lineMap ...map[string]int) []fileproc.UntranslatedItem {
+	var lm map[string]int
+	if len(lineMap) > 0 {
+		lm = lineMap[0]
+	}
 	out := make([]fileproc.UntranslatedItem, 0, 4)
 	for i, src := range texts {
 		if strings.TrimSpace(src) == "" {
@@ -187,11 +220,21 @@ func untranslatedNotesFromSegments(texts []string, tr map[string]string) []filep
 		if v != "" && !IsFailurePlaceholder(v) {
 			continue
 		}
-		out = append(out, fileproc.UntranslatedItem{
+		// ★ P4（2026-11-20）：有物理行号映射写"第 N 行"（一行表格拆多片段会落到同一物理行），
+		//   否则写"第 N 段"——i+1 是片段序号，冒充物理行号会出现"第211行"但全文仅204行。
+		item := fileproc.UntranslatedItem{
 			Line:   i + 1,
 			Source: src,
 			Reason: "模型多轮补译后仍无可用输出，已按原文交付（成因见工单质量提示：上游未返回／输出被截断）",
-		})
+			Unit:   "段",
+		}
+		if lm != nil {
+			if physLine, ok := lm[src]; ok && physLine > 0 {
+				item.Line = physLine
+				item.Unit = "行"
+			}
+		}
+		out = append(out, item)
 	}
 	return out
 }
@@ -738,6 +781,10 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	} else {
 		texts, err = fileproc.ExtractTexts(filePath)
 	}
+	// ★ P4（2026-11-20）：提取成功后建"片段→物理行号"映射（仅 .md 有效）。
+	//   下方所有 untranslatedNotesFromSegments 调用都传它，交付文档能点名真实物理行；
+	//   非 .md / 读不到源文时为 nil，自动回退"第 N 段"（不冒充行号）。
+	mdLineMap := buildMdPhysicalLineMap(extractFrom, filepath.Ext(extractFrom), texts)
 	if err != nil || len(texts) == 0 {
 		// ★ 2026-10-15：图片/音频两条新腿把 fileproc 那句**可行动的**原因原样带出去
 		//   （判据与理由见 extractFailureReason）；其余格式继续走下面那句既有文案，一字未改。
@@ -1563,7 +1610,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// ★ 2026-10-26 裁决 7（「交付文档只记录未翻译的内容」）在**第二个交付口**的同一把尺子：
 			//   纯文案 .md 就是这一语言的主交付物，未译出的段必须在文末点名。
 			//   ★ 2026-10-30 组5：改用统一助手（口径与图片/Office 各口一致）。
-			appendUntranslatedNotes(lc, outPath, untranslatedNotesFromSegments(texts, tr))
+			appendUntranslatedNotes(lc, outPath, untranslatedNotesFromSegments(texts, tr, mdLineMap))
 			appendComplianceNotes(lc, outPath) // ★ 2026-11-03 裁决②：纯文案主交付物同样必须点名词项
 			filesOut = append(filesOut, outPath)
 			langArtifact[lc] = outPath // 纯文案产物即该语言主交付物（.md 可直读比对指纹）
@@ -1581,7 +1628,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			if len(tr) == 0 {
 				continue
 			}
-			if _, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr)); perr != nil {
+			if _, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr, mdLineMap)); perr != nil {
 				// md 失败不判死：原格式件仍可能交付成功（它与 md 是两条独立写路径）。
 				observability.Warn(ctx, "xlsx 纯文案 .md 先行生成失败（不影响原格式交付）", "lang", lc, "error", perr.Error())
 				gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案 .md 生成失败（不影响原格式交付）：%s", config.LangNames[lc], perr.Error()))
@@ -1639,7 +1686,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				p := mdPaths[lc]
 				if p == "" {
 					// 阶段①的 md 没写成（极少见）：现场补一次，宁可晚到也不能让该语言颗粒无收。
-					if p2, perr := writeLangMD(lc, deliveryTranslations(lc, langTranslations[lc]), untranslatedNotesFromSegments(texts, deliveryTranslations(lc, langTranslations[lc]))); perr == nil {
+					if p2, perr := writeLangMD(lc, deliveryTranslations(lc, langTranslations[lc]), untranslatedNotesFromSegments(texts, deliveryTranslations(lc, langTranslations[lc]), mdLineMap)); perr == nil {
 						p = p2
 					}
 				}
@@ -1776,7 +1823,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 				}
 				// ★ 两段式阶段①：md 先行（配音可能要等 TTS 子进程几十秒，那段时间客户先拿到可读的译文）。
 				//   未译出的行同样点名（B18）：音频链的 md 也是主阅读面。
-				appendUntranslatedNotes(lc, audPath, untranslatedNotesFromSegments(texts, tr))
+				appendUntranslatedNotes(lc, audPath, untranslatedNotesFromSegments(texts, tr, mdLineMap))
 				appendComplianceNotes(lc, audPath) // ★ 2026-11-03 裁决②：音频链的 md 也是主阅读面
 				mdPaths[lc] = audPath
 				artStage.emitOne(ArtifactKindMD, lc, audPath, false, false)
@@ -1828,7 +1875,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			// 那段时间客户已经能读到译文，而不是对着空白页等）。
 			// .md 输入件是唯一例外：回写件本身就是 markdown ⇒ md 与 original 同一路径
 			// （同路径去重口径，B10），阶段① 直接把行对齐写回做掉、写回段复用结果。
-			notes := untranslatedNotesFromSegments(texts, tr)
+			notes := untranslatedNotesFromSegments(texts, tr, mdLineMap)
 			mdIsOriginal := false
 			if ext == ".md" {
 				if werr := fileproc.ApplyAlignedText(".md", filePath, outPath, tr); werr == nil {
@@ -1978,7 +2025,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			p := mdPaths[lc]
 			if p == "" {
 				tr := deliveryTranslations(lc, langTranslations[lc])
-				p2, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr))
+				p2, perr := writeLangMD(lc, tr, untranslatedNotesFromSegments(texts, tr, mdLineMap))
 				if perr != nil {
 					// ★ G18：旁路产物失败不判死，但必须进 GateWarnings（否则客户以为一直都有 .md 可读）。
 					gateWarnings = append(gateWarnings, fmt.Sprintf("%s 纯文案旁路产物生成失败（不影响主交付）：%s", config.LangNames[lc], perr.Error()))

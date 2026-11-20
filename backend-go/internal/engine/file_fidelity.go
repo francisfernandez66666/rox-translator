@@ -49,6 +49,8 @@ type structureFingerprint struct {
 	bold          int // '**' 计数：加粗标记有没有丢（RC-5 的实测 381 处）
 	inlineCode    int // 反引号计数（已扣围栏）：行内代码标记有没有丢
 	strike        int // '~~' 计数：删除线标记有没有丢
+	brTags        int // '<br' 计数（含 <br>/<br/>/<br />）：表格内换行标记有没有丢（P1/G5）
+	htmlTags      int // 行内 HTML 标签总数（<b>/<i>/<span>/<br>…）：写回有没有吞标签（P1/G5）
 	cjkLines      int // 含汉字行数：非 CJK 目标语下即「残留源语」
 }
 
@@ -60,6 +62,8 @@ func computeStructureFingerprint(text string) structureFingerprint {
 	f.fences = strings.Count(text, "```")
 	f.bold = strings.Count(text, "**")
 	f.strike = strings.Count(text, "~~")
+	f.brTags = strings.Count(strings.ToLower(text), "<br")
+	f.htmlTags = countHTMLTags(text)
 	// 行内代码：先按围栏数量扣掉围栏自身的反引号（一个 ``` 含 3 个 `），
 	// 否则「代码块变多」会被误计成「行内代码变多」，两类丢失就分不开了。
 	f.inlineCode = strings.Count(text, "`") - f.fences*3
@@ -76,6 +80,31 @@ func computeStructureFingerprint(text string) structureFingerprint {
 		}
 	}
 	return f
+}
+
+// countHTMLTags 统计行内 HTML 标签个数（<b>/<i>/<span>/<br>/</span>…）。
+// 纯扫描不引正则：只认 `<` 紧跟字母或 `/` 且随后有 `>` 的形态，避免把数学比较 `a < b` 计入。
+func countHTMLTags(text string) int {
+	n := 0
+	for i := 0; i < len(text); i++ {
+		if text[i] != '<' || i+1 >= len(text) {
+			continue
+		}
+		j := i + 1
+		if text[j] == '/' {
+			j++
+		}
+		if j >= len(text) || !((text[j] >= 'a' && text[j] <= 'z') || (text[j] >= 'A' && text[j] <= 'Z')) {
+			continue
+		}
+		for j < len(text) && text[j] != '>' && text[j] != '\n' {
+			j++
+		}
+		if j < len(text) && text[j] == '>' {
+			n++
+		}
+	}
+	return n
 }
 
 // structureFidelityWarnings 比对原文与产物的结构指纹，返回人类可读的差异警告（含具体差值）。
@@ -101,6 +130,8 @@ func structureFidelityWarnings(lang, src, out string) []string {
 		{"** 加粗标记数", sf.bold, of.bold},
 		{"行内反引号数", sf.inlineCode, of.inlineCode},
 		{"~~ 删除线数", sf.strike, of.strike},
+		{"<br> 换行标记数", sf.brTags, of.brTags},
+		{"HTML 标签数", sf.htmlTags, of.htmlTags},
 	} {
 		if c.src != c.out {
 			w = append(w, fmt.Sprintf("%s 产物%s与原文不一致：原文 %d / 产物 %d（差 %+d），"+

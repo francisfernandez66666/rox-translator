@@ -1172,6 +1172,14 @@ func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, tar
 	if tid := tenant.FromContext(ctx); tid > 0 {
 		culture = e.cultureBlockFor(ctx, tid, targetLang, source)
 	}
+	// ★ 2026-11-20 P3：把本批高频词统一译法表拼进 culture 段（不改 reviewPromptFmt 模板，
+	//   从而不动 costmodel 固定开销锁）。策略是"建议统一"，与 KB 强制译法分离。
+	if hfBlock := highfreqTermsFromCtx(ctx).PromptBlock(); hfBlock != "" {
+		if culture != "" {
+			culture += "\n"
+		}
+		culture += hfBlock
+	}
 	langName := config.LangNames[targetLang]
 	if langName == "" {
 		langName = targetLang
@@ -3504,6 +3512,13 @@ func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translatio
 	culture := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
 		culture = e.cultureBlockFor(ctx, tid, targetLang, strings.Join(sources, "\n"))
+	}
+	// ★ 2026-11-20 P3：高频词统一译法表注入（与 ReviewTranslation 同一口径，文件链走这条）。
+	if hfBlock := highfreqTermsFromCtx(ctx).PromptBlock(); hfBlock != "" {
+		if culture != "" {
+			culture += "\n"
+		}
+		culture += hfBlock
 	}
 	langName := config.LangNames[targetLang]
 	if langName == "" {

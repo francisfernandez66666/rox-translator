@@ -673,6 +673,139 @@ func mdNormalizeTranslation(tr string, cell bool) string {
 	return s
 }
 
+// mdMarkerSeq 提取一段文本里的行内标记 token（按出现顺序）。
+// 只取会"丢了就破坏结构"的标记：成对的 **/__/~~/` 与孤立的 <br>。
+// 单个 * / _ 不取——它们可能是列表符或普通字面量，计数守恒反而会误伤（旧 emphasisRe 的教训）。
+//
+// <br> 的识别只认**完整闭合**的 `<br...>`（大小写不敏感）；被破坏的 `<br`（无 >）
+// 不算 token——它是"待修复"的形态，由 mdRestoreMarkers 按源计数补 `>` 修复。
+func mdMarkerSeq(s string) []string {
+	var out []string
+	lower := strings.ToLower(s)
+	for i := 0; i < len(s); {
+		if strings.HasPrefix(s[i:], "**") || strings.HasPrefix(s[i:], "__") || strings.HasPrefix(s[i:], "~~") {
+			out = append(out, s[i:i+2])
+			i += 2
+			continue
+		}
+		if s[i] == '`' {
+			out = append(out, "`")
+			i++
+			continue
+		}
+		if strings.HasPrefix(lower[i:], "<br") {
+			j := i + 3
+			for j < len(s) && s[j] != '>' {
+				j++
+			}
+			if j < len(s) {
+				out = append(out, "<br>") // 归一成标准形式，便于计数比对
+				i = j + 1
+				continue
+			}
+			// 无 '>'：被破坏的 <br，不产 token（留给修复逻辑）
+		}
+		i++
+	}
+	return out
+}
+
+// indexBrokenBR 从 from 起找第一个"残缺 <br"（大小写不敏感）：
+// 形如 `<br` 后面**直接跟非 '>' 字符**（如 `<br 覆盖`、`<brX`），即模型吞掉右尖括号的形态。
+// 完整的 `<br>`/`<br/>` 不算残缺。找不到返回 -1。
+func indexBrokenBR(s string, from int) int {
+	lower := strings.ToLower(s)
+	for i := from; i+3 <= len(s); i++ {
+		if lower[i:i+3] == "<br" {
+			// 向后找最近的 '>'；若紧跟的就是 '>' 则是完整标签，跳过
+			if i+3 < len(s) && s[i+3] == '>' {
+				continue
+			}
+			// 若后面更远处有 '>'，说明是 <br ...> 完整标签（如 <br/>），也不算残缺
+			j := i + 3
+			for j < len(s) && s[j] != '>' {
+				j++
+			}
+			if j < len(s) {
+				continue // 完整标签
+			}
+			return i // 后面没有 '>' ⇒ 残缺
+		}
+	}
+	return -1
+}
+
+// mdRestoreMarkers 写回前的标记守恒（P1 / G5，2026-11-20）。
+// 源片段 srcKey 里的标记是**结构**，不是可译内容：模型删了 **、把 <br> 写成 <br 都属破损。
+// 本函数按源的标记 token 序列把丢失的标记补回译文——
+//   - 成对标记（**/__/~~/`）：按源数量在译文首尾成对包裹，保证计数守恒；
+//   - <br>：按源数量补到译文末尾（位置不精确但结构不丢，且 <br> 多在表格 cell 末尾）。
+//
+// 只在"译文标记数 < 源标记数"时补（丢失场景）；译文标记更多不动（可能是模型加了强调，
+// 属于内容增强，不该削掉）。D1 保交付取向：不判死、不回退原文，只把结构标记补回去。
+func mdRestoreMarkers(srcKey, tr string) string {
+	srcSeq := mdMarkerSeq(srcKey)
+	if len(srcSeq) == 0 {
+		return tr
+	}
+	out := tr
+
+	// 第一优先：修复被破坏的 `<br`（无右尖括号）——模型把 `<br>` 写成 `<br` 是现网形态。
+	// 源里有几个完整 <br>、译文里有几个残缺 `<br`，逐个把残缺的补成 `<br>`（不新增、不重复）。
+	srcBR := 0
+	for _, m := range srcSeq {
+		if m == "<br>" {
+			srcBR++
+		}
+	}
+	if srcBR > 0 {
+		// 逐个把"残缺 <br"（<br 后直接跟非 '>' 字符，如 "<br 覆盖" 或 "<brX"）补成 "<br>"。
+		// 用 strings.Index 逐个定位，补完一个从下一位继续，绝不重复补同一个位置。
+		searchFrom := 0
+		for fixed := 0; fixed < srcBR; {
+			idx := indexBrokenBR(out, searchFrom)
+			if idx < 0 {
+				break // 没有更多残缺 <br
+			}
+			// 补 '>'；若 '<br' 后紧跟一个空格则一并吞掉（<br 覆盖 → <br>覆盖），
+			// 得到与源一致的标准形态。
+			rest := idx + 3
+			if rest < len(out) && (out[rest] == ' ' || out[rest] == '\t') {
+				rest++
+			}
+			out = out[:idx+3] + ">" + out[rest:]
+			searchFrom = idx + 4
+			fixed++
+		}
+	}
+
+	trSeq := mdMarkerSeq(out)
+	if len(trSeq) >= len(srcSeq) {
+		return out // 标记没丢（或已修复），不动
+	}
+	// 统计每种标记源/译文各多少个，缺多少补多少。
+	need := map[string]int{}
+	for _, m := range srcSeq {
+		need[m]++
+	}
+	for _, m := range trSeq {
+		need[m]--
+	}
+	// 成对标记：补到首尾（左开右闭各加一个），保证包裹关系成立。
+	for _, m := range []string{"**", "__", "~~", "`"} {
+		for need[m] > 0 {
+			out = m + out + m
+			need[m] -= 2
+		}
+	}
+	// <br> 仍缺的（整个被删掉，不是被破坏）：补到末尾。
+	for need["<br>"] > 0 {
+		out += "<br>"
+		need["<br>"]--
+	}
+	return out
+}
+
 // mdEscapeCellPipes 把 cell 译文里的裸分隔符中和成 markdown 转义形式 `\|`
 // （渲染后仍是 `|`，但不再被当作列边界 ⇒ 列数守恒）。
 // ★ 为什么不能简单 ReplaceAll("|", `\|`)：源 cell 里本来就可能写的是 `\|`（表格内的转义竖线），

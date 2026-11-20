@@ -89,19 +89,9 @@ var (
 	greekRe    = regexp.MustCompile("[\u0370-\u03FF]")
 	latnRe     = regexp.MustCompile("[A-Za-z]")
 
-	// 语言→书写系统
-	scriptMap = map[string]string{
-		"en": "latin", "es": "latin", "pt": "latin", "fr": "latin", "de": "latin",
-		"vi": "latin", "ms": "latin", "id": "latin", "it": "latin", "pl": "latin",
-		"sv": "latin", "nl": "latin", "tr": "latin", "fil": "latin",
-		"ru": "cyrillic", "kk": "cyrillic", "uk": "cyrillic", "mn": "cyrillic",
-		"ar": "arabic", "fa": "arabic", "ur": "arabic",
-		"zh_hant": "cjk", "ja": "cjk",
-		"ko": "hangul",
-		"th": "thai",
-		"he": "hebrew",
-		"el": "greek",
-	}
+	// ★ 语言→书写系统映射已归一（2026-11-20）：原 scriptMap 删除，
+	//   全仓唯一真源＝textscript.LangToScript。调用方 purityTargetScripts/
+	//   StripForeignParagraphs 均转调它，不再各持一份名单（"多把尺子"根治）。
 )
 
 // StripLangPrefix 去除翻译结果开头的语言名前缀（如 "英语："、"ru:"）
@@ -360,6 +350,53 @@ func StripChineseInNonZh(text, langCode string) string {
 	return stripHanLetters(text)
 }
 
+// StripForeignScriptsInNonTarget 删除译文里"成段的外来非拉丁脚本"（2026-11-20 P2）。
+//
+// 背景：StripChineseInNonZh 只删汉字，韩文 신호/西里尔 канал 混入希伯来/阿拉伯译文时无防线。
+// 本函数按 textscript 单一脚本分类，删掉"目标脚本以外、且非拉丁白名单"的连续字母串（≥2 字母）。
+//
+// 三条保守纪律（避免误杀）：
+//  1. 拉丁字母恒保留——品牌/技术词（Facebook/API）合法，且 D3 白名单由 gate 层单独管；
+//  2. 目标脚本恒保留——日文 Han+Kana 混排里 Kana 是目标的一部分（复用 TargetConsistency 口径）；
+//  3. 只删连续 ≥2 的外来字母串——孤立单字母可能是标点/符号误分类，宁可放过不误删。
+//
+// 参数 text 已过 StripChineseInNonZh；langCode 目标语言。返回清洗后的文本。
+func StripForeignScriptsInNonTarget(text, langCode string) string {
+	want := textscript.LangToScript(langCode)
+	if want == textscript.Other || want == textscript.Latin {
+		return text // 未知语言/拉丁目标：不清洗（拉丁目标只有中文残留，已由 StripChineseInNonZh 管）
+	}
+	isTarget := func(s textscript.Script) bool {
+		return s == want || s == textscript.Latin || s == textscript.Other || (want == textscript.Han && s.Kana())
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	runes := []rune(text)
+	i := 0
+	for i < len(runes) {
+		r := runes[i]
+		s := textscript.Of(r)
+		if isTarget(s) || !unicode.IsLetter(r) {
+			b.WriteRune(r)
+			i++
+			continue
+		}
+		// 外来脚本字母：数连续同脚本字母个数
+		j := i + 1
+		for j < len(runes) && unicode.IsLetter(runes[j]) && textscript.Of(runes[j]) == s {
+			j++
+		}
+		if j-i >= 2 {
+			// 连续 ≥2 外来字母：整串删除（这正是 신호/канал 的形态）
+			i = j
+			continue
+		}
+		b.WriteRune(r) // 孤立单字母保留
+		i++
+	}
+	return b.String()
+}
+
 // stripHanLetters 删除文本里的全部汉字（只删汉字，标点/数字/假名原样保留）。
 //
 // 为什么不用正则：旧实现只覆盖 U+4E00–9FFF 与 U+3400–4DBF，扩展 B~G 的汉字会原样留在
@@ -377,15 +414,19 @@ func stripHanLetters(text string) string {
 	return b.String()
 }
 
-// StripForeignParagraphs 删除不属于目标语言书写系统的段落
+// StripForeignParagraphs 删除不属于目标语言书写系统的段落。
+// ★ 2026-11-20：scriptMap 归一后转调 textscript.LangToScript，单一真源。
+// 注意本函数按"整行过滤"，激进（含品牌名的正常行可能被删）——生产链默认用更温和的
+// 字符级 StripForeignScriptsInNonTarget；本函数保留给"整段外语回译"的清洗场景。
 func StripForeignParagraphs(text, langCode string) string {
-	script, ok := scriptMap[langCode]
-	if !ok {
+	script := textscript.LangToScript(langCode)
+	if script == textscript.Other {
 		return text
 	}
-	if script == "latin" {
+	if script == textscript.Latin {
 		return stripLangNameSections(text, langCode)
 	}
+	scriptName := purityTargetScripts(langCode) // 复用字符串档映射（同一真源）
 	lines := strings.Split(text, "\n")
 	var kept []string
 	for _, line := range lines {
@@ -393,11 +434,21 @@ func StripForeignParagraphs(text, langCode string) string {
 		if line == "" {
 			continue
 		}
-		if lineBelongsToScript(line, script) {
+		if lineBelongsToScript(line, scriptName) {
 			kept = append(kept, line)
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// hasHanScript 判断文本是否含汉字（走 textscript 单一脚本分类，覆盖扩展 B~G）。
+func hasHanScript(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) && textscript.Of(r) == textscript.Han {
+			return true
+		}
+	}
+	return false
 }
 
 // lineBelongsToScript 判断某行是否属于目标语言书写系统（按各书写系统正则检查；
@@ -415,6 +466,10 @@ func lineBelongsToScript(line, script string) bool {
 	case "thai":
 		return thaiRe.MatchString(line)
 	case "hebrew":
+		// ★ 2026-11-20：he 目标行若混入韩文/西里尔/汉字（整段回译污染），不算合格目标行。
+		if hangulRe.MatchString(line) || cyrillicRe.MatchString(line) || hasHanScript(line) {
+			return false
+		}
 		return hebrewRe.MatchString(line)
 	case "greek":
 		return greekRe.MatchString(line)
@@ -683,6 +738,13 @@ func PostProcessTranslation(text, langCode string) string {
 	}
 	// 非 CJK 目标语删除中文字符
 	text = StripChineseInNonZh(text, langCode)
+	// ★ 2026-11-20 P2：删除其他外来非拉丁脚本（韩文/西里尔等混入希伯来/阿拉伯译文）。
+	//   拉丁品牌恒保留；只删连续 ≥2 的外来字母串，孤立单字母放过。
+	text = StripForeignScriptsInNonTarget(text, langCode)
+	// ★ 2026-11-20（方案 #7 取舍）：StripForeignParagraphs 保持**不接入**生产链——
+	//   它按整行删除，实测会误删 ja/ru/th 的正常译文行（TestReviewStageNeverWritesMapWhileIterating 红）。
+	//   外来脚本清洗已由上面的字符级 StripForeignScriptsInNonTarget 覆盖（只删外来字母串、保内容），
+	//   符合用户"保交付优先"拍板。函数保留供未来"整段回译"专用场景，并在 he 分支加了外来脚本排除。
 	// ★ 二次空占位清扫（2026-09-02 符号残留根因修复）：中文删除可能把残留标记
 	//   变成新的空方括号对（如【原文】→【】），兜底再剥离一次，确保成品无空占位括号残留。
 	text = stripEmptyPlaceholderBrackets(text)

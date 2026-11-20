@@ -31,6 +31,8 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+
+	"translator/internal/textscript"
 )
 
 // reviewLatinRunMinWords 判"整句外语残留"的连续拉丁词阈值。
@@ -83,15 +85,31 @@ func maxLatinWordRun(text string) int {
 	return max
 }
 
-// purityTargetScripts 目标语种的书写体系查表（★ 派生自 postprocess.go 的 scriptMap，不另立第二份名单）。
-// zh 刻意补进来：scriptMap 因为历史原因没收 zh（中文是"删除中文"那条腿的豁免档），
-// 但纯度判据必须认它是 CJK 目标——㊶ 本体就是 zh。
+// purityTargetScripts 目标语种的书写体系查表（2026-11-20 映射归一后单一真源）。
+// ★ 不再持有自己的 scriptMap——统一转调 textscript.LangToScript（全仓语言→脚本唯一映射），
+// 再折叠成本文件判据需要的字符串档。两份旧映射（postprocess.scriptMap、本函数旧表）已删除。
 // 返回 "" 表示不认识这个语种（不认识 ⇒ 不判，fail-soft）。
 func purityTargetScripts(langCode string) string {
-	if langCode == "zh" {
+	switch textscript.LangToScript(langCode) {
+	case textscript.Latin:
+		return "latin"
+	case textscript.Cyrillic:
+		return "cyrillic"
+	case textscript.Arabic:
+		return "arabic"
+	case textscript.Han:
 		return "cjk"
+	case textscript.Hangul:
+		return "hangul"
+	case textscript.Thai:
+		return "thai"
+	case textscript.Hebrew:
+		return "hebrew"
+	case textscript.Greek:
+		return "greek"
+	default:
+		return ""
 	}
-	return scriptMap[langCode]
 }
 
 // reviewOutputRejectReason ② 审校产物纯度判据。

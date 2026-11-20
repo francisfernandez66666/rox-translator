@@ -205,6 +205,77 @@ func cjkEchoWashedToSkeleton(src, out string) bool {
 	return !hasLetterRun(out, 2)
 }
 
+// IsSkeletonForLang 判据 3″ 的"带品牌英文骨架"补强（2026-11-20 P0）。
+//
+// 为什么需要它：cjkEchoWashedToSkeleton 用 !hasLetterRun(out,2)，任何语言连续 2 个字母即放行；
+// 现网样本 `Facebook / Instagram / TikTok ，，、；，。 = ` 里品牌英文有连续字母 ⇒ 被误判"可用"。
+//
+// ★ 骨架的跨语言通用信号＝**中文全角标点残留**：源文中文字被 StripChineseInNonZh 洗掉后，
+//   全角标点（，。、；：…）原样留下，正常目标语译文绝不会用源语的全角标点。
+//   这比"目标脚本占比"更可靠——拉丁目标（de/en）里品牌英文与目标脚本同形，占比判据会失效。
+//
+// 判据（先过前置，再按目标语种分两档）：
+//  前置：源文有可译文字（非 ASCII 字母）+ out 非空 + 目标语言已知；
+//  拉丁目标：中文全角标点残留 ≥2 即判骨架（正常拉丁译文用半角标点）；
+//  非拉丁目标：目标脚本字母占比 < 0.15 且（有全角标点残留 或 有数字）即判骨架。
+//
+// 语言无关：任意目标语同一套口径；未知语言（want=Other）fail-soft 放行。
+const skeletonTargetMinShare = 0.15
+
+// cjkFullWidthPunct 中文全角标点集合（源文洗掉汉字后残留的骨架指纹）。
+// 不含半角 ,.;:!? —— 那些是正常目标语译文的合法标点，不能当骨架证据。
+const cjkFullWidthPunct = "，。、；：？！（）《》「」『』【】—…·“”‘’"
+
+// countCJKFullWidthPunct 统计 s 里中文全角标点的个数。
+// 参数 s：待判文本（写回前的译文 out）；返回：落在 cjkFullWidthPunct 集合里的字符个数。
+// 用途：骨架判据的跨语言信号——正常目标语译文不会用源语全角标点。
+func countCJKFullWidthPunct(s string) int {
+	n := 0
+	for _, r := range s {
+		if strings.ContainsRune(cjkFullWidthPunct, r) {
+			n++
+		}
+	}
+	return n
+}
+
+// IsSkeletonForLang 判"带品牌英文的骨架半截译文"是否不可用（P0，2026-11-20）。
+// 参数：src=源文（中文为主）、out=后处理过的候选译文、lang=目标语言码。
+// 返回：true=判骨架不可用（走补译/救援），false=正常译文放行。
+// 口径分两档：拉丁目标靠中文全角标点残留≥2；非拉丁目标靠"目标脚本占比不足+骨架证据"。
+// 上方长注释含完整推导与误杀边界，本函数由 fileTranslationUsable 调用。
+func IsSkeletonForLang(src, out, lang string) bool {
+	if !sourceHasTranslatableLetters(src) {
+		return false
+	}
+	want := textscript.LangToScript(lang)
+	if want == textscript.Other {
+		return false // 未知语言不判（fail-soft）
+	}
+	o := strings.TrimSpace(out)
+	if o == "" {
+		return false // 空串由判据 1 管
+	}
+	fullPunct := countCJKFullWidthPunct(o)
+	// 拉丁目标：品牌英文与目标同脚本，占比判据失效，靠全角标点残留判定。
+	if want == textscript.Latin {
+		return fullPunct >= 2
+	}
+	// 非拉丁目标：目标脚本字母占比不足 + 骨架证据（全角标点或数字）。
+	// maxForeignShare 传 1.0：外来脚本拦截交给 P2 的 gate，本判据只管"目标占比不足"。
+	if textscript.TargetConsistency(o, want, skeletonTargetMinShare, 1.0) {
+		return false // 目标占比达标 ⇒ 不是骨架
+	}
+	hasDigit := false
+	for _, r := range o {
+		if unicode.IsDigit(r) {
+			hasDigit = true
+			break
+		}
+	}
+	return fullPunct >= 2 || hasDigit
+}
+
 // hasLetterRun 译文里是否存在至少 n 个**连续字母**（任何书写系统：拉丁/西里尔/假名/谚文/阿拉伯…）。
 // 用 unicode.IsLetter 而不是 [A-Za-z]：西里尔/泰文/阿拉伯等目标语的正常译文同样要能放行。
 func hasLetterRun(s string, n int) bool {

@@ -68,7 +68,7 @@ func (g *gateCtx) termReqs(ctx context.Context, source, lang string) []gate.Term
 	if err != nil {
 		ents = nil
 	}
-	seen := map[string]bool{}
+	seen := map[string]int{} // key → out 里主译法的下标（同 source 的其它译法收进 Aliases）
 	var out []gate.TermRequirement
 	for _, ent := range ents {
 		if ent == nil || ent.Layer != 1 || ent.TargetLang != lang {
@@ -87,14 +87,19 @@ func (g *gateCtx) termReqs(ctx context.Context, source, lang string) []gate.Term
 				"term_id", ent.ID, "target_lang", lang, "source_len", len([]rune(ent.SourceText)))
 			continue
 		}
-		// ★ 2026-10-29 第十一轮：同一个 source 只留一条（按 SQL 的 pack_type 优先级取第一条）。
+		// ★ 2026-10-29 第十一轮：同一个 source 只留一条主译法（按 SQL 的 pack_type 优先级取第一条）。
 		//   RunWithTerms 要求**每条**要求的 target 都出现；两条不同译法会让这句话永远过不了闸
 		//   （每段重翻 + 一条 KB术语遵循 警告），这正是 T-A-0 查重的根因。
+		// ★ 2026-11-20（方案 #8）：同 source 的其它译法不再丢弃，收进 Aliases 供未来的
+		//   一致性后检/别名判定消费；主译法仍是第一条，ForceTerms/RunWithTerms 口径不变。
 		k := strings.ToLower(ent.SourceText) + "\x00" + ent.TargetLang
-		if seen[k] {
+		if idx, ok := seen[k]; ok {
+			if out[idx].Target != ent.TargetText {
+				out[idx].Aliases = append(out[idx].Aliases, ent.TargetText)
+			}
 			continue
 		}
-		seen[k] = true
+		seen[k] = len(out)
 		out = append(out, gate.TermRequirement{Source: ent.SourceText, Target: ent.TargetText})
 	}
 	g.termCache[key] = out
@@ -183,8 +188,12 @@ func (g *gateCtx) check(source, lang, translated string, retry bool, e *Engine, 
 			//   IsTranslationUsable 里的 nonLinguisticMustStayVerbatim / hasInstructionEcho 正是
 			//   为这一类回显而设，此处漏接＝那道判定对「文件重译腿」完全无感（同 RC-2 的装配级教训：
 			//   判定函数存在且有单测，装配漏一处照样复发）。
-			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageAIInitial); strings.TrimSpace(fixed) != "" &&
-				IsTranslationUsable(source, fixed) && gate.RunWithTerms(source, lang, fixed, terms).Pass {
+			// ★ 2026-11-20 P3（用户拍板）：问题段落走**复核模型**（StageReview）重译，
+			//   输入只有原文+诊断（TranslateWithFeedback 天然不带初翻）⇒ 不走初翻链路。
+			//   采纳门槛用 fileTranslationUsable（含 P0 骨架判据），与写入点同一把尺子。
+			//   失败不回落初翻——由上层按"回落原文+md 标注"处理（见 applySegmentGates/review_rescue）。
+			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageReview); strings.TrimSpace(fixed) != "" &&
+				e.fileTranslationUsable(ctx, source, fixed, lang) && gate.RunWithTerms(source, lang, fixed, terms).Pass {
 				tr = fixed
 			}
 		}
@@ -217,15 +226,32 @@ func (e *Engine) applyOutputGates(ctx context.Context, source string, translatio
 		return nil
 	}
 	gc := e.newGateCtx(ctx)
+	// ★ P3：每个目标语构建一个高频词统一表（KB 词已剔除），注入 ctx 供复核重译腿/一致性后检消费。
 	var warnings []string
 	for lc, tr := range translations {
-		fixed, ws := gc.check(source, lc, tr, retry, e, ctx)
+		hfCtx := withHighfreqTerms(ctx, e.BuildHighfreqTermTable(ctx, []string{source}, lc, &gc))
+		fixed, ws := gc.check(source, lc, tr, retry, e, hfCtx)
 		if fixed != tr {
 			translations[lc] = fixed
 		}
 		warnings = append(warnings, ws...)
+		warnings = append(warnings, e.highfreqConsistencyCheck(hfCtx, lc, source, translations)...)
 	}
 	return capWarnings(warnings)
+}
+
+// highfreqConsistencyCheck 对单个目标语译文跑高频词一致性后检，漂移则告警（保交付，不判死）。
+// 真正的"抽出重译"由 gc.check 的复核重译腿承担（StageReview）；这里只做兜底信号。
+func (e *Engine) highfreqConsistencyCheck(ctx context.Context, lc, source string, translations map[string]string) []string {
+	tbl := highfreqTermsFromCtx(ctx)
+	checks := gate.CheckTermConsistency(source, translations[lc], tbl.AsSnapshot())
+	var w []string
+	for _, c := range checks {
+		if !c.Pass {
+			w = append(w, fmt.Sprintf("%s %s", langLabel(lc), c.Detail))
+		}
+	}
+	return w
 }
 
 // applySegmentGates 文件主路径（HandleFile）：对流式分段译文按语言做质量闸门校验。
@@ -238,15 +264,31 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 	gc := e.newGateCtx(ctx)
 	var warnings []string
 	for lc, m := range langTranslations {
+		// ★ P3：按语言收集全篇源段，构建一次高频词表（KB 已剔除），整篇一致性后检。
+		sources := make([]string, 0, len(m))
+		for orig := range m {
+			sources = append(sources, orig)
+		}
+		hfCtx := withHighfreqTerms(ctx, e.BuildHighfreqTermTable(ctx, sources, lc, &gc))
 		for orig, tr := range m {
 			if tr == SensitivePlaceholderText { // ★ S8：拦截占位段不进质量闸门
 				continue
 			}
-			fixed, ws := gc.check(orig, lc, tr, retry, e, ctx)
+			fixed, ws := gc.check(orig, lc, tr, retry, e, hfCtx)
 			if fixed != tr {
 				m[orig] = fixed
 			}
 			warnings = append(warnings, ws...)
+		}
+		// 整篇一致性后检（跨段分歧必须整篇看）。
+		joinedSrc, joinedTr := strings.Join(sources, "\n"), ""
+		for _, s := range sources {
+			joinedTr += m[s] + "\n"
+		}
+		for _, c := range gate.CheckTermConsistency(joinedSrc, joinedTr, highfreqTermsFromCtx(hfCtx).AsSnapshot()) {
+			if !c.Pass {
+				warnings = append(warnings, fmt.Sprintf("%s %s", langLabel(lc), c.Detail))
+			}
 		}
 	}
 	return capWarnings(warnings)

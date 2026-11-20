@@ -239,6 +239,11 @@ func (e *Engine) fileTranslationUsable(ctx context.Context, src, out, targetLang
 	if !IsTranslationUsable(src, out) {
 		return false
 	}
+	// ★ P0 骨架判据补强（2026-11-20，Q5 定案）：带品牌英文的骨架（旧判据靠 hasLetterRun
+	//   会放行）在此拦下。放在 echoGuardOff() 之前——骨架是交付正确性问题，不受 echo 应急档控制。
+	if IsSkeletonForLang(src, out, targetLang) {
+		return false
+	}
 	if e.echoGuardOff() {
 		return true
 	}

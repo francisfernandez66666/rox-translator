@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"translator/internal/textscript"
 )
 
 // GateResult 译文约束闸门的整体校验结果：汇总全部硬性校验项，
@@ -30,8 +32,12 @@ type GateResult struct {
 // TermRequirement 术语遵循要求：源文命中 KB 术语时，译文必须包含其规定译法。
 // 用于 RAG 硬闸——知识库检索到的术语（如 极石→ROX）若未在译文中体现，判不通过。
 type TermRequirement struct {
-	Source string // KB 术语源文（中文，如「极石」）
-	Target string // KB 规定译法（如 ROX）
+	Source  string   // KB 术语源文（中文，如「极石」）
+	Target  string   // KB 规定译法（如 ROX）
+	Aliases []string // 合法别名（高频词表用；KB 词默认空=只有 Target 一种合法译法）
+	// FromHighfreq 标记该条来自高频词表（非 KB）。KB 硬闸 ForceTerms/RunWithTerms 只认
+	// 非本标记的词——保证"KB 词强制不变、高频词不碰 KB"的职责分离（2026-11-20 用户拍板）。
+	FromHighfreq bool
 }
 
 // Check 单条硬性校验项的结果：Name 标识校验项、Pass 标记是否通过、
@@ -140,6 +146,9 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 	//   仅对「源文确实包含该术语」的要求生效；目标译法为空或源文不包含则跳过。
 	//   校验口径：译文非空且包含术语规定译法（子串匹配）即通过。
 	for _, tm := range terms {
+		if tm.FromHighfreq {
+			continue // 高频词是"建议统一"，不进 KB 强制硬闸（保交付，避免误杀品牌/一词多义）
+		}
 		if strings.TrimSpace(tm.Source) == "" || strings.TrimSpace(tm.Target) == "" {
 			continue
 		}
@@ -160,6 +169,19 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 		res.Pass = false
 	}
 
+	// 11. 目标语言脚本一致性（2026-11-20 P2）：译文混入非目标语言脚本（如希伯来文里
+	//   混入韩文 신호/西里尔カнал）必须检出。用 textscript 单一口径，拉丁品牌白名单不误杀。
+	//   阈值取"明显污染"档（目标体系占比 >= 0.15、任一外来非拉丁脚本 <= 0.10），避免误杀
+	//   短译文/术语混排。失败动作＝记 Check 让上层走既有重译闭环，不新增"阻断交付"档。
+	if tr != "" {
+		want := textscript.LangToScript(target)
+		if want != textscript.Other && want != textscript.Latin && !textscript.TargetConsistency(tr, want, 0.15, 0.10) {
+			res.Checks = append(res.Checks, Check{"目标语言脚本一致", false,
+				fmt.Sprintf("译文混入非目标语言(%s)的书写系统字符", target)})
+			res.Pass = false
+		}
+	}
+
 	return res
 }
 
@@ -174,6 +196,9 @@ func ForceTerms(source, translation string, terms []TermRequirement) (string, in
 		return tr, 0
 	}
 	for _, tm := range terms {
+		if tm.FromHighfreq {
+			continue // 高频词不参与 KB 强制覆写（同上，职责分离）
+		}
 		src := strings.TrimSpace(tm.Source)
 		tgt := strings.TrimSpace(tm.Target)
 		if src == "" || tgt == "" || !termContains(source, src) {
@@ -332,27 +357,18 @@ func hasRepetition(s string) bool {
 	return false
 }
 
-// targetCharsReasonable 目标语言词面合理性（弱校验：目标为 CJK 时应含汉字等）
+// targetCharsReasonable 目标语言词面合理性（弱校验：目标体系字母是否出现）。
+//
+// ★ 2026-11-20 P2 重写：原 switch 无 he 等语种分支，落 default 要求拉丁字母——
+//   方向反了，希伯来语污染译文含 `arketing` 反而通过。现转调 textscript 单一口径，
+//   覆盖全部已在 LangToScript 登记的语言（含 he/ar/ru/kk）。
+//   kk 的"西里尔且不含阿拉伯"专属约束保留（见下方特判）。
 func targetCharsReasonable(tr, target string) bool {
 	if tr == "" {
 		return true
 	}
-	switch target {
-	case "zh_hant", "zh":
-		return reCJK.MatchString(tr)
-	case "ru":
-		return strings.ContainsAny(tr, "абвгдеёжзийклмнопрстуфхцчшщъыьэюя")
-	case "ar":
-		return strings.ContainsAny(tr, "ابتثجحخدذرزسشصضطظعغفقكلمنهوي")
-	case "ja":
-		return strings.ContainsAny(tr, "あいうえおかきくけこアイウエオ一二三四五六七八九十")
-	case "ko":
-		return strings.ContainsAny(tr, "가나다라마바사아자차카타파하")
-	case "th":
-		return strings.ContainsAny(tr, "กขคงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหอฮ")
-	case "kk":
-		// 哈萨克语（哈萨克斯坦）：官方书写系统为西里尔字母（Қазақ тілі）。
-		// 必须出现西里尔字母，且不得输出阿拉伯字母写法（中国哈萨克族所用阿拉伯字母变体）。
+	// 哈萨克语专属：官方用西里尔，不得输出阿拉伯字母变体（比通用脚本校验更严）。
+	if target == "kk" {
 		var cyr, arabic int
 		for _, r := range tr {
 			if !unicode.IsLetter(r) {
@@ -366,8 +382,20 @@ func targetCharsReasonable(tr, target string) bool {
 			}
 		}
 		return cyr > 0 && arabic == 0
-	default:
-		// 拉丁系语言：应含英文字母
+	}
+	want := textscript.LangToScript(target)
+	if want == textscript.Other {
+		// 未映射语言：沿用旧的兜底（有非 ASCII 字母即放行），fail-soft
+		for _, r := range tr {
+			if r > unicode.MaxASCII && unicode.IsLetter(r) {
+				return true
+			}
+		}
+		return false
+	}
+	// 拉丁目标保留旧语义：必须至少有一个拉丁字母（`<`/纯符号无字母 ⇒ 不通过，
+	// 让闸门打回重译——现网"源段是 `<`、重译回吐指令"那条锁依赖此行为）。
+	if want == textscript.Latin {
 		for _, r := range tr {
 			if unicode.IsLetter(r) && (r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z') {
 				return true
@@ -375,4 +403,6 @@ func targetCharsReasonable(tr, target string) bool {
 		}
 		return false
 	}
+	// 非拉丁目标：只判"目标体系字母占比 >= 极低阈值"；外来脚本拦截交给检查 11。
+	return textscript.TargetConsistency(tr, want, 0.05, 1.0)
 }

@@ -131,6 +131,7 @@ func mdApplyLine(raw string, ctx *mdLineCtx, translations map[string]string) str
 		if rep == "" || rep == sp.key {
 			continue // 空译文或同文回显：等于没翻，保留原文更诚实
 		}
+		rep = mdRestoreMarkers(sp.key, rep) // P1/G5：模型删掉的 **/<br> 等标记按源补回
 		rep = mdProtectLinkTargets(sp.key, rep)
 		out = out[:sp.start] + rep + out[sp.end:]
 		hitStart = sp.start
@@ -195,9 +196,10 @@ func WriteTranslationMd(outPath string, sourceTexts []string, translations map[s
 // Reason 由调用方给**成因原话**——三族（上游未返回／输出被截断／补译多轮仍非译文）不许混成
 // 一句"部分未译出"，那是把归因藏起来。
 type UntranslatedItem struct {
-	Line   int    // 1 起的行号（按交付文档里的段落顺序数）
+	Line   int    // 1 起的序号（Unit="行" 时为物理行号；Unit="段" 时为片段序号）
 	Source string // 该段原文（图上/文内已按原样保留，这里点名它）
 	Reason string // 成因一句话，由调用方按族给
+	Unit   string // "行"或"段"（空值按"行"兼容旧调用）；P4：无法保证物理行号时诚实写"段"
 }
 
 // AppendUntranslatedNotes 在已写好的 .md 末尾追加「未译出内容」一节。
@@ -218,9 +220,18 @@ func AppendUntranslatedNotes(outPath string, items []UntranslatedItem) error {
 	if len(b) > 0 && b[len(b)-1] != '\n' {
 		sb.WriteString("\n")
 	}
-	fmt.Fprintf(&sb, "\n## 未译出内容（共 %d 行）\n", len(items))
+	// P4：按 item 的 Unit 输出"行"或"段"——无法确定物理行号时诚实写"第 N 段"，
+	// 不再把片段序号冒充物理行号（现网"第 211 行"但全文仅 204 行的根因）。
+	unitOf := func(u string) string {
+		if u == "段" {
+			return "段"
+		}
+		return "行" // 空值/其它按"行"兼容旧调用
+	}
+	firstUnit := unitOf(items[0].Unit)
+	fmt.Fprintf(&sb, "\n## 未译出内容（共 %d %s）\n", len(items), firstUnit)
 	for _, it := range items {
-		fmt.Fprintf(&sb, "- 第 %d 行：原文「%s」，%s\n", it.Line, it.Source, it.Reason)
+		fmt.Fprintf(&sb, "- 第 %d %s：原文「%s」，%s\n", it.Line, unitOf(it.Unit), it.Source, it.Reason)
 	}
 	return os.WriteFile(outPath, []byte(sb.String()), 0o644)
 }
