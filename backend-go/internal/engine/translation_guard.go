@@ -868,11 +868,33 @@ func stripTrailingSymbolGarbage(out string) string {
 		return out
 	}
 	rest := strings.TrimRight(string(rs[:cut]), " \t")
+	// ★ 2026-11-21 三轮：若这一刀正好落在 `*` 串中间，且该串是偶数长度（成对强调标记），
+	// 把整串纳入 rest 再继续剥它后面的残渣——否则 `**标题** （）` 会被劈成 `**标题`，
+	// 写回层再按源补回时两头各加一个 ⇒ `****标题**`（tv_job3 实测 6 行奇数 `**`）。
+	// 奇数长度的 `*` 串（`***`）不动：那种形态本身就残缺，硬并进去等于替模型猜意图。
+	if cut < len(rs) && rs[cut] == '*' {
+		j := cut
+		for j < len(rs) && rs[j] == '*' {
+			j++
+		}
+		if (j-cut)%2 == 0 {
+			cut = j
+			rest = strings.TrimRight(string(rs[:cut]), " \t")
+		}
+	}
 	// 收尾处残留的分隔符一并收干净（`refresh ；` ⇒ `refresh`），但**不碰字母**。
 	rest = strings.TrimRight(rest, ";；,，、·|")
 	rest = strings.TrimSpace(rest)
 	if rest == "" {
 		return out // 整段都是残渣：保留原值，绝不留白
+	}
+	// ★ 2026-11-21 三轮：这一刀不许把成对强调标记劈成单边。
+	// 形态：`**标题**` 的尾部 `**` 落在"无字母尾巴"里，旧判据把它当标点残渣剥掉 ⇒ 交付 `**标题`，
+	// 写回层再按源补回时两头各加一个 ⇒ `****标题**`（tv_job3 实测 6 行奇数 `**`）。
+	// 判据刻意窄：只在"原文成对（偶数个 `**`）、剥完成单边（奇数个）"时放弃剥离——
+	// 真正的残渣尾巴（`（） =；=-×；30`）不含 `**`，行为一字不变。
+	if strings.Count(out, "**")%2 == 0 && strings.Count(rest, "**")%2 == 1 {
+		return out
 	}
 	return rest
 }

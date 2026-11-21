@@ -101,6 +101,80 @@ func TestMdTrimExcessMarkers(t *testing.T) {
 	}
 }
 
+// TestMdMarkerRoundTripAcrossModelShapes ★ 2026-11-21 三轮：模型对成对标记的四种形态
+// （原样保留 / 只给开头 / 只给结尾 / 全丢）走**真实提取→写回链路**后，最终 `**` 计数必须等于源、
+// 且不得出现 `****`。
+//
+// 为什么必须走整条链：三轮 tv_job3 真值暴露的根因不在单点，而在两段逻辑叠加——
+// `engine.stripTrailingSymbolGarbage` 把结尾 `**` 当标点残渣剥掉，`mdRestoreMarkers` 又对
+// 奇数缺口两头各加一个 ⇒ `**X` 变成 `****X**`。只测纯函数会各自"看起来对"，串起来才是坏形态。
+func TestMdMarkerRoundTripAcrossModelShapes(t *testing.T) {
+	srcLine := `## **1.2 价值测算**`
+	srcKey := `**1.2 价值测算**`
+	cases := []struct{ name, tr string }{
+		{"模型原样保留标记", `**1.2 Value Calculation**`},
+		{"模型只给开头（被剥尾后的形态）", `**1.2 Value Calculation`},
+		{"模型只给结尾", `1.2 Value Calculation**`},
+		{"模型全丢标记", `1.2 Value Calculation`},
+		{"模型多包一层", `****1.2 Value Calculation****`},
+	}
+	wantBody := "1.2 Value Calculation"
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mdApply(t, srcLine, map[string]string{srcKey: c.tr})
+			if n := strings.Count(got, "**"); n != 2 {
+				t.Errorf("最终 ** 计数=%d，期望 2（源计数）\n产物=%q", n, got)
+			}
+			if strings.Contains(got, "****") {
+				t.Errorf("产物出现 `****`（过发形态）: %q", got)
+			}
+			if !strings.Contains(got, wantBody) {
+				t.Errorf("内容丢失: %q 不含 %q", got, wantBody)
+			}
+			if !strings.HasPrefix(got, "## **") || !strings.HasSuffix(got, "**") {
+				t.Errorf("标记未正确包裹: %q", got)
+			}
+		})
+	}
+}
+
+// TestMdRealDocOddMarkerShapes ★ 2026-11-21 三轮：用 tv_job3 真值产物里那 6 行奇数 `**`
+// 的**原始形态**（源行 + 模型输出）走真实写回链路，断言最终标记 token 数与源相等、
+// 且不出现源里没有的相邻 `****`。
+//
+// 这组样本是本轮根因的直接证据：`**P0 组件**` 被模型输出成 `****מרכיב P**`（3 个 token），
+// 以及源本身带 `**0****5****`（7 个 token，奇数！）时模型少给一个 → 旧 restore 两头各加一个。
+// ⇒ 「奇数行=0」不能当唯一判据：源计数本身可以是奇数，真正的守恒口径是**token 数等于源**。
+func TestMdRealDocOddMarkerShapes(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		key   string
+		model string
+	}{
+		{"表格cell被多包一层", `|**环节**|**P0 组件**|**功能**|`, `**P0 组件**`, `****מרכיב P**`},
+		{"标题闭标记被吞", `**3\\.4 大模型调用逻辑**`, `**3\\.4 大模型调用逻辑**`, `****3.4 לוגיקת הקריאה של מודלים גדולים**`},
+		{"源本身含相邻标记且模型少一个", `**0****5**** 研发预算与选型：自研 vs 供应商**`,
+			`**0****5**** 研发预算与选型：自研 vs 供应商**`, `**0****5**** תקציב פיתוח ובחירת מוצרים**`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mdApply(t, c.src, map[string]string{c.key: c.model})
+			// ★ 基准必须是**源行**而不是单个键：表格行里还有别的 cell 的标记，
+			// 拿键比会把自己算成"产物多出 4 个 token"（首跑真踩，那是判据错不是产品错）。
+			wantTok := len(mdMarkerSeq(c.src))
+			gotTok := len(mdMarkerSeq(got))
+			if gotTok != wantTok {
+				t.Errorf("标记 token 数不守恒：源行 %d / 产物 %d\n源=%q\n产物=%q", wantTok, gotTok, c.src, got)
+			}
+			// 源行不含相邻 `****` 时，产物也不许出现（那是过发形态，不是内容增强）。
+			if !strings.Contains(c.src, "****") && strings.Contains(got, "****") {
+				t.Errorf("产物出现源里没有的 `****`（过发形态）: %q", got)
+			}
+		})
+	}
+}
+
 // TestMdExcessThenRestore 验证双向守恒串联：过发削回 + 缺失补回，最终计数==源。
 func TestMdExcessThenRestore(t *testing.T) {
 	src := `**1\.2 价值测算：效率、成本、订单**`

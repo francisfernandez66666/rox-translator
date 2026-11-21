@@ -912,11 +912,38 @@ func mdRestoreMarkers(srcKey, tr string) string {
 	for _, m := range trSeq {
 		need[m]--
 	}
-	// 成对标记：补到首尾（左开右闭各加一个），保证包裹关系成立。
+	// 成对标记：**按缺失侧补**（2026-11-21 三轮，tv_job3 真值实测）。
+	// ★ 旧写法 `out = m + out + m` 对奇数缺口（缺 1 个）会两头各加一个 ⇒ `**X` 变成 `****X**`：
+	//   计数从 1 个变 3 个（过发），交付物里既出现 `****` 又出现 6 行奇数 `**`（源 152 → 产物 162）。
+	//   正确形态是「哪一侧缺就补哪一侧」：源以 m 起手而译文没有 ⇒ 补开头；源以 m 收尾而译文没有 ⇒ 补结尾。
+	//   只有「中间整对丢失」（两侧都在、总计数仍不足）才走成对包裹，且**绝不**只加一侧（那会造出奇数计数）。
 	for _, m := range []string{"**", "__", "~~", "`"} {
-		for need[m] > 0 {
+		if need[m] <= 0 {
+			continue
+		}
+		if strings.HasPrefix(srcKey, m) && !strings.HasPrefix(out, m) {
+			out = m + out
+			need[m]--
+		}
+		if need[m] > 0 && strings.HasSuffix(srcKey, m) && !strings.HasSuffix(out, m) {
+			out += m
+			need[m]--
+		}
+		// 中间整对丢失：一开一闭成对包裹，计数守恒。
+		for need[m] >= 2 {
 			out = m + out + m
 			need[m] -= 2
+		}
+		// 源本身计数为奇数（不配对写法，如 `**A** 与 **B`）：只补单侧，且避开已有该侧的情形，
+		// 绝不制造 `****`（同 §19「只砍多出来的，不造新形态」）。
+		if need[m] == 1 {
+			switch {
+			case !strings.HasSuffix(out, m):
+				out += m
+			case !strings.HasPrefix(out, m):
+				out = m + out
+			}
+			need[m] = 0
 		}
 	}
 	// <br> 仍缺的（整个被删掉，不是被破坏）：补到末尾。
