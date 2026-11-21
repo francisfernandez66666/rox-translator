@@ -131,6 +131,9 @@ func mdApplyLine(raw string, ctx *mdLineCtx, translations map[string]string) str
 		if rep == "" || rep == sp.key {
 			continue // 空译文或同文回显：等于没翻，保留原文更诚实
 		}
+		// P1/G5 双向守恒（2026-11-21）：先削掉模型多塞的标记（过发），再补回模型删掉的（缺失）——
+		// 两次都按源 sp.key 的标记计数对齐，杜绝全局收敛那种"过纠到 129"的 RC-5 回归。
+		rep = mdTrimExcessMarkers(sp.key, rep)
 		rep = mdRestoreMarkers(sp.key, rep) // P1/G5：模型删掉的 **/<br> 等标记按源补回
 		rep = mdProtectLinkTargets(sp.key, rep)
 		out = out[:sp.start] + rep + out[sp.end:]

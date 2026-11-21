@@ -73,7 +73,7 @@ if [ "${1:-}" = "--selftest" ]; then
     if [ "$state" = "$want" ]; then
       echo "OK  selftest $label"
     else
-      echo "BAD selftest $label（期望 ${want}，实得 ${got}）"
+      echo "BAD selftest ${label}（期望 ${want}，实得 ${got}）"
       FAIL=$((FAIL + 1))
     fi
   }

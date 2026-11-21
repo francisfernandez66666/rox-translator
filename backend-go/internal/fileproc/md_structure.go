@@ -735,6 +735,104 @@ func indexBrokenBR(s string, from int) int {
 	return -1
 }
 
+// mdTrimExcessMarkers 削掉译文里「模型自己多塞的」成对标记（P1/G5 加固，2026-11-21）。
+// 真值验收（方案 §13.2）暴露：模型有时把已带 `**` 的骨架标题再包一层（`****...**`），
+// 或把编号逐字加粗（`**5**\.**3**...`），产出 `**` 158 vs 源 152、6 行奇数——违反 §6.3
+// 「计数守恒、奇数行=0」。旧 mdRestoreMarkers 只管「译文标记 < 源」的补，对过发无感。
+//
+// ★ 修法刻意按"源计数对齐"，绝不做全局 `****`→`**` 收敛：后者会把合法标记从 158 过纠到 129
+//
+//	（真值实测），破坏 `|**指标**|` 这类正常加粗，重蹈 RC-5 内容/标记双损。
+//
+// 只对 srcSeq 里出现的标记种类生效；对每种标记，译文 token 数 > 源 token 数时，
+// 删除多余的 token——**只删标记字符本身，标记之间的内容逐字节保留**。
+// 哪几个算多余：保留首尾各一个（保住包裹语义），删中间的；源只有 1 个时保留第一个。
+func mdTrimExcessMarkers(srcKey, tr string) string {
+	srcSeq := mdMarkerSeq(srcKey)
+	if len(srcSeq) == 0 || tr == "" {
+		return tr
+	}
+	// 源每种标记的计数（只对成对标记收敛，<br> 交给 mdRestoreMarkers 的残缺修复）。
+	srcCount := map[string]int{}
+	for _, m := range srcSeq {
+		if m == "<br>" {
+			continue
+		}
+		srcCount[m]++
+	}
+	if len(srcCount) == 0 {
+		return tr
+	}
+	// 逐字节扫描译文，记录每个 token 的字节区间与种类（与 mdMarkerSeq 同一套判定）。
+	type tok struct {
+		start, end int
+		mark       string
+	}
+	var toks []tok
+	for i := 0; i < len(tr); {
+		if strings.HasPrefix(tr[i:], "**") || strings.HasPrefix(tr[i:], "__") || strings.HasPrefix(tr[i:], "~~") {
+			m := tr[i : i+2]
+			toks = append(toks, tok{i, i + 2, m})
+			i += 2
+			continue
+		}
+		if tr[i] == '`' {
+			toks = append(toks, tok{i, i + 1, "`"})
+			i++
+			continue
+		}
+		i++
+	}
+	// 对每种标记：数出译文 token 下标，超过源数的部分标记为"删中间、留首尾"。
+	drop := map[int]bool{}
+	for mark, srcN := range srcCount {
+		var idx []int
+		for i, t := range toks {
+			if t.mark == mark {
+				idx = append(idx, i)
+			}
+		}
+		excess := len(idx) - srcN
+		if excess <= 0 {
+			continue
+		}
+		// 保留首尾各一个（srcN==1 时只留第一个），删中间 excess 个。
+		keepHead := 1
+		keepTail := 0
+		if srcN >= 2 {
+			keepTail = 1
+		}
+		removed := 0
+		for k := keepHead; k < len(idx)-keepTail && removed < excess; k++ {
+			drop[idx[k]] = true
+			removed++
+		}
+		// 中间不够删（例如 excess 大于可删位）时从头部补删，仍只删标记不动内容。
+		for k := 0; removed < excess && k < len(idx); k++ {
+			if !drop[idx[k]] {
+				drop[idx[k]] = true
+				removed++
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return tr
+	}
+	// 从左往右重建：被删 token 只跳过标记字符本身，token 之间的内容逐字节原样写出。
+	var b strings.Builder
+	b.Grow(len(tr))
+	pos := 0
+	for i, t := range toks {
+		if !drop[i] {
+			continue
+		}
+		b.WriteString(tr[pos:t.start]) // 该标记之前的内容（含更早已保留的标记）
+		pos = t.end                    // 跳过这个多余标记
+	}
+	b.WriteString(tr[pos:])
+	return b.String()
+}
+
 // mdRestoreMarkers 写回前的标记守恒（P1 / G5，2026-11-20）。
 // 源片段 srcKey 里的标记是**结构**，不是可译内容：模型删了 **、把 <br> 写成 <br 都属破损。
 // 本函数按源的标记 token 序列把丢失的标记补回译文——

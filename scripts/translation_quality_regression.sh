@@ -33,7 +33,7 @@ run() {
   local rc=$?
   printf '%s\n' "$out" | tail -5
   if [ "$rc" -ne 0 ] || printf '%s' "$out" | grep -q 'no tests to run'; then
-    echo "FAIL:$label（非零退出或 -run 命中 0 测试）"
+    echo "FAIL:${label}（非零退出或 -run 命中 0 测试）"
     FAILN=$((FAILN+1))
   else
     PASS=$((PASS+1))
