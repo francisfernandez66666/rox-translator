@@ -188,3 +188,58 @@ func TestMdExcessThenRestore(t *testing.T) {
 		t.Errorf("内容丢失: %q", out)
 	}
 }
+
+// TestMdTrimExcessBR ★ 2026-11-21 真值验收（tv_job3/tv_job4）暴露的第二类过发：
+// 源文 30 个 `<br>`，产物 32 个——模型多塞的行内换行会把表格 cell 撑出多余一行。
+//
+// <br> 的删法与成对标记**不同**：它是行内换行，多余那几个必须从**尾部**删（保留前 srcN 个）。
+// 从中间删会把同一个 cell 的两段文字直接粘在一起（客户看到的是"两行变一行"）。
+//
+// 四条腿：
+//
+//	A 过发从尾部削（保前 2 个，删后 2 个）；
+//	B 未过发时一字不动（含 `<br/>`、`<br />` 变体，计数归一但内容不改）；
+//	C 源里没有 `<br>` 时不动（同"源无标记时模型加粗属内容增强"那条口径）；
+//	D 只删 `<br>` 标记本身，cell 文字逐字节保留。
+func TestMdTrimExcessBR(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		tr   string
+		want string
+	}{
+		{
+			name: "过发从尾部削",
+			src:  `甲<br>乙`,
+			tr:   `A<br>B<br>C<br>D`,
+			// 只删多余的 <br>，文字一个都不丢（删内容＝把客户译文吃掉）。
+			want: `A<br>BCD`,
+		},
+		{
+			name: "未过发不动(含变体)",
+			src:  `甲<br>乙<br>丙`,
+			tr:   `A<br/>B<br />C`,
+			want: `A<br/>B<br />C`,
+		},
+		{
+			name: "源无br时不动",
+			src:  `甲乙`,
+			tr:   `A<br>B`,
+			want: `A<br>B`,
+		},
+		{
+			name: "只删标记内容保留",
+			src:  `甲<br>乙`,
+			tr:   `甲A<br>乙B<br>丙C`,
+			want: `甲A<br>乙B丙C`,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mdTrimExcessMarkers(c.src, c.tr)
+			if got != c.want {
+				t.Fatalf("trim 结果不符\n  src=%q\n  tr =%q\n  got =%q\n  want=%q", c.src, c.tr, got, c.want)
+			}
+		})
+	}
+}

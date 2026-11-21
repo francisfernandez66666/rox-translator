@@ -208,6 +208,42 @@ func minimalInstructionFromCtx(ctx context.Context) bool {
 	return v
 }
 
+// segmentContextKey 上下文重译的「语境参考」context 键（★ 2026-11-21 用户令：
+// 「翻译不出的内容要带上下文进复核模型重新翻译」）。
+type segmentContextKey struct{}
+
+// WithSegmentContext 把「同一文档里的语境参考」（表头＋相邻行/单元格）写入 context。
+//
+// 用途只有一个：文件链硬闸所有腿（批量重译／逐段极简／定向补译）都失败之后，
+// 把这一段**连着上下文**送复核模型再翻一次。现网实证（tv_job3）：表格 cell `45–80 万`
+// 在整篇批量里三轮全败、按原文回落，而同一句单独送模型能翻对——
+// 缺的是「这一格属于哪张表、旁边写的是什么」这份语境，不是模型能力。
+// ⚠️ 语境只作参考，不许进译文：提示词里显式声明「不要翻译、不要输出」，见 segmentContextNote。
+func WithSegmentContext(ctx context.Context, note string) context.Context {
+	if strings.TrimSpace(note) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, segmentContextKey{}, note)
+}
+
+// segmentContextFromCtx 读取语境参考；未设置返回空串（行为与改造前逐字一致）。
+func segmentContextFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(segmentContextKey{}).(string)
+	return v
+}
+
+// segmentContextNote 组装「语境参考」尾注。
+//
+// ★ 为什么用英文：同 batchContextNote——纯翻译模型会把 system 里的**中文**指令当成
+// 待译内容一起翻（现网实证见 minimalInstructionFromCtx 的注释）。这条尾注随单段请求走，
+// 短段最容易触发那个退化形态，所以宁可让复核模型（通用模型）读英文。
+// 句式给三条硬约束：① 只作参考、② 不要翻译/不要输出、③ 只翻待译条目本身。
+func segmentContextNote(ref string) string {
+	return fmt.Sprintf(" Reference context (do NOT translate it, do NOT output it): this item is one line or table cell from the same document; nearby text is %q."+
+		" Use it only to disambiguate terminology, units, magnitudes and abbreviations, then translate only the item itself.",
+		clipRunes(strings.TrimSpace(ref), 400))
+}
+
 // maxLengthOption 从 options map 读取缩翻最长字符限制（兼容 JSON number/string 形态）。
 // 返回：>0=启用缩翻并指定上限；<=0=未启用。
 func maxLengthOption(options map[string]interface{}) int {
@@ -1828,6 +1864,11 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	// ★ 缩翻（任务7）：启用时向指令追加最长字符限制，提示模型精简输出
 	if ml := maxLengthFromCtx(ctx); ml > 0 {
 		dynNotes.WriteString(fmt.Sprintf(" 译文总长度（含标点）不得超过 %d 个字符。请在保留原意与关键信息的前提下尽量精简，不要额外解释，只输出译文。", ml))
+	}
+	// ★ 2026-11-21 上下文重译：硬闸全部腿失败后的最后一条腿，把表头＋邻段当语境一起送。
+	//   与缩翻注记同位（user 尾），不进 system 前缀——语境是 per-request 的，塞 system 会打碎缓存前缀（B4）。
+	if sc := segmentContextFromCtx(ctx); sc != "" {
+		dynNotes.WriteString(segmentContextNote(sc))
 	}
 	// ★ 2026-10-29 第十二轮：本单领域词表进 **user 尾**（dynNotes），不进 system 前缀——
 	//   那条 system 前缀是刻意做成稳定可缓存的（B4 Phase 1），塞 per-request 词表会把缓存前缀打碎。

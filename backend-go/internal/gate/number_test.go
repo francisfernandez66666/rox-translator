@@ -179,3 +179,67 @@ func TestSuffixMultiplierGuard(t *testing.T) {
 		}
 	}
 }
+
+// TestNumberKeepRangeSharedSuffix ★ 2026-11-21 真值验收（tv_job3/tv_job4）暴露的假警：
+// 中文量级词在数值区间里**只写在末端**（"45–80 万"＝45万–80万），旧判据只给第二个数乘 1e4，
+// 第一个数按 45 去比 ⇒ 正确译文 `450,000–800,000` 被判「缺失: 45, 80」。
+//
+// 三条腿（缺一条这锁就空转）：
+//
+//	A 正确译文零缺失（这是本锁的靶心）；
+//	B 真丢量级仍判缺失（`45–80` 丢了「万」＝10000 倍的错，必须红）；
+//	C 真丢数字仍判缺失（`450,000–800,000` 里少了 80 那一半）。
+func TestNumberKeepRangeSharedSuffix(t *testing.T) {
+	pass := []struct{ name, src, tr string }{
+		{"半角短横", "45–80 万", "450,000–800,000"},
+		{"中文至", "45 至 80 万", "450,000–800,000"},
+		{"波浪号", "45~80万", "450000-800000"},
+		{"带货币", "25–50 万 元", "250,000–500,000 yuan"},
+		{"区间后无空格", "1.5–2 亿", "150–200 million"},
+	}
+	for _, c := range pass {
+		t.Run("pass_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) != 0 {
+				t.Fatalf("正确译文不得判缺失，实得 %v（src=%q tr=%q）", got, c.src, c.tr)
+			}
+			if !NumbersPreserved(c.src, c.tr) {
+				t.Fatalf("NumbersPreserved 应与 missingNumbers 同口径，实得 false（src=%q tr=%q）", c.src, c.tr)
+			}
+		})
+	}
+	fail := []struct{ name, src, tr string }{
+		{"丢了量级", "45–80 万", "45–80"},
+		{"丢了一半", "45–80 万", "450,000"},
+		{"只翻一个", "45–80 万", "450,000–80"},
+	}
+	for _, c := range fail {
+		t.Run("fail_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) == 0 {
+				t.Fatalf("真丢数字/量级必须判缺失，实得零缺失（src=%q tr=%q）", c.src, c.tr)
+			}
+			if NumbersPreserved(c.src, c.tr) {
+				t.Fatalf("NumbersPreserved 必须与 missingNumbers 同判：真丢却报 true（src=%q tr=%q）", c.src, c.tr)
+			}
+		})
+	}
+}
+
+// TestRangeSuffixMultiplierUnit 区间量级词识别的边界：只在「数字+区间符+数字」形态生效。
+func TestRangeSuffixMultiplierUnit(t *testing.T) {
+	cases := []struct {
+		src  string
+		end  int
+		want float64
+	}{
+		{"45–80 万", 2, 1e4}, // 区间：末端量级词回填到第一个数
+		{"45 万", 2, 1},      // 不是区间（后面直接是量级词）⇒ 由 suffixMultiplier 负责
+		{"45-80", 2, 1},     // 区间但无末端量级词
+		{"2026-11", 4, 1},   // 日期形态：右端不是量级词
+		{"45–80 万", 6, 1},   // end 落在区间右端数字之后：由 suffixMultiplier 负责
+	}
+	for _, c := range cases {
+		if got := rangeSuffixMultiplier(c.src, c.end); got != c.want {
+			t.Errorf("rangeSuffixMultiplier(%q,%d)=%v, want %v", c.src, c.end, got, c.want)
+		}
+	}
+}

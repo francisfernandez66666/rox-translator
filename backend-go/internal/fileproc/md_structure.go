@@ -746,18 +746,17 @@ func indexBrokenBR(s string, from int) int {
 //
 // 只对 srcSeq 里出现的标记种类生效；对每种标记，译文 token 数 > 源 token 数时，
 // 删除多余的 token——**只删标记字符本身，标记之间的内容逐字节保留**。
-// 哪几个算多余：保留首尾各一个（保住包裹语义），删中间的；源只有 1 个时保留第一个。
+// 哪几个算多余：成对标记保留首尾各一个、删中间的；<br> 保留前 srcN 个、删尾部的。
+// （★ 2026-11-21：<br> 过发也纳入本函数——真值验收产物 <br> 32 vs 源 30，多余换行会把表格 cell 撑开。）
 func mdTrimExcessMarkers(srcKey, tr string) string {
 	srcSeq := mdMarkerSeq(srcKey)
 	if len(srcSeq) == 0 || tr == "" {
 		return tr
 	}
-	// 源每种标记的计数（只对成对标记收敛，<br> 交给 mdRestoreMarkers 的残缺修复）。
+	// 源每种标记的计数（★ 2026-11-21：<br> 也纳入收敛——真值验收里产物 <br> 32 vs 源 30，
+	// 过发的 <br> 会把表格 cell 撑出多余换行，属于"模型多塞的"同一族）。
 	srcCount := map[string]int{}
 	for _, m := range srcSeq {
-		if m == "<br>" {
-			continue
-		}
 		srcCount[m]++
 	}
 	if len(srcCount) == 0 {
@@ -792,6 +791,7 @@ func mdTrimExcessMarkers(srcKey, tr string) string {
 		mark       string
 	}
 	var toks []tok
+	lowerTr := strings.ToLower(tr)
 	for i := 0; i < len(tr); {
 		if strings.HasPrefix(tr[i:], "**") || strings.HasPrefix(tr[i:], "__") || strings.HasPrefix(tr[i:], "~~") {
 			m := tr[i : i+2]
@@ -803,6 +803,18 @@ func mdTrimExcessMarkers(srcKey, tr string) string {
 			toks = append(toks, tok{i, i + 1, "`"})
 			i++
 			continue
+		}
+		// <br> 归一成标准形式计数（与 mdMarkerSeq 同一套判定）：完整的 `<br...>` 才算一个 token。
+		if strings.HasPrefix(lowerTr[i:], "<br") {
+			j := i + 3
+			for j < len(tr) && tr[j] != '>' {
+				j++
+			}
+			if j < len(tr) {
+				toks = append(toks, tok{i, j + 1, "<br>"})
+				i = j + 1
+				continue
+			}
 		}
 		i++
 	}
@@ -817,6 +829,14 @@ func mdTrimExcessMarkers(srcKey, tr string) string {
 		}
 		excess := len(idx) - srcN
 		if excess <= 0 {
+			continue
+		}
+		// ★ <br> 的删法与成对标记不同：它是行内换行，多余的那几个从**尾部**删（保留前 srcN 个）。
+		//   从中间删会把同一个 cell 的两段文字直接粘在一起（客户看到的是"两行变一行"）。
+		if mark == "<br>" {
+			for k := len(idx) - excess; k < len(idx); k++ {
+				drop[idx[k]] = true
+			}
 			continue
 		}
 		// 保留首尾各一个（srcN==1 时只留第一个），删中间 excess 个。

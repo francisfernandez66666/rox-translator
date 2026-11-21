@@ -131,7 +131,15 @@ func (h *mdFirstHarness) mdFakeHandler(w http.ResponseWriter, r *http.Request) {
 		v := tr(m[1])
 		content = "<t>" + v + "</t>"
 	} else {
-		content = "<t>" + tr(user) + "</t>"
+		// ★ 2026-11-21 上下文重译腿（带语境换复核模型再翻一次）：那一路的 user 段是
+		// 「英文语境尾注 + 源文」，**没有 <t> 包装**。夹具的契约是「emptyLine 那一行恒回空」，
+		// 所以这里必须按源文行认领，不能把整段 user（含尾注）当源文回一句 "Translated: …"——
+		// 那会让 B18 的「有未译段」前提凭空消失（断言绿着，被测的东西已经不在了）。
+		// 待译条目恒在 user 段**最后一行**（语境尾注在它前面），按最后一行认领，
+		// 不能按"包含哪一行"扫——尾注里带着邻段，扫到第一个就会把邻段当成本段。
+		lines := strings.Split(strings.TrimRight(user, "\n"), "\n")
+		src := strings.TrimSpace(lines[len(lines)-1])
+		content = "<t>" + tr(src) + "</t>"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"choices":[{"message":{"content":%s},"finish_reason":"stop"}]}`, mdQuoteJSON(content))

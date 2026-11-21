@@ -47,7 +47,10 @@ import (
 // ★ 2026-10-24 F-01：新增第 6 个写入点——5% 阈值触发后的「定向补译」循环，
 //
 //	同样先过 fileTranslationUsable 再 addTrans；本基线同步 5→6。
-const fwpExpectedWritePoints = 6
+//
+// ★ 2026-11-21 上下文重译批：新增第 7 个写入点——硬闸全腿失败后「带语境换复核模型再翻一次」
+// 的救回段写入。它与其余写入点同形（写入前早退式 fileTranslationUsable 判定），本基线同步 6→7。
+const fwpExpectedWritePoints = 7
 
 // fwpSensitiveFile 唯一豁免文件：S8 敏感拦截段要**直接预填占位交付**（占位符不是译文，
 // 过判定反而会被「同文/空串」规则拦掉），因此 sensitive.go 的裸写入是设计内的。

@@ -202,7 +202,9 @@ func buildMdPhysicalLineMap(srcPath, srcExt string, texts []string) map[string]i
 
 // untranslatedNotesFromSegments 从「按提取顺序的段」与「原文→译文」映射里导出未译出段清单。
 // 参数：texts=提取顺序的原文段（决定序号口径）；tr=该语言译文映射；
-//      lineMap=可选的"片段→物理行号"映射（P4：有则写"第 N 行"、无则写"第 N 段"）。
+//
+//	lineMap=可选的"片段→物理行号"映射（P4：有则写"第 N 行"、无则写"第 N 段"）。
+//
 // 返回：交付文档文末那一节的素材；全部译出 ⇒ **空切片**。
 // 与图片那一口共用同一个 `fileproc.UntranslatedItem` 结构与同一份追加函数——
 // 两个交付口各写一份"什么算没译出"，迟早一边松一边紧（本仓「多把尺子」那一族）。
@@ -646,6 +648,87 @@ func (e *Engine) translateSegmentMinimal(ctx context.Context, seg, lc string) (s
 	}
 	v, ok := r.Translations[lc]
 	return v, ok
+}
+
+// ctxRetryMarker 「上下文重译救回一段」这一形态在二进制里的**字面证据**。
+// 口径同 minimalInstrRescueMarker：发布件是 -s -w 编的，函数名留不留在件里不可依赖，
+// "编的是不是本棵工作树"只能靠一个被运行期真正引用的字符串常量。
+const ctxRetryMarker = "CTX_RETRY_SEG_RESCUE_V1"
+
+// buildSegmentContext 为第 idx 段拼「语境参考」：表头 ＋ 前后各两段（去重、限长）。
+//
+// 为什么带**邻段**而不只带表头：失败的多是表格 cell，光有表头读不出这一格是什么量级；
+// 前后段（同一行的其他 cell / 下一行）才能说明"这一列是价格区间"。
+// 限长 160/120 字符：上下文越长越容易被模型当成待译内容（同 table_header.go 头注第 3 条）。
+func buildSegmentContext(texts []string, idx int, header string) string {
+	var parts []string
+	if h := strings.TrimSpace(header); h != "" {
+		parts = append(parts, clipRunes(h, 160))
+	}
+	for _, off := range []int{-2, -1, 1, 2} {
+		j := idx + off
+		if j < 0 || j >= len(texts) {
+			continue
+		}
+		s := strings.TrimSpace(texts[j])
+		if s == "" {
+			continue
+		}
+		parts = append(parts, clipRunes(s, 120))
+	}
+	return strings.Join(parts, " | ")
+}
+
+// translateSegmentWithContext 用**复核模型**、带着语境单独翻一段（上下文重译唯一实现）。
+//
+// 与 translateSegmentByReviewModel 的分工：那个是"换模型"（补译梯第 4 档），不带语境；
+// 这个是"换模型 + 带语境"，专门治「批量上下文里翻不出、单独送就能翻对」的那一批。
+// 走 SingleLangTranslate 而不是 TranslateOne：后者会先查 KB/TM 精确命中，
+// 一条脏行（原文→原文）就会把这一档原地挡回（同 translateSegmentByReviewModel 第 1 条）。
+func (e *Engine) translateSegmentWithContext(ctx context.Context, seg, targetLang, ref string) (string, bool) {
+	if e == nil {
+		return "", false
+	}
+	cctx := WithMinimalInstruction(ctx)
+	if strings.TrimSpace(ref) != "" {
+		cctx = WithSegmentContext(cctx, ref)
+	}
+	v, err := e.SingleLangTranslate(cctx, seg, targetLang, nil, DetectSourceLang(seg), config.StageReview)
+	if err != nil || strings.TrimSpace(v) == "" {
+		return "", false
+	}
+	return v, true
+}
+
+// retranslateMissingWithContext 对仍缺失的段做一次「带上下文的重译」，返回救回的段。
+//
+// 位置：文件链硬闸全部腿都跑完、按原文回落之前。三条纪律：
+//  1. 只送仍缺失的段（have 里已有的段一个都不重发），且受段数上限 maxSegs 约束；
+//  2. 采纳判据仍是 fileTranslationUsable 那一把尺子（换腿不是换尺子）；
+//  3. 失败不写空、不覆盖已有译文——调用方按原文回落并点名，与既有出口同形。
+func (e *Engine) retranslateMissingWithContext(ctx context.Context, lc string, texts []string, have map[string]string, header string, maxSegs int) map[string]string {
+	out := map[string]string{}
+	if maxSegs <= 0 {
+		return out
+	}
+	tried := 0
+	for i, t := range texts {
+		if ctx.Err() != nil || tried >= maxSegs {
+			break
+		}
+		if _, ok := have[t]; ok {
+			continue
+		}
+		if _, ok := out[t]; ok {
+			continue
+		}
+		tried++
+		v, ok := e.translateSegmentWithContext(ctx, t, lc, buildSegmentContext(texts, i, header))
+		if ok && e.fileTranslationUsable(ctx, t, v, lc) {
+			out[t] = v
+		}
+	}
+	return out
 }
 
 // HandleFile 文件翻译主流程（复刻 skill.py _handle_file_translate）
@@ -1345,6 +1428,30 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						addModelHit() // ★ 同上一处：定向补译也是模型译文，计数跟着写入走（still 只含仍缺失段 ⇒ 不重复计）
 						se.done(lc, m, v)
 					}
+				}
+			}
+		}
+		// ★ 2026-11-21 用户令：上下文重译——按原文回落之前的最后一条腿。
+		//   前面的腿（批量重译 3 轮 / 逐段极简 / 定向补译）都在"无语境"下重拨，
+		//   而现网实证 tv_job3 的表格 cell `45–80 万` 是「批量里翻不出、单独送就翻对」那一族：
+		//   缺的是这一格属于哪张表、旁边写什么。这里把表头＋邻段当语境，换复核模型再翻一次。
+		if still := missingSegments(texts, langTranslations[lc]); len(still) > 0 && ctx.Err() == nil {
+			if limit := e.fileCtxRetryMax(); limit > 0 && !stopForTokenBudget(lc, len(still)) {
+				log.Printf("[file-ctx-retry] lang=%s 上下文重译 %d 段（上限 %d）", lc, len(still), limit)
+				got := e.retranslateMissingWithContext(ctx, lc, texts, langTranslations[lc], fileHeaderCtx, limit)
+				for m, v := range got {
+					// 采纳判据与其余写入点**同一把尺子**（换腿不是换尺子）。retranslateMissingWithContext
+					// 内部已判过一次，这里再判一次不是重复：写入点守护的机械闸门按"写入前有没有被判据拦下"
+					// 判（file_writepoints_guard_test.go），绕过它等于给下一个人留一个"照抄这处就不必判"的坏样板。
+					if !e.fileTranslationUsable(ctx, m, v, lc) {
+						continue
+					}
+					addTrans(lc, m, v)
+					addModelHit() // 复核模型译出的段同样是模型译文，计数必须跟着写入走
+					se.done(lc, m, v)
+				}
+				if len(got) > 0 {
+					observability.Info(ctx, "文件翻译：上下文重译救回未译段", "lang", lc, "rescued", len(got), "mark", ctxRetryMarker)
 				}
 			}
 		}
@@ -2338,6 +2445,28 @@ func (e *Engine) fileRepairMaxCalls() int {
 		}
 	}
 	return 40
+}
+
+// fileCtxRetryMax 「上下文重译」单语言单次最多尝试几段（★ 2026-11-21 用户令）。
+//
+// 为什么要有上限：这一档每段都是**一次单段复核模型调用**，而它只在"所有既有腿都失败"之后才跑，
+// 缺段通常是几十行以内的零头；上限的作用是兜住"整篇几乎全失败"的病态单——
+// 那种情况下逐段重译既救不回来，又会把客户的时间与平台的 token 一起烧光。
+// 三级档位：env FILE_CTX_RETRY_MAX > system_config.file_ctx_retry_max > 默认 20；0＝关闭这一档。
+func (e *Engine) fileCtxRetryMax() int {
+	if v := strings.TrimSpace(os.Getenv("FILE_CTX_RETRY_MAX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	if e != nil && e.St != nil {
+		if v, _ := e.St.GetConfig("file_ctx_retry_max"); strings.TrimSpace(v) != "" {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+				return n
+			}
+		}
+	}
+	return 20
 }
 
 // writeMultiSheetXlsx xlsx 多 Sheet 模式：复制原始文件后，每个目标语言新增一个 Sheet，

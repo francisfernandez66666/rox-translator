@@ -23,6 +23,7 @@ import (
 	"unicode"
 
 	"translator/internal/fileproc"
+	"translator/internal/gate"
 	"translator/internal/textscript"
 )
 
@@ -202,7 +203,102 @@ func cjkEchoWashedToSkeleton(src, out string) bool {
 	if !sourceHasTranslatableLetters(src) {
 		return false
 	}
+	// ★ 2026-11-21 真值验收（tv_job3/tv_job4）暴露的假警：**纯数量表达的正确译文就是纯数值**。
+	//   源 `45–80 万` 被模型正确译成 `450,000–800,000` 时，本函数按「译文没有连续两个字母」
+	//   判成"中文被洗成骨架"，于是这段被打回原文——客户在表格里看到中文数字，
+	//   而模型其实翻对了（真值产物 tv_job4 L157/L159 两个 cell 就是这么留下的）。
+	//
+	//   豁免只对「数字占主导的源段」生效（isNumericDominantSource），且**数字必须一个没丢**：
+	//   判据直接委托 gate.NumbersPreserved，不另立第二把尺子（丢了量级＝把 45 万写成 45，
+	//   那是 10000 倍的错，绝不许放行）。放行分两档：
+	//     ① 纯数值译文（isNumericOnlyText）：只在源段除量级/单位外**没有别的字**时放行。
+	//        源段带实义修饰词（约/左右/以上）⇒ 那个词必须出现在译文里，`约 20%`→`20%` 是丢义。
+	//     ② 译文至少有一个字母（hasAnyLetter）：覆盖「约」在希伯来语里写成单字母前缀
+	//        （`כ-20%` 只有一个字母，够不到 hasLetterRun 的两个）那一档；数字同样必须没丢。
+	//   ⚠️ 这两档都要求源段「数字占主导」：`已实现=加权成本重放…30s刷新` 那种长句源文
+	//      letters 远多于数字，豁免完全不适用，原有骨架判据一字不动（E 腿钉住）。
+	if isNumericDominantSource(src) && gate.NumbersPreserved(src, out) {
+		if isNumericOnlyText(out) && !hasNonQuantityLetter(src) {
+			return false
+		}
+		if hasAnyLetter(out) {
+			return false
+		}
+	}
 	return !hasLetterRun(out, 2)
+}
+
+// quantityWordRunes 纯数量表达里允许出现的「非数字文字」：量级词、货币、常见单位、区间连接词。
+//
+// 判据只服务 cjkEchoWashedToSkeleton 的那一条放行（见上方注释），不参与任何其它判定，
+// 因此它不是一份"业务词表"——刻意收得很窄：只收**不改变数量含义**的字，
+// 任何带实义的修饰词（约/左右/以上/不足/每/多）都不在这里。
+const quantityWordRunes = "万萬千亿億兆百十元块塊角分币幣美元港欧日人民币泰铢卢布韩越印尼盾" +
+	"个個台件套人名位天年月日小时分鐘分钟秒公里千米米厘米毫米千克公斤斤吨噸升毫升度倍折至到"
+
+// numericDominantLetterMax 「数字占主导」的源段最多允许几个字母。
+// 实测样本：`45–80 万`=1、`约 20%`=1、`20 万左右`=3、`25–50 万 元`=2、`2026 年 3 月`=2。
+// 取 6 是给「单位＋量级」留余量；长句源文（十几个汉字）远在这之上，不会误入豁免。
+const numericDominantLetterMax = 6
+
+// isNumericDominantSource 源段是不是「数字占主导」：有数字，且字母数不超过上限。
+func isNumericDominantSource(src string) bool {
+	hasDigit := false
+	letters := 0
+	for _, r := range src {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			continue
+		}
+		if unicode.IsLetter(r) {
+			letters++
+			if letters > numericDominantLetterMax {
+				return false
+			}
+		}
+	}
+	return hasDigit
+}
+
+// hasNonQuantityLetter 源段里有没有「量级/单位之外的字」（约/左右/本季度…）。
+// 有 ⇒ 纯数值译文属于丢义，必须由译文把那个词带出来。
+func hasNonQuantityLetter(src string) bool {
+	for _, r := range src {
+		if unicode.IsLetter(r) && !strings.ContainsRune(quantityWordRunes, r) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasAnyLetter 译文里有没有任何一个字母（任意书写体系）。
+// 与 hasLetterRun(out,2) 的差别只在"一个字母也算"：服务希伯来语单字母前缀（כ-）那一档。
+func hasAnyLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// numericOnlyKeep 纯数值文本里允许出现的非数字字符（数值分隔符/货币符号/百分号/空白/正负号）。
+// 注意**不含任何字母**：带字母的译文会由 hasLetterRun / hasAnyLetter 那两条放行，不必也不许走这条。
+const numericOnlyKeep = ".,-–—－~～%‰+− \t¥$€£₪₽₩฿₫₺₴₦₹₱"
+
+// isNumericOnlyText 译文是不是纯数值文本（有数字，且除 numericOnlyKeep 外没有任何字符）。
+func isNumericOnlyText(s string) bool {
+	hasDigit := false
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+			continue
+		}
+		if !strings.ContainsRune(numericOnlyKeep, r) {
+			return false
+		}
+	}
+	return hasDigit
 }
 
 // IsSkeletonForLang 判据 3″ 的"带品牌英文骨架"补强（2026-11-20 P0）。
@@ -211,13 +307,15 @@ func cjkEchoWashedToSkeleton(src, out string) bool {
 // 现网样本 `Facebook / Instagram / TikTok ，，、；，。 = ` 里品牌英文有连续字母 ⇒ 被误判"可用"。
 //
 // ★ 骨架的跨语言通用信号＝**中文全角标点残留**：源文中文字被 StripChineseInNonZh 洗掉后，
-//   全角标点（，。、；：…）原样留下，正常目标语译文绝不会用源语的全角标点。
-//   这比"目标脚本占比"更可靠——拉丁目标（de/en）里品牌英文与目标脚本同形，占比判据会失效。
+//
+//	全角标点（，。、；：…）原样留下，正常目标语译文绝不会用源语的全角标点。
+//	这比"目标脚本占比"更可靠——拉丁目标（de/en）里品牌英文与目标脚本同形，占比判据会失效。
 //
 // 判据（先过前置，再按目标语种分两档）：
-//  前置：源文有可译文字（非 ASCII 字母）+ out 非空 + 目标语言已知；
-//  拉丁目标：中文全角标点残留 ≥2 即判骨架（正常拉丁译文用半角标点）；
-//  非拉丁目标：目标脚本字母占比 < 0.15 且（有全角标点残留 或 有数字）即判骨架。
+//
+//	前置：源文有可译文字（非 ASCII 字母）+ out 非空 + 目标语言已知；
+//	拉丁目标：中文全角标点残留 ≥2 即判骨架（正常拉丁译文用半角标点）；
+//	非拉丁目标：目标脚本字母占比 < 0.15 且（有全角标点残留 或 有数字）即判骨架。
 //
 // 语言无关：任意目标语同一套口径；未知语言（want=Other）fail-soft 放行。
 const skeletonTargetMinShare = 0.15

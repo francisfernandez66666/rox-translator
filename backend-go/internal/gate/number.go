@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // CheckNumberKeep 「数字保持」检查项名称（对外可见文案）。
@@ -92,8 +93,50 @@ func suffixMultiplier(rest string) float64 {
 	return 1
 }
 
+// numRangeSeps 数值区间的连接符（半角/全角/波浪/中文「至」）。
+// 中文量级词在区间里**只写在末端**（"45–80 万"＝45万–80万），单独看第一个数会读成 45。
+const numRangeSeps = "-–—－~～至"
+
+// rangeSuffixMultiplier 识别「区间 + 共用数量词」形态并返回该数量词的基数（无则返回 1）。
+//
+// ★ 2026-11-21 真值验收暴露的假警：源文 `45–80 万`（表格 cell）被模型正确译成
+// `450,000–800,000` 时，旧判据只给**第二个**数字乘 1e4（第一个数后面紧跟的是区间符，不是「万」），
+// 于是拿 45 去比 450000 ⇒ 报「数字保持（缺失: 45, 80）」——数字其实一个没丢，错的是尺子。
+// 判据方向：区间内所有数字共用末端那一个量级词（中文/英文都是这个读法）。
+func rangeSuffixMultiplier(srcNorm string, end int) float64 {
+	i := end
+	// 允许数字与区间符之间有空格
+	for i < len(srcNorm) && (srcNorm[i] == ' ' || srcNorm[i] == '\t') {
+		i++
+	}
+	if i >= len(srcNorm) {
+		return 1
+	}
+	// ★ 必须按 rune 解码，不能拿单字节转 rune：区间符（–—～至）是多字节字符，
+	//   按字节取会把首字节当 rune，`ContainsRune` 永远判不中（本批首跑真踩）。
+	r, size := utf8.DecodeRuneInString(srcNorm[i:])
+	if !strings.ContainsRune(numRangeSeps, r) {
+		return 1
+	}
+	i += size
+	// 跳过区间符后的空格
+	for i < len(srcNorm) && (srcNorm[i] == ' ' || srcNorm[i] == '\t') {
+		i++
+	}
+	// 区间右端必须还是一个数字（否则不是数值区间，如 "2026-11" 这类日期已在 reNumbers 之外）
+	start := i
+	for i < len(srcNorm) && (srcNorm[i] >= '0' && srcNorm[i] <= '9' || srcNorm[i] == '.' || srcNorm[i] == ',') {
+		i++
+	}
+	if i == start {
+		return 1
+	}
+	return suffixMultiplier(srcNorm[i:])
+}
+
 // extractNumValues 从（已剥千分位的）文本中抽取全部数字的数值。
-// 每个数字先按字面解析为浮点，再乘上其后紧跟的数量词基数（"150万"→150×1e4）。
+// 每个数字先按字面解析为浮点，再乘上其后紧跟的数量词基数（"150万"→150×1e4）；
+// 区间形态（"45–80 万"）里所有数字共用区间末端那一个基数（见 rangeSuffixMultiplier）。
 // 解析失败的 token（理论上是畸形小数）直接跳过，不参与比对。
 func extractNumValues(s string) []float64 {
 	locs := reNumbers.FindAllStringIndex(s, -1)
@@ -103,7 +146,12 @@ func extractNumValues(s string) []float64 {
 		if err != nil {
 			continue // 畸形字面量跳过，不 panic
 		}
-		vals = append(vals, v*suffixMultiplier(s[loc[1]:]))
+		mult := suffixMultiplier(s[loc[1]:])
+		if mult == 1 {
+			// 第一个数后面跟的是区间符 ⇒ 取区间末端的量级词
+			mult = rangeSuffixMultiplier(s, loc[1])
+		}
+		vals = append(vals, v*mult)
 	}
 	return vals
 }
@@ -248,6 +296,15 @@ func containsCnNumber(tr, reading string) bool {
 	return false
 }
 
+// NumbersPreserved 报告 source 里的数字（含量级词换算）是否在 translation 里全都找得到。
+//
+// ★ 2026-11-21 新增的唯一理由：engine 侧判「纯数量表达的纯数值译文是否可用」需要同一把尺子，
+// 而 missingNumbers 是本包私有。这里只做**薄委托**，不另写一套比对——
+// 「数字保持」的判据永远只有 missingNumbers 一处（同 §一·11「三把尺子」那条纪律）。
+func NumbersPreserved(source, translation string) bool {
+	return len(missingNumbers(source, translation)) == 0
+}
+
 // missingNumbers 「数字保持」主判据（纯函数）：返回源文有、译文（归一后）找不到的
 // 数字字面量清单（去重、按源文出现序）。比对三步：
 //  1. 两侧同形态归一（剥千分位）后按「数值+数量词乘子」等值比对（"1,000"≡"1000"≡"1000.0"，
@@ -270,7 +327,12 @@ func missingNumbers(source, translation string) []string {
 		if err != nil {
 			continue // 畸形字面量不参与判定，也不计入缺失
 		}
-		if numValueIn(trVals, v*suffixMultiplier(srcNorm[loc[1]:])) {
+		mult := suffixMultiplier(srcNorm[loc[1]:])
+		if mult == 1 {
+			// 区间形态（"45–80 万"）：第一个数后面跟的是区间符，量级词在区间末端。
+			mult = rangeSuffixMultiplier(srcNorm, loc[1])
+		}
+		if numValueIn(trVals, v*mult) {
 			continue
 		}
 		// 中文数字单向认领：只放行「数字还在、写法变了」；对原文（未剥分隔符形态）检索，
