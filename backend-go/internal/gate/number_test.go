@@ -243,3 +243,120 @@ func TestRangeSuffixMultiplierUnit(t *testing.T) {
 		}
 	}
 }
+
+// TestSuffixMultiplierMultilingualMagnitudes ★ 2026-11-21 上下文重译批收尾：
+// 量级词表原先只认中文「万/亿」与英文 million/billion，而**目标语会用它自己的量级词**。
+// 现网实证（演示站 `tvctx` 小件，希伯来语）：源 `150–250 万` 被正确译成 `1.5–2.5 מיליון`，
+// 判据却报「数字保持（缺失: 150, 250）」——数字一个没丢，错的是尺子的语种射程。
+// 这条假警会进 `gate_warnings` 变成客户看到的「质检存疑」，代价是真漏译被淹掉。
+//
+// ★ 希伯来/阿拉伯词条一律用 `\u` 转义写：它们是右向文字，直接抄进源码会在编辑器里
+//
+//	与相邻标点重排，看代码的人根本分不清自己改的是哪个字符（本批就靠码位核对过一次）。
+func TestSuffixMultiplierMultilingualMagnitudes(t *testing.T) {
+	cases := []struct {
+		name string
+		rest string
+		want float64
+	}{
+		// 希伯来语：מיליון=百万、מיליארד=十亿（码位：מ=05de י=05d9 ל=05dc ו=05d5 ן=05df א=05d0 ר=05e8 ד=05d3）
+		{"希伯来_百万", " \u05de\u05d9\u05dc\u05d9\u05d5\u05df", 1e6},
+		{"希伯来_百万复数", " \u05de\u05d9\u05dc\u05d9\u05d5\u05e0\u05d9\u05dd", 1e6},
+		{"希伯来_十亿", " \u05de\u05d9\u05dc\u05d9\u05d0\u05e8\u05d3", 1e9},
+		// 阿拉伯语
+		{"阿拉伯_百万", " \u0645\u0644\u064a\u0648\u0646", 1e6},
+		{"阿拉伯_十亿", " \u0645\u0644\u064a\u0627\u0631", 1e9},
+		// 俄语
+		{"俄语_百万", " \u043c\u0438\u043b\u043b\u0438\u043e\u043d", 1e6},
+		{"俄语_十亿", " \u043c\u0438\u043b\u043b\u0438\u0430\u0440\u0434", 1e9},
+		{"俄语_千", " \u0442\u044b\u0441\u044f\u0447", 1e3},
+		// 韩语/日语（汉字量级词）
+		{"韩语_万", " \ub9cc", 1e4},
+		{"韩语_亿", " \uc5b5", 1e8},
+		{"日语_亿", " \u5104", 1e8},
+		{"日语_兆", " \u5146", 1e12},
+		// 拉丁语族与其它
+		{"意大利_百万", " milioni", 1e6},
+		{"意大利_十亿", " miliardi", 1e9},
+		{"荷兰_百万", " miljoen", 1e6},
+		{"波兰_百万", " milion", 1e6},
+		{"西班牙_百万", " millones", 1e6},
+		{"葡语_百万", " milh\u00f5es", 1e6},
+		{"越南_百万", " tri\u1ec7u", 1e6},
+		{"越南_十亿", " t\u1ef7", 1e9},
+		{"土耳其_百万", " milyon", 1e6},
+		{"土耳其_千", " bin", 1e3},
+		{"印尼_百万", " juta", 1e6},
+		{"西语_千", " mil", 1e3},
+		// 反向：更长单词前缀仍不认领（词边界那条腿不能被这批新词条弄坏）
+		{"普通单词_千米", " kilometro", 1},
+		{"普通单词_分钟", " minutes", 1},
+		{"普通单词_军事", " militar", 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := suffixMultiplier(c.rest); got != c.want {
+				t.Fatalf("suffixMultiplier(%q) = %v, want %v", c.rest, got, c.want)
+			}
+		})
+	}
+}
+
+// TestSuffixMultiplierShadowGuard 表内顺序守卫：短词条排在长词条**前面**且乘子不同时，
+// 长词条要么被 ASCII 词边界兜住（尾巴是字母 ⇒ continue），要么**永远匹配不到**。
+// 非 ASCII 词条没有词边界保护（中文/希伯来/俄语词之间不加空格是常态），那一档只能靠顺序。
+//
+// 这条锁不是"形式主义"：它挡的正是 `M` 排在 `Million` 前面那一类——
+// 当年英文百万就是这么被单字母截断的（文件头第一条注释），换成俄语/希伯来语时
+// 报错形态会变成"数字一个不差却报缺失"，比直接崩更难归因。
+func TestSuffixMultiplierShadowGuard(t *testing.T) {
+	for i := 0; i < len(numSuffixMults); i++ {
+		for j := i + 1; j < len(numSuffixMults); j++ {
+			short, long := numSuffixMults[i], numSuffixMults[j]
+			if short.mult == long.mult || !strings.HasPrefix(long.suf, short.suf) {
+				continue
+			}
+			tail := long.suf[len(short.suf):]
+			// 尾巴是 ASCII 字母 ⇒ 词边界那条腿会 continue 到下一个词条，不算遮蔽。
+			if tail != "" && tail[0] < 0x80 && (tail[0] >= 'a' && tail[0] <= 'z' || tail[0] >= 'A' && tail[0] <= 'Z') {
+				continue
+			}
+			t.Fatalf("词条顺序有遮蔽：%q(×%g) 排在 %q(×%g) 之前，且尾巴 %q 不是 ASCII 字母 ⇒ 后者永远匹配不到",
+				short.suf, short.mult, long.suf, long.mult, tail)
+		}
+	}
+}
+
+// TestNumberKeepCrossLanguageMagnitude 行为腿：跨语种量级词的正确译文零缺失，
+// 而**真丢量级**仍必须判缺失（否则上面那批词条会让闸门变成摆设）。
+func TestNumberKeepCrossLanguageMagnitude(t *testing.T) {
+	pass := []struct{ name, src, tr string }{
+		{"希伯来_区间百万", "150–250 万", "1.5–2.5 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		{"希伯来_区间亿", "2–3 亿", "200–300 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		// ⚠️ 俄语这里刻意用**点号小数**：判据的 reNumbers 只认 `.` 作小数点，
+		//    俄/德/法惯用的逗号小数（`1,5`）会被拆成 1 与 5 两个数 ⇒ 报缺失。
+		//    那一档是**已知盲区**（逗号同时是英文千分位，改它要连带改 stripNumSeparators 的判据），
+		//    本批不碰、也不假装它能过：真出现时是 warning 级（不拦交付）。
+		{"俄语_区间百万", "150–250 万", "1.5–2.5 \u043c\u0438\u043b\u043b\u0438\u043e\u043d\u0430"},
+		{"韩语_万", "25–50 万", "25\ub9cc\u201350\ub9cc"},
+	}
+	for _, c := range pass {
+		t.Run("pass_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) != 0 {
+				t.Fatalf("跨语种量级词的正确译文不得判缺失，实得 %v（src=%q tr=%q）", got, c.src, c.tr)
+			}
+		})
+	}
+	fail := []struct{ name, src, tr string }{
+		{"希伯来_丢了量级", "150–250 万", "1.5–2.5"},
+		{"希伯来_只翻一半", "150–250 万", "1.5 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		{"俄语_丢了量级", "150–250 万", "1,5–2,5"},
+	}
+	for _, c := range fail {
+		t.Run("fail_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) == 0 {
+				t.Fatalf("真丢量级必须判缺失，实得零缺失（src=%q tr=%q）", c.src, c.tr)
+			}
+		})
+	}
+}

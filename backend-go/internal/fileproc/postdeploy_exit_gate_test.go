@@ -28,6 +28,7 @@
 package fileproc
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,6 +121,115 @@ func TestPostdeployScriptsPropagateRemoteExit(t *testing.T) {
 			strings.Join(problems, "\n  "))
 	}
 	t.Logf("射程内复查脚本 %d 份，退出码接线全部成立", len(matches))
+}
+
+// postdeployAssistFaceJudgement 判一份**现役**复查脚本的「挂件面」判据是不是活的形态。
+//
+// 为什么这条腿要存在（2026-11-21 发版实测）：
+//
+//	挂件自 2026-10-31 起整段收进主服务（Caddy 的 /assist-api/* 落 8787），独立的
+//	ai-assist.service 与 127.0.0.1:8790 自此不存在。而 postdeploy_20261012.sh 的 A 段
+//	仍按那两个对象判 ⇒ **每次发版恒两条假红**（实测 `unit ai-assist = inactive` ＋
+//	`挂件 /health = 000000`，其中 000000 还是 `|| echo 000` 与 curl 的 000 拼出来的）。
+//	假红的代价不是"多看一眼"：真回归混在同形红里没人分得清（AGENTS §三「判据比实现先坏」）。
+//
+// 三条腿各管一种"判了不存在的对象"的写法（先剥整行注释——说明回滚位的注释里
+// 必然写着 ai-assist 与 8790，不剥就会把"写明了退役"读成"还在按它判"）：
+//
+//	L4a 还在判已退役的 ai-assist 单元；
+//	L4b 还在探 127.0.0.1:8790 的 /health；
+//	L4c 两条现役判据缺一（主服务 /api/health 的 assist 段 ＋ 访客端点 /assist-api/…）——
+//	    只删旧判据不补新判据，等于把"挂件面没验"写成绿。
+func postdeployAssistFaceJudgement(rel string, content string) []string {
+	var problems []string
+	code := strings.Join(stripShellCommentLines(content), "\n")
+	if strings.Contains(code, "ai-assist") {
+		problems = append(problems, rel+": 还在判已退役的 ai-assist 单元（L4a）⇒ 那个单元自 2026-10-31 起不存在，这条恒假红")
+	}
+	if strings.Contains(code, "8790") {
+		problems = append(problems, rel+": 还在探 127.0.0.1:8790（L4b）⇒ 挂件已收进主服务，这个端口上没有服务")
+	}
+	// 现役形态的两条锚：health 的 assist 段（判装配态）＋ /assist-api 访客端点（判真可达）。
+	// 刻意按**两处各自**判：只留 health 那条会漏掉"分发器没接上"（health 是装配态，不是路由面），
+	// 只留 greeting 那条会漏掉"引擎没装配、端点回兜底"。
+	if !strings.Contains(code, "/api/health") || !strings.Contains(code, `"assist"`) {
+		problems = append(problems, rel+": 没判主服务 /api/health 的 assist 段（L4c）⇒ 挂件装配态没人看")
+	}
+	if !strings.Contains(code, "/assist-api/") {
+		problems = append(problems, rel+": 没判 /assist-api/ 访客端点（L4c）⇒ 分发链断没断没人看")
+	}
+	return problems
+}
+
+// postdeploy000DoublingSites 找「这一跳没走完」被拼成两个 000 的写法：
+// `curl -w '%{http_code}' … || echo 000`。
+//
+// 真身（2026-11-21 发版实测的那一条 BAD）：curl 连不上时**自己就回 000**，`|| echo 000` 再补一个
+// ⇒ 屏幕上读到 `挂件 /health = 000000`。这不只是"读数不准"：同一个失败被显示成一种谁也没见过的形态，
+// 于是判据表里那一行永远对不上，也没人能一眼说出它是"一次都没拨通"还是"拨了两次"。
+// 口径（同 AGENTS「这一跳没走完必须与判据不合格不同形」）：失败归一化只有一个出口（脚本里的 `http_code`）。
+//
+// ★ 射程刻意只认 `|| echo 000` 这一种：`|| echo CURL_FAIL` 是**正确**写法（哨兵与真实状态码不同形），
+// 连带判红等于逼人拆掉一条好读数（锁的归宿会变成被摘掉）。
+//
+// 先剥整行注释：事故写法必然抄在注释里当记录，不剥会把"记下了坑"读成"踩了坑"。
+func postdeploy000DoublingSites(rel string, content string) []string {
+	var problems []string
+	for i, line := range stripShellCommentLines(content) {
+		if !strings.Contains(line, "%{http_code}") || !strings.Contains(line, "|| echo") {
+			continue
+		}
+		if !strings.Contains(line, "|| echo 000") && !strings.Contains(line, `|| echo "000"`) &&
+			!strings.Contains(line, `|| echo '000'`) {
+			continue
+		}
+		problems = append(problems, fmt.Sprintf("%s:%d 把 curl 的 000 又拼了一个 ⇒ 失败会显示成 000000；"+
+			"改走 http_code 助手（单出口归一）", rel, i+1))
+	}
+	return problems
+}
+
+// TestPostdeployStandingScriptJudgesLiveAssistFace 只判**现役那一份**（文件名日期最大者）。
+// 为什么不是 glob 全集：10-06／10-10 那两份是历史批次的取证记录，它们按当时的形态判是**正确**的；
+// 让锁去判历史件只会逼人删历史或改历史。而"现役那一份"是可派生的（这一族按批次日期命名、glob 有序），
+// 不写死文件名——写死会让下一份 `postdeploy_2027xxxx.sh` 天然免检，正是这一族最容易复发的地方。
+func TestPostdeployStandingScriptJudgesLiveAssistFace(t *testing.T) {
+	repo := findDispatchRepoRoot(t)
+	matches, err := filepath.Glob(filepath.Join(repo, postdeployGlobPattern))
+	if err != nil || len(matches) == 0 {
+		t.Fatalf("没有射程内脚本（%v，命中 %d 份）", err, len(matches))
+	}
+	newest := matches[len(matches)-1] // filepath.Glob 返回**已排序**结果，末位即最新批次
+	rel, err := filepath.Rel(repo, newest)
+	if err != nil {
+		t.Fatalf("算相对路径失败：%v", err)
+	}
+	rel = filepath.ToSlash(rel)
+	src := readRepoText(t, repo, rel)
+	if problems := postdeployAssistFaceJudgement(rel, src); len(problems) > 0 {
+		t.Errorf("现役复查脚本 %s 的挂件面判据不是活的形态：\n  %s\n"+
+			"要的形态：删掉 ai-assist 单元与 8790 两条，改判主服务 /api/health 的 assist 段 ＋ /assist-api/ 访客端点",
+			rel, strings.Join(problems, "\n  "))
+	}
+	if problems := postdeploy000DoublingSites(rel, src); len(problems) > 0 {
+		t.Errorf("现役复查脚本 %s 有「000 拼接」读数（失败会被显示成 000000）：\n  %s",
+			rel, strings.Join(problems, "\n  "))
+	}
+	// 反证：把正常写法换回拼接形态（事故现场那一行），必须被同一把尺子抓到。
+	// 变异是**追加**一行，不动原件——它证明的是"这个判据真认得那种写法"，
+	// 而不是"文件里恰好没有那几个字"。
+	dbl := src + "\nX=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:1/x || echo 000)\n"
+	if problems := postdeploy000DoublingSites(rel, dbl); len(problems) == 0 {
+		t.Fatalf("反证无效：拼接形态一行问题都没出 ⇒ 这条锁没有射程")
+	}
+	// 反证：把现役脚本换回退役形态（补一条 ai-assist 判据、摘掉现役两条），必须被同一把尺子抓到。
+	mutant := src
+	mutant += "\nfor u in ai-assist; do systemctl is-active \"$u\"; done\n"
+	mutant = strings.ReplaceAll(mutant, "/assist-api/", "/legacy-assist/")
+	if problems := postdeployAssistFaceJudgement(rel, mutant); len(problems) == 0 {
+		t.Fatalf("反证无效：换回退役形态之后这条锁一行问题都没出 ⇒ 射程是空气")
+	}
+	t.Logf("现役复查脚本 %s 的挂件面判据已按现役形态判", rel)
 }
 
 // TestPostdeployExitGateCounterproof 反证两条（都在临时副本上跑，**仓库原件一字不动**）：

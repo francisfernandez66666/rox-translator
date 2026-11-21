@@ -124,18 +124,49 @@ bad() { echo "  BAD  $*"; RC=1; }
 # 写成 $(cmd || echo x) 会把两行一起收进变量 ⇒ 判据永远对不上；这里按"一次调用、取第一行"收口。
 sysd() { "$@" 2>/dev/null | head -1; }
 
-echo "----- A 四个单元与健康面（换件/换源后进程是不是那一台）-----"
-for u in translator translator-demo ai-assist caddy; do
+# http_code URL [超时秒] —— 取一次 HTTP 状态码，「这一跳没走完」归一成**唯一一个** 000。
+# ★ 不许写成 `curl -w '%{http_code}' … || echo 000`：curl 连不上时自己就打了 000，`|| echo` 再补一个
+#   ⇒ 屏幕上读到 `000000`（2026-11-21 那轮 `挂件 /health = 000000` 就是这么长出来的）。
+#   那种读数不只是不准：一个失败被显示成一种谁都没见过的形态，判据表里那行永远对不上，
+#   也没人能一眼说出它到底是"一次都没拨通"还是"拨了两次"。
+http_code() {
+  local out rc
+  out=$(curl -s -o /dev/null -w '%{http_code}' --max-time "${2:-8}" "$1" 2>/dev/null)
+  rc=$?
+  [ "$rc" -ne 0 ] && out=000
+  [ -z "$out" ] && out=000
+  printf '%s' "$out"
+}
+
+echo "----- A 单元与健康面（换件/换源后进程是不是那一台）-----"
+# ★ 2026-11-21 判据纠偏（「判据比实现先坏」那一族，产品侧无缺陷）：
+#   挂件自 2026-10-31 起已整段收进主服务（Caddy 的 /assist-api/* 落 8787，见 translator.conf 那段注释），
+#   独立的 ai-assist.service 与 127.0.0.1:8790 自此不存在。旧判据仍按那两个对象判 ⇒ 每次发版恒两条假红，
+#   而假红会把真回归淹掉。现口径＝问主服务自报的装配态（/api/health 的 assist 段）＋访客端点可达性。
+#   回滚位：若将来重新拆进程（ASSIST_LINK=remote 那一支），把下面三条换回 unit 与 8790 的判据。
+for u in translator translator-demo caddy; do
   st=$(sysd systemctl is-active "$u")
   if [ "$st" = "active" ]; then ok "unit $u = active"; else bad "unit $u = ${st:-<未读>}（必须 active；<未读>＝单元名不存在，先核名字再判）"; fi
 done
 for p in 8787 8789; do
-  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:$p/api/health" || echo 000)
+  code=$(http_code "http://127.0.0.1:$p/api/health")
   [ "$code" = "200" ] && ok "127.0.0.1:$p/api/health = 200" || bad "127.0.0.1:$p/api/health = ${code}（8787=主站 8789=演示单元）"
 done
-# 挂件健康面是 /health，不是 /api/health（这两个 unit 的日志也不落 journal，一律落文件）
-AC=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:8790/health || echo 000)
-[ "$AC" = "200" ] && ok "挂件 127.0.0.1:8790/health = 200" || bad "挂件 /health = $AC"
+# 挂件装配态：主服务 /api/health 的 assist 段（mode=local + ready=true），并核访客端点真回 200
+AHC=$(curl -s --max-time 8 http://127.0.0.1:8787/api/health || true)
+AMODE=$(printf '%s' "$AHC" | python3 -c 'import sys,json
+try: print((json.load(sys.stdin).get("assist") or {}).get("mode",""))
+except Exception: print("")' 2>/dev/null)
+AREADY=$(printf '%s' "$AHC" | python3 -c 'import sys,json
+try: print("1" if (json.load(sys.stdin).get("assist") or {}).get("ready") else "0")
+except Exception: print("")' 2>/dev/null)
+if [ "$AMODE" = "local" ] && [ "$AREADY" = "1" ]; then
+  ok "挂件装配 assist.mode=local ready=true（主服务内嵌）"
+else
+  bad "挂件装配 assist.mode=${AMODE:-<未读>} ready=${AREADY:-<未读>}（期望 local/1；<未读>＝health 取不到或字段缺失）"
+fi
+AC=$(http_code http://127.0.0.1:8787/assist-api/api/assist/greeting)
+[ "$AC" = "200" ] && ok "挂件访客端点 /assist-api/api/assist/greeting = 200" || bad "挂件访客端点 greeting = ${AC}（期望 200）"
 
 echo
 echo "----- B brotli/gzip 侧车落盘对账（两站磁盘 vs 本机 dist）-----"
