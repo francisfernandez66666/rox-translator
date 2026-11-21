@@ -298,3 +298,79 @@ func TestFileCtxRetryCandidatesOrderAndLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestCtxRetryNotGatedByMissingSegments 形态锁（**守卫级**，不是判据级）。
+//
+// 为什么必须有这一条：候选集自 2026-11-21 起包含「译了但形态不过」的段（数字/脚本），
+// 而这类单子往往**一个缺失段都没有**。只要这条腿被任何"按 missing0 分支"的 if 包住，
+// 它就在现网静默不生效——而且症状是"日志里一条都没有"，与"这一单不需要救"完全同形。
+// 本批就是这么踩的：ctx2 小件交付后 3 条数字不过，journal 里 `[file-ctx-retry]` 计数 0，
+// 根因是语言循环开头那句 `if len(missing0) == 0 { continue }` 把整段（含这条腿）跳过了。
+//
+// 两条判据（缺一条都会让这条腿重新变回死码）：
+//
+//	① 源码里不许再出现 `if len(missing0) == 0` 这种前置 continue 形态；
+//	② `ctxRetryTargets(` 的调用点不许落在 `if len(missing0) > 0 { … }` 的块内
+//	   （把前置 continue 改成包一层 if，效果一模一样）。
+func TestCtxRetryNotGatedByMissingSegments(t *testing.T) {
+	src := readEngineSource(t, "file.go")
+	if strings.Contains(src, "if len(missing0) == 0") {
+		t.Fatal("`if len(missing0) == 0 { continue }` 会让上下文重译腿在零缺失的单子上整段跳过（本批真实踩过）")
+	}
+	// ★ 必须按**HandleFile 里那一处调用**取（带 `langTranslations[lc]`）。本批连踩两次空转：
+	//   ① 先用 `ctxRetryTargets(lc, texts` ⇒ 命中的是函数**定义**（在 HandleFile 之外）；
+	//   ② 再缩成 `ctxRetryTargets(lc, texts,` ⇒ 命中的是另一处**内部转发**（retranslateMissingWithContext 的
+	//      `... ctxRetryTargets(lc, texts, have)`）。两处都在 HandleFile 之前，于是"腿被包进 if"恒判绿。
+	//   教训：形态锁的锚点必须能唯一定位到被测的那一次调用，否则反证永远不红。
+	call := strings.Index(src, "ctxRetryTargets(lc, texts, langTranslations[lc])")
+	if call < 0 {
+		t.Fatal("找不到上下文重译的候选集调用点（判据已失明，先核函数名）")
+	}
+	head := "if len(missing0) > 0 {"
+	h := strings.Index(src, head)
+	if h < 0 {
+		t.Log("没有 `if len(missing0) > 0` 包裹块（形态变化），只跑第①条")
+		return
+	}
+	// 从该 if 的左花括号开始做花括号配对（跳过行注释与双引号字符串）。
+	open := h + strings.Index(src[h:], "{")
+	end := matchBrace(src, open)
+	if end < 0 {
+		t.Fatal("花括号配对失败（源码形态变了，先修这条锁的扫描器）")
+	}
+	if call > open && call < end {
+		t.Fatal("上下文重译的候选集调用被 `if len(missing0) > 0` 包住了 ⇒ 零缺失的单子上这条腿不跑（屏幕上只有'一次都没触发'）")
+	}
+}
+
+// matchBrace 返回 src[open] 这对花括号的闭合下标（open 必须指向 '{'）。
+// 只跳过行注释与双引号字符串——够用于本仓 file.go 的形态；匹配失败返回 -1。
+func matchBrace(src string, open int) int {
+	depth := 0
+	for i := open; i < len(src); i++ {
+		switch {
+		case strings.HasPrefix(src[i:], "//"):
+			if nl := strings.IndexByte(src[i:], '\n'); nl >= 0 {
+				i += nl
+				continue
+			}
+			return -1
+		case src[i] == '"':
+			i++
+			for i < len(src) && src[i] != '"' {
+				if src[i] == '\\' {
+					i++
+				}
+				i++
+			}
+		case src[i] == '{':
+			depth++
+		case src[i] == '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}

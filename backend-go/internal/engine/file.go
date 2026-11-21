@@ -1422,125 +1422,129 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		// ★ missingSegments 与写入点判定（fileTranslationUsable）配对：不可用译文不写入 ⇒ 键存在
 		//   严格等价于已译出，故 KB 脏行不再「既不算命中也不被统计」地凭空消失（RC-2 落点）。
 		missing0 := missingSegments(texts, langTranslations[lc])
-		if len(missing0) == 0 {
-			continue
-		}
-		budget := hardGateBudget()
-		loopStart := time.Now()
-		for attempt := 1; attempt <= fileHardgateMaxAttempts; attempt++ {
-			if ctx.Err() != nil {
-				break
-			}
-			still := []string{}
-			stillIdx := []int{} // ★B3：与 still 等长的 texts 全局段号映射（逐段事件行键）
-			// 判定口径与 missingSegments 严格一致（键存在=已译出）：此处额外要段号，故未直接复用。
-			for i, t := range texts {
-				if _, ok := langTranslations[lc][t]; !ok {
-					still = append(still, t)
-					stillIdx = append(stillIdx, i)
-				}
-			}
-			if len(still) == 0 {
-				break
-			}
-			if elapsed := time.Since(loopStart); elapsed > budget {
-				log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译", lc, elapsed.Round(time.Second), len(still))
-				break
-			}
-			// ★ N-01：轮首复核 token 预算（与墙钟预算并列，两条各拦一种失控形态）。
-			if stopForTokenBudget(lc, len(still)) {
-				break
-			}
-			log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
-			// 轮间间隔防打爆供应商；可被取消打断（不再无条件睡死 500ms）
-			select {
-			case <-ctx.Done():
-			case <-time.After(500 * time.Millisecond):
-			}
-			if ctx.Err() != nil {
-				break
-			}
-			// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
-			// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
-			protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
-			batch := e.BatchTranslateOpts(ctx, protStill, lc, adaptiveBatchSize(protStill, imgSegCap, 6000),
-				// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
-				se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
-				// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
-				BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced, Glossary: glossaryProf.TermsFor(lc, glossaryLim.MaxTerms), GlossaryLabel: glossaryProf.DisplayLabel()})
-			for i, m := range still {
-				// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
-				//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
-				if i < len(batch) {
-					if e.fileTranslationUsable(ctx, m, batch[i], lc) {
-						addTrans(lc, m, batch[i])
-						// ★ 2026-10-25：硬闸这一轮同样是**模型**译出的段，必须计进 model_hits。
-						//   改之前只 addTrans 不计数 ⇒ 初翻全被判回显、靠硬闸救回整篇的单，
-						//   工单读数写「模型翻译 0 段」而成品里每一行都是模型译文（命中计数与实际
-						//   写入脱钩，同 addTrans 裸写入器那条注释针对的形态）。补译段不重复计：
-						//   still 只含此刻仍缺失的段，初翻已写入的段进不了这个循环。
-						addModelHit()
-					} else {
-						noteRefusal(lc, m, batch[i]) // ★ M1：硬闸这一轮仍是回绝 ⇒ 记账
-					}
-				}
-			}
-			// 本轮第2优先：批量后仍缺失的段逐段兜底（全新调用，绕过 KB/缓存）。
-			// ★ 段粒度预算检查：每段之间复核剩余预算，保证尾部段落也能分到时间。
-			for _, m := range still {
-				if _, ok := langTranslations[lc][m]; ok {
-					continue
-				}
-				if time.Since(loopStart) > budget {
+		// ★ 2026-11-21（用户令扩展的必然后果）：**不再**"零缺失就 continue"。
+		//   下面那条上下文重译腿现在还要处理「译了但形态不过」的段（数字保持／目标语脚本），
+		//   而这类单子往往**一个缺失段都没有**——旧写法会把整段（含这条腿）跳过，
+		//   屏幕上表现为"触发条件加了但一次都没跑"（本批 ctx2 小件实测：3 条数字不过、
+		//   journal 里一条 [file-ctx-retry] 都没有，正是这个 continue 干的）。
+		if len(missing0) > 0 {
+			budget := hardGateBudget()
+			loopStart := time.Now()
+			for attempt := 1; attempt <= fileHardgateMaxAttempts; attempt++ {
+				if ctx.Err() != nil {
 					break
 				}
-				// ★ N-01：逐段之间同样复核 token 预算（与上面那条墙钟复核同位）——
-				//   一轮内部的逐段兜底可以是几十次整块调用，只在轮首判等于给一轮开了无限额度。
-				if stopForTokenBudget(lc, len(missingSegments(texts, langTranslations[lc]))) {
-					break
-				}
-				if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok {
-					if !e.fileTranslationUsable(ctx, m, v, lc) {
-						noteRefusal(lc, m, v) // ★ M1：逐段兜底仍是回绝 ⇒ 记账
-						continue
+				still := []string{}
+				stillIdx := []int{} // ★B3：与 still 等长的 texts 全局段号映射（逐段事件行键）
+				// 判定口径与 missingSegments 严格一致（键存在=已译出）：此处额外要段号，故未直接复用。
+				for i, t := range texts {
+					if _, ok := langTranslations[lc][t]; !ok {
+						still = append(still, t)
+						stillIdx = append(stillIdx, i)
 					}
-					addTrans(lc, m, v)
-					addModelHit()     // ★ 同上：极简腿救回的段也是模型译文，计数必须跟着写入走
-					se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
-					// 观测腿：这条日志既是"极简腿真被走到"的现场读数，也是 minimalInstrRescueMarker
-					// 的运行期引用点（没有它，常量会被内联/优化掉，发布件特征串两向都不可信）。
-					// 只出语言与标记，**不出段文本**（工单内容属客户资料，日志不留原文）。
-					observability.Info(ctx, "文件翻译：极简指令兜底腿救回未译段", "lang", lc, "mark", minimalInstrRescueMarker)
 				}
-			}
-		}
-		// ★ F-01（2026-10-24 用户令）：5% 阈值。硬闸 3 轮后仍超阈值 ⇒ 再做定向补译，
-		//   只送缺失段（极简指令腿），补回即止；不判失败、不退款、不自动整单重发。
-		if lang := leakedLangAt(lc, len(missingSegments(texts, langTranslations[lc])), len(texts), e.fileLeakRatio()); lang != "" {
-			calls := 0
-			maxCalls := e.fileRepairMaxCalls()
-			for round := 1; round <= e.fileRepairMaxRounds(); round++ {
-				still := missingSegments(texts, langTranslations[lc])
 				if len(still) == 0 {
 					break
 				}
-				if ctx.Err() != nil || calls >= maxCalls {
+				if elapsed := time.Since(loopStart); elapsed > budget {
+					log.Printf("[tm-hardgate] lang=%s 预算耗尽（%s），剩余 %d 段未译", lc, elapsed.Round(time.Second), len(still))
 					break
 				}
-				// ★ N-01：追加补译同样受 token 预算约束（次数上限只管"打几次"，管不住"每次多大"）。
+				// ★ N-01：轮首复核 token 预算（与墙钟预算并列，两条各拦一种失控形态）。
 				if stopForTokenBudget(lc, len(still)) {
 					break
 				}
-				log.Printf("[file-repair] lang=%s round=%d 定向补译 %d 段（阈值 %.0f%%）", lc, round, len(still), e.fileLeakRatio()*100)
+				log.Printf("[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段", lc, attempt, len(still))
+				// 轮间间隔防打爆供应商；可被取消打断（不再无条件睡死 500ms）
+				select {
+				case <-ctx.Done():
+				case <-time.After(500 * time.Millisecond):
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				// 本轮第1优先：小批量重译（bs=10）。BatchTranslate 内部含动态批与低解析率二次收编，
+				// 对短段回显的纠正率高于逐段单发。品牌保护同前：源文品牌名先替换为规定译法防音译。
+				protStill, _ := protectSourceByLang(still, brandTermsAll[lc])
+				batch := e.BatchTranslateOpts(ctx, protStill, lc, adaptiveBatchSize(protStill, imgSegCap, 6000),
+					// ★B3：硬闸重译块同样逐段推进度+segment_done（补漏段此前无行，前端据此补行）
+					se.batchCB(lc, func(done, total int) { prog("file_translate|初翻|"+lc, done, total) }, stillIdx),
+					// ★ P5：硬闸重译同样带表头语境——补译的那几行正是最容易跑偏术语的一批
+					BatchOptions{HeaderContext: fileHeaderCtx, LiteralOCR: ocrSourced, Glossary: glossaryProf.TermsFor(lc, glossaryLim.MaxTerms), GlossaryLabel: glossaryProf.DisplayLabel()})
+				for i, m := range still {
+					// ★ 硬闸写入点同样走 fileTranslationUsable（原手写 3 个不等式 + 无指令残留判定）：
+					//   仍回显/仍残留指令 ⇒ 不写入，该段留在缺失集合里直至被收尾统计浮出。
+					if i < len(batch) {
+						if e.fileTranslationUsable(ctx, m, batch[i], lc) {
+							addTrans(lc, m, batch[i])
+							// ★ 2026-10-25：硬闸这一轮同样是**模型**译出的段，必须计进 model_hits。
+							//   改之前只 addTrans 不计数 ⇒ 初翻全被判回显、靠硬闸救回整篇的单，
+							//   工单读数写「模型翻译 0 段」而成品里每一行都是模型译文（命中计数与实际
+							//   写入脱钩，同 addTrans 裸写入器那条注释针对的形态）。补译段不重复计：
+							//   still 只含此刻仍缺失的段，初翻已写入的段进不了这个循环。
+							addModelHit()
+						} else {
+							noteRefusal(lc, m, batch[i]) // ★ M1：硬闸这一轮仍是回绝 ⇒ 记账
+						}
+					}
+				}
+				// 本轮第2优先：批量后仍缺失的段逐段兜底（全新调用，绕过 KB/缓存）。
+				// ★ 段粒度预算检查：每段之间复核剩余预算，保证尾部段落也能分到时间。
 				for _, m := range still {
+					if _, ok := langTranslations[lc][m]; ok {
+						continue
+					}
+					if time.Since(loopStart) > budget {
+						break
+					}
+					// ★ N-01：逐段之间同样复核 token 预算（与上面那条墙钟复核同位）——
+					//   一轮内部的逐段兜底可以是几十次整块调用，只在轮首判等于给一轮开了无限额度。
+					if stopForTokenBudget(lc, len(missingSegments(texts, langTranslations[lc]))) {
+						break
+					}
+					if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok {
+						if !e.fileTranslationUsable(ctx, m, v, lc) {
+							noteRefusal(lc, m, v) // ★ M1：逐段兜底仍是回绝 ⇒ 记账
+							continue
+						}
+						addTrans(lc, m, v)
+						addModelHit()     // ★ 同上：极简腿救回的段也是模型译文，计数必须跟着写入走
+						se.done(lc, m, v) // ★B3：逐段兜底补译成功即推初翻上屏
+						// 观测腿：这条日志既是"极简腿真被走到"的现场读数，也是 minimalInstrRescueMarker
+						// 的运行期引用点（没有它，常量会被内联/优化掉，发布件特征串两向都不可信）。
+						// 只出语言与标记，**不出段文本**（工单内容属客户资料，日志不留原文）。
+						observability.Info(ctx, "文件翻译：极简指令兜底腿救回未译段", "lang", lc, "mark", minimalInstrRescueMarker)
+					}
+				}
+			}
+			// ★ F-01（2026-10-24 用户令）：5% 阈值。硬闸 3 轮后仍超阈值 ⇒ 再做定向补译，
+			//   只送缺失段（极简指令腿），补回即止；不判失败、不退款、不自动整单重发。
+			if lang := leakedLangAt(lc, len(missingSegments(texts, langTranslations[lc])), len(texts), e.fileLeakRatio()); lang != "" {
+				calls := 0
+				maxCalls := e.fileRepairMaxCalls()
+				for round := 1; round <= e.fileRepairMaxRounds(); round++ {
+					still := missingSegments(texts, langTranslations[lc])
+					if len(still) == 0 {
+						break
+					}
 					if ctx.Err() != nil || calls >= maxCalls {
 						break
 					}
-					calls++
-					if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok && e.fileTranslationUsable(ctx, m, v, lc) {
-						addTrans(lc, m, v)
-						addModelHit() // ★ 同上一处：定向补译也是模型译文，计数跟着写入走（still 只含仍缺失段 ⇒ 不重复计）
-						se.done(lc, m, v)
+					// ★ N-01：追加补译同样受 token 预算约束（次数上限只管"打几次"，管不住"每次多大"）。
+					if stopForTokenBudget(lc, len(still)) {
+						break
+					}
+					log.Printf("[file-repair] lang=%s round=%d 定向补译 %d 段（阈值 %.0f%%）", lc, round, len(still), e.fileLeakRatio()*100)
+					for _, m := range still {
+						if ctx.Err() != nil || calls >= maxCalls {
+							break
+						}
+						calls++
+						if v, ok := e.translateSegmentMinimal(ctx, m, lc); ok && e.fileTranslationUsable(ctx, m, v, lc) {
+							addTrans(lc, m, v)
+							addModelHit() // ★ 同上一处：定向补译也是模型译文，计数跟着写入走（still 只含仍缺失段 ⇒ 不重复计）
+							se.done(lc, m, v)
+						}
 					}
 				}
 			}
