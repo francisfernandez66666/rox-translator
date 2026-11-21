@@ -49,7 +49,8 @@ describe('R5 overflowProblems 判据自证', () => {
       { label: '.na-fab', rect: { left: -80, right: -24, top: 660, bottom: 716 } },
     ], [])
     expect(problems.length).toBeGreaterThan(0)
-    expect(problems.join('；')).toContain('左边界')
+    // 诊断串自 2026-11-21 起为英文（src/api/ 在 hardcodedCjkGate 射程内），判据只钉"被点名"这一件事
+    expect(problems.join('; ')).toContain('left edge')
   })
 
   it('容差内不误伤：2px 描边取整不算溢出', () => {

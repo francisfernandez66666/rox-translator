@@ -433,6 +433,10 @@ func (e *Engine) translateSegmentByReviewModel(ctx context.Context, seg, targetL
 	if e == nil {
 		return "", false
 	}
+	// ★ 2026-11-21：复核链路关闭时这一档（换复核模型补译）不拨模型，交给调用方走既有回落出口。
+	if !e.ReviewEnabled(ctx) {
+		return "", false
+	}
 	v, err := e.SingleLangTranslate(WithMinimalInstruction(ctx), seg, targetLang, nil,
 		DetectSourceLang(seg), config.StageReview)
 	if err != nil || strings.TrimSpace(v) == "" {

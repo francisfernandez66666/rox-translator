@@ -6,6 +6,7 @@
 package api
 
 import (
+	"bytes"
 	"net/http"
 	"strings"
 	"testing"
@@ -18,6 +19,9 @@ type deadlineSpy struct {
 	calls    int
 	last     time.Time
 	supports bool // false＝模拟 ResponseController 够不到底层（Unwrap 链断掉时的真实形态）
+	// body 记录写出去的响应体：写超时豁免的判据还要证明「拒绝路径的响应体真的写出去了」，
+	// 只数 SetWriteDeadline 次数会把"豁免了但把 401 体吞掉"判成绿。
+	body bytes.Buffer
 }
 
 func (d *deadlineSpy) Header() http.Header {
@@ -26,7 +30,7 @@ func (d *deadlineSpy) Header() http.Header {
 	}
 	return d.h
 }
-func (d *deadlineSpy) Write(b []byte) (int, error) { return len(b), nil }
+func (d *deadlineSpy) Write(b []byte) (int, error) { return d.body.Write(b) }
 func (d *deadlineSpy) WriteHeader(code int)        {}
 func (d *deadlineSpy) SetWriteDeadline(t time.Time) error {
 	// 先记账再表态：supports=false 模拟的是"够到底层但底层不支持"，

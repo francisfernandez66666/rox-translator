@@ -256,6 +256,11 @@ func arrAllNonEmpty(arr []string) bool {
 //  3. 预算与 finish_reason 每段各自判（审校腿在 ReviewTranslation 内部已流式＋带截断/纯度退回）。
 func (e *Engine) chatReviewByParagraph(ctx context.Context, segs []string, srcLang string,
 	initByLang map[string][]string, prog Progress) map[string][]string {
+	// ★ 2026-11-21：复核链路开关关闭时整条腿不跑（调用方也会判一次，这里再判一次是防御——
+	//   本函数是"复核模型调用"的入口之一，漏判＝关了还在烧模型）。
+	if !e.ReviewEnabled(ctx) {
+		return nil
+	}
 	// ★ 先把待审校的语种**快照成切片**再并发（AGENTS §三）：map 的"边遍历边写"是 runtime fatal error，
 	//   不是 panic——recover 兜不住、整个进程挂。整篇路径当年就是栽在这一条上（review_snapshot_test.go）。
 	type job struct {

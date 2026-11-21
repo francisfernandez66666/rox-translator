@@ -56,3 +56,7 @@
 #   那种提交一旦进历史，push_code_only 的「全量差异 − 代码清单」就会把它们当代码推上公开仓库。
 :(exclude)promo_poster/
 :(exclude)ses_*.json
+# ★ 2026-11-21 质量批补一条：`output/` 是验收/取证读数目录（真值验收报告、产物快照、对比件），
+#   不是运行代码。本批的 `output/tv_acceptance_20261121/compare.txt` 就是被本地文档提交带进 BASE..HEAD
+#   之后被当成"代码"的（干跑清单只它一个）——同族第 N 次，按目录整条排除。
+:(exclude)output/

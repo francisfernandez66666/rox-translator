@@ -21,10 +21,10 @@ func TestStripForeignScriptsInNonTarget(t *testing.T) {
 		{"he", "דרך 신호 פרסום", "דרך  פרסום"},
 		{"he", "דרך канал פרסום", "דרך  פרסום"},
 		{"he", "דרך Facebook פרסום 30%", "דרך Facebook פרסום 30%"}, // 拉丁品牌+数字保留
-		{"he", "שלום עולם", "שלום עולם"},                            // 纯目标不动
+		{"he", "שלום עולם", "שלום עולם"},                           // 纯目标不动
 		{"ar", "عبر القناة 신호", "عبر القناة "},
 		{"ru", "Через 신호 канал", "Через  канал"}, // 西里尔目标：韩文删、西里尔留
-		{"en", "Hello 世界", "Hello 世界"},            // 拉丁目标不清洗（中文由 StripChineseInNonZh 管）
+		{"en", "Hello 世界", "Hello 世界"},           // 拉丁目标不清洗（中文由 StripChineseInNonZh 管）
 		{"xx", "anything 신호", "anything 신호"},     // 未知语言 fail-soft
 	}
 	for _, c := range cases {

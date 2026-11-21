@@ -21,6 +21,7 @@ import (
 	"translator/internal/kb"
 	"translator/internal/llm"
 	"translator/internal/notify"
+	"translator/internal/observability"
 	"translator/internal/qa"
 	"translator/internal/store"
 	"translator/internal/tenant"
@@ -574,6 +575,13 @@ func (w *Workflow) runReview(ctx context.Context, t *store.Ticket) error {
 	if p == nil {
 		return nil
 	}
+	// ★ 2026-11-21：复核链路开关关闭时整条审校腿不跑（流程照常走完，译文保持初翻）。
+	//   只出声不改形态：客户面上"这一单没有审校"与"这一单审校没改动任何一行"在交付物里同形，
+	//   所以唯一能区分两者的地方就是这行日志。
+	if !w.Engine.ReviewEnabled(ctx) {
+		observability.Info(ctx, "复核链路已按运营策略关闭（翻译工单），跳过审校腿", "ticket", t.ID)
+		return nil
+	}
 	// ★ DEF-02：文本工单逐行审校（保留行数）；单段/关闭开关时走下方旧整篇 review。
 	if w.reviewTextPerLine(ctx, p) {
 		w.savePayload(t, p)
@@ -600,6 +608,12 @@ func (w *Workflow) runEvalsReview(ctx context.Context, t *store.Ticket) error {
 		return nil
 	}
 	if w.Engine.Evals == nil {
+		return nil
+	}
+	// ★ 2026-11-21：复核 evals 与审校腿同属"复核链路"，同一档开关；关闭时只跳过评估，
+	//   流程照常完成（不写 ReviewEvalScores，也不打标——"没评估"不许伪装成"评估通过"）。
+	if !w.Engine.ReviewEnabled(ctx) {
+		observability.Info(ctx, "复核链路已按运营策略关闭（翻译工单），跳过复核评估", "ticket", t.ID)
 		return nil
 	}
 	for lc, tr := range p.Translations {

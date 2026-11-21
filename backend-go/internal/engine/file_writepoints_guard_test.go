@@ -574,7 +574,7 @@ func TestApplySegmentGatesWarnsButNeverDropsTranslation(t *testing.T) {
 	h := fwpGateEngine(t, fwpTrBad) // 重翻仍给出同样违规的译文
 	lt := map[string]map[string]string{"en": {fwpSrcBad: fwpTrBad}}
 
-	warnings := h.eng.applySegmentGates(context.Background(), lt, true)
+	warnings := h.eng.applySegmentGates(context.Background(), lt, true, nil, "")
 	if len(warnings) == 0 {
 		t.Fatal("违规译文必须以警告透出（静默放行=闸门形同不存在）")
 	}
@@ -604,7 +604,7 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 	t.Run("修正合格则覆写", func(t *testing.T) {
 		h := fwpGateEngine(t, fwpTrOK)
 		lt := map[string]map[string]string{"en": {fwpSrcBad: fwpTrBad}}
-		if ws := h.eng.applySegmentGates(context.Background(), lt, true); len(ws) != 0 {
+		if ws := h.eng.applySegmentGates(context.Background(), lt, true, nil, ""); len(ws) != 0 {
 			t.Fatalf("重翻后已过闸，不应再留警告：%v", ws)
 		}
 		if lt["en"][fwpSrcBad] != fwpTrOK {
@@ -614,7 +614,7 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 	t.Run("修正为空则保留原译文", func(t *testing.T) {
 		h := fwpGateEngine(t, "   ")
 		lt := map[string]map[string]string{"en": {fwpSrcBad: fwpTrBad}}
-		ws := h.eng.applySegmentGates(context.Background(), lt, true)
+		ws := h.eng.applySegmentGates(context.Background(), lt, true, nil, "")
 		if lt["en"][fwpSrcBad] != fwpTrBad {
 			t.Fatalf("模型空回复不得覆写已交付内容，got %q", lt["en"][fwpSrcBad])
 		}
@@ -625,7 +625,7 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 	t.Run("修正仍是源文回显则保留原译文", func(t *testing.T) {
 		h := fwpGateEngine(t, fwpSrcBad) // 中文回显：非源语言项必不过 ⇒ 不采纳
 		lt := map[string]map[string]string{"en": {fwpSrcBad: fwpTrBad}}
-		h.eng.applySegmentGates(context.Background(), lt, true)
+		h.eng.applySegmentGates(context.Background(), lt, true, nil, "")
 		if lt["en"][fwpSrcBad] != fwpTrBad {
 			t.Fatalf("回显/未过闸的修正不得写回交付物，got %q", lt["en"][fwpSrcBad])
 		}
@@ -639,7 +639,7 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 		echo := "<target language is reasonable. Please strictly follow the revision suggestions and retranslate the text."
 		h := fwpGateEngine(t, echo)
 		lt := map[string]map[string]string{"en": {"<": "<"}}
-		h.eng.applySegmentGates(context.Background(), lt, true)
+		h.eng.applySegmentGates(context.Background(), lt, true, nil, "")
 		if h.hitCount() == 0 {
 			t.Fatal("本锁要求闸门先打回 `<` 才会走到重译腿（闸门行为变了就换个能过闸的回显样本，别让它空转）")
 		}
@@ -655,7 +655,7 @@ func TestApplySegmentGatesAdoptsOnlyGateCleanRethranslation(t *testing.T) {
 func TestApplySegmentGatesSkipsSensitivePlaceholder(t *testing.T) {
 	h := fwpGateEngine(t, fwpTrOK)
 	lt := map[string]map[string]string{"en": {"违规待拦截段": SensitivePlaceholderText}}
-	if ws := h.eng.applySegmentGates(context.Background(), lt, true); len(ws) != 0 {
+	if ws := h.eng.applySegmentGates(context.Background(), lt, true, nil, ""); len(ws) != 0 {
 		t.Fatalf("拦截占位段不应产生闸门警告：%v", ws)
 	}
 	if got := lt["en"]["违规待拦截段"]; got != SensitivePlaceholderText {
@@ -671,7 +671,7 @@ func TestApplySegmentGatesSkipsSensitivePlaceholder(t *testing.T) {
 func TestApplySegmentGatesCleanTranslationNoLLMCall(t *testing.T) {
 	h := fwpGateEngine(t, fwpTrOK)
 	lt := map[string]map[string]string{"en": {fwpSrcBad: fwpTrOK}}
-	if ws := h.eng.applySegmentGates(context.Background(), lt, true); len(ws) != 0 {
+	if ws := h.eng.applySegmentGates(context.Background(), lt, true, nil, ""); len(ws) != 0 {
 		t.Fatalf("合规译文不应产生警告：%v", ws)
 	}
 	if n := h.hitCount(); n != 0 {
@@ -683,10 +683,10 @@ func TestApplySegmentGatesCleanTranslationNoLLMCall(t *testing.T) {
 // 钉住的是 fast/异常路径下 langTranslations 可能为空的事实。
 func TestApplySegmentGatesEmptyMapSafe(t *testing.T) {
 	h := fwpGateEngine(t)
-	if ws := h.eng.applySegmentGates(context.Background(), map[string]map[string]string{}, true); ws != nil {
+	if ws := h.eng.applySegmentGates(context.Background(), map[string]map[string]string{}, true, nil, ""); ws != nil {
 		t.Fatalf("空输入应返回 nil，got %v", ws)
 	}
-	if ws := h.eng.applySegmentGates(context.Background(), nil, false); ws != nil {
+	if ws := h.eng.applySegmentGates(context.Background(), nil, false, nil, ""); ws != nil {
 		t.Fatalf("nil 输入应返回 nil，got %v", ws)
 	}
 }

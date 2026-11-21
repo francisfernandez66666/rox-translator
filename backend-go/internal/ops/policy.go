@@ -125,6 +125,19 @@ type InstantPatch struct {
 	FreeLangLimit         *int64 `json:"free_lang_limit,omitempty"`          // 免费档最多目标语种数
 }
 
+// QualityPatch 复核链路因子（★ 2026-11-21：即时翻译/翻译工单是否走复核模型）。
+//
+// 两档**分开**是刻意的：即时翻译是高频短文本、复核腿要白烧一次模型调用（降本时先关它）；
+// 翻译工单是客户付费的成品、复核腿恰恰是「译得出来的那个模型有没有被问到」的唯一通道
+// （提质时留它）。合成一个总开关就只能两档一起动，运营没法只降即时那一侧的成本。
+//
+// 默认档一律 true（保持现行为）：这两个字段从 `nil` 变成 `false` 会让所有存量部署的
+// 交付质量**悄悄降一档**，而屏幕上没有任何一条读数会指出这件事。
+type QualityPatch struct {
+	InstantReviewEnabled *bool `json:"instant_review_enabled,omitempty"` // 即时翻译是否走复核模型
+	TicketReviewEnabled  *bool `json:"ticket_review_enabled,omitempty"`  // 翻译工单是否走复核模型
+}
+
 // FrontPatch 站点门面因子（★ 〇-Z：官网首页对未登录访客是否开放）。
 //
 // LandingEnabled 语义：true／缺省＝访客打开 `/` 看官网落地页（**平台默认档，主站就是这一档**）；
@@ -154,6 +167,7 @@ type OperationsPolicy struct {
 	Task         TaskPatch         `json:"task,omitempty"`
 	Front        FrontPatch        `json:"front,omitempty"`
 	Instant      InstantPatch      `json:"instant,omitempty"`
+	Quality      QualityPatch      `json:"quality,omitempty"`
 }
 
 // ============================== 保存校验（★ B6，2026-09-12） ==============================
@@ -186,6 +200,12 @@ func ValidateWindowOverrides(w PromoWindow) error {
 		ip.FreeImageMaxMB != nil || ip.FreeAudioMaxSec != nil || ip.ImageMaxMB != nil ||
 		ip.AudioMaxMB != nil || ip.AudioMaxSec != nil || ip.FreeLangLimit != nil {
 		return fmt.Errorf("时间窗覆盖禁止设置 instant.*（免费档是成本顶，请用运营策略显式保存）")
+	}
+	// ★ 2026-11-21 复核链路：禁止经时间窗夹带。理由与门面/免费档同形——窗口自动生效/失效，
+	//   让它顺手把「复核腿开不开」翻掉，等于给交付质量留了一个没人复核的开关，
+	//   而现场只有一条窗口记录指不到这件事。
+	if w.Overrides.Quality.InstantReviewEnabled != nil || w.Overrides.Quality.TicketReviewEnabled != nil {
+		return fmt.Errorf("时间窗覆盖禁止设置 quality.*（复核链路请用运营策略显式保存）")
 	}
 	if len(w.Overrides.PromoWindows) > 0 {
 		return fmt.Errorf("时间窗覆盖不允许嵌套子窗口")
@@ -235,6 +255,7 @@ type EffectivePolicy struct {
 	Task         TaskEffective         `json:"task"`
 	Front        FrontEffective        `json:"front"`
 	Instant      InstantEffective      `json:"instant"`
+	Quality      QualityEffective      `json:"quality"`
 }
 
 // InstantEffective 解析后的即时翻译免费档（九项，全部是最终值：未配置时为出厂默认，不是 0）。
@@ -307,6 +328,13 @@ type FrontEffective struct {
 	LandingEnabled bool `json:"landing_enabled"`
 }
 
+// QualityEffective 解析后的复核链路因子（★ 2026-11-21）。
+// 缺省 true＝照旧走复核模型；false＝跳过复核腿（闸门校验与警告仍保留）。
+type QualityEffective struct {
+	InstantReviewEnabled bool `json:"instant_review_enabled"`
+	TicketReviewEnabled  bool `json:"ticket_review_enabled"`
+}
+
 // Mode 取指定翻译模式因子；未配置（或空模式）回落 pro 语义并返回 false。
 // 说明：空模式视为专业模式（历史口径 "" 与 pro 等同）。
 func (p EffectivePolicy) Mode(m string) (ModeRule, bool) {
@@ -346,6 +374,10 @@ func DefaultEffective() EffectivePolicy {
 		// 首屏字节一个字都不变，所以默认值必须是 true；把它改成 false 会让主站首页凭空少一块内容，
 		// 由 site_flags 那条「开＝不注入」的等值锁拦住（见 internal/api/site_flags_test.go）。
 		Front: FrontEffective{LandingEnabled: true},
+		// ★ 2026-11-21 复核链路：出厂档一律**开**（＝现行为）。改成 false 会让所有存量部署的
+		//   交付质量悄悄降一档（复核腿是"译得出来的那个模型有没有被问到"的唯一通道），
+		//   而屏幕上没有任何一条读数会指出这件事。
+		Quality: QualityEffective{InstantReviewEnabled: true, TicketReviewEnabled: true},
 		// ★ 2026-10-30 组4（D-1／D-16）：免费档出厂档。数值口径＝用户 10-30 拍板：
 		//   个人 300 积分/天、租户池 2000 积分/天、IP 300 次/天；免费图片 1 MiB、免费音频 30 秒；
 		//   付费即时硬顶 3 MiB / 60 秒；免费档单语种。
@@ -370,6 +402,15 @@ func ParseOps(raw string) OperationsPolicy {
 	}
 	_ = json.Unmarshal([]byte(raw), &p)
 	return p
+}
+
+// QualityOf 从 ops_policy 原文解析复核链路档位；空/非法 ⇒ 出厂默认（全开）。
+//
+// 这是运行期读这一档的**唯一出口**：调用方不要自己 ParseOps+Merge 再取字段——
+// 那样"出厂默认值"与"读不到时怎么回退"会各写一份（§一·11 多把尺子那一族），
+// 而这一档回退错方向的代价是**全站交付质量静默降一档**，屏幕上零读数。
+func QualityOf(raw string) QualityEffective {
+	return Merge(DefaultEffective(), ParseOps(raw)).Quality
 }
 
 // ============ ★ C6（2026-09-12）默认值单一来源访问器 ============
@@ -534,6 +575,13 @@ func Merge(base EffectivePolicy, patch OperationsPolicy) EffectivePolicy {
 	// ★ 〇-Z 门面开关：显式 false 才关，缺省继承上层（默认＝展示主页）。
 	if patch.Front.LandingEnabled != nil {
 		out.Front.LandingEnabled = *patch.Front.LandingEnabled
+	}
+	// ★ 2026-11-21 复核链路：同样"显式 false 才关"，缺省继承上层（默认＝走复核）。
+	if patch.Quality.InstantReviewEnabled != nil {
+		out.Quality.InstantReviewEnabled = *patch.Quality.InstantReviewEnabled
+	}
+	if patch.Quality.TicketReviewEnabled != nil {
+		out.Quality.TicketReviewEnabled = *patch.Quality.TicketReviewEnabled
 	}
 	return out
 }

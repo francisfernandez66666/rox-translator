@@ -59,7 +59,7 @@ export function OpsP() {
   const [, t, tpl] = useT()
   const { isSuper, activeTenantId } = useAdmin()
   // 策略草稿（本地编辑；2026-09 起仅超管平台级可写）
-  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {}, front: {}, instant: {} })
+  const [pol, setPol] = useState<Record<string, any>>({ billing: { mode_rules: {} }, package: {}, invite: {}, registration: {}, limits: {}, payment: {}, content: {}, task: {}, front: {}, instant: {}, quality: {} })
   const [windows, setWindows] = useState<any[]>([])
   const [, setNow] = useState('') // ★ E14
   // 推广窗口编辑弹窗
@@ -111,6 +111,10 @@ export function OpsP() {
           // ★ 2026-10-30 即时翻译免费档（九键全 `*int` 三态：-1 关 / 0 不限 / N 上限）：
           //   界面只做读写同源，档位真值与跨键校验都在后端（倒挂配置 400 由服务端拦）。
           instant: eff.instant || {},
+          // ★ 2026-11-21 复核链路（质量）：两档独立开关（即时 / 工单）。
+          //   effective 段已把缺省档算成 true/true，所以界面看到的就是线上真实态；
+          //   提交时整包回写，后端按指针语义只认显式表态（见 ops.QualityPatch）。
+          quality: eff.quality || {},
         })
         setWindows(r.windows || [])
         try {
@@ -143,6 +147,8 @@ export function OpsP() {
   const setFront = (patch: Record<string, any>) => setPol((p) => ({ ...p, front: { ...p.front, ...patch } }))
   // ★ 2026-10-30 即时翻译免费档九键（同款不可变补丁；保存仍走整包 opsPolicySave）
   const setInstant = (patch: Record<string, any>) => setPol((p) => ({ ...p, instant: { ...p.instant, ...patch } }))
+  // ★ 2026-11-21 复核链路（质量）两档开关：同款不可变补丁
+  const setQuality = (patch: Record<string, any>) => setPol((p) => ({ ...p, quality: { ...p.quality, ...patch } }))
 
   // 保存当前草稿（平台级，仅超管）；成功即重新加载生效策略
   const save = async () => {
@@ -481,6 +487,26 @@ export function OpsP() {
           ))}
           <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '6px 0 0', lineHeight: 1.7 }}>{t('ops.instantCrossHint')}</p>
         </div>
+      </Panel>
+
+      {/* ★ 2026-11-21 复核链路（质量）两档独立开关。
+          用户令：即时翻译与翻译工单**各自**可配「是否走复核链路（复核模型＋复核 evals）」。
+          语义：关掉＝不再为这一档烧复核模型调用（成本），翻译本身照常；闸门校验与质量警告**不关**。
+          checked 一律写 `!== false`：后端缺省是「走复核」，库里没这个键时必须显示为开——
+          写成 `!!x` 会让存量部署一开面板就看到"复核全关"，顺手一保存就把全站质量降一档。
+          作用域判定在后端由入口打标（即时链缺省即即时档），前端不需要也不许按页面猜档位。 */}
+      <Panel title={t('ops.qualityTitle')} extra={<span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>{t('ops.qualityHint')}</span>}>
+        <div data-testid="ops-quality" style={{ display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center', opacity: isSuper ? 1 : 0.55 }}>
+          <Field label={t('ops.qualityInstant')}>
+            <Switch disabled={!isSuper} checked={pol.quality?.instant_review_enabled !== false}
+              onChange={(e) => setQuality({ instant_review_enabled: e.target.checked })} />
+          </Field>
+          <Field label={t('ops.qualityTicket')}>
+            <Switch disabled={!isSuper} checked={pol.quality?.ticket_review_enabled !== false}
+              onChange={(e) => setQuality({ ticket_review_enabled: e.target.checked })} />
+          </Field>
+        </div>
+        <p style={{ fontSize: 14, color: 'var(--adm-faint)', margin: '8px 0 0', lineHeight: 1.7 }}>{t('ops.qualityBody')}</p>
       </Panel>
 
       {/* 推广窗口编辑弹窗 */}

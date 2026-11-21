@@ -1123,23 +1123,46 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 		culture = e.cultureBlockFor(ctx, tid, targetLang, zhText)
 	}
 	ref := buildExamplesPrompt(zhText, targetLang, examples) // 知识库术语参考（无命中则为空串）
+	// ★ 2026-11-21 用户令「翻译不出的内容要带上下文进复核模型重新翻译」的**提示词侧落点**：
+	// 文件链的带反馈重译（gates.go 的 check → 本函数）此前只送「原文 + 驳回意见」，
+	// 而现网实证的错法恰恰是语境型：表格 cell `25–50 万` 被译成 `25–50 אלף ¥`（万→千），
+	// 同一列上一行写的是 `450,000–800,000`——只看这一格模型读不出它是什么量级。
+	// ctx 里没有语境时 ctxNote 为空串，提示词与改造前逐字一致（文本主路径零改动）。
+	ctxNote := ""
+	if note := segmentContextFromCtx(ctx); strings.TrimSpace(note) != "" {
+		ctxNote = segmentContextNote(note)
+	}
 	var prompt string
 	if ref != "" {
-		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
-			langName, feedback, ref, culture, zhText, langName, contractNoteZh())
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
+			langName, feedback, ref, culture, ctxNote, zhText, langName, contractNoteZh())
 	} else {
-		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
-			langName, feedback, culture, zhText, langName, contractNoteZh())
+		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被审校驳回，驳回意见如下：%s。请严格按照意见修正重译。%s%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
+			langName, feedback, culture, ctxNote, zhText, langName, contractNoteZh())
 	}
 	messages := []map[string]string{{"role": "user", "content": prompt}}
 	base, key, model := e.resolveModel(ctx)
 	if b2, k2, m2, ok := e.resolveStageModel(ctx, stage); ok {
 		base, key, model = b2, k2, m2
 	}
-	// ★ 2026-10-15 截断修复：同 ReviewTranslation——预算按待产出译文定档（旧写死 2048），
-	//   且读回 finish_reason，被截断即丢弃（本腿产物同样会覆盖客户手上那版译文）。
 	content, finishReason, err := e.LLM.CallChat(ctx, base, key, model, messages, translateOutputBudget(zhText), false, e.Cfg.FallbackTemp)
-	if err != nil || strings.TrimSpace(content) == "" {
+	if (err != nil || strings.TrimSpace(content) == "") && stage != config.StageAIInitial {
+		// ★ 2026-11-21：复核阶段不可用 ⇒ 回落到初翻模型、带着**同一条驳回意见与同一份语境**再试一次。
+		// 取舍：这一腿的全部价值是「带反馈/带语境再翻一次」，阶段模型只是载体；
+		// 而阶段模型是运营配的、可能失效（现网实证：theturbo 返回 401「Incorrect API key provided」，
+		// 高频词判定那条 WARN 是同一根因）——让一个配置项把整条质量腿**静默关掉**，
+		// 比多花一次调用坏得多：屏幕上只有"质量没变好"，没有任何读数指向它（AGENTS §一·12）。
+		// 只回落一次；采纳仍由调用方那一把尺子判（换腿不是换尺子）。
+		observability.Warn(ctx, "复核模型改写腿不可用，回落初翻模型重试", "lang", targetLang, "stage", stage, "err", fmt.Sprint(err))
+		base, key, model = e.resolveModel(ctx)
+		content, finishReason, err = e.LLM.CallChat(ctx, base, key, model, messages, translateOutputBudget(zhText), false, e.Cfg.FallbackTemp)
+	}
+	if err != nil {
+		observability.Warn(ctx, "译文改写腿调用失败，保留上一版译文", "lang", targetLang, "stage", stage, "err", fmt.Sprint(err))
+		return ""
+	}
+	if strings.TrimSpace(content) == "" {
+		observability.Warn(ctx, "译文改写腿返回空产物，保留上一版译文", "lang", targetLang, "stage", stage)
 		return ""
 	}
 	if finishReason == "length" {
@@ -1204,6 +1227,11 @@ func translateOutputBudget(text string) int {
 // ReviewTranslation 审校译文（LLM 修正术语/语法/表达，返回修正后译文；失败返回原文）。
 // 参数 stage: 流程阶段（默认 config.StageReview）。
 func (e *Engine) ReviewTranslation(ctx context.Context, source, translation, targetLang, stage string) string {
+	// ★ 2026-11-21：复核链路开关关闭时直接返回空串。调用方一律把 "" 当"这一轮没改"
+	//   （退路是已存在的初翻/原译文），所以这里关掉的只是**复核模型调用**，闸门与警告照旧。
+	if !e.ReviewEnabled(ctx) {
+		return ""
+	}
 	culture := ""
 	if tid := tenant.FromContext(ctx); tid > 0 {
 		culture = e.cultureBlockFor(ctx, tid, targetLang, source)
@@ -3547,6 +3575,10 @@ func (e *Engine) applyCultureGate(ctx context.Context, tid int64, targetLang, te
 func (e *Engine) ReviewTranslationBatch(ctx context.Context, sources, translations []string, targetLang, stage string) []string {
 	out := make([]string, len(translations))
 	copy(out, translations) // 缺省回退原值
+	// ★ 2026-11-21：复核链路开关关闭时整批不送审校（原样返回）。见 ReviewTranslation 同款注释。
+	if !e.ReviewEnabled(ctx) {
+		return out
+	}
 	if len(sources) == 0 || len(sources) != len(translations) {
 		return out
 	}

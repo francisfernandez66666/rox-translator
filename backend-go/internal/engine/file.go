@@ -689,13 +689,26 @@ func (e *Engine) translateSegmentWithContext(ctx context.Context, seg, targetLan
 	if e == nil {
 		return "", false
 	}
+	// ★ 2026-11-21：复核链路关闭时「带语境重译」这一腿不拨模型——它是复核模型调用，
+	//   归同一档开关。关掉后缺失段按既有出口「回落原文 + md 点名」处理，不静默改走初翻。
+	if !e.ReviewEnabled(ctx) {
+		return "", false
+	}
 	cctx := WithMinimalInstruction(ctx)
 	if strings.TrimSpace(ref) != "" {
 		cctx = WithSegmentContext(cctx, ref)
 	}
 	v, err := e.SingleLangTranslate(cctx, seg, targetLang, nil, DetectSourceLang(seg), config.StageReview)
 	if err != nil || strings.TrimSpace(v) == "" {
-		return "", false
+		// ★ 2026-11-21：复核阶段不可用（现网实证：theturbo 那把 Key 返回 401）时，回落到初翻模型
+		// 带着**同一份语境**再翻一次。这一腿的价值主要在语境（这一格属于哪张表、旁边写的是什么量级），
+		// 不在换模型；让一个配置项把整条腿静默关掉，会让「上下文重译」在日志上看起来像
+		// "这一单没有需要救的段"——那正是最难归因的读数（AGENTS §一·12）。
+		observability.Warn(ctx, "上下文重译：复核模型不可用，回落初翻模型重试", "lang", targetLang, "err", fmt.Sprint(err))
+		v, err = e.SingleLangTranslate(cctx, seg, targetLang, nil, DetectSourceLang(seg), config.StageAIInitial)
+		if err != nil || strings.TrimSpace(v) == "" {
+			return "", false
+		}
 	}
 	return v, true
 }
@@ -831,6 +844,18 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 
 	// ★ 双模式：fast 快速模式跳过知识库直配——全部语言并入批量模型直翻
 	fast := ModeFromOptions(options) == "fast"
+	// ★ 2026-11-21：复核链路关闭时本单的批量审校 / 闸门带反馈重译 / 上下文重译一律不跑
+	//   （文件链是"即时文件翻译"与"翻译工单"共用的，所以按 ctx 作用域取档）。
+	//   这里只出一行读数：关掉之后交付物与"审校没改动任何一行"完全同形，不给读数就无从归因。
+	if !fast && !e.ReviewEnabled(ctx) {
+		observability.Info(ctx, "复核链路已按运营策略关闭（文件链），本单跳过审校与上下文重译",
+			"scope", func() string {
+				if reviewScopeFrom(ctx) == ReviewScopeTicket {
+					return ReviewScopeTicket
+				}
+				return ReviewScopeInstant
+			}())
+	}
 	if fast && len(kbLangs) > 0 {
 		directOther = append(directOther, kbLangs...)
 		kbLangs = nil
@@ -1512,7 +1537,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		result := fmt.Sprintf("[sensitive] 文件通道输出侧兑底替换 %d 段", n)
 		log.Println(result)
 	}
-	gateWarnings = append(gateWarnings, e.applySegmentGates(ctx, langTranslations, true)...)
+	gateWarnings = append(gateWarnings, e.applySegmentGates(ctx, langTranslations, true, texts, fileHeaderCtx)...)
 	gateWarnings = append(gateWarnings, leakWarnings...)
 	// ★ G4（2026-10-19 D5）：品牌名是不可译常量，工单/文件链此前没有挂件那道 guardReplyBrand。
 	//   译文里品牌名逐字缺失 ⇒ 出声 + 记账（客户与审批台可见）。名单取不到时 checkFileBrandPresence

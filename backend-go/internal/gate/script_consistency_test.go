@@ -11,11 +11,11 @@ import "testing"
 // 品牌拉丁白名单不误杀。用希伯来语（现网样本）为主，配语言无关矩阵。
 func TestScriptConsistencyCheck11(t *testing.T) {
 	cases := []struct {
-		name  string
-		src   string
-		lang  string
-		tr    string
-		pass  bool
+		name string
+		src  string
+		lang string
+		tr   string
+		pass bool
 	}{
 		{"he_正常含品牌", "通过Facebook投放", "he", "דרך Facebook פרסום", true},
 		{"he_韩文污染", "通过Facebook投放", "he", "דרך Facebook 신호 פרסום", false},

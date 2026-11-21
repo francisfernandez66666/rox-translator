@@ -360,9 +360,10 @@ func hasRepetition(s string) bool {
 // targetCharsReasonable 目标语言词面合理性（弱校验：目标体系字母是否出现）。
 //
 // ★ 2026-11-20 P2 重写：原 switch 无 he 等语种分支，落 default 要求拉丁字母——
-//   方向反了，希伯来语污染译文含 `arketing` 反而通过。现转调 textscript 单一口径，
-//   覆盖全部已在 LangToScript 登记的语言（含 he/ar/ru/kk）。
-//   kk 的"西里尔且不含阿拉伯"专属约束保留（见下方特判）。
+//
+//	方向反了，希伯来语污染译文含 `arketing` 反而通过。现转调 textscript 单一口径，
+//	覆盖全部已在 LangToScript 登记的语言（含 he/ar/ru/kk）。
+//	kk 的"西里尔且不含阿拉伯"专属约束保留（见下方特判）。
 func targetCharsReasonable(tr, target string) bool {
 	if tr == "" {
 		return true

@@ -51,10 +51,21 @@ export const W6_ON_KEYS = ['sales_facts_injection_enabled', 'sales_claim_guard_e
 /** 开关三态 */
 export type OpsState = 'on' | 'off' | 'half'
 
-/** 批次门控：只有到了该批，这项才允许呈现 on（W3 期间 W5/W6 项一律 false） */
+/** 批次档的先后序（★ 2026-11-21 修）：批次是**累积**的，不是互斥档位 */
+const OPS_BATCH_ORDER: Record<OpsBatch, number> = { W3: 1, W5: 2, W6: 3 }
+
+/**
+ * 批次门控：只有到了该批，这项才允许呈现 on。
+ *
+ * ★ 2026-11-21 修（存量红）：旧写法 `batch === current` 把批次当互斥档位，于是
+ * `CURRENT_OPS_BATCH` 抬到 W6 之后，W5 那三项（销售引擎/外联总闸）**永远**判 false
+ * ⇒ 两把闸都开也只显示「半套」，面板对着运营撒谎。而锁里那条「批次已到 ⇒ 全部 defs
+ * 允许 on」正是按累积语义写的，两者打架时才暴露。
+ * 口径：批次只许按序放行（W5 到 = W3 也到），**禁止**再写成等值比较——
+ * 等值比较下一次抬批还会重演同一种静默（旧批全变 half）。
+ */
 export function opsAllowOn(batch: OpsBatch, current: OpsBatch): boolean {
-  if (batch === 'W3') return true
-  return batch === current
+  return OPS_BATCH_ORDER[batch] <= OPS_BATCH_ORDER[current]
 }
 
 /**

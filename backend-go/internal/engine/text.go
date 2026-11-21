@@ -342,15 +342,20 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		}
 		// ★ pro 档：审校**逐段**并**接流式**（D-1 拍板"全部要做流式"的唯一自洽形态）。
 		//   初翻那条腿已被 WithStreamSuppressed 静默 ⇒ 流式吐的就是最终稿，delta 与 done 同一份东西。
+		// ★ 2026-11-21：复核链路开关关闭时整条腿不跑（闸门与警告仍保留在后续 applyOutputGates）。
 		if !fast {
-			rev := e.chatReviewByParagraph(ctx, segs, srcLang, segInit, prog)
-			for lc, arr := range rev {
-				if len(arr) == len(segs) {
-					allTr[lc] = ComposeParagraphOutput(arr)
-					continue
+			if e.ReviewEnabled(ctx) {
+				rev := e.chatReviewByParagraph(ctx, segs, srcLang, segInit, prog)
+				for lc, arr := range rev {
+					if len(arr) == len(segs) {
+						allTr[lc] = ComposeParagraphOutput(arr)
+						continue
+					}
+					observability.Warn(ctx, "逐段审校返回的段数与源文不符，整语种保留初翻",
+						"lang", lc, "want", len(segs), "got", len(arr))
 				}
-				observability.Warn(ctx, "逐段审校返回的段数与源文不符，整语种保留初翻",
-					"lang", lc, "want", len(segs), "got", len(arr))
+			} else {
+				observability.Info(ctx, "复核链路已按运营策略关闭（即时翻译·分段），本单跳过审校腿")
 			}
 		}
 		prog("翻译完成", 4, 4)
@@ -452,7 +457,11 @@ func (e *Engine) handleTextCore(ctx context.Context, text string, options map[st
 		// ★ 2026-10-17 用户令：**只有 pro 跑校对腿**——fast 的「快」就快在这一步（原形态
 		//   fast 反而更慢：它绕过 KB 直配、把每条腿都逼进模型初翻+校对，命中知识库的文本
 		//   在专业档是 0 次模型调用）。
-		if !fast && len(allTr) > 0 {
+		reviewOn := e.ReviewEnabled(ctx)
+		if !fast && len(allTr) > 0 && !reviewOn {
+			observability.Info(ctx, "复核链路已按运营策略关闭（即时翻译·整篇），本单跳过审校腿")
+		}
+		if !fast && len(allTr) > 0 && reviewOn {
 			prog("AI 校对中...", 3, 4)
 			sem := make(chan struct{}, 3)
 			var mu sync.Mutex

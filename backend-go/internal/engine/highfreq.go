@@ -35,9 +35,9 @@ var highfreqStopWords = map[string]bool{
 
 // highfreqMinCount / highfreqMaxTerms 抽取门槛与上限（env 可配见 highfreqMaxTermsFromEnv）。
 const (
-	highfreqMinCount = 2  // 至少出现 2 次才算"高频"
-	highfreqMinRunes = 2  // 中文词最短 2 字
-	highfreqMaxRunes = 6  // 中文词最长 6 字
+	highfreqMinCount = 2 // 至少出现 2 次才算"高频"
+	highfreqMinRunes = 2 // 中文词最短 2 字
+	highfreqMaxRunes = 6 // 中文词最长 6 字
 )
 
 var latinWordReHF = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]{1,}`)

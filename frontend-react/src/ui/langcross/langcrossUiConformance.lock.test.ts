@@ -42,9 +42,19 @@ const SCOPE = [
 
 const EXTRA = ['components/admin/AssistP.tsx', 'components/admin/PersonasP.tsx']
 
+/**
+ * 目录枚举（射程的一半：SCOPE 少登记一个页面、或目录里多出一个未登记的页面，双向比对都判红）。
+ *
+ * ★ 2026-11-21 修（存量红，非本批引入）：旧写法只判 `endsWith('.tsx')`，
+ * 而 W3 批提交的 `ProductPublicPage.notFound.dom.test.tsx` 同样以 `Product` 开头、以 `.tsx` 结尾，
+ * 于是被当成"未登记的销售域页面"，锁恒红——而产品代码一字未错。
+ * 本锁的射程是**生产页面**（要它用统一组件源），测试文件天生不 import 统一组件源，
+ * 放进射程只会让这条闸门长期红灯、最终被人摘掉（比红灯更坏）。
+ * ⇒ 排除 `*.test.tsx` / `*.dom.test.tsx`，**只排除测试件**，其余一律照旧双向比对。
+ */
 function enumerate(dir: string, re: RegExp): string[] {
   return readdirSync(join(SRC, dir))
-    .filter((f) => re.test(f) && f.endsWith('.tsx'))
+    .filter((f) => re.test(f) && f.endsWith('.tsx') && !f.includes('.test.'))
     .map((f) => `${dir}/${f}`)
 }
 

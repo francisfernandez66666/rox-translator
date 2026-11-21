@@ -192,7 +192,9 @@ func (g *gateCtx) check(source, lang, translated string, retry bool, e *Engine, 
 	}
 	gr := gate.RunWithTerms(source, lang, tr, terms)
 	if !gr.Pass {
-		if retry {
+		// ★ 2026-11-21：复核链路关闭时，这条"带反馈重译"腿（走复核模型）整段不跑；
+		//   下面的"未通过质量校验"警告照旧出栈——关的是复核调用，不是闸门本身。
+		if retry && e.ReviewEnabled(ctx) {
 			// ★ 方案 §6.4 Q2 / D2（2026-11-21 补齐）：把单次带反馈重译扩成可配置的多次重检循环。
 			//   合并计数：首轮 gate.RunWithTerms 已算 1 次检查，故再重译 gateRecheckMax()-1 次；
 			//   默认 N=2 ⇒ 最多 1 次重译，与补齐前行为逐字节一致（不改变成本/延迟基线）。
@@ -280,11 +282,23 @@ func (e *Engine) highfreqConsistencyCheck(ctx context.Context, lc, source string
 // applySegmentGates 文件主路径（HandleFile）：对流式分段译文按语言做质量闸门校验。
 // retry=true 时约束闸门首轮不过则带反馈重翻一次（文件交付物如成本表必须保证数字/格式正确，
 // 整改：原「文件不重翻」会导致硬闸失效、错误直接落入成品文件）。
-func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[string]map[string]string, retry bool) []string {
+func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[string]map[string]string, retry bool, texts []string, header string) []string {
 	if len(langTranslations) == 0 {
 		return nil
 	}
 	gc := e.newGateCtx(ctx)
+	// ★ 2026-11-21 用户令「翻译不出的内容要带上下文进复核模型重新翻译」的**闸门侧落点**：
+	// 文件链的带反馈重译（check 里那一腿）此前只送「原文 + 驳回意见」，没有语境——
+	// 而现网实证的错法恰恰是**语境型**：表格 cell `25–50 万` 被译成 `25–50 אלף ¥`（万→千），
+	// 同一列上一行写的是 `450,000–800,000`，只看这一格模型读不出它是什么量级。
+	// 所以这里把「表头 ＋ 前后各两段」的语境挂进 ctx，由 translateWithFeedbackEx 拼进提示词。
+	// 段索引按**源段首次出现**建表（同一段重复出现在多行时取第一次，够用且确定）。
+	idxByText := make(map[string]int, len(texts))
+	for i, t := range texts {
+		if _, ok := idxByText[t]; !ok {
+			idxByText[t] = i
+		}
+	}
 	var warnings []string
 	for lc, m := range langTranslations {
 		// ★ P3：按语言收集全篇源段，构建一次高频词表（KB 已剔除），整篇一致性后检。
@@ -297,7 +311,15 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 			if tr == SensitivePlaceholderText { // ★ S8：拦截占位段不进质量闸门
 				continue
 			}
-			fixed, ws := gc.check(orig, lc, tr, retry, e, hfCtx)
+			// ★ 2026-11-21：带语境重译——这一段若来自源文清单，就把它的表头/邻段挂进 ctx。
+			// 取不到索引（文本主路径、或源段与清单对不上）⇒ 原样 ctx，行为与改造前逐字一致。
+			segCtx := hfCtx
+			if i, ok := idxByText[orig]; ok {
+				if note := buildSegmentContext(texts, i, header); strings.TrimSpace(note) != "" {
+					segCtx = WithSegmentContext(hfCtx, note)
+				}
+			}
+			fixed, ws := gc.check(orig, lc, tr, retry, e, segCtx)
 			if fixed != tr {
 				m[orig] = fixed
 			}

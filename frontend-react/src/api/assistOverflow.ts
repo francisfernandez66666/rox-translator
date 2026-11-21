@@ -28,17 +28,20 @@ export function overflowProblems(
   boxes: Array<{ label: string; rect: Rect }>,
   scrollAncestors: ScrollBox[],
 ): string[] {
+  // ★ 诊断串一律英文：这些是**开发者/测试**读的红字（不是界面文案），
+  //   而 `src/api/` 在 i18n 静态闸门（i18n/hardcodedCjkGate.test.ts）的射程内——
+  //   写中文会被判成「接口层写死中文」（2026-11-21 存量红收口）。
   const out: string[] = []
   for (const b of boxes) {
     const r = b.rect
-    if (r.left < -TOL_PX) out.push(`${b.label} 左边界越出视口 left=${Math.round(r.left)}`)
-    if (r.right > vw + TOL_PX) out.push(`${b.label} 右边界越出视口 right=${Math.round(r.right)} > ${vw}`)
-    if (r.top < -TOL_PX) out.push(`${b.label} 上边界越出视口 top=${Math.round(r.top)}`)
-    if (r.bottom > vh + TOL_PX) out.push(`${b.label} 下边界越出视口 bottom=${Math.round(r.bottom)} > ${vh}`)
+    if (r.left < -TOL_PX) out.push(`${b.label} left edge outside viewport left=${Math.round(r.left)}`)
+    if (r.right > vw + TOL_PX) out.push(`${b.label} right edge outside viewport right=${Math.round(r.right)} > ${vw}`)
+    if (r.top < -TOL_PX) out.push(`${b.label} top edge outside viewport top=${Math.round(r.top)}`)
+    if (r.bottom > vh + TOL_PX) out.push(`${b.label} bottom edge outside viewport bottom=${Math.round(r.bottom)} > ${vh}`)
   }
   for (const s of scrollAncestors) {
     if (s.scrollWidth > s.clientWidth + TOL_PX) {
-      out.push(`${s.label} 被撑宽 ${s.scrollWidth} > ${s.clientWidth}`)
+      out.push(`${s.label} scroll ancestor widened ${s.scrollWidth} > ${s.clientWidth}`)
     }
   }
   return out

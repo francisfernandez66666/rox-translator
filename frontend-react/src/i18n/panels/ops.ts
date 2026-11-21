@@ -166,6 +166,12 @@ export const zh: Record<string, string> = {
   'ops.cfLast': '上次清理：{raw}',
   'ops.cfFileOn': '投影文件在场',
   'ops.cfFileOff': '投影文件缺失',
+  // ---- ★ 2026-11-21 复核链路（质量）两档独立开关 ----
+  'ops.qualityTitle': '复核链路（质量）',
+  'ops.qualityHint': '关闭后该档不再为复核模型付费，翻译本身照常',
+  'ops.qualityInstant': '即时翻译走复核链路',
+  'ops.qualityTicket': '翻译工单走复核链路',
+  'ops.qualityBody': '「复核链路」指初翻之后再交给复核模型与复核评估跑一遍（术语/语法/语义/数字/风格）。关掉只省这一档的模型调用，翻译、质量闸门校验与交付警告都不受影响；默认两档都开。',
 }
 
 // 英文文案词典：键与上方 zh 一一对应。
@@ -331,4 +337,10 @@ export const zh: Record<string, string> = {
   'ops.cfLast': 'Last purge: {raw}',
   'ops.cfFileOn': 'Projection file present',
   'ops.cfFileOff': 'Projection file missing',
+  // ---- ★ 2026-11-21 review pipeline (quality): two independent switches ----
+  'ops.qualityTitle': 'Review pipeline (quality)',
+  'ops.qualityHint': 'When off, that tier stops paying for the review model; translation itself is unchanged',
+  'ops.qualityInstant': 'Instant translation uses the review pipeline',
+  'ops.qualityTicket': 'Translation tickets use the review pipeline',
+  'ops.qualityBody': 'The review pipeline means running the draft through the review model and the review evaluation (terminology, grammar, semantics, numbers, style) after the first pass. Turning it off only saves that tier\'s model calls — translation, quality gate checks and delivery warnings are unaffected. Both tiers default to on.',
 }

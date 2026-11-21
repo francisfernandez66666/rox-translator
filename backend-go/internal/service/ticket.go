@@ -615,6 +615,8 @@ func (s *TicketService) runTextTicket(ctx context.Context, t *store.Ticket) erro
 		textMode = "pro"
 	}
 	ctx = tenant.WithMode(ctx, textMode)
+	// ★ 2026-11-21：文本工单同样打复核链路作用域（见 runFileTicket 同款注释）。
+	ctx = engine.WithReviewScope(ctx, engine.ReviewScopeTicket)
 	wf := orchestrator.NewWorkflow(s.Store, s.Engine, s.Ten, s.DB)
 	if wf == nil {
 		return fmt.Errorf("编排器未初始化")
@@ -727,6 +729,9 @@ func (s *TicketService) runFileTicket(ctx context.Context, t *store.Ticket) erro
 	}
 	// ★ 运营策略引擎（2026-09-05）：注入模式到 ctx，异步工单实时计量按 fast/pro 区分免费/扣费
 	ctx = tenant.WithLang(tenant.WithMode(ctx, mode), firstLangOf(langs)) // ★ C4：模式+主目标语种注入
+	// ★ 2026-11-21：翻译工单打上复核链路作用域（供 ops_policy.quality.ticket_review_enabled 分档）。
+	//   只此一处打标：引擎里所有复核腿都按 ctx 作用域取档，逐个调用点注标记必然漏一处。
+	ctx = engine.WithReviewScope(ctx, engine.ReviewScopeTicket)
 	// ★ 归属登记用创建者 ID（评审整改 C1）：OpenAPI 任务回退其归属用户
 	ownerUID := t.CreatedBy
 	if ownerUID <= 0 && t.APIUserID > 0 {

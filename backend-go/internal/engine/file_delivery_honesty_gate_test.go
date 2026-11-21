@@ -57,6 +57,11 @@ var fdhAllow = map[string]string{
 	//   若哪天把 `out` 并进 gateWarnings 口径，这两条豁免应同步删除。
 	"图片工单逐行补译仍不合格，按原文回落":         "记账＝返回值 out（逐行进 .md「未译出内容」）；本 WARN 补的是**成因读数**（empty/explosion/length_info），不是新增静默",
 	"图片工单逐行补译判上游断，剩余未译行一次性按原文回填": "记账＝返回值 out（剩余段逐条计入未译出）；本 WARN 是整语种一行汇总，防逐行刷屏",
+	// ★ 2026-11-21：上下文重译腿的「阶段模型不可用 ⇒ 回落初翻模型」。
+	//   这是**换腿不是换尺子**：回落那一次仍过 fileTranslationUsable 同一把判据，
+	//   救不回时由 retranslateMissingWithContext 的收尾块进 untranslated/gate_warnings，
+	//   客户面照常看到「未译出」那一节。本 WARN 只记成因（阶段模型失效），不是新增静默。
+	"上下文重译：复核模型不可用，回落初翻模型重试": "换腿不是换尺子：回落仍走 fileTranslationUsable，救不回时调用方进 untranslated/gate_warnings；本 WARN 只记成因",
 }
 
 // fdhSite 一处「出声」点位及其记账配对情况。

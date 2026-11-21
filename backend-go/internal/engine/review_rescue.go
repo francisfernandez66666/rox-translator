@@ -32,6 +32,10 @@ func (e *Engine) RescueProblemSegments(ctx context.Context, problems []ProblemSe
 	if len(problems) == 0 {
 		return nil
 	}
+	// ★ 2026-11-21：复核链路关闭时不救援，调用方按既有出口「回落原文 + md 标注」处理。
+	if !e.ReviewEnabled(ctx) {
+		return nil
+	}
 	out := make(map[string]string, len(problems))
 	var mu sync.Mutex
 	var wg sync.WaitGroup

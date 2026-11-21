@@ -775,6 +775,18 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 // PDF 体积/页数超限 400（客户端换个文件即可），落盘/写入失败 500；
 // 与 /api/translate/stream 的分工是「头未写出才谈状态码」——SSE 通道里同款失败一律走 error 事件帧。
 func (s *Server) handleTranslateFile(w http.ResponseWriter, r *http.Request) {
+	// ★ 2026-11-21 真值验收暴露（tv6，199 行 / 15.6 KB 的 Markdown 实测 2,150 s）：本接口是
+	// **同步长任务**，而全站 http.Server 的 WriteTimeout 是 30 分钟（见 cmd/server/main.go）。
+	// 写超时到点之后 handler 仍把成品写完了（产物落盘 mtime 与请求结束同秒），但响应写不出去 ⇒
+	// 客户端拿到的是"连接被关"（curl 000），客户以为失败、文件其实已经在磁盘上。
+	// 这一族的坏法比"产物坏"更难发现：产物能打开、服务端日志全绿，只有回执那一跳是坏的
+	// （AGENTS §一·12「有自动降级的链路，产物能打开不算验收」的同一形态）。
+	// SSE 通道早在 sseHeaders 里清过一次写超时；同步文件通道是同一族的"合法长请求"，
+	// 必须在入口同样清一次。清成"无限"而不是给一个大数字：大文件耗时随行数线性增长，
+	// 任何有限值都只是把同一条缺陷挪到下一个尺寸档；真正的兜底是客户端断开后的 ctx 取消。
+	// 位置刻意排在鉴权之前：这一行改的是「本请求的写截止时刻」，与"谁来调"无关；
+	// 放在鉴权之后会让它变成"只有带对 Token 的请求才豁免"——而拒绝路径同样要写回 401 响应体。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
 	// ★ 安全止血（整改 A1）：强制登录（在解析 multipart 前拒绝，匿名零成本）
 	if s.authUser(r) == nil {
 		writeJSON(w, 401, map[string]string{"error": "未登录或登录已过期"})
