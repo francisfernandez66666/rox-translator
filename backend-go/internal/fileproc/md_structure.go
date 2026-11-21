@@ -763,6 +763,29 @@ func mdTrimExcessMarkers(srcKey, tr string) string {
 	if len(srcCount) == 0 {
 		return tr
 	}
+	// 第一道：相邻同标记收敛（2026-11-21 二轮真值暴露）。
+	// 模型偶发用 `****`（两个相邻 **）当"一个加粗开头"，而 mdMarkerSeq 会把 `****` 数成 2 个 token，
+	// 于是纯计数对齐看不出过发（源 **X** 是 2 token、译文 ****X** 是 3 token 才被抓；但 ****X 无闭合法
+	// 也是 2 token 就漏网）。这里在计数之前先收敛相邻同标记：译文 `****`/`____`/`~~~~` 相邻对 → 单个，
+	// 直到不再变化；**仅当源片段本身不含该相邻形态**（源含 `**5****\.**` 这类是合法骨架，不能动）。
+	for _, m := range []string{"**", "__", "~~"} {
+		if strings.Contains(srcKey, m+m) {
+			continue // 源本身有相邻同标记 ⇒ 是骨架语义，跳过
+		}
+		// m+m（如 `****`）＝模型把一对加粗开/闭连写 ⇒ 收敛成一个 m（`**`）。
+		// 4 个 `*` 是一次相邻对；3 个 `*` 是"1 个标记 + 半个"，也收敛成一对。
+		for strings.Contains(tr, m+m) {
+			tr = strings.ReplaceAll(tr, m+m, m)
+		}
+		// 奇数个星（如 5 连收敛后剩 3）⇒ 多余的单字符也并入相邻对，收敛到 m。
+		half := m[:1]
+		for strings.Contains(tr, m+half) {
+			tr = strings.ReplaceAll(tr, m+half, m)
+		}
+		for strings.Contains(tr, half+m) {
+			tr = strings.ReplaceAll(tr, half+m, m)
+		}
+	}
 	// 逐字节扫描译文，记录每个 token 的字节区间与种类（与 mdMarkerSeq 同一套判定）。
 	type tok struct {
 		start, end int

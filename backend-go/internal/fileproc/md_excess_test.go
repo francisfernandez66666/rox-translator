@@ -57,6 +57,30 @@ func TestMdTrimExcessMarkers(t *testing.T) {
 			tr:   "`` shrink_draft ``",
 			want: "` shrink_draft `",
 		},
+		{
+			name: "二轮真值:表格cell开闭都双写(源无相邻)",
+			src:  `**P0 组件**`,
+			tr:   `****מרכיב P****`,
+			want: `**מרכיב P**`,
+		},
+		{
+			name: "二轮真值:只有开头双写无闭(计数相同须收敛)",
+			src:  `**P0 组件**`,
+			tr:   `****מרכיב P`,
+			want: `**מרכיב P`,
+		},
+		{
+			name: "二轮真值:三连收敛到一对",
+			src:  `**参照方案**`,
+			tr:   `*****תוכנית מראה**`,
+			want: `**תוכנית מראה**`,
+		},
+		{
+			name: "源本身有相邻标记不得收敛(骨架语义)",
+			src:  `**5****\.****4**** 与市场上其他方案**`,
+			tr:   `**5****\.****4**** השוואה`,
+			want: `**5****\.****4**** השוואה`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -66,7 +90,8 @@ func TestMdTrimExcessMarkers(t *testing.T) {
 			}
 			// 不变量：内容（去掉所有标记字符后）不得变少/改变——只删标记不动内容。
 			stripMarks := func(s string) string {
-				r := strings.NewReplacer("**", "", "__", "", "~~", "", "`", "")
+				// 收敛会消掉奇数个星里多余的单字符，内容判据须把它也当标记剥离。
+				r := strings.NewReplacer("**", "", "__", "", "~~", "", "`", "", "*", "", "_", "", "~", "")
 				return strings.TrimSpace(r.Replace(s))
 			}
 			if stripMarks(got) != stripMarks(c.tr) {
