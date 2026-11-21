@@ -14,6 +14,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"translator/internal/config"
@@ -23,6 +25,20 @@ import (
 	"translator/internal/store"
 	"translator/internal/tenant"
 )
+
+// gateRecheckMax 闸门"检查 + 带反馈重译"的合并计数上限（方案 §6.4 Q2 / D2，2026-11-21 补齐）。
+// 默认 2 ＝ 首轮检查 1 次 + 最多 1 次带反馈重译，与补齐前的单次重译行为等价；
+// env TRANS_GATE_RECHECK_MAX 可配更大的值做多次重检（如 3 ⇒ 首检 + 2 次重译），
+// 空/非法/非正一律回退 2，防止误配置把重译次数放大到成本失控。
+// 灰度期间可临时设 1（= 只首检、不重译）观察触发率，见方案 §10 D-2。
+func gateRecheckMax() int {
+	if v := strings.TrimSpace(os.Getenv("TRANS_GATE_RECHECK_MAX")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 2
+}
 
 // gateCtx 主翻译路径（整改 R1）输出质量闸门上下文：
 // 自带调用方租户的安全句（避雷词 / 风格 / 替换对），避免每次逐条查库。
@@ -177,24 +193,31 @@ func (g *gateCtx) check(source, lang, translated string, retry bool, e *Engine, 
 	gr := gate.RunWithTerms(source, lang, tr, terms)
 	if !gr.Pass {
 		if retry {
-			msg := "请修正以下质量问题后重新翻译：" + firstGateFail(gr.Checks)
-			// ★ 重译结果的采纳门槛＝「过闸」∧「过可用性判定」两条同时成立（2026-10-19 现网图片单）。
-			//   闸门查的是数字/格式/术语/脚本这几项**形态**，它对「一整句英文指令回显」是放行的；
-			//   而重译腿的提示词本身就是一句指令（「请严格按照意见修正重译」），模型偶发把这句
-			//   **译成目标语言回吐** ⇒ 过闸即被采纳，客户屏幕上出现
-			//   `<target language is reasonable. Please strictly follow the revision suggestions and
-			//   retranslate the text.`（现网实证：源段是符号 `<`，闸门打回后重译回吐该句，
-			//   它曾覆盖掉 identity 预填的原文）。
-			//   IsTranslationUsable 里的 nonLinguisticMustStayVerbatim / hasInstructionEcho 正是
-			//   为这一类回显而设，此处漏接＝那道判定对「文件重译腿」完全无感（同 RC-2 的装配级教训：
-			//   判定函数存在且有单测，装配漏一处照样复发）。
-			// ★ 2026-11-20 P3（用户拍板）：问题段落走**复核模型**（StageReview）重译，
-			//   输入只有原文+诊断（TranslateWithFeedback 天然不带初翻）⇒ 不走初翻链路。
-			//   采纳门槛用 fileTranslationUsable（含 P0 骨架判据），与写入点同一把尺子。
-			//   失败不回落初翻——由上层按"回落原文+md 标注"处理（见 applySegmentGates/review_rescue）。
-			if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageReview); strings.TrimSpace(fixed) != "" &&
-				e.fileTranslationUsable(ctx, source, fixed, lang) && gate.RunWithTerms(source, lang, fixed, terms).Pass {
-				tr = fixed
+			// ★ 方案 §6.4 Q2 / D2（2026-11-21 补齐）：把单次带反馈重译扩成可配置的多次重检循环。
+			//   合并计数：首轮 gate.RunWithTerms 已算 1 次检查，故再重译 gateRecheckMax()-1 次；
+			//   默认 N=2 ⇒ 最多 1 次重译，与补齐前行为逐字节一致（不改变成本/延迟基线）。
+			//   每轮重译后立刻重跑闸门，一旦过闸即 break，绝不多做无谓的模型调用。
+			for round := 1; round < gateRecheckMax() && !gr.Pass; round++ {
+				msg := "请修正以下质量问题后重新翻译：" + firstGateFail(gr.Checks)
+				// ★ 重译结果的采纳门槛＝「过闸」∧「过可用性判定」两条同时成立（2026-10-19 现网图片单）。
+				//   闸门查的是数字/格式/术语/脚本这几项**形态**，它对「一整句英文指令回显」是放行的；
+				//   而重译腿的提示词本身就是一句指令（「请严格按照意见修正重译」），模型偶发把这句
+				//   **译成目标语言回吐** ⇒ 过闸即被采纳，客户屏幕上出现
+				//   `<target language is reasonable. Please strictly follow the revision suggestions and
+				//   retranslate the text.`（现网实证：源段是符号 `<`，闸门打回后重译回吐该句，
+				//   它曾覆盖掉 identity 预填的原文）。
+				//   IsTranslationUsable 里的 nonLinguisticMustStayVerbatim / hasInstructionEcho 正是
+				//   为这一类回显而设，此处漏接＝那道判定对「文件重译腿」完全无感（同 RC-2 的装配级教训：
+				//   判定函数存在且有单测，装配漏一处照样复发）。
+				// ★ 2026-11-20 P3（用户拍板）：问题段落走**复核模型**（StageReview）重译，
+				//   输入只有原文+诊断（TranslateWithFeedback 天然不带初翻）⇒ 不走初翻链路。
+				//   采纳门槛用 fileTranslationUsable（含 P0 骨架判据），与写入点同一把尺子。
+				//   失败不回落初翻——由上层按"回落原文+md 标注"处理（见 applySegmentGates/review_rescue）。
+				if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageReview); strings.TrimSpace(fixed) != "" &&
+					e.fileTranslationUsable(ctx, source, fixed, lang) && gate.RunWithTerms(source, lang, fixed, terms).Pass {
+					tr = fixed
+					gr = gate.RunWithTerms(source, lang, tr, terms) // 采纳后重跑闸门，过闸即止
+				}
 			}
 		}
 		if gr = gate.RunWithTerms(source, lang, tr, terms); !gr.Pass {
