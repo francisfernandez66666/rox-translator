@@ -107,6 +107,32 @@ func stripNumSeparators(s string) string {
 	}
 }
 
+// stripMarkdownNumberEscapes 去掉 Markdown 反斜杠转义（`2\.1`→`2.1`、`99\.5%`→`99.5%`）。
+//
+// 为什么必须做（2026-11-21 tv7 真值实测）：交付源件的标题常写成 `**2\.1 组件**`
+// （点被转义，免得被当成有序列表），而译文通常写 `2.1`。不归一就会把同一个数拆成
+// `2` 与 `1` 两个数去比 `2.1` ⇒ **每个小节标题都报一次**「数字保持（缺失: 2, 1）」。
+// 现网同一份文档里 2.1／3.5／3.6 三条同时命中，客户看到的是满屏「质检存疑」。
+//
+// 只丢反斜杠本身、保留被转义的字符；不动任何非转义内容（纯归一，不参与出栈）。
+func stripMarkdownNumberEscapes(s string) string {
+	if !strings.ContainsRune(s, '\\') {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '.', ',', '-', '~', '%':
+				continue // 丢掉反斜杠，下一轮原样保留被转义的字符
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // suffixMultiplier 识别紧跟在数字后面的数量词词缀并返回应乘回的基数（无词缀返回 1）。
 // 只处理「跟在数字后面」的词缀（允许一个空白间隔），不做跨词猜测：
 // 拉丁词缀后若紧跟字母（km / MB / Millions）视为普通单词不认领，
@@ -142,19 +168,26 @@ const numRangeSeps = "-–—－~～至"
 // 于是拿 45 去比 450000 ⇒ 报「数字保持（缺失: 45, 80）」——数字其实一个没丢，错的是尺子。
 // 判据方向：区间内所有数字共用末端那一个量级词（中文/英文都是这个读法）。
 func rangeSuffixMultiplier(srcNorm string, end int) float64 {
+	m, _ := rangeSuffixInfo(srcNorm, end)
+	return m
+}
+
+// rangeSuffixInfo 与 rangeSuffixMultiplier 同口径，额外给出**区间右端的数值**（含它自己的量级词），
+// 供调用方判断「共用末端量级词」这条规则是否成立（见 plausibleRangeLeft）。
+func rangeSuffixInfo(srcNorm string, end int) (mult float64, rightVal float64) {
 	i := end
 	// 允许数字与区间符之间有空格
 	for i < len(srcNorm) && (srcNorm[i] == ' ' || srcNorm[i] == '\t') {
 		i++
 	}
 	if i >= len(srcNorm) {
-		return 1
+		return 1, 0
 	}
 	// ★ 必须按 rune 解码，不能拿单字节转 rune：区间符（–—～至）是多字节字符，
 	//   按字节取会把首字节当 rune，`ContainsRune` 永远判不中（本批首跑真踩）。
 	r, size := utf8.DecodeRuneInString(srcNorm[i:])
 	if !strings.ContainsRune(numRangeSeps, r) {
-		return 1
+		return 1, 0
 	}
 	i += size
 	// 跳过区间符后的空格
@@ -167,9 +200,32 @@ func rangeSuffixMultiplier(srcNorm string, end int) float64 {
 		i++
 	}
 	if i == start {
-		return 1
+		return 1, 0
 	}
-	return suffixMultiplier(srcNorm[i:])
+	rv, err := strconv.ParseFloat(srcNorm[start:i], 64)
+	if err != nil {
+		return 1, 0
+	}
+	m := suffixMultiplier(srcNorm[i:])
+	return m, rv * m
+}
+
+// plausibleRangeLeft 「区间共用末端量级词」这条规则的合理性检查。
+//
+// ★ 2026-11-21 tv7 真值实测抓到的第二种假警：译文把区间**混着写**——
+// `65–120 万` 译成 `650,000–1.2 מיליון`（左端写全、右端带量级词）。
+// 此时若照旧把右端的 1e6 乘到左端 65 上，得到 6.5e11，于是 65 万判「缺失」。
+// 判据：乘完之后必须与右端处在同一量级（十分之一到十倍之间）才算"共用末端量级词"；
+// 否则说明左端本来就是写全的，不该再乘。
+//
+// 这条不会放过「真丢量级」：`45–80 万` 对 `45–80` 时右端无数级词（mult=1）⇒ 规则根本不适用，
+// 460 万 vs 80 仍然判缺失（见 TestNumberKeepRangeSharedSuffix 的 fail 腿）。
+func plausibleRangeLeft(v, mult, rightVal float64) bool {
+	if mult == 1 || rightVal <= 0 {
+		return false
+	}
+	cand := v * mult
+	return cand <= rightVal*10 && cand >= rightVal/10
 }
 
 // extractNumValues 从（已剥千分位的）文本中抽取全部数字的数值。
@@ -186,8 +242,10 @@ func extractNumValues(s string) []float64 {
 		}
 		mult := suffixMultiplier(s[loc[1]:])
 		if mult == 1 {
-			// 第一个数后面跟的是区间符 ⇒ 取区间末端的量级词
-			mult = rangeSuffixMultiplier(s, loc[1])
+			// 第一个数后面跟的是区间符 ⇒ 取区间末端的量级词（仅在量级对得上时才共用，见 plausibleRangeLeft）
+			if rm, right := rangeSuffixInfo(s, loc[1]); plausibleRangeLeft(v, rm, right) {
+				mult = rm
+			}
 		}
 		vals = append(vals, v*mult)
 	}
@@ -351,8 +409,9 @@ func NumbersPreserved(source, translation string) bool {
 //  3. 仍不中才计入缺失。方向刻意单向：译文多出的数字不检查（保持旧语义），
 //     译文侧的阿拉伯数字必须能对回源文。
 func missingNumbers(source, translation string) []string {
-	srcNorm := stripNumSeparators(source)
-	trVals := extractNumValues(stripNumSeparators(translation))
+	// ★ 先剥 Markdown 转义再剥千分位：`2\.1` 与 `2.1` 必须视为同一个数（见 stripMarkdownNumberEscapes）。
+	srcNorm := stripNumSeparators(stripMarkdownNumberEscapes(source))
+	trVals := extractNumValues(stripNumSeparators(stripMarkdownNumberEscapes(translation)))
 	locs := reNumbers.FindAllStringIndex(srcNorm, -1)
 	var missing []string
 	seen := map[string]bool{}
@@ -368,7 +427,10 @@ func missingNumbers(source, translation string) []string {
 		mult := suffixMultiplier(srcNorm[loc[1]:])
 		if mult == 1 {
 			// 区间形态（"45–80 万"）：第一个数后面跟的是区间符，量级词在区间末端。
-			mult = rangeSuffixMultiplier(srcNorm, loc[1])
+			// 只在量级对得上时共用（混写形态 `650,000–1.2 מיליון` 左端已写全，不该再乘）。
+			if rm, right := rangeSuffixInfo(srcNorm, loc[1]); plausibleRangeLeft(v, rm, right) {
+				mult = rm
+			}
 		}
 		if numValueIn(trVals, v*mult) {
 			continue

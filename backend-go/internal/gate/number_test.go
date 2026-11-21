@@ -360,3 +360,82 @@ func TestNumberKeepCrossLanguageMagnitude(t *testing.T) {
 		})
 	}
 }
+
+// TestNumberKeepMarkdownEscapedNumbers ★ 2026-11-21 tv7 真值实测：
+// 源件标题常写成 `**2\.1 组件**`（点被 Markdown 转义），译文写 `2.1`。
+// 不剥转义会把同一个数拆成 2 与 1 去比 2.1 ⇒ 每个小节标题都报一次「缺失: 2, 1」。
+// 现网同一份文档里 2.1／3.5／3.6 三条同时命中——客户看到的是满屏「质检存疑」，
+// 而真丢数字的行被这些噪音淹没（这是这条锁存在的全部理由）。
+func TestNumberKeepMarkdownEscapedNumbers(t *testing.T) {
+	pass := []struct{ name, src, tr string }{
+		{"转义小节号", `**2\.1 12 个 P0 组件**`, `**2.1 12 מרכיבי P0**`},
+		{"转义小数点_两处", `**3\.5 知识库**`, `**3.5 ארכיון ידע**`},
+		{"转义百分比", `同比\+99\.5%`, `עלייה של 99.5%`},
+		{"转义区间符", `80\-120 万`, `800,000–1,200,000`},
+	}
+	for _, c := range pass {
+		t.Run("pass_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) != 0 {
+				t.Fatalf("剥掉 Markdown 转义后不得判缺失，实得 %v（src=%q tr=%q）", got, c.src, c.tr)
+			}
+		})
+	}
+	fail := []struct{ name, src, tr string }{
+		{"转义也救不了真丢", `**2\.1 组件**`, `**רכיבים**`},
+		{"转义百分比真丢", `同比\+99\.5%`, `עלייה`},
+	}
+	for _, c := range fail {
+		t.Run("fail_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) == 0 {
+				t.Fatalf("数字真丢了必须判缺失，实得零缺失（src=%q tr=%q）", c.src, c.tr)
+			}
+		})
+	}
+}
+
+// TestNumberKeepMixedRangeNotation ★ 2026-11-21 tv7 真值实测的第二种假警：
+// 译文把区间**混着写**——`65–120 万` 译成 `650,000–1.2 מיליון`（左端写全、右端带量级词）。
+// 旧规则无条件把右端的 1e6 乘到左端 65 上 ⇒ 6.5e11 ⇒ 判「缺失: 65」。
+//
+// 判据：「共用末端量级词」只在乘完之后与右端同量级时成立（见 plausibleRangeLeft）。
+// 这条**不会**放过真丢量级——右端没有量级词时规则不适用，`45–80 万` 对 `45–80` 仍判缺失
+// （由 TestNumberKeepRangeSharedSuffix 的 fail 腿守着）。
+func TestNumberKeepMixedRangeNotation(t *testing.T) {
+	pass := []struct{ name, src, tr string }{
+		{"混写_左端全写右端带量级词", "65–120 万", "650,000–1.2 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		{"混写_两端都写全", "65–120 万", "650,000–1,200,000"},
+		{"混写_左端缩写右端量级词", "500–750 万", "5–7.5 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		{"中文原形态仍要过", "45–80 万", "450,000–800,000"},
+	}
+	for _, c := range pass {
+		t.Run("pass_"+c.name, func(t *testing.T) {
+			if got := missingNumbers(c.src, c.tr); len(got) != 0 {
+				t.Fatalf("混写形态的正确译文不得判缺失，实得 %v（src=%q tr=%q）", got, c.src, c.tr)
+			}
+		})
+	}
+	// 反向：量级真错了（150–250 万 → 150–250 אלפי＝千）必须判缺失，混写豁免不能把它兜住。
+	if got := missingNumbers("150–250 万", "150\u2013250 \u05d0\u05dc\u05e4\u05d9"); len(got) == 0 {
+		t.Fatal("把「万」译成「千」（差 10 倍）必须判缺失，混写豁免不许把它兜成通过")
+	}
+}
+
+// TestPlausibleRangeLeftUnit 纯函数腿：混写判据的边界。
+func TestPlausibleRangeLeftUnit(t *testing.T) {
+	cases := []struct {
+		name        string
+		v, mult, rv float64
+		want        bool
+	}{
+		{"左端缩写对得上", 45, 1e4, 8e5, true},
+		{"左端已写全", 650000, 1e6, 1.2e6, false},
+		{"右端无数级词", 45, 1, 80, false},
+		{"右端为零", 45, 1e4, 0, false},
+		{"量级差两档", 1.5, 1e6, 2.5e4, false},
+	}
+	for _, c := range cases {
+		if got := plausibleRangeLeft(c.v, c.mult, c.rv); got != c.want {
+			t.Errorf("%s: plausibleRangeLeft(%g,%g,%g)=%v want %v", c.name, c.v, c.mult, c.rv, got, c.want)
+		}
+	}
+}
