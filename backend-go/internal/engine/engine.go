@@ -232,6 +232,47 @@ func segmentContextFromCtx(ctx context.Context) string {
 	return v
 }
 
+// segmentHintKey 本次重译要修的**形态**（数字保持／目标语脚本一致）。
+//
+// ★ 2026-11-21（用户令扩展后实测）：只带语境、不点名"要修的是什么"，模型往往照旧把
+// `65–120 万` 写成 `65–120 מיליון`（差 10 倍）——语境给了它看同一列的机会，但它不知道
+// 这一次被判死的正是"量级/数字"这件事。点名后提示词多一句硬要求，命中率才有意义；
+// 不点名时**逐字不加**（文本主路径与既有重试腿的提示词保持字节不变）。
+type segmentHintKey struct{}
+
+// WithSegmentHint 写入本次重译要修的形态（空串＝不加，行为与改造前逐字一致）。
+func WithSegmentHint(ctx context.Context, hint string) context.Context {
+	if strings.TrimSpace(hint) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, segmentHintKey{}, hint)
+}
+
+// segmentHintFromCtx 读取本次重译要修的形态；未设置返回空串。
+func segmentHintFromCtx(ctx context.Context) string {
+	v, _ := ctx.Value(segmentHintKey{}).(string)
+	return v
+}
+
+// segmentHintNote 把"要修的形态"拼成英文硬要求（英文理由同 segmentContextNote：
+// 纯翻译模型会把中文指令当待译内容一起翻）。
+//
+// 只认两个已知档：数字保持、目标语脚本一致。其余值返回空串——
+// 这条腿的候选集只由这两条判据产生，凭空多出来的档位只会让下一个人以为还有别的触发条件。
+func segmentHintNote(hint string) string {
+	switch hint {
+	case "数字保持":
+		return " Hard requirement: keep every number exactly as in the source, including its magnitude word" +
+			" (for example \"150–250 万\" means 1,500,000–2,500,000). Do not drop, round or re-scale any digit," +
+			" and do not change the unit. Numbers from the reference context show the expected format."
+	case "目标语言脚本一致":
+		return " Hard requirement: write ONLY in the target language and its native script." +
+			" Do not mix in characters, words or sentences from any other script or language."
+	default:
+		return ""
+	}
+}
+
 // segmentContextNote 组装「语境参考」尾注。
 //
 // ★ 为什么用英文：同 batchContextNote——纯翻译模型会把 system 里的**中文**指令当成
@@ -1132,6 +1173,9 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	if note := segmentContextFromCtx(ctx); strings.TrimSpace(note) != "" {
 		ctxNote = segmentContextNote(note)
 	}
+	if h := segmentHintNote(segmentHintFromCtx(ctx)); h != "" {
+		ctxNote += h
+	}
 	var prompt string
 	if ref != "" {
 		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
@@ -1681,33 +1725,87 @@ func (e *Engine) resolveModelForStage(ctx context.Context, stage string) (base, 
 	return base, key, model, false
 }
 
-// resolveStageModel 解析指定流程阶段的独立模型配置（system_config.stage_models，超管维护）。
-// 参数 stage: 流程阶段标识（config.StageKBMatch / StageAIInitial / StageEvals / StageReview）。
-// 返回 base/key/model 与是否命中；未配置该阶段或缺 model/api_base 时 ok=false（调用方回退 resolveModel）。
-// APIKey 为空时继承全局默认密钥（租户/路由/全局），便于阶段模型复用同一供应商密钥。
-func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key, model string, ok bool) {
+// stageCandidates 解析指定阶段在 stage_models 里的全部候选模型（主档 + Candidates），
+// 统一做：密文解密、空 key 继承全局默认、按 Weight 降序稳定排序（相等时保持配置顺序）。
+//
+// ★ 向后兼容：单模型形态（Candidates 为空）返回长度为 1 的切片＝主档，与旧 resolveStageModel 完全等价。
+// ★ 返回的 key 均为明文（仅内存态，不落库、不回前端）。
+func (e *Engine) stageCandidates(ctx context.Context, stage string) []config.StageCandidate {
 	if e.St == nil {
-		return "", "", "", false
+		return nil
 	}
 	raw, err := e.St.GetConfig("stage_models")
 	if err != nil || raw == "" {
-		return "", "", "", false
+		return nil
 	}
 	var m config.StageModels
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
-		return "", "", "", false
+		return nil
 	}
 	sm, exists := m[stage]
 	if !exists || sm.APIBase == "" || sm.Model == "" {
+		return nil
+	}
+	// 主档转成一个候选（主档自身也有 Weight）
+	out := []config.StageCandidate{{
+		Provider: sm.Provider, APIBase: sm.APIBase, APIKey: sm.APIKey, Model: sm.Model, Weight: sm.Weight,
+	}}
+	out = append(out, sm.Candidates...) // Candidates 为 nil 时 append 空，仍是单元素
+	// 库内密文解密 + 空 key 继承全局 + 丢弃 api_base/model 不全的半成品
+	var gKey string
+	valid := out[:0]
+	for _, c := range out {
+		if c.APIBase == "" || c.Model == "" {
+			continue
+		}
+		c.APIKey = store.DecryptSecret(c.APIKey)
+		if c.APIKey == "" {
+			if gKey == "" {
+				_, gKey, _ = e.resolveModel(ctx) // 某候选未填密钥 → 继承全局默认密钥
+			}
+			c.APIKey = gKey
+		}
+		valid = append(valid, c)
+	}
+	if len(valid) < 2 {
+		return valid // 单候选无需排序
+	}
+	// Weight 降序稳定排序（sort.SliceStable 保持相等元素的配置顺序）
+	sort.SliceStable(valid, func(i, j int) bool { return valid[i].Weight > valid[j].Weight })
+	return valid
+}
+
+// resolveStageModel 解析指定流程阶段的独立模型配置（system_config.stage_models，超管维护）。
+// 参数 stage: 流程阶段标识（config.StageKBMatch / StageAIInitial / StageEvals / StageReview）。
+// 返回 base/key/model 与是否命中；未配置该阶段或缺 model/api_base 时 ok=false（调用方回退 resolveModel）。
+// 阶段内配了多模型时，按 Weight 降序取优先级最高的那个作为主档（Candidates 兼容的核心）。
+func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key, model string, ok bool) {
+	cands := e.stageCandidates(ctx, stage)
+	if len(cands) == 0 {
 		return "", "", "", false
 	}
-	// ★ 库内密文解密（评审整改 D3）：stage_models 的 api_key 以 enc:v1: 落库
-	sm.APIKey = store.DecryptSecret(sm.APIKey)
-	if sm.APIKey != "" {
-		return sm.APIBase, sm.APIKey, sm.Model, true
+	c := cands[0]
+	return c.APIBase, c.APIKey, c.Model, true
+}
+
+// stageFallbackCandidates 返回该阶段内、除当前主模型(base/model)外的备用候选，
+// 转成现有降级链消费的 config.ProviderConfig（已按 Weight 降序）。
+// 单模型形态（无备用）返回空切片，调用方据此保持原「回全局路由」逻辑不变。
+func (e *Engine) stageFallbackCandidates(ctx context.Context, stage, primaryBase, primaryModel string) []config.ProviderConfig {
+	cands := e.stageCandidates(ctx, stage)
+	if len(cands) < 2 {
+		return nil // 没有阶段内备用 ⇒ 继续走全局路由兜底（向后兼容）
 	}
-	_, gKey, _ := e.resolveModel(ctx) // 阶段模型未填密钥 → 继承全局默认密钥
-	return sm.APIBase, gKey, sm.Model, true
+	out := make([]config.ProviderConfig, 0, len(cands)-1)
+	for _, c := range cands {
+		if c.APIBase == primaryBase && c.Model == primaryModel {
+			continue // 跳过当前主档（已由 resolveModelForStage 选用）
+		}
+		out = append(out, config.ProviderConfig{
+			Provider: c.Provider, APIBase: c.APIBase, APIKey: c.APIKey, Model: c.Model, Weight: c.Weight,
+		})
+	}
+	return out
 }
 
 // pickPrimaryRoute 按权重选取主路由（权重最高者；全为 0 时取第一个）
@@ -1898,6 +1996,9 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	if sc := segmentContextFromCtx(ctx); sc != "" {
 		dynNotes.WriteString(segmentContextNote(sc))
 	}
+	if h := segmentHintNote(segmentHintFromCtx(ctx)); h != "" {
+		dynNotes.WriteString(h)
+	}
 	// ★ 2026-10-29 第十二轮：本单领域词表进 **user 尾**（dynNotes），不进 system 前缀——
 	//   那条 system 前缀是刻意做成稳定可缓存的（B4 Phase 1），塞 per-request 词表会把缓存前缀打碎。
 	if prof, maxTerms := glossaryFromCtx(ctx); prof != nil {
@@ -1941,13 +2042,18 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	// ★ 2026-08-26 BYOK 移除：原「租户 BYOK 路由优先」分支删除——该分支还有两处
 	//   缺陷（降级链含主路由自身导致双倍请求放大；租户端点误配 Hunyuan 兜底模型必 404），随分支一并消除。
 	var routeFallbacks []config.ProviderConfig
-	if len(snap.Routes) > 0 {
-		if stageActive {
-			routeFallbacks = e.resolveRouteFallbacks(config.ProviderConfig{APIBase: base, APIKey: key, Model: model})
-		} else {
-			primary := e.pickPrimaryRoute()
-			routeFallbacks = e.resolveRouteFallbacks(primary)
+	if stageActive {
+		// ★ 阶段内多模型（2026-11-21）：该阶段自己配了备用模型时，故障切换在阶段内进行，
+		//   按 Weight 降序逐一降级；没配备用（单模型形态）时返回 nil，保持原「回全局路由」逻辑不变。
+		routeFallbacks = e.stageFallbackCandidates(ctx, stage, base, model)
+	}
+	if len(routeFallbacks) == 0 && len(snap.Routes) > 0 {
+		// 原有全局路由降级链（阶段未配备用 / 非阶段模型时照旧）
+		primary := config.ProviderConfig{APIBase: base, APIKey: key, Model: model}
+		if !stageActive {
+			primary = e.pickPrimaryRoute()
 		}
+		routeFallbacks = e.resolveRouteFallbacks(primary)
 	}
 
 	// Hunyuan-MT 不支持的语种 → 降级模型

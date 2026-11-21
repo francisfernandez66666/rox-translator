@@ -4,6 +4,11 @@
 // 从 panels_d.tsx 拆分
 // 2026-09-18（UI 融合）：密钥「已配置/未配置」不再用 ✓/✗ 图形字符（emoji 清理），
 //   改由文案 + 掩码回显承担；保存链路与密钥掩码口径不变（明文永不回显）。
+// 2026-11-21（阶段内多模型）：每张阶段卡从「单组 api_base/key/model」扩展为
+//   「主档 + N 个备用候选（各带 weight）」，主模型故障时在阶段内按权重降序切换。
+//   ① 向后兼容：旧配置没有 candidates 字段 ⇒ 回填为空数组、卡片只显示主档，行为不变；
+//   ② 后端对整阶段是「按提交键覆盖」，故增删候选后必须把整段 candidates 全量回传；
+//   ③ api_key 只写不读：读回的是掩码（sk-****），原样提交由后端按位置回填旧真值。
 // ============================================================================
 import { useCallback, useEffect, useState } from 'react'
 // 2026-09-18（UI 融合）：按钮/行内操作改吃自研 @/ui/langcross 原语。口径注意：
@@ -107,7 +112,12 @@ export function ModelsP() {
       const nf: Any = {}
       for (const c of stageCards) {
         const s = st[c.key] || {}
-        nf[c.key] = { preset: '', provider: c.key, api_base: s.api_base || '', api_key: s.api_key || '', model: s.model || '' }
+        // candidates 是阶段内备用模型列表（可为空）；回填时逐条带上 weight，供故障切换按权重排序
+        const cands = Array.isArray(s.candidates) ? s.candidates.map((x: Any) => ({
+          provider: x.provider || '', api_base: x.api_base || '', api_key: x.api_key || '',
+          model: x.model || '', weight: num(x.weight ?? 0),
+        })) : []
+        nf[c.key] = { preset: '', provider: c.key, api_base: s.api_base || '', api_key: s.api_key || '', model: s.model || '', weight: num(s.weight ?? 0), candidates: cands }
       }
       setStForm(nf)
     }
@@ -151,7 +161,13 @@ export function ModelsP() {
     for (const c of stageCards) {
       const { preset, ...rest } = stForm[c.key] || {}
       void preset
-      payload[c.key] = rest
+      // weight 必须是数字（原生 number input 回字符串），否则落库成字符串会让引擎按权重排序时失准；
+      // candidates 整段全量回传（后端按位置对齐旧 key 做掩码回填），逐条同样做数字归一化
+      const cands = Array.isArray(rest.candidates) ? rest.candidates.map((x: Any) => ({
+        provider: String(x.provider || ''), api_base: String(x.api_base || ''),
+        api_key: String(x.api_key || ''), model: String(x.model || ''), weight: Number(x.weight ?? 0),
+      })) : []
+      payload[c.key] = { ...rest, weight: Number(rest.weight ?? 0), candidates: cands }
     }
     const r = await stageModelsSave(payload as never)
     if (!r.success) { toastError(r.message); return }
@@ -280,6 +296,28 @@ export function ModelsP() {
           <Field label={t('models.apiBase')}><input className="lc-input" value={String(stForm[st.key]?.api_base ?? '')} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_base: e.target.value } })} placeholder={t('models.stageApiBasePlaceholder' as never)} /></Field>
           <form onSubmit={(e) => e.preventDefault()}><Field label={t('models.apiKey')}><input className="lc-input" type="password" autoComplete="new-password" value={String(stForm[st.key]?.api_key ?? '')} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], api_key: e.target.value } })} placeholder={t('models.stageApiKeyPlaceholder' as never)} /></Field></form>
           <Field label={t('models.modelName')}><input className="lc-input" value={String(stForm[st.key]?.model ?? '')} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], model: e.target.value } })} placeholder={t('models.stageModelPlaceholder' as never)} /></Field>
+          <Field label={t('models.weightPlaceholder')}><input className="lc-input" type="number" value={num(stForm[st.key]?.weight ?? 0)} onChange={(e) => setStForm({ ...stForm, [st.key]: { ...stForm[st.key], weight: Number(e.target.value) } })} style={{ maxWidth: 160 }} /></Field>
+
+          {/* 阶段内备用模型：主模型失败时按 weight 从高到低切换；没有备用行时保持旧的单模型行为。
+              每行 onChange 都先浅拷该阶段对象、再拷 candidates 数组、最后替换下标 —— React 靠引用变化
+              触发重渲染，直接改 stForm[st.key].candidates[ci] 不会刷新界面。 */}
+          {(stForm[st.key]?.candidates || []).map((c: Any, ci: number) => (
+            <div key={ci} style={{ borderTop: '1px solid var(--color-border-tertiary)', paddingTop: 8, marginTop: 8 }}>
+              <div style={{ fontSize: 14, color: 'var(--adm-hint)', marginBottom: 6 }}>{t('models.stageFallbackLabel')} #{ci + 1}</div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <input className="lc-input" value={String(c.provider || '')} onChange={(e) => { const st0 = { ...stForm[st.key] }; const cs = [...(st0.candidates || [])]; cs[ci] = { ...cs[ci], provider: e.target.value }; st0.candidates = cs; setStForm({ ...stForm, [st.key]: st0 }) }} placeholder={t('models.providerPlaceholder')} style={{ width: 150 }} />
+                <input className="lc-input" value={String(c.api_base || '')} onChange={(e) => { const st0 = { ...stForm[st.key] }; const cs = [...(st0.candidates || [])]; cs[ci] = { ...cs[ci], api_base: e.target.value }; st0.candidates = cs; setStForm({ ...stForm, [st.key]: st0 }) }} placeholder={t('models.stageApiBasePlaceholder' as never)} style={{ flex: 1 }} />
+                <input className="lc-input" type="password" autoComplete="new-password" value={String(c.api_key || '')} onChange={(e) => { const st0 = { ...stForm[st.key] }; const cs = [...(st0.candidates || [])]; cs[ci] = { ...cs[ci], api_key: e.target.value }; st0.candidates = cs; setStForm({ ...stForm, [st.key]: st0 }) }} placeholder={t('models.stageApiKeyPlaceholder' as never)} style={{ flex: 1 }} />
+                <input className="lc-input" value={String(c.model || '')} onChange={(e) => { const st0 = { ...stForm[st.key] }; const cs = [...(st0.candidates || [])]; cs[ci] = { ...cs[ci], model: e.target.value }; st0.candidates = cs; setStForm({ ...stForm, [st.key]: st0 }) }} placeholder={t('models.stageModelPlaceholder' as never)} style={{ flex: 1 }} />
+                <input className="lc-input" type="number" value={num(c.weight ?? 0)} onChange={(e) => { const st0 = { ...stForm[st.key] }; const cs = [...(st0.candidates || [])]; cs[ci] = { ...cs[ci], weight: Number(e.target.value) }; st0.candidates = cs; setStForm({ ...stForm, [st.key]: st0 }) }} placeholder={t('models.weightPlaceholder')} style={{ width: 90 }} />
+                <Link tone="danger" onClick={() => { const st0 = { ...stForm[st.key] }; st0.candidates = (st0.candidates || []).filter((_: Any, j: number) => j !== ci); setStForm({ ...stForm, [st.key]: st0 }) }}>{t('models.delete')}</Link>
+              </div>
+            </div>
+          ))}
+          <div style={{ marginTop: 8 }}>
+            <Button variant="secondary" size="sm" onClick={() => { const st0 = { ...stForm[st.key] }; st0.candidates = [...(st0.candidates || []), { provider: '', api_base: '', api_key: '', model: '', weight: 0 }]; setStForm({ ...stForm, [st.key]: st0 }) }}>{t('models.addStageFallback')}</Button>
+            <span style={{ fontSize: 14, color: 'var(--adm-hint)', marginLeft: 8 }}>{t('models.stageFallbackHint')}</span>
+          </div>
         </Panel>
       ))}
       <div style={rowMt}>

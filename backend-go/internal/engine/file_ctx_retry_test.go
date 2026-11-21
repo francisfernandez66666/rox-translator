@@ -374,3 +374,50 @@ func matchBrace(src string, open int) int {
 	}
 	return -1
 }
+
+// TestFileCtxRetryHintNamesTheDefect 提示词侧：只给语境不点名，模型往往照旧犯同一个错
+// （现网实测 `65–120 万`→`65–120 מיליון`，同一列的正确写法就在语境里也没救回来）。
+// 因此候选段的 reason 必须变成提示词里的一句硬要求；而"缺失段"不带这句
+// ——多一句不该有的指令会把纯翻译模型带偏，也让这条腿与改造前的提示词不再逐字一致。
+func TestFileCtxRetryHintNamesTheDefect(t *testing.T) {
+	// ① 数字保持：必须点名"保留每一个数字与量级"
+	const numSrc = "65–120 万"
+	fake := &ctxRetryFake{replies: map[string]string{numSrc: "650,000–1,200,000"}}
+	eng := newCtxRetryEngine(t, fake)
+	have := map[string]string{numSrc: "65–120 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"} // 65–120 מיליון（差 10 倍）
+	_ = eng.retranslateMissingWithContext(context.Background(), "he", []string{numSrc}, have, "| 金额 |", 20)
+	users := fake.snapshotUsers()
+	if len(users) != 1 {
+		t.Fatalf("应拨 1 次，实得 %d", len(users))
+	}
+	if !strings.Contains(users[0], "Hard requirement") || !strings.Contains(users[0], "magnitude") {
+		t.Fatalf("数字不过的重译必须在提示词里点名「保留数字与量级」：%q", users[0])
+	}
+
+	// ② 缺失段：不许带这句（与改造前逐字一致）
+	const missSrc = "第二行原文"
+	fake2 := &ctxRetryFake{replies: map[string]string{missSrc: "Second line"}}
+	eng2 := newCtxRetryEngine(t, fake2)
+	_ = eng2.retranslateMissingWithContext(context.Background(), "en", []string{missSrc}, map[string]string{}, "", 20)
+	u2 := fake2.snapshotUsers()
+	if len(u2) != 1 {
+		t.Fatalf("应拨 1 次，实得 %d", len(u2))
+	}
+	if strings.Contains(u2[0], "Hard requirement") {
+		t.Fatalf("缺失段不该带「形态」硬要求（提示词必须与改造前逐字一致）：%q", u2[0])
+	}
+
+	// ③ 档位表：只认两条，其余一律空串（防止下一个人以为还有别的触发条件）
+	for _, c := range []struct{ in, want string }{
+		// 提示词是**英文**（中文指令会被纯翻译模型当成待译内容一起翻），所以这里按英文锚判。
+		{"数字保持", "number"}, {"目标语言脚本一致", "script"}, {"缺失", ""}, {"", ""}, {"随便", ""},
+	} {
+		got := segmentHintNote(c.in)
+		if c.want == "" && got != "" {
+			t.Fatalf("segmentHintNote(%q) 应返回空串，实得 %q", c.in, got)
+		}
+		if c.want != "" && !strings.Contains(got, c.want) {
+			t.Fatalf("segmentHintNote(%q) 应含 %q，实得 %q", c.in, c.want, got)
+		}
+	}
+}

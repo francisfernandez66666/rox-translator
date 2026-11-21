@@ -87,13 +87,35 @@ func AllStages() []string {
 	}
 }
 
-// StageModel 单个流程阶段的模型配置（stage_models 中的一项）
-type StageModel struct {
+// StageCandidate 阶段内单个候选模型（阶段内多模型故障切换的一档）。
+// 字段与 StageModel 主档一致，weight 用于阶段内定主次（降序，越大越优先）。
+// 注意：api_key 存库时为 enc:v1: 密文，读出后由调用方解密。
+type StageCandidate struct {
 	Provider string `json:"provider"` // 供应商标识（计量分组用，可为空自动推断）
-	APIBase  string `json:"api_base"` // 该阶段 LLM API 基地址（必填才启用该阶段独立模型）
-	APIKey   string `json:"api_key"`  // 该阶段 API 密钥（为空继承全局默认密钥）
-	Model    string `json:"model"`    // 该阶段使用的模型名（必填才启用该阶段独立模型）
+	APIBase  string `json:"api_base"` // OpenAI 兼容 API 基地址
+	APIKey   string `json:"api_key"`  // API 密钥（为空继承全局默认密钥；存库为密文）
+	Model    string `json:"model"`    // 模型名
+	Weight   int    `json:"weight"`   // 阶段内主次，降序；相等时按配置顺序
 }
+
+// StageModel 单个流程阶段的模型配置（stage_models 中的一项）。
+//
+// ★ 向后兼容（2026-11-21 阶段内多模型）：
+//   - 旧的「单模型」形态只有 provider/api_base/api_key/model 四个字段，Candidates 为空——
+//     引擎与后端一律按「只有主档一个候选」处理，行为与此前完全相同。
+//   - 新形态在 Candidates 里列出阶段内的备用模型；主档 + Candidates 一起按 Weight 降序
+//     参与阶段内故障切换。主档自身也有 Weight（默认 0，即最低优先），便于统一排序。
+type StageModel struct {
+	Provider   string           `json:"provider"`             // 供应商标识（计量分组用，可为空自动推断）
+	APIBase    string           `json:"api_base"`             // 该阶段主模型 LLM API 基地址（必填才启用该阶段独立模型）
+	APIKey     string           `json:"api_key"`              // 该阶段主模型 API 密钥（为空继承全局默认密钥；存库为密文）
+	Model      string           `json:"model"`                // 该阶段主模型名（必填才启用该阶段独立模型）
+	Weight     int              `json:"weight"`               // 主档在阶段内的主次（降序）；单模型形态忽略
+	Candidates []StageCandidate `json:"candidates,omitempty"` // 阶段内备用模型列表（可选，空=单模型形态）
+}
+
+// HasCandidates 该阶段是否配置了阶段内多模型（主档 + 至少一个备用）
+func (s StageModel) HasCandidates() bool { return len(s.Candidates) > 0 }
 
 // StageModels 各流程阶段模型配置映射（system_config 键 "stage_models"）
 // 键为流程阶段标识（kb_match / ai_initial / evals / review）。

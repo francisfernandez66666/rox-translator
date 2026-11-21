@@ -818,7 +818,10 @@ func (e *Engine) retranslateWithContextTargets(ctx context.Context, lc string, t
 			break
 		}
 		tried++
-		v, ok := e.translateSegmentWithContext(ctx, tg.text, lc, buildSegmentContext(texts, idx[tg.text], header))
+		// ★ 把"这一次要修的是什么形态"也带进提示词：只给语境不点名，模型往往照旧犯同一个错
+		//   （现网实测：`65–120 万`→`65–120 מיליון`，语境在旁边也没救回来）。
+		cctx := WithSegmentHint(ctx, tg.reason)
+		v, ok := e.translateSegmentWithContext(cctx, tg.text, lc, buildSegmentContext(texts, idx[tg.text], header))
 		if !ok || !e.fileTranslationUsable(ctx, tg.text, v, lc) {
 			continue
 		}

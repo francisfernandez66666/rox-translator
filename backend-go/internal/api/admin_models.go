@@ -57,6 +57,46 @@ func encryptRoutes(rs []config.ProviderConfig) []config.ProviderConfig {
 	return out
 }
 
+// --- 阶段内多模型（stage_models 的 Candidates）加解密辅助 ---
+// 主档与每个候选的 api_key 都要同样处理，统一在这里做，避免两处逻辑分叉。
+
+// decryptStage 把阶段主档 + 所有候选的 api_key 从密文解成明文（返回副本，不改入参）。
+func decryptStage(sm config.StageModel) config.StageModel {
+	sm.APIKey = store.DecryptSecret(sm.APIKey)
+	for i := range sm.Candidates {
+		sm.Candidates[i].APIKey = store.DecryptSecret(sm.Candidates[i].APIKey)
+	}
+	return sm
+}
+
+// encryptStage 把阶段主档 + 所有候选的 api_key 加密（返回副本，不改入参）。
+func encryptStage(sm config.StageModel) config.StageModel {
+	sm.APIKey = store.EncryptSecret(sm.APIKey)
+	if len(sm.Candidates) > 0 {
+		cands := make([]config.StageCandidate, len(sm.Candidates))
+		copy(cands, sm.Candidates)
+		for i := range cands {
+			cands[i].APIKey = store.EncryptSecret(cands[i].APIKey)
+		}
+		sm.Candidates = cands
+	}
+	return sm
+}
+
+// maskStage 把阶段主档 + 所有候选的 api_key 掩码（返回副本，不改入参）。
+func maskStage(sm config.StageModel) config.StageModel {
+	sm.APIKey = maskKey(sm.APIKey)
+	if len(sm.Candidates) > 0 {
+		cands := make([]config.StageCandidate, len(sm.Candidates))
+		copy(cands, sm.Candidates)
+		for i := range cands {
+			cands[i].APIKey = maskKey(cands[i].APIKey)
+		}
+		sm.Candidates = cands
+	}
+	return sm
+}
+
 // llmKeyState 查询某个以密文落库的密钥配置（如 embed_api_key）的当前状态。
 //   - 入参 key：system_config 中的配置键名（其值应为 store.EncryptSecret 产生的 enc:v1: 密文）。
 //   - 返回 (是否已设置, 脱敏后的掩码)：未配置/解密失败均返回 (false, "")。
@@ -373,24 +413,16 @@ func (s *Server) handleStageModels(w http.ResponseWriter, r *http.Request) {
 	if s.Store != nil {
 		if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
 			_ = json.Unmarshal([]byte(v), &stages)
-			// ★ 库内密文 → 明文后再掩码输出（评审整改 D3）
+			// ★ 库内密文 → 明文后再掩码输出（评审整改 D3）；主档 + 所有候选一起解
 			for k := range stages {
-				sm := stages[k]
-				sm.APIKey = store.DecryptSecret(sm.APIKey)
-				stages[k] = sm
+				stages[k] = decryptStage(stages[k])
 			}
 		}
 	}
 	// 掩码所有 API Key 再返回（密钥仅保存后返回一次）；输出的档位＝config.AllStages() 派生
 	out := config.StageModels{}
 	for _, k := range config.AllStages() {
-		sm := stages[k]
-		out[k] = config.StageModel{
-			Provider: sm.Provider,
-			APIBase:  sm.APIBase,
-			APIKey:   maskKey(sm.APIKey),
-			Model:    sm.Model,
-		}
+		out[k] = maskStage(stages[k])
 	}
 	writeJSON(w, 200, map[string]interface{}{"success": true, "stages": out})
 }
@@ -420,15 +452,12 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, r, apierrors.New(apierrors.ErrInternal, "平台存储未初始化"))
 		return
 	}
-	// 读取旧配置并解密，掩码密钥保留原值
+	// 读取旧配置并解密，掩码密钥保留原值（主档 + 所有候选一起解）
 	old := config.StageModels{}
 	if v, err := s.Store.GetConfig("stage_models"); err == nil && v != "" {
 		_ = json.Unmarshal([]byte(v), &old)
-		// 遍历旧配置，解密各阶段密钥以便后续对比
 		for k := range old {
-			sm := old[k]
-			sm.APIKey = store.DecryptSecret(sm.APIKey)
-			old[k] = sm
+			old[k] = decryptStage(old[k])
 		}
 	}
 	// 遍历请求中各阶段配置，做校验与缺省值补全
@@ -452,26 +481,52 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("未知流程阶段 %s", k)))
 			return
 		}
-		if sm.APIBase == "" && sm.Model == "" {
+		if sm.APIBase == "" && sm.Model == "" && len(sm.Candidates) == 0 {
 			// 清空该阶段 → 删除键
 			delete(req.Stages, k)
 			continue
 		}
 		if sm.APIBase == "" || sm.Model == "" {
-			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("阶段 %s 缺少 api_base 或 model", k)))
+			s.writeError(w, r, apierrors.New(apierrors.ErrValidation, fmt.Sprintf("阶段 %s 主模型缺少 api_base 或 model", k)))
 			return
 		}
-		if sm.Provider == "" {
-			req.Stages[k] = config.StageModel{Provider: "stage_" + k, APIBase: sm.APIBase, APIKey: sm.APIKey, Model: sm.Model}
-			sm = req.Stages[k]
-		}
-		if hasMask(sm.APIKey) {
-			if o, ok := old[k]; ok {
-				req.Stages[k] = config.StageModel{Provider: sm.Provider, APIBase: sm.APIBase, APIKey: o.APIKey, Model: sm.Model}
-			} else {
-				req.Stages[k] = config.StageModel{Provider: sm.Provider, APIBase: sm.APIBase, APIKey: "", Model: sm.Model}
+		// 候选必填校验：半成品候选（缺 api_base/model）不能入库参与故障切换
+		for ci, c := range sm.Candidates {
+			if c.APIBase == "" || c.Model == "" {
+				s.writeError(w, r, apierrors.New(apierrors.ErrValidation,
+					fmt.Sprintf("阶段 %s 第 %d 个备用模型缺少 api_base 或 model", k, ci+1)))
+				return
 			}
 		}
+		// 旧的解密态配置（主档 + 候选），用于掩码按位置回填
+		oldSM := old[k]
+
+		// provider 缺省补全（主档）
+		if sm.Provider == "" {
+			sm.Provider = "stage_" + k
+		}
+		// 掩码回填：主档 key 为掩码 ⇒ 用旧主档真值；候选 key 为掩码 ⇒ 按位置用旧候选真值
+		if hasMask(sm.APIKey) {
+			sm.APIKey = oldSM.APIKey // 没有旧值时也就是空串，等同"继承全局"
+		}
+		if len(sm.Candidates) > 0 {
+			cands := make([]config.StageCandidate, len(sm.Candidates))
+			copy(cands, sm.Candidates)
+			for i := range cands {
+				if cands[i].Provider == "" {
+					cands[i].Provider = "stage_" + k
+				}
+				if hasMask(cands[i].APIKey) {
+					if i < len(oldSM.Candidates) {
+						cands[i].APIKey = oldSM.Candidates[i].APIKey
+					} else {
+						cands[i].APIKey = ""
+					}
+				}
+			}
+			sm.Candidates = cands
+		}
+		req.Stages[k] = sm
 	}
 	// ★ 覆盖式的边界（修法 D 配套，2026-10-04）：只有**本次提交里出现过的键**才参与覆盖/删除，
 	//   没出现的键保留旧值。旧写法是「整表替换」，客户端只要少渲染一张卡（历史上的 kb_match，
@@ -482,13 +537,11 @@ func (s *Server) handleStageModelsSave(w http.ResponseWriter, r *http.Request) {
 	stored := config.StageModels{}
 	for k, sm := range old {
 		if !submitted[k] {
-			sm.APIKey = store.EncryptSecret(sm.APIKey) // 旧值已是解密态，回写要重新加密
-			stored[k] = sm
+			stored[k] = encryptStage(sm) // 旧值已是解密态，回写要重新加密（主档 + 候选）
 		}
 	}
 	for k, sm := range req.Stages {
-		sm.APIKey = store.EncryptSecret(sm.APIKey)
-		stored[k] = sm
+		stored[k] = encryptStage(sm)
 	}
 	b, _ := json.Marshal(stored)
 	if err := s.Store.SetConfig("stage_models", string(b)); err != nil {
