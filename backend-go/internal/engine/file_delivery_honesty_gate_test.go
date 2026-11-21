@@ -40,7 +40,7 @@ var fdhAllow = map[string]string{
 	"[tm-hardgate] lang=%s round=%d 重启LLM重译 %d 段":                      "硬闸重译轮次，非退化",
 	"[tm-hardgate] lang=%s 结束：仍有 %d/%d 段未译出（已写入工单 Untranslated 供人工补译）": "硬闸收尾：未译清单已进工单 Data，非静默",
 	"[file-repair] lang=%s round=%d 定向补译 %d 段（阈值 %.0f%%）":              "5% 触发后的补译进度，非交付退化",
-	"[file-ctx-retry] lang=%s 上下文重译 %d 段（上限 %d）":                       "上下文重译进度：救回的段直接写入，未救回的段紧随其后进 untranslated/untranslatedSegments（同函数收尾块），非静默",
+	"[file-ctx-retry] lang=%s 上下文重译：缺失 %d 段 / 形态不过 %d 段（上限 %d）":        "上下文重译进度：救回的段直接写入；仍缺失的段紧随其后进 untranslated/untranslatedSegments（同函数收尾块）；形态不过的段由紧随其后的 applySegmentGates 记警告，非静默",
 	"[file-gate] %s 漏译 %d/%d 段（超 %.0f%%），已按补译/标记口径交付":                  "缺失段已进 untranslated/gate_warnings（同块嵌套 if），非静默",
 	"[brandterm] 文件路径品牌术语归一化 %d 个语言译文":                                 "信息：归一化生效，非退化",
 	"译文配音跳过（不影响译文 .md 交付）":                                             "配音跳过：返回值把 warning 交给调用方 append（见 dubTranslatedAudio 调用点），本函数内无 degraded/gateWarnings（★ 2026-10-30 措辞随字幕取消同步改名，豁免键必须与实现字面量同批改）",

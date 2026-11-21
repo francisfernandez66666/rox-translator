@@ -217,3 +217,84 @@ func TestBuildSegmentContext(t *testing.T) {
 		t.Errorf("语境必须限长（表头 160 / 邻段 120），实得 %d 字符", len([]rune(got)))
 	}
 }
+
+// TestFileCtxRetryTriggersOnNumbers F 腿（★ 2026-11-21 用户令扩展）：
+// 「数字不保持」也进候选集。现网 tv7 实证：`150–250 万` 被译成 `150–250 אלפי`（千，差 10 倍），
+// 这一族缺的不是"翻不出"而是**这一格属于哪张表、上一行是什么量级**——正是语境能救的形态。
+func TestFileCtxRetryTriggersOnNumbers(t *testing.T) {
+	const src = "25–50 万"
+	fake := &ctxRetryFake{replies: map[string]string{src: "250,000–500,000 yuan"}}
+	eng := newCtxRetryEngine(t, fake)
+	have := map[string]string{src: "25–50 \u05d0\u05dc\u05e4\u05d9"} // 「25–50 千」——量级错
+	got := eng.retranslateMissingWithContext(context.Background(), "en", []string{src}, have, "| 项目 | 价格 |", 20)
+	if got[src] != "250,000–500,000 yuan" {
+		t.Fatalf("数字不过的段应被带语境重译救回，实得 %v", got)
+	}
+	users := fake.snapshotUsers()
+	if len(users) != 1 {
+		t.Fatalf("应只拨 1 次（这一条候选），实得 %d 次", len(users))
+	}
+	// 语境必须真进请求：这一族的价值全在语境上，退化成"普通重译"就白烧一次调用。
+	if !strings.Contains(users[0], "Reference context") {
+		t.Fatalf("数字触发腿也必须带语境：%q", users[0])
+	}
+}
+
+// TestFileCtxRetryTriggersOnScript G 腿：目标语脚本不纯也进候选集
+// （tv7 实证：两行标题被译成泰文，混在希伯来语交付里）。
+func TestFileCtxRetryTriggersOnScript(t *testing.T) {
+	const src = "产品说明书"
+	fake := &ctxRetryFake{replies: map[string]string{src: "\u05de\u05d3\u05e8\u05d9\u05da \u05d4\u05de\u05d5\u05e6\u05e8"}} // מדריך המוצר
+	eng := newCtxRetryEngine(t, fake)
+	have := map[string]string{src: "\uc2e0\ud638 \uc124\uba85"} // 신호 설명（韩文混进 he 交付）
+	got := eng.retranslateMissingWithContext(context.Background(), "he", []string{src}, have, "", 20)
+	if got[src] == "" {
+		t.Fatalf("脚本不纯的段应被带语境重译救回，实得 %v", got)
+	}
+	if n := len(fake.snapshotUsers()); n != 1 {
+		t.Fatalf("应只拨 1 次，实得 %d 次", n)
+	}
+}
+
+// TestFileCtxRetryKeepsOldWhenStillBad H 腿（替换侧的反向对照）：
+// 已有译文时，"重译结果仍过不了那条判据"**不许**替换——把一个错的换成另一个错的是净亏，
+// 而屏幕上只会多一行"救回 N 段"的成功日志。
+func TestFileCtxRetryKeepsOldWhenStillBad(t *testing.T) {
+	const src = "25–50 万"
+	fake := &ctxRetryFake{replies: map[string]string{src: "250–500 \u05d0\u05dc\u05e4\u05d9"}} // 仍然丢量级（千）
+	eng := newCtxRetryEngine(t, fake)
+	old := "25–50 \u05d0\u05dc\u05e4\u05d9"
+	have := map[string]string{src: old}
+	got := eng.retranslateMissingWithContext(context.Background(), "en", []string{src}, have, "", 20)
+	if len(got) != 0 {
+		t.Fatalf("重译仍不过数字判据时不得采纳，实得 %v", got)
+	}
+	if have[src] != old {
+		t.Fatalf("不得改写调用方的已有译文，实得 %q", have[src])
+	}
+}
+
+// TestFileCtxRetryCandidatesOrderAndLimit J 腿：候选集按源文序、去重，上限截断只截尾部。
+func TestFileCtxRetryCandidatesOrderAndLimit(t *testing.T) {
+	texts := []string{"A 10 万", "B 正常句", "C 20 万", "A 10 万"}
+	have := map[string]string{
+		"A 10 万": "A 10 thousand", // 数字不过
+		"B 正常句":  "B normal",      // 健康：不进候选
+	}
+	got := ctxRetryTargets("en", texts, have)
+	if len(got) != 2 {
+		t.Fatalf("候选应为 2 段（A 与 C，B 健康且 A 去重），实得 %d：%+v", len(got), got)
+	}
+	if got[0].text != "A 10 万" || got[1].text != "C 20 万" {
+		t.Fatalf("候选必须按源文序且去重，实得 %+v", got)
+	}
+	if got[0].old == "" || got[1].old != "" {
+		t.Fatalf("已译段的 old 必须非空、缺失段的 old 必须为空：%+v", got)
+	}
+	// 健康段一个都不许重发（与 D 腿同判据，这里是候选集层面的对照）。
+	for _, tg := range got {
+		if tg.text == "B 正常句" {
+			t.Fatal("健康段混进了候选集")
+		}
+	}
+}

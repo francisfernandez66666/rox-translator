@@ -27,6 +27,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 
 	"github.com/xuri/excelize/v2"
 	"translator/internal/config"
@@ -713,33 +714,121 @@ func (e *Engine) translateSegmentWithContext(ctx context.Context, seg, targetLan
 	return v, true
 }
 
-// retranslateMissingWithContext 对仍缺失的段做一次「带上下文的重译」，返回救回的段。
+// ctxRetryTarget 一条「带语境重译」的候选段。
 //
-// 位置：文件链硬闸全部腿都跑完、按原文回落之前。三条纪律：
-//  1. 只送仍缺失的段（have 里已有的段一个都不重发），且受段数上限 maxSegs 约束；
+// ★ 2026-11-21 用户令扩展：这条腿原先只收**缺失**段（has 里没有译文的）；
+// 现网 tv7 真值暴露的另一族是「译了，但形态不该交付」——表格里的 `150–250 万` 被译成
+// `150–250 אלפי`（千，差 10 倍）、两行标题混进泰文。它们不是"没翻"，所以原先那条腿看不见，
+// 只能等闸门那一次反馈重译；而闸门腿的提示词是"请修正以下质量问题"，没有这张表是什么、
+// 上一行写什么量级。**缺的同样是语境**，所以收进同一条腿，共用同一份 buildSegmentContext。
+type ctxRetryTarget struct {
+	text   string // 源段
+	old    string // 已有译文；空串＝该段仍缺失
+	reason string // 触发原因（只进日志与读数，不进提示词）
+}
+
+// ctxRetryProblem 判一段「已译但形态不过」的成因：数字保持／目标语言脚本一致（两条）。
+//
+// 为什么只认这两条、不把整个闸门搬过来：
+//   - 这两条的共同点是**看语境就能救**（这一格属于哪张表、上一行是什么量级；这一行是不是被
+//     另一门语言的样例串了）——正是这条腿的价值所在；
+//   - 其余检查项（非空／长度／回环／残留标记／术语遵循）要么上游已经拦过，要么重译无收益：
+//     把它们也收进来只会让"重译"在每条不合格段上白烧一次调用。
+//
+// 判据全部走 gate 的导出出口（NumbersPreserved／ScriptConsistent），阈值只有闸门那一份：
+// 这里再写一对 0.15/0.10 就是第二把尺子（AGENTS §一·11）。
+func ctxRetryProblem(lc, src, tr string) string {
+	if strings.TrimSpace(tr) == "" || strings.TrimSpace(src) == "" {
+		return ""
+	}
+	// 源文没有数字 ⇒ 数字判据恒真，跳过（长文档 200 段 × 多语种，正则也不是白跑的）。
+	if hasDigitRune(src) && !gate.NumbersPreserved(src, tr) {
+		return gate.CheckNumberKeep
+	}
+	if !gate.ScriptConsistent(lc, tr) {
+		return gate.CheckScriptConsistency
+	}
+	return ""
+}
+
+// hasDigitRune 源文是否含数字（快筛用；纯函数）。
+func hasDigitRune(s string) bool {
+	for _, r := range s {
+		if unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// ctxRetryTargets 按源文顺序选出候选段：先缺失段、再"已译但形态不过"的段；同一段只出现一次。
+//
+// 顺序刻意保持源文序：上限 maxSegs 截断时，被截掉的是**文末**的段——
+// 与"按原文回落并点名"那条出口看到的顺序一致，排障时两处读数能对上。
+func ctxRetryTargets(lc string, texts []string, have map[string]string) []ctxRetryTarget {
+	seen := make(map[string]bool, len(texts))
+	out := make([]ctxRetryTarget, 0, 8)
+	for _, t := range texts {
+		if seen[t] || strings.TrimSpace(t) == "" {
+			continue
+		}
+		seen[t] = true
+		old := strings.TrimSpace(have[t])
+		if old == "" {
+			out = append(out, ctxRetryTarget{text: t, reason: "缺失"})
+			continue
+		}
+		// 已有译文：只有"形态不过"才重译；健康段一个都不许重发（否则覆盖正确译文、计费翻倍）。
+		if reason := ctxRetryProblem(lc, t, old); reason != "" {
+			out = append(out, ctxRetryTarget{text: t, old: old, reason: reason})
+		}
+	}
+	return out
+}
+
+// retranslateMissingWithContext 对候选段做一次「带上下文的重译」，返回可采纳的段。
+//
+// 位置：文件链硬闸全部腿都跑完、按原文回落之前。四条纪律：
+//  1. 只送 ctxRetryTargets 选出的段（缺失段 + 数字/脚本不过段），受段数上限 maxSegs 约束；
 //  2. 采纳判据仍是 fileTranslationUsable 那一把尺子（换腿不是换尺子）；
-//  3. 失败不写空、不覆盖已有译文——调用方按原文回落并点名，与既有出口同形。
+//  3. **替换**已有译文多一道门槛：必须把触发它的那条判据修好（ctxRetryProblem 回空串），
+//     否则宁可留旧译文——把"数字错的"换成"另一种错的"是净亏，而屏幕上只会看到一次成功日志；
+//  4. 失败不写空、不覆盖已有译文——调用方按原文回落并点名，与既有出口同形。
 func (e *Engine) retranslateMissingWithContext(ctx context.Context, lc string, texts []string, have map[string]string, header string, maxSegs int) map[string]string {
+	return e.retranslateWithContextTargets(ctx, lc, texts, header, maxSegs, ctxRetryTargets(lc, texts, have))
+}
+
+// retranslateWithContextTargets 是 retranslateMissingWithContext 的实现体：
+// 候选集由调用方一次算好，日志读数与真正重译用的是**同一份**清单
+// （两处各算一次会让"日志说 3 段、实际送 2 段"这种读数差重新长出来）。
+func (e *Engine) retranslateWithContextTargets(ctx context.Context, lc string, texts []string, header string, maxSegs int, targets []ctxRetryTarget) map[string]string {
 	out := map[string]string{}
 	if maxSegs <= 0 {
 		return out
 	}
-	tried := 0
+	idx := make(map[string]int, len(texts))
 	for i, t := range texts {
+		if _, ok := idx[t]; !ok {
+			idx[t] = i
+		}
+	}
+	tried := 0
+	for _, tg := range targets {
 		if ctx.Err() != nil || tried >= maxSegs {
 			break
 		}
-		if _, ok := have[t]; ok {
-			continue
-		}
-		if _, ok := out[t]; ok {
-			continue
-		}
 		tried++
-		v, ok := e.translateSegmentWithContext(ctx, t, lc, buildSegmentContext(texts, i, header))
-		if ok && e.fileTranslationUsable(ctx, t, v, lc) {
-			out[t] = v
+		v, ok := e.translateSegmentWithContext(ctx, tg.text, lc, buildSegmentContext(texts, idx[tg.text], header))
+		if !ok || !e.fileTranslationUsable(ctx, tg.text, v, lc) {
+			continue
 		}
+		if tg.old != "" {
+			// 替换已有译文：内容没变、或新的仍然过不了那条判据 ⇒ 保留原译（见函数头第 3 条）。
+			if v == tg.old || ctxRetryProblem(lc, tg.text, v) != "" {
+				continue
+			}
+		}
+		out[tg.text] = v
 	}
 	return out
 }
@@ -1460,23 +1549,37 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 		//   前面的腿（批量重译 3 轮 / 逐段极简 / 定向补译）都在"无语境"下重拨，
 		//   而现网实证 tv_job3 的表格 cell `45–80 万` 是「批量里翻不出、单独送就翻对」那一族：
 		//   缺的是这一格属于哪张表、旁边写什么。这里把表头＋邻段当语境，换复核模型再翻一次。
-		if still := missingSegments(texts, langTranslations[lc]); len(still) > 0 && ctx.Err() == nil {
-			if limit := e.fileCtxRetryMax(); limit > 0 && !stopForTokenBudget(lc, len(still)) {
-				log.Printf("[file-ctx-retry] lang=%s 上下文重译 %d 段（上限 %d）", lc, len(still), limit)
-				got := e.retranslateMissingWithContext(ctx, lc, texts, langTranslations[lc], fileHeaderCtx, limit)
-				for m, v := range got {
-					// 采纳判据与其余写入点**同一把尺子**（换腿不是换尺子）。retranslateMissingWithContext
-					// 内部已判过一次，这里再判一次不是重复：写入点守护的机械闸门按"写入前有没有被判据拦下"
-					// 判（file_writepoints_guard_test.go），绕过它等于给下一个人留一个"照抄这处就不必判"的坏样板。
-					if !e.fileTranslationUsable(ctx, m, v, lc) {
-						continue
+		// ★ 同日扩展（用户令「数字不保持／目标语脚本不纯也纳入触发条件」）：候选集不再只有缺失段，
+		//   还收「已译但过不了这两条形态判据」的段——它们缺的同样是语境（见 ctxRetryTarget 注释）。
+		if ctx.Err() == nil {
+			if limit := e.fileCtxRetryMax(); limit > 0 {
+				targets := ctxRetryTargets(lc, texts, langTranslations[lc])
+				missing, problem := 0, 0
+				for _, tg := range targets {
+					if tg.old == "" {
+						missing++
+					} else {
+						problem++
 					}
-					addTrans(lc, m, v)
-					addModelHit() // 复核模型译出的段同样是模型译文，计数必须跟着写入走
-					se.done(lc, m, v)
 				}
-				if len(got) > 0 {
-					observability.Info(ctx, "文件翻译：上下文重译救回未译段", "lang", lc, "rescued", len(got), "mark", ctxRetryMarker)
+				if len(targets) > 0 && !stopForTokenBudget(lc, len(targets)) {
+					log.Printf("[file-ctx-retry] lang=%s 上下文重译：缺失 %d 段 / 形态不过 %d 段（上限 %d）", lc, missing, problem, limit)
+					got := e.retranslateWithContextTargets(ctx, lc, texts, fileHeaderCtx, limit, targets)
+					for m, v := range got {
+						// 采纳判据与其余写入点**同一把尺子**（换腿不是换尺子）。retranslateMissingWithContext
+						// 内部已判过一次，这里再判一次不是重复：写入点守护的机械闸门按"写入前有没有被判据拦下"
+						// 判（file_writepoints_guard_test.go），绕过它等于给下一个人留一个"照抄这处就不必判"的坏样板。
+						if !e.fileTranslationUsable(ctx, m, v, lc) {
+							continue
+						}
+						addTrans(lc, m, v)
+						addModelHit() // 复核模型译出的段同样是模型译文，计数必须跟着写入走
+						se.done(lc, m, v)
+					}
+					if len(got) > 0 {
+						observability.Info(ctx, "文件翻译：上下文重译救回未译段", "lang", lc, "rescued", len(got),
+							"missing", missing, "problem", problem, "mark", ctxRetryMarker)
+					}
 				}
 			}
 		}

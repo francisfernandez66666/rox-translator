@@ -66,6 +66,19 @@ func Run(source, target, translation string) *GateResult {
 // source: 源文本（中文）；target: 目标语言代码；translation: 译文；
 // terms: KB 命中的术语要求（源文→规定译法）。术语要求非空时，
 // 源文出现该术语、译文却未包含规定译法，则判不通过（RAG 硬闸护栏）。
+// CheckScriptConsistency 检查项名称「目标语言脚本一致」（对外/跨包契约）。
+//
+// ★ 2026-11-21 收成常量：引擎侧"这一段要不要带语境重译"的判据按**检查项名字**认，
+// 调用方各写一份字面量时，改一处名字就会让那条触发条件静默失效（屏幕上一行红都不会出）。
+const CheckScriptConsistency = "目标语言脚本一致"
+
+// 脚本一致性阈值（检查 11）。只在这里定义一次：引擎侧的重译触发条件走 ScriptConsistent，
+// 禁止在调用方再抄一份阈值（抄一份＝两把尺子，改一处就会互相打脸）。
+const (
+	scriptMinTargetRatio  = 0.15 // 目标书写体系占比下限
+	scriptMaxForeignRatio = 0.10 // 任一外来非拉丁脚本占比上限
+)
+
 func RunWithTerms(source, target, translation string, terms []TermRequirement) *GateResult {
 	res := &GateResult{Pass: true}
 	tr := strings.TrimSpace(translation)
@@ -173,16 +186,30 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 	//   混入韩文 신호/西里尔カнал）必须检出。用 textscript 单一口径，拉丁品牌白名单不误杀。
 	//   阈值取"明显污染"档（目标体系占比 >= 0.15、任一外来非拉丁脚本 <= 0.10），避免误杀
 	//   短译文/术语混排。失败动作＝记 Check 让上层走既有重译闭环，不新增"阻断交付"档。
-	if tr != "" {
-		want := textscript.LangToScript(target)
-		if want != textscript.Other && want != textscript.Latin && !textscript.TargetConsistency(tr, want, 0.15, 0.10) {
-			res.Checks = append(res.Checks, Check{"目标语言脚本一致", false,
-				fmt.Sprintf("译文混入非目标语言(%s)的书写系统字符", target)})
-			res.Pass = false
-		}
+	if tr != "" && !ScriptConsistent(target, tr) {
+		res.Checks = append(res.Checks, Check{CheckScriptConsistency, false,
+			fmt.Sprintf("译文混入非目标语言(%s)的书写系统字符", target)})
+		res.Pass = false
 	}
 
 	return res
+}
+
+// ScriptConsistent 目标语言脚本一致性（检查 11）的唯一出口。
+//
+// 为什么要有这个薄委托：引擎侧「已译但形态不过 ⇒ 带语境重译」的触发条件必须与闸门
+// **同一把尺子**。若调用方自己调 textscript.TargetConsistency 并各写一对阈值，
+// 闸门说"过"、重译腿说"不过"（或反过来）就会长期并存，而两边都不报错
+// （AGENTS §一·11「多把尺子」）；抄字面量 0.15/0.10 是同一个病的轻症形态。
+//
+// 拉丁体系与其他（Other）目标语不判：拉丁译文本就允许混入品牌名/术语，
+// 硬判会把所有英文交付打成"脚本不纯"（阈值与检查 11 完全同源）。
+func ScriptConsistent(target, translation string) bool {
+	want := textscript.LangToScript(target)
+	if want == textscript.Other || want == textscript.Latin || strings.TrimSpace(translation) == "" {
+		return true
+	}
+	return textscript.TargetConsistency(translation, want, scriptMinTargetRatio, scriptMaxForeignRatio)
 }
 
 // ForceTerms 术语强制替换（H1）：源文命中术语但译文未含规定译法时，
