@@ -236,28 +236,39 @@ func (e *Engine) echoGuardOff() bool {
 	return false
 }
 
-// fileTranslationUsable 文件全链路写入点的统一判据：现有可用性 + 指令回显 + 长文爆炸。
-// 应急档（FILE_ECHO_GUARD=0 或 system_config.file_echo_guard=0）仅保留现有可用性判据。
-func (e *Engine) fileTranslationUsable(ctx context.Context, src, out, targetLang string) bool {
+// fileTranslationRejectReason 文件译文可用性判据的**唯一实现体**：按序跑完全部门槛，
+// 返回第一个拒绝项的可读名（空串＝可用）。判据顺序与旧 fileTranslationUsable 逐字一致，
+// 只是把"哪一条拒了"从布尔值升级为原因名——供救援腿诊断日志点名，不改任何采纳行为。
+// ★ 为什么把判据体挪到这里而不是在日志侧复刻一遍：AGENTS §一·11 的"两把尺子"纪律——
+//
+//	采纳判据与诊断读数必须读同一组纯函数，否则诊断会说"骨架拒的"而实际是"回显拒的"。
+func (e *Engine) fileTranslationRejectReason(ctx context.Context, src, out, targetLang string) string {
 	if !IsTranslationUsable(src, out) {
-		return false
+		return "IsTranslationUsable"
 	}
 	// ★ P0 骨架判据补强（2026-11-20，Q5 定案）：带品牌英文的骨架（旧判据靠 hasLetterRun
 	//   会放行）在此拦下。放在 echoGuardOff() 之前——骨架是交付正确性问题，不受 echo 应急档控制。
 	if IsSkeletonForLang(src, out, targetLang) {
-		return false
+		return "IsSkeletonForLang"
 	}
 	if e.echoGuardOff() {
-		return true
+		return ""
 	}
 	ui := uiLangFromCtx(ctx)
 	if isProseInstructionEcho(src, out, targetLang, ui) {
-		return false
+		return "isProseInstructionEcho"
 	}
 	if hasLongTextExpansion(src, out) {
-		return false
+		return "hasLongTextExpansion"
 	}
-	return true
+	return ""
+}
+
+// fileTranslationUsable 文件全链路写入点的统一判据：现有可用性 + 指令回显 + 长文爆炸。
+// 应急档（FILE_ECHO_GUARD=0 或 system_config.file_echo_guard=0）仅保留现有可用性判据。
+// ★ 2026-11-22：薄委托到 fileTranslationRejectReason（判据逻辑只有一份，原因名给诊断用）。
+func (e *Engine) fileTranslationUsable(ctx context.Context, src, out, targetLang string) bool {
+	return e.fileTranslationRejectReason(ctx, src, out, targetLang) == ""
 }
 
 // TextTranslationUsable 文本链路（逐行翻译/重发）可用的导出判据：

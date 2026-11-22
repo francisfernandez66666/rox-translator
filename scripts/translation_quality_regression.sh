@@ -74,6 +74,8 @@ run "11-22:外来组合符/泰国"   ./internal/engine/ -run 'TestForeignScript|
 run "11-22:数字期望判据"      ./internal/gate/ -run 'TestNumberExpectations|TestNumberExpectationsAgreeWithJudge|TestScriptConsistencyNeutralCell'
 run "11-22:上下文重译分档"    ./internal/engine/ -run 'TestFileCtxRetryTargetsTierOrder|TestFileCtxRetryNumberExpectationsInPrompt|TestFileCtxRetryMissingSegmentGetsNumberExpectations|TestFileCtxRetryCandidatesOrderAndLimit'
 run "11-22:救援段复核evals"   ./internal/engine/ -run 'TestRescueReviewEvalDegradesQuietly|TestReviewScope'
+# ★ 2026-11-22 诊断日志：救援段被拒原因名必须与采纳布尔同源（单一判据）
+run "11-22:被拒诊断同源"      ./internal/engine/ -run 'TestRejectReason'
 # 全量 -race 四处红灯修复（提交 d4edb4bf）：SQL 方言包装 + D3 字面量门禁 + 守卫反证
 run "11-22:SQL方言包装守卫"   ./internal/db/ -run 'TestNoRawSQLOutsideDialectWrapper|TestRawSQLPatternHasTeeth|TestNoRawUniqueViolationLiteralOutsideHelper|TestUniqueViolationLiteralScanHasTeeth|TestNoUncoveredDialectConstructs|TestDialectScanPatternsActuallyFire'
 run "11-22:方言裸SQL修复回归" ./internal/store/ -run 'TestOutboundNoAntiPatterns'

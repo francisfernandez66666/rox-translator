@@ -48,7 +48,7 @@ echo "===== P0 前端交付包（本批前端源码零改动，复用了上一�
 PREV_TAR="/tmp/fe-20261122quality.tar.gz"
 [ -f "$PREV_TAR" ] || { echo "ABORT=2 复用件 $PREV_TAR 不在位（需先跑上一批发版或手工构建）"; exit 2; }
 PREV_SHA=$(sha_local "$PREV_TAR" | cut -c1-16)
-[ "$PREV_SHA" = "82f5ef4f1a7e3e2d" ] || { echo "ABORT=2 复用件 sha 前缀不符（实得 $PREV_SHA，期望 82f5ef4f1a7e3e2d）"; exit 2; }
+[ "$PREV_SHA" = "82f5ef4f1a7e3e2d" ] || { echo "ABORT=2 复用件 sha 前缀不符（实得 ${PREV_SHA}，期望 82f5ef4f1a7e3e2d）"; exit 2; }
 cp "$PREV_TAR" "$TAR" || { echo "ABORT=2 复制复用件失败"; exit 2; }
 echo "tar=$TAR size=$(wc -c <"$TAR" | tr -d ' ') sha=$(sha_local "$TAR" | cut -c1-16) (reused, sha 前缀锁定)"
 bash "$REPO/scripts/check_frontend_tar.sh" "$TAR" || { echo "ABORT=2 交付包自检没过 ⇒ 不许换源"; exit 2; }

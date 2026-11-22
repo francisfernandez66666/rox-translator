@@ -901,7 +901,19 @@ func (e *Engine) retranslateWithContextTargets(ctx context.Context, lc string, t
 			}
 		}
 		v, ok := e.translateSegmentWithContext(cctx, tg.text, lc, buildSegmentContext(texts, idx[tg.text], header))
-		if !ok || !e.fileTranslationUsable(ctx, tg.text, v, lc) {
+		if !ok {
+			// ★ 2026-11-22 诊断：复核模型这一枪没产出（调用错/空产物）——过去静默 continue，
+			//   屏幕上只剩"没救回"，分不清是模型没返回还是返回了被判据拒。这里点名成因（不改采纳）。
+			observability.Info(ctx, "文件翻译：救援段复核模型无可用产出", "lang", lc,
+				"src", tg.text, "reason", tg.reason, "mark", ctxRetryMarker)
+			continue
+		}
+		if reject := e.fileTranslationRejectReason(ctx, tg.text, v, lc); reject != "" {
+			// ★ 2026-11-22 诊断：把被 fileTranslationUsable 丢弃的**模型真实输出**单独记下来，
+			//   供确认"是不是判据/复核 evals 误杀"——例如纯数字金额格被 IsSkeletonForLang 判骨架。
+			//   采纳行为一字不改：仍按原判据丢弃、调用方按原文回落+点名（客户可见面不变）。
+			observability.Info(ctx, "文件翻译：救援段译文被判据丢弃", "lang", lc,
+				"src", tg.text, "out", v, "reject", reject, "reason", tg.reason, "mark", ctxRetryMarker)
 			continue
 		}
 		if tg.old != "" {
