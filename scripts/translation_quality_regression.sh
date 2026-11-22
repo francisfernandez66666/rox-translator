@@ -63,6 +63,21 @@ run "P3:写点/未译清单"       ./internal/engine/ -run 'TestApplySegmentGate
 # P5 门禁登记
 run "P5:gateguard登记"       ./internal/gateguard/
 
+# ============================================================================
+# ★ 2026-11-22 今日开发内容（真值 tv8–tv10 暴露的缺陷 + 全量红灯收口），
+#   按「新增一条锁就进回归脚本」的纪律逐条登记，防止只跑全量时漏掉定向自证。
+# 7 处译文缺陷的四类根因（提交 c922ccb2/13328fbe）
+run "11-22:数字尾巴/量级口径" ./internal/engine/ -run 'TestDeliveryTailGarbage|TestMagnitudeInstruction|TestQuantity'
+run "11-22:标题编号骨架"      ./internal/fileproc/ -run 'TestHeadingNumberBlock|TestMdHeadingNumber'
+run "11-22:外来组合符/泰国"   ./internal/engine/ -run 'TestForeignScript|TestStripForeignScriptsInNonTarget'
+# 数字换算判据与上下文重译（提交 1452092b/a6af7581）
+run "11-22:数字期望判据"      ./internal/gate/ -run 'TestNumberExpectations|TestNumberExpectationsAgreeWithJudge|TestScriptConsistencyNeutralCell'
+run "11-22:上下文重译分档"    ./internal/engine/ -run 'TestFileCtxRetryTargetsTierOrder|TestFileCtxRetryNumberExpectationsInPrompt|TestFileCtxRetryMissingSegmentGetsNumberExpectations|TestFileCtxRetryCandidatesOrderAndLimit'
+run "11-22:救援段复核evals"   ./internal/engine/ -run 'TestRescueReviewEvalDegradesQuietly|TestReviewScope'
+# 全量 -race 四处红灯修复（提交 d4edb4bf）：SQL 方言包装 + D3 字面量门禁 + 守卫反证
+run "11-22:SQL方言包装守卫"   ./internal/db/ -run 'TestNoRawSQLOutsideDialectWrapper|TestRawSQLPatternHasTeeth|TestNoRawUniqueViolationLiteralOutsideHelper|TestUniqueViolationLiteralScanHasTeeth|TestNoUncoveredDialectConstructs|TestDialectScanPatternsActuallyFire'
+run "11-22:方言裸SQL修复回归" ./internal/store/ -run 'TestOutboundNoAntiPatterns'
+
 echo "============================================================"
 echo "PASS=$PASS FAIL=$FAILN"
 if [ "$FAILN" -eq 0 ]; then

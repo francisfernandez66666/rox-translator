@@ -79,6 +79,11 @@ const (
 	scriptMaxForeignRatio = 0.10 // 任一外来非拉丁脚本占比上限
 )
 
+// RunWithTerms 带术语要求的闸门主入口：先跑全部确定性检查（1–11），再把术语遵循（检查 9）
+// 用 terms 覆盖 Run 的默认空表。source/target 为源/目标语言码，translation 为译文；
+// 返回逐项 Checks 与 Pass——任何一项失败只记 Check，不在此处阻断交付，由上层决定
+// 重译、诚实回落或放行。★ 检查 11 的脚本一致性必须传 target＋source 两个口径：
+// 两侧都无非拉丁字母时豁免（纯数字/拉丁单元格不算脚本污染），防止把正确译文误判后送重译。
 func RunWithTerms(source, target, translation string, terms []TermRequirement) *GateResult {
 	res := &GateResult{Pass: true}
 	tr := strings.TrimSpace(translation)
