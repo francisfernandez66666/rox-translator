@@ -128,7 +128,14 @@ func (s *Server) estimateTokens(req estimateReq, mode string, tid int64) (int64,
 		// ★ DEF-P1-05 B2：这一单到底走不走分段，与进引擎那次是**同一个判定**（口径 A：
 		//   两处各判一次＝两把尺子，会长出"横幅按整篇报价、执行按分段跑"那种客户备钱备不够的形态）。
 		//   回落档（超上限）在这里同样按整篇报价——预估与实扣同尺（AGENTS §一·5④）。
-		_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, "", req.UILang)
+		// ★ 2026-11-22 真值验收 §7.8：源语言必须与真发出去的那一枪**同源**。
+		//   `translateInstruction` 的量级条款只在中文源文下追加（见 engine.magnitudeInstructionNote），
+		//   而引擎侧一律先跑 `DetectSourceLang` 再拼提示词（`Engine.TranslateText` / 批量链都如此）。
+		//   预估这里若继续传空串，中文正文的固定指令开销就少算那一段 ⇒ 横幅比实扣低一截，
+		//   客户按预估备的钱不够花（AGENTS §一·5④「预估与实扣同一把尺子」）。
+		//   检测是纯本地字符统计、零模型调用（同 §23 的成本口径），不引入任何额外开销。
+		srcLang := engine.DetectSourceLang(req.Text)
+		_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, srcLang, req.UILang)
 	} else {
 		minTokens, maxTokens = engine.EstimateSegmentTokens(req.SegmentCount, req.TargetLangs, mode, "", req.UILang)
 	}

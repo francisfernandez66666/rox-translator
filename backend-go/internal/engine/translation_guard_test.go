@@ -295,6 +295,9 @@ var t4NoisePairs = [][2]string{
 	// 判据 ②：源段是实义词，译文整体退化成孤立功能词（含模型自己加的包装）
 	{"manua", "` and `"},
 	{"の", "and"},
+	// ★ 2026-11-22 真值验收 tv8 的 L150：整格金额 `65–120 万<br>` 被交付成单个希伯来字母 ו（"and"）。
+	//   旧表只收阿拉伯语 و（U+0648），希伯来语 ו（U+05D5）同形不同码 ⇒ 漏判。
+	{"65–120 万<br>", "ו"},
 	// 判据 ③：译文把源段逐字引号引用再另起一句解释
 	{"manual", "manual  \nThe original term \"manual\" remains unchanged in the translation."},
 	{"配件", "\"配件\" is a term used in the manual."}, // CJK 源段同样：引号逐字引用 + 一整句解释（且源段压根没被翻）
@@ -331,10 +334,15 @@ var t4LegitPairs = [][2]string{
 	{"-11312.00", "-11312.00"},         // 数字列：模型原样回显（判据 ① 要求原样，但同文由第 3 类判据挡下，见下行说明）
 	{"龙头战法 Dragon", "Dragon Strategy"}, // 中英混排
 	{"关闭的战法信号不会进实盘链路（模拟盘不受影响）", "Closed strategy signals will not enter the live trading link (simulated trading is unaffected)"},
-	{"和", "and"},              // ★ 源段本身就是功能词 ⇒ 判据 ② 必须放行（"和"→"and" 是正译）
-	{"的", "of"},               // ★ 同上
-	{"and", "y"},              // ★ 英语虚词译成目标语虚词是正译，不得被判据 ② 误杀
-	{"the", "le"},             // ★ 同上（法语）
+	{"和", "and"},  // ★ 源段本身就是功能词 ⇒ 判据 ② 必须放行（"和"→"and" 是正译）
+	{"的", "of"},   // ★ 同上
+	{"and", "y"},  // ★ 英语虚词译成目标语虚词是正译，不得被判据 ② 误杀
+	{"the", "le"}, // ★ 同上（法语）
+	{"and", "ו"},  // ★ 反向对照：源段是功能词时，新收的希伯来语单字母条目不得误杀
+	// ⚠️ 刻意**不**收「和 → ו」：那一对不是被 functionWordNoise 判掉的，而是撞上
+	//   cjkEchoWashedToSkeleton（源文是 CJK、译文没有连续两个字母 ⇒ 判"中文被洗成骨架"）。
+	//   那条判据是另一条独立射程（真值验收 E 腿），把它为这一对放宽＝拿"中文被洗空"的防线换一个表格单元格，
+	//   方向反了。故反向对照统一用非 CJK 的功能词源段（"and"/"the"）。
 	{"manual", "user manual"}, // ★ 正常译名（带空格）不得被判据 ③ 误杀
 	{"描述这一段是怎么标价的", "Codes that describe how this section is priced"},
 }

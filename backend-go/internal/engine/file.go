@@ -714,6 +714,25 @@ func (e *Engine) translateSegmentWithContext(ctx context.Context, seg, targetLan
 	return v, true
 }
 
+// ctxRetryReasonMissing 「该段根本没有译文」这一档的成因名。
+// 只进日志与分档计数，不进提示词（提示词侧由 segmentHintNote 按形态决定）。
+const ctxRetryReasonMissing = "缺失"
+
+// formatNumberExpectations 把 gate 的换算结果拼成提示词里的短句。
+// 最多 6 条：长表格一格里可能挤着十几个数，全列出来会把提示词撑到盖过待译内容
+// （同 buildSegmentContext 的限长理由）；超出部分不提示也不会更坏——判据仍照旧判。
+func formatNumberExpectations(exps []gate.NumberExpectation) []string {
+	const maxItems = 6
+	out := make([]string, 0, len(exps))
+	for i, e := range exps {
+		if i >= maxItems {
+			break
+		}
+		out = append(out, fmt.Sprintf("%q = %s", e.Source, strconv.FormatFloat(e.Value, 'f', -1, 64)))
+	}
+	return out
+}
+
 // ctxRetryTarget 一条「带语境重译」的候选段。
 //
 // ★ 2026-11-21 用户令扩展：这条腿原先只收**缺失**段（has 里没有译文的）；
@@ -745,7 +764,7 @@ func ctxRetryProblem(lc, src, tr string) string {
 	if hasDigitRune(src) && !gate.NumbersPreserved(src, tr) {
 		return gate.CheckNumberKeep
 	}
-	if !gate.ScriptConsistent(lc, tr) {
+	if !gate.ScriptConsistent(lc, src, tr) {
 		return gate.CheckScriptConsistency
 	}
 	return ""
@@ -761,13 +780,24 @@ func hasDigitRune(s string) bool {
 	return false
 }
 
-// ctxRetryTargets 按源文顺序选出候选段：先缺失段、再"已译但形态不过"的段；同一段只出现一次。
+// ctxRetryTargets 选出候选段并按**严重度分档**排序：缺失段 → 数字不保持 → 目标语脚本不纯；
+// 同一段只出现一次，档内保持源文序。
 //
-// 顺序刻意保持源文序：上限 maxSegs 截断时，被截掉的是**文末**的段——
-// 与"按原文回落并点名"那条出口看到的顺序一致，排障时两处读数能对上。
+// ★ 2026-11-22 第九轮真值复跑（tv9）实证：候选数与上限会打架——本轮 `缺失 3 段 / 形态不过 20 段`
+// 共 23 段，而默认上限 20 ⇒ 尾部 3 段**一次都没送**，其中就有文末那条 `年费 300 万+`
+// （量级错译，交付成 `300 שנק' ומעלה`）。旧实现只按源文序排队，于是"哪一段能被救"取决于它在
+// 文档里的位置，而不是它有多严重；而屏幕上只有一行 `（上限 20）`，看不出谁被截掉了。
+//
+// 分档理由（严重度就是"客户会因此损失什么"）：
+//   - 缺失段：交付里直接留中文，读者一眼看到外语；
+//   - 数字不保持：读起来完全正常，但金额/规模错了十倍——最隐蔽、最贵的一类；
+//   - 脚本不纯：混进另一门语言的字符，可读性受损但不改事实。
+//
+// 档内仍按源文序：上限截断时被截掉的总是**同一档的尾部**，与"按原文回落并点名"那条出口
+// 看到的顺序一致，排障时两处读数能对上（截断本身另有 WARN 点名，见 retranslateWithContextTargets）。
 func ctxRetryTargets(lc string, texts []string, have map[string]string) []ctxRetryTarget {
 	seen := make(map[string]bool, len(texts))
-	out := make([]ctxRetryTarget, 0, 8)
+	var missing, numbers, scripts []ctxRetryTarget
 	for _, t := range texts {
 		if seen[t] || strings.TrimSpace(t) == "" {
 			continue
@@ -775,15 +805,25 @@ func ctxRetryTargets(lc string, texts []string, have map[string]string) []ctxRet
 		seen[t] = true
 		old := strings.TrimSpace(have[t])
 		if old == "" {
-			out = append(out, ctxRetryTarget{text: t, reason: "缺失"})
+			missing = append(missing, ctxRetryTarget{text: t, reason: ctxRetryReasonMissing})
 			continue
 		}
 		// 已有译文：只有"形态不过"才重译；健康段一个都不许重发（否则覆盖正确译文、计费翻倍）。
-		if reason := ctxRetryProblem(lc, t, old); reason != "" {
-			out = append(out, ctxRetryTarget{text: t, old: old, reason: reason})
+		switch reason := ctxRetryProblem(lc, t, old); reason {
+		case "":
+			// 健康段：不送。
+		case gate.CheckNumberKeep:
+			numbers = append(numbers, ctxRetryTarget{text: t, old: old, reason: reason})
+		default:
+			// 目前只剩「目标语言脚本一致」这一档（ctxRetryProblem 只有两个出口）；
+			// 用 default 而不是再写一次字面量：将来加第三个出口时它会落进末档而不是静默消失。
+			scripts = append(scripts, ctxRetryTarget{text: t, old: old, reason: reason})
 		}
 	}
-	return out
+	out := make([]ctxRetryTarget, 0, len(missing)+len(numbers)+len(scripts))
+	out = append(out, missing...)
+	out = append(out, numbers...)
+	return append(out, scripts...)
 }
 
 // retranslateMissingWithContext 对候选段做一次「带上下文的重译」，返回可采纳的段。
@@ -821,6 +861,14 @@ func (e *Engine) retranslateWithContextTargets(ctx context.Context, lc string, t
 		// ★ 把"这一次要修的是什么形态"也带进提示词：只给语境不点名，模型往往照旧犯同一个错
 		//   （现网实测：`65–120 万`→`65–120 מיליון`，语境在旁边也没救回来）。
 		cctx := WithSegmentHint(ctx, tg.reason)
+		// ★ 2026-11-22 tv9：数字档再带上**这一段**的换算结果。
+		//   通用示例（"300 万+ means 3,000,000+"）在场时模型仍交付 `300 שנק' ומעלה`，
+		//   因为它还得自己做一次「万→10000」的乘法；把结果直接给它，这一跳就不需要算术。
+		if tg.reason == gate.CheckNumberKeep {
+			if exps := gate.NumberExpectations(tg.text); len(exps) > 0 {
+				cctx = WithSegmentNumberExpectations(cctx, formatNumberExpectations(exps))
+			}
+		}
 		v, ok := e.translateSegmentWithContext(cctx, tg.text, lc, buildSegmentContext(texts, idx[tg.text], header))
 		if !ok || !e.fileTranslationUsable(ctx, tg.text, v, lc) {
 			continue
@@ -1570,6 +1618,26 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					}
 				}
 				if len(targets) > 0 && !stopForTokenBudget(lc, len(targets)) {
+					// ★ 2026-11-22 tv9：候选撞上上限时必须点名"有多少段一次都没送"。
+					//   实测 23 个候选 / 上限 20，旧日志只有一句「（上限 20）」，
+					//   被截掉的是哪几档只能靠读源码推。分档后截断落在末档（脚本），
+					//   但档数一律**现算**：写死"截掉的都是脚本档"在加档那天就会说谎。
+					if len(targets) > limit {
+						dm, dn, ds := 0, 0, 0
+						for _, tg := range targets[limit:] {
+							switch tg.reason {
+							case ctxRetryReasonMissing:
+								dm++
+							case gate.CheckNumberKeep:
+								dn++
+							default:
+								ds++
+							}
+						}
+						observability.Warn(ctx, "文件翻译：上下文重译预算不足，部分候选未送", "lang", lc,
+							"candidates", len(targets), "limit", limit,
+							"dropped_missing", dm, "dropped_numbers", dn, "dropped_script", ds)
+					}
 					log.Printf("[file-ctx-retry] lang=%s 上下文重译：缺失 %d 段 / 形态不过 %d 段（上限 %d）", lc, missing, problem, limit)
 					got := e.retranslateWithContextTargets(ctx, lc, texts, fileHeaderCtx, limit, targets)
 					for m, v := range got {

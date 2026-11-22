@@ -186,7 +186,7 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 	//   混入韩文 신호/西里尔カнал）必须检出。用 textscript 单一口径，拉丁品牌白名单不误杀。
 	//   阈值取"明显污染"档（目标体系占比 >= 0.15、任一外来非拉丁脚本 <= 0.10），避免误杀
 	//   短译文/术语混排。失败动作＝记 Check 让上层走既有重译闭环，不新增"阻断交付"档。
-	if tr != "" && !ScriptConsistent(target, tr) {
+	if tr != "" && !ScriptConsistent(target, source, tr) {
 		res.Checks = append(res.Checks, Check{CheckScriptConsistency, false,
 			fmt.Sprintf("译文混入非目标语言(%s)的书写系统字符", target)})
 		res.Pass = false
@@ -204,12 +204,39 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 //
 // 拉丁体系与其他（Other）目标语不判：拉丁译文本就允许混入品牌名/术语，
 // 硬判会把所有英文交付打成"脚本不纯"（阈值与检查 11 完全同源）。
-func ScriptConsistent(target, translation string) bool {
+//
+// ★ 2026-11-22 tv9 补第三档「脚本中立格不判」（source 参数为此而来）：
+// 表格里 `SaaS`、`650,000–1,200,000<br>` 这类格两侧的字母**全是拉丁**——它本来就没有
+// 目标语内容可写，却因为「分母只算字母、拉丁不进目标占比分子」被算成 0% 目标体系 ⇒ 判不纯。
+// 现网实证（tv9）：`gate.ScriptConsistent("he","650,000–1,200,000<br>")` = false，
+// 于是三个**完全正确**的数字格被送进上下文重译（白占预算），而其中一次重译若把 `<br>`
+// 丢掉、其余不变，反而能通过判据 ⇒ 有拿正确译文换坏形态的风险。
+// 判据方向：只有**两侧都没有非拉丁字母**才豁免（`SaaS`→`סאס` 不豁免、`SaaS`→`사스` 不豁免、
+// 中文源→韩文译文更不豁免——中文源有汉字，第一步就不成立）。这样"拉丁格不动"与
+// "回显原文/串语照样抓"两件事同时成立。
+func ScriptConsistent(target, source, translation string) bool {
 	want := textscript.LangToScript(target)
 	if want == textscript.Other || want == textscript.Latin || strings.TrimSpace(translation) == "" {
 		return true
 	}
+	// 脚本中立格：源与译文两侧的字母都只有拉丁（纯数字/术语/HTML 标签/缩写）⇒ 无从判纯度。
+	if !hasNonLatinLetters(source) && !hasNonLatinLetters(translation) {
+		return true
+	}
 	return textscript.TargetConsistency(translation, want, scriptMinTargetRatio, scriptMaxForeignRatio)
+}
+
+// hasNonLatinLetters 文本里是否出现非拉丁字母（数字/标点/空白不算）。
+//
+// 与 textscript.Share 同一套分档（它就是 TargetConsistency 的分母来源），
+// 所以"这里判中立"与"那里算占比"永远看同一批字符。
+func hasNonLatinLetters(text string) bool {
+	for s, n := range textscript.Share(text) {
+		if n > 0 && s != textscript.Latin && s != textscript.Other {
+			return true
+		}
+	}
+	return false
 }
 
 // ForceTerms 术语强制替换（H1）：源文命中术语但译文未含规定译法时，

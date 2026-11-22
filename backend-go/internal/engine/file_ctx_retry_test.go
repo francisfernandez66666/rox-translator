@@ -32,6 +32,7 @@ import (
 	"testing"
 
 	"translator/internal/config"
+	"translator/internal/gate"
 )
 
 // ctxRetryFake 假上游：按"源文→译文"映射回内容，并记录收到的 user 段。
@@ -274,11 +275,15 @@ func TestFileCtxRetryKeepsOldWhenStillBad(t *testing.T) {
 	}
 }
 
-// TestFileCtxRetryCandidatesOrderAndLimit J 腿：候选集按源文序、去重，上限截断只截尾部。
+// TestFileCtxRetryCandidatesOrderAndLimit J 腿：候选集**档内**按源文序、去重，上限截断只截尾部。
+//
+// ⚠️ 这一腿刻意让两条候选落在**同一档**（都是「数字不保持」）：跨档顺序由 K 腿负责，
+// 若在这里混两档，这条腿就会在分档规则一改时红——而它真正要守的是"档内不乱序、不重复"。
 func TestFileCtxRetryCandidatesOrderAndLimit(t *testing.T) {
 	texts := []string{"A 10 万", "B 正常句", "C 20 万", "A 10 万"}
 	have := map[string]string{
 		"A 10 万": "A 10 thousand", // 数字不过
+		"C 20 万": "C 20 thousand", // 同档：数字不过（不用缺失档，见上面注释）
 		"B 正常句":  "B normal",      // 健康：不进候选
 	}
 	got := ctxRetryTargets("en", texts, have)
@@ -286,10 +291,10 @@ func TestFileCtxRetryCandidatesOrderAndLimit(t *testing.T) {
 		t.Fatalf("候选应为 2 段（A 与 C，B 健康且 A 去重），实得 %d：%+v", len(got), got)
 	}
 	if got[0].text != "A 10 万" || got[1].text != "C 20 万" {
-		t.Fatalf("候选必须按源文序且去重，实得 %+v", got)
+		t.Fatalf("同一档内必须按源文序且去重，实得 %+v", got)
 	}
-	if got[0].old == "" || got[1].old != "" {
-		t.Fatalf("已译段的 old 必须非空、缺失段的 old 必须为空：%+v", got)
+	if got[0].old == "" || got[1].old == "" {
+		t.Fatalf("已译段的 old 必须非空：%+v", got)
 	}
 	// 健康段一个都不许重发（与 D 腿同判据，这里是候选集层面的对照）。
 	for _, tg := range got {
@@ -419,5 +424,75 @@ func TestFileCtxRetryHintNamesTheDefect(t *testing.T) {
 		if c.want != "" && !strings.Contains(got, c.want) {
 			t.Fatalf("segmentHintNote(%q) 应含 %q，实得 %q", c.in, c.want, got)
 		}
+	}
+}
+
+// TestFileCtxRetryTargetsTierOrder K 腿（★ 2026-11-22 第九轮真值复跑 tv9）：
+// 候选集必须按**严重度**分档排队——缺失 → 数字不保持 → 目标语脚本不纯，档内保持源文序。
+//
+// 为什么这是硬要求而不是"顺手优化"：tv9 实测 23 个候选撞上默认上限 20，
+// 旧实现只按源文序排队，于是"哪一段能被救"取决于它在文档里的位置；而屏幕上只有一句
+// 「（上限 20）」。分档之后被截掉的永远是末档（脚本不纯，损失最小），
+// 数字错译（读起来正常、金额差十倍）排在最前——那才是客户真正会亏钱的一类。
+func TestFileCtxRetryTargetsTierOrder(t *testing.T) {
+	texts := []string{"脚本段", "数字段 20 万", "缺失段", "健康段"}
+	have := map[string]string{
+		"脚本段":      "קטע 한국어", // 韩文混进希伯来语交付
+		"数字段 20 万": "20 אלף",  // 20 千（差 10 倍）
+		"健康段":      "קטע תקין",
+	}
+	got := ctxRetryTargets("he", texts, have)
+	want := []struct{ text, reason string }{
+		{"缺失段", ctxRetryReasonMissing},
+		{"数字段 20 万", gate.CheckNumberKeep},
+		{"脚本段", gate.CheckScriptConsistency},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("候选应为 %d 段（健康段不进），实得 %d：%+v", len(want), len(got), got)
+	}
+	for i := range want {
+		if got[i].text != want[i].text || got[i].reason != want[i].reason {
+			t.Fatalf("第 %d 位应为 %q/%q，实得 %q/%q（顺序＝上限截断时谁被放弃）",
+				i, want[i].text, want[i].reason, got[i].text, got[i].reason)
+		}
+	}
+}
+
+// TestFileCtxRetryNumberExpectationsInPrompt L 腿（★ 2026-11-22 tv9）：
+// 数字档必须把**这一段的换算结果**写进提示词（`"300 万" = 3000000`）。
+//
+// tv9 实证：通用示例（"300 万+ means 3,000,000+"）在场时模型仍交付 `300 שנק' ומעלה`，
+// 因为换算那一步还得它自己做；把结果直接给它，才叫"带上下文"。
+// 反向对照同样重要：缺失段一个换算字都不许带——多一句不该有的指令会把纯翻译模型带偏，
+// 也让这条腿在缺失段上的提示词与改造前不再逐字一致。
+func TestFileCtxRetryNumberExpectationsInPrompt(t *testing.T) {
+	const src = "年费 300 万+"
+	const good = "דמי מנוי שנתיים 3,000,000+"
+	fake := &ctxRetryFake{replies: map[string]string{src: good}}
+	eng := newCtxRetryEngine(t, fake)
+	have := map[string]string{src: "דמי מנוי שנתיים 300 ומעלה"} // 量级丢了
+	got := eng.retranslateMissingWithContext(context.Background(), "he", []string{src}, have, "| 项目 | 年费 |", 20)
+	if got[src] != good {
+		t.Fatalf("数字不过的段应被带换算重译救回，实得 %v", got)
+	}
+	users := fake.snapshotUsers()
+	if len(users) != 1 {
+		t.Fatalf("应只拨 1 次，实得 %d 次", len(users))
+	}
+	if !strings.Contains(users[0], `"300 万" = 3000000`) {
+		t.Fatalf("提示词必须给出这一段的换算结果（不是通用示例）：%q", users[0])
+	}
+
+	// 反向对照：缺失段不许带换算句。
+	const missSrc = "第二行原文"
+	fake2 := &ctxRetryFake{replies: map[string]string{missSrc: "Second line"}}
+	eng2 := newCtxRetryEngine(t, fake2)
+	_ = eng2.retranslateMissingWithContext(context.Background(), "en", []string{missSrc}, map[string]string{}, "", 20)
+	u2 := fake2.snapshotUsers()
+	if len(u2) != 1 {
+		t.Fatalf("应拨 1 次，实得 %d", len(u2))
+	}
+	if strings.Contains(u2[0], "exact converted values") {
+		t.Fatalf("缺失段不该带数字换算句（提示词必须与改造前逐字一致）：%q", u2[0])
 	}
 }

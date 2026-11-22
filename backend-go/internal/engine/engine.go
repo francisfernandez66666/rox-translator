@@ -262,15 +262,54 @@ func segmentHintFromCtx(ctx context.Context) string {
 func segmentHintNote(hint string) string {
 	switch hint {
 	case "数字保持":
-		return " Hard requirement: keep every number exactly as in the source, including its magnitude word" +
-			" (for example \"150–250 万\" means 1,500,000–2,500,000). Do not drop, round or re-scale any digit," +
-			" and do not change the unit. Numbers from the reference context show the expected format."
+		return " Hard requirement: keep every number exactly as in the source, including its magnitude word." +
+			" Chinese magnitude words are multipliers and must be converted exactly: 万 = 10,000, 亿 = 100,000,000," +
+			" 千 = 1,000, 百 = 100 (so \"150–250 万\" means 1,500,000–2,500,000, \"80–120 万\" means 800,000–1,200,000," +
+			" and \"300 万+\" means 3,000,000+). Do not drop, round or re-scale any digit, do not render a magnitude" +
+			" word as a bare unit word such as thousand, and do not shift the scale by a factor of ten." +
+			" Numbers from the reference context show the expected format."
 	case "目标语言脚本一致":
 		return " Hard requirement: write ONLY in the target language and its native script." +
 			" Do not mix in characters, words or sentences from any other script or language."
 	default:
 		return ""
 	}
+}
+
+// segmentNumberExpectKey 本次重译**这一段**的数字换算目标值（"300 万" = 3000000）。
+//
+// 与 segmentHintKey 的分工：那个说"要修的是哪一类形态"（通用规则 + 示例），
+// 这个说"这一段里的这个数该写成什么"（具体换算）。tv9 实证：通用示例在场时模型仍写 300，
+// 因为要它自己做一次「万→10000」的乘法；把结果直接给它，这一跳就不需要模型做算术。
+// 空值＝不加（文本主路径与其余重译腿的提示词保持字节不变）。
+type segmentNumberExpectKey struct{}
+
+// WithSegmentNumberExpectations 写入本次重译的数字换算目标值（空切片＝不加）。
+func WithSegmentNumberExpectations(ctx context.Context, vals []string) context.Context {
+	if len(vals) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, segmentNumberExpectKey{}, vals)
+}
+
+// segmentNumberExpectFromCtx 读取数字换算目标值；未设置返回 nil。
+func segmentNumberExpectFromCtx(ctx context.Context) []string {
+	v, _ := ctx.Value(segmentNumberExpectKey{}).([]string)
+	return v
+}
+
+// segmentNumberExpectNote 把数字换算目标值拼成英文硬要求（英文理由同 segmentContextNote）。
+//
+// 句式刻意给"两种合法写法"：直接写全值（3000000）或用目标语自己的量级词（3 מיליון），
+// 只要数值不变即可——否则模型可能为了满足这句话写出目标语里不自然的数字串。
+func segmentNumberExpectNote(vals []string) string {
+	if len(vals) == 0 {
+		return ""
+	}
+	return " This item contains numbers written with a magnitude word. Write them with their exact converted values: " +
+		strings.Join(vals, "; ") +
+		". Writing only the leading figure (for example 300 instead of 3000000) is a fatal error." +
+		" You may also use the target language's own magnitude word, as long as the value stays identical."
 }
 
 // segmentContextNote 组装「语境参考」尾注。
@@ -1176,6 +1215,8 @@ func (e *Engine) translateWithFeedbackEx(ctx context.Context, zhText, targetLang
 	if h := segmentHintNote(segmentHintFromCtx(ctx)); h != "" {
 		ctxNote += h
 	}
+	// ★ 2026-11-22 tv9：把这一段的数字换算结果直接给模型（见 segmentNumberExpectKey）。
+	ctxNote += segmentNumberExpectNote(segmentNumberExpectFromCtx(ctx))
 	var prompt string
 	if ref != "" {
 		prompt = fmt.Sprintf("你是资深%s翻译。前一次翻译被驳回，驳回意见如下：%s。请严格按照意见修正重译。\n%s\n%s%s\n\n【原文】%s\n\n只输出修正后的%s译文：\n%s",
@@ -1411,7 +1452,37 @@ func srcName(code string) string {
 // 内容（按语言组合分桶，等效一次冷启动，一次性成本可接受；F-15 已有同形先例）。
 // 「双十一→11.11」这类词条级译法不走本函数（写死通用指令表达不了），交行业包术语层数据驱动。
 func translateInstruction(source, target, uiLang string) string {
-	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang) + purityInstructionNote(uiLang)
+	return translateInstructionCore(source, target, uiLang) + currencyInstructionNote(uiLang) +
+		purityInstructionNote(uiLang) + magnitudeInstructionNote(source, uiLang)
+}
+
+// magnitudeInstructionNote 中文量级词（万/亿/千/百）的换算口径（★ 2026-11-22 真值验收 §7.8）。
+//
+// 现网形态（希伯来语 tv7，三处同一根因）：源文 `80–120 万/年` 交付成 `80,000–120,000`、
+// `150–250 万` 交付成 `150–250 אלפי`（=150–250 千）、`年费 300 万+` 交付成 `300,000+`
+// ——**全部差 10 倍**。模型把 `万` 当成了千，而数字一致性闸门只核"数字串有没有出现"，
+// 量级错译在字符层面完全合法，所以它一路过闸。
+//
+// 口径只能落在指令里：量级词是中文的构词法（`万` 不是单位词，是乘数），
+// 不点名时纯翻译模型按"数词 + 单位"处理，语料里最常见的映射又恰好是 thousand。
+// 与 F-15 货币条款同一取向（改指令 ⇒ B4 前缀换一次桶，一次性成本可接受）。
+//
+// ★ 只在**源文是中文**时追加（source ∈ zh/zh_hant）：这条规则讲的是中文构词法，
+// 加到英/法/阿拉伯源文的提示词里既是噪声、也可能让模型对并不存在的量级词过度紧张。
+// 判据取的是 `DetectSourceLang` 的返回值（批量链与即时链都先做本地字符统计，
+// 中文文件稳定判 zh；纯符号/纯数字单元格判 en，本来也没有量级词可换算）。
+// 未知/空 source 一律不加——`instruction_echo` 的语料用 zh 构建，与真实中文提示词同形。
+func magnitudeInstructionNote(source, uiLang string) string {
+	if source != "zh" && source != "zh_hant" {
+		return ""
+	}
+	if uiLang != "" && uiLang != "zh" && uiLang != "zh_hant" {
+		return " Number magnitude rule: Chinese magnitude words are multipliers and must be converted exactly —" +
+			" 万 = 10,000, 亿 = 100,000,000, 千 = 1,000, 百 = 100." +
+			" So \"80–120 万\" = 800,000–1,200,000, \"300 万+\" = 3,000,000+, \"1.5 亿\" = 150,000,000." +
+			" Never render a magnitude word as a bare unit word (such as thousand) and never shift the scale by a factor of ten."
+	}
+	return "。数字量级口径：中文量级词是乘数，必须按原值换算——万＝10,000、亿＝100,000,000、千＝1,000、百＝100（例如「80–120 万」＝800,000–1,200,000、「300 万+」＝3,000,000+、「1.5 亿」＝150,000,000）。不得把量级词只译成一个单位词（如 thousand），也不得把数量级换算错十倍。"
 }
 
 // purityInstructionNote 输出语言纯度指令尾注（★ 14.3，2026-10-10）：禁止以括号或
@@ -1999,6 +2070,8 @@ func (e *Engine) singleLangRaw(ctx context.Context, zhText, targetLang string, e
 	if h := segmentHintNote(segmentHintFromCtx(ctx)); h != "" {
 		dynNotes.WriteString(h)
 	}
+	// ★ 2026-11-22 tv9：这一段的数字换算结果（见 segmentNumberExpectKey）。
+	dynNotes.WriteString(segmentNumberExpectNote(segmentNumberExpectFromCtx(ctx)))
 	// ★ 2026-10-29 第十二轮：本单领域词表进 **user 尾**（dynNotes），不进 system 前缀——
 	//   那条 system 前缀是刻意做成稳定可缓存的（B4 Phase 1），塞 per-request 词表会把缓存前缀打碎。
 	if prof, maxTerms := glossaryFromCtx(ctx); prof != nil {

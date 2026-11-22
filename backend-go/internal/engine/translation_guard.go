@@ -677,6 +677,14 @@ var functionWordNoise = map[string]bool{
 	"dan": true, "atau": true, "yang": true,
 	// 韩（助词）
 	"과": true, "와": true, "의": true, "은": true, "는": true,
+	// ★ 2026-11-22 真值验收 tv8 的 L150：`65–120 万<br>` 被交付成单个希伯来字母 `ו`（"and"）。
+	//   旧表只有阿拉伯语的 `و`（U+0648），**希伯来语的 ו（U+05D5）不在其中**——两个字面几乎同形，
+	//   于是这条整格丢数字的坏译被判「可用」直接进了成品（`ctxRetryProblem` 虽判出数字缺失，
+	//   但重译失败时按设计保留旧译 ⇒ 客户看到的是一个孤零零的连接词）。
+	//   只收**单字母前缀**（ו/ב/ל/ה/מ/ש/כ = and/in/to/the/from/that/as）：
+	//   它们在任何多字实义源段上都不可能是合格译文；多字母虚词（רק/גם/של…）刻意不收——
+	//   那些在短段上是正译（如「仅」→ רק），收进来会误杀。
+	"ו": true, "ב": true, "ל": true, "ה": true, "מ": true, "ש": true, "כ": true,
 	// 中
 	"和": true, "与": true, "及": true, "的": true, "是": true, "在": true, "有": true,
 	"也": true, "而": true, "就": true, "都": true, "或": true, "并": true, "则": true,
@@ -926,6 +934,36 @@ func isSymbolGarbageOp(r rune) bool {
 	return false
 }
 
+// numericTail 这段"无字母尾巴"是不是一个**数**（数字族字符组成、且至少有一个数字）。
+//
+// 数字族＝数字 ＋ 分隔符（`,` `.` `，` `．` `、` `·` 撇号）＋ 正负号（`-` `+` `±` 及全角/破折号）
+// ＋ 百分号 ＋ 括号 ＋ 空白。刻意**不收**分号/冒号/斜杠/乘号——那些是"把源文标点重拼一遍"
+// 的典型成分，收进来就等于给真残渣发豁免（现网那条 `（） =；=-×；30` 正是靠 `；` 落回剥离支）。
+func numericTail(tail []rune) bool {
+	hasDigit := false
+	for _, r := range tail {
+		if unicode.IsDigit(r) {
+			hasDigit = true
+			continue
+		}
+		if !isNumericTailRune(r) {
+			return false
+		}
+	}
+	return hasDigit
+}
+
+// isNumericTailRune 数字族字符（只服务 numericTail，不参与其它判据）。
+func isNumericTailRune(r rune) bool {
+	switch r {
+	case ' ', '\t', ',', '.', '，', '．', '、', '·', '\'', '’',
+		'-', '－', '–', '—', '+', '＋', '±', '%', '％',
+		'(', ')', '（', '）', '[', ']', '【', '】':
+		return true
+	}
+	return false
+}
+
 // stripTrailingSymbolGarbage 剥掉译文末尾那段「模型把源文的标点/运算符/数字又吐了一遍」的残渣。
 //
 // ★ 2026-10-29 现网实证（同一张界面截图）：源文 `已实现=加权成本重放；浮动=市值-成本×数量；30s 刷新`
@@ -954,6 +992,17 @@ func stripTrailingSymbolGarbage(out string) string {
 	}
 	tail := rs[cut:]
 	if len(tail) < 2 {
+		return out
+	}
+	// ★ 2026-11-22 真值验收 §7.8：**数字尾巴不许剥**。
+	// 现网形态（希伯来语 tv7）：`כ-20%`→`כ`、`מופחת-80%+`→`מופחת`、`… +150%`→`…`
+	// ——源文里「约 20%」「降低 80%+」「+150%」这种**带正负号/百分号的数字**，
+	// 走到"无字母尾巴"那一支时刚好凑够两个结构符（`-` 与 `%`、`+` 与 `%`），
+	// 于是整段数字被当成标点残渣剥掉，客户看到的是一句没有数的句子。
+	// 判据刻意窄：尾巴**含数字**且**全部字符都属于数字族**（数字/分隔符/正负号/百分号/括号/空白）
+	// 才算"这是一个数"，照旧保留；真正的残渣（`（） =；=-×；30`）里有中文分号，
+	// 不在数字族里，所以那条现网用例的行为一字不变。
+	if numericTail(tail) {
 		return out
 	}
 	ops := 0

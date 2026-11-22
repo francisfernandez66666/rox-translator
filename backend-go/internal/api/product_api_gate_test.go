@@ -106,6 +106,12 @@ func TestProductScopeSingleHelper(t *testing.T) {
 }
 
 // SC2：写路径的存在性前置在 UPDATE/DELETE 之前。
+//
+// ★ 判据必须**按分支各判一次**：这三个函数都有两条写分支——kc 影子分支
+// （`kc.ProductDelete` / `kc.ProductUpsert`）与主库分支（`db.Exec`）。
+// 旧形态只判「函数里出现过一次前置、且在第一个 db.Exec 之前」，
+// 于是摘掉主库分支那一处前置仍然全绿（kc 分支那处替它背书）——
+// 2026-11-22 变异体 M0152 当场暴露这条锁的射程缺口。
 func TestProductWritePathHasExistencePrecheck(t *testing.T) {
 	raw, err := os.ReadFile("../store/product_write.go")
 	if err != nil {
@@ -121,12 +127,40 @@ func TestProductWritePathHasExistencePrecheck(t *testing.T) {
 		if j := strings.Index(seg, "\n}\n"); j > 0 {
 			seg = seg[:j]
 		}
-		pre := strings.Index(seg, "productExistsScoped")
-		write := strings.Index(seg, "db.Exec(")
-		if pre < 0 || write < 0 || pre > write {
+		// 主库写点是判据的射程自证：一个都没扫到说明锚点漂了、闸门已失明。
+		dbAt := strings.Index(seg, "db.Exec(")
+		if dbAt < 0 {
+			t.Fatalf("%s 没扫到主库写点 db.Exec ⇒ 判据失明", name)
+		}
+		kcAt := productWriteAnchorAt(seg, "kc.ProductDelete(", "kc.ProductUpsert(")
+		if kcAt < 0 {
+			// 没有 kc 分支时与旧口径等价：主库写点前必须有一处前置。
+			if !strings.Contains(seg[:dbAt], "productExistsScoped") {
+				t.Fatalf("%s 的写 SQL 前必须有 productExistsScoped 存在性前置（SC2）", name)
+			}
+			continue
+		}
+		if !strings.Contains(seg[:kcAt], "productExistsScoped") {
+			t.Fatalf("%s 的 kc 分支写点前必须有 productExistsScoped 存在性前置（SC2）", name)
+		}
+		// 主库分支：kc 写点之后、db.Exec 之前必须再有一处前置。
+		// 失败消息与旧口径逐字一致，好让已登记的变异体 M0152 仍红在自己的消息上。
+		if !strings.Contains(seg[kcAt:dbAt], "productExistsScoped") {
 			t.Fatalf("%s 的写 SQL 前必须有 productExistsScoped 存在性前置（SC2）", name)
 		}
 	}
+}
+
+// productWriteAnchorAt 返回多个锚点里最早出现的下标（都没出现回 -1）。
+// 参数：s=源码片段，anchors=候选锚点；返回：最早下标。
+func productWriteAnchorAt(s string, anchors ...string) int {
+	best := -1
+	for _, a := range anchors {
+		if i := strings.Index(s, a); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+	}
+	return best
 }
 
 // N1：完整走一次 /api/product/answer ⇒ usage_ledger 行数增量必须为 0。

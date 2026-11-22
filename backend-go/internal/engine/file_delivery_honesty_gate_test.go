@@ -62,6 +62,12 @@ var fdhAllow = map[string]string{
 	//   救不回时由 retranslateMissingWithContext 的收尾块进 untranslated/gate_warnings，
 	//   客户面照常看到「未译出」那一节。本 WARN 只记成因（阶段模型失效），不是新增静默。
 	"上下文重译：复核模型不可用，回落初翻模型重试": "换腿不是换尺子：回落仍走 fileTranslationUsable，救不回时调用方进 untranslated/gate_warnings；本 WARN 只记成因",
+	// ★ 2026-11-22 tv9：候选撞上 fileCtxRetryMax 时点名"被截掉几段、分属哪一档"。
+	//   这不是新增的静默退化：被截掉的那些段**状态与重译前完全一样**——缺失段紧随其后进
+	//   untranslated/untranslatedSegments（同函数收尾块），形态不过的段由紧随其后的
+	//   applySegmentGates 逐条记 gate_warnings。本 WARN 补的是**预算读数**（该调 fileCtxRetryMax 了），
+	//   不改变任何客户可见结论。若哪天被截掉的段不再走那两条记账，这条豁免必须同批删除。
+	"文件翻译：上下文重译预算不足，部分候选未送": "被截段状态不变：缺失段进 untranslated、形态不过段由 applySegmentGates 记 gate_warnings；本 WARN 只出预算读数",
 }
 
 // fdhSite 一处「出声」点位及其记账配对情况。

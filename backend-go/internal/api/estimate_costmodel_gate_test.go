@@ -104,6 +104,24 @@ func TestEstimateTokensDelegatesToEngine(t *testing.T) {
 	if m != em || x != ex {
 		t.Fatalf("接口与引擎必须同值（这里是第二处算式）: %d/%d vs %d/%d", m, x, em, ex)
 	}
+	// ★ 2026-11-22 真值验收 §7.8：中文正文的源语言必须**检测出来再传**。
+	//   `translateInstruction` 的中文量级条款只在中文源文下追加，引擎侧一律先 DetectSourceLang；
+	//   预估若继续传空串，中文正文的固定指令开销就少算那一段（横幅比实扣低 ⇒ 客户备钱不够）。
+	//   成对判：中文正文必须等于「按检测到的源语言」那一档，且必须**大于**旧空串档。
+	const estCJKText = "研发预算约 80–120 万/年，年费 300 万+"
+	srcDetected := engine.DetectSourceLang(estCJKText)
+	if srcDetected != "zh" {
+		t.Fatalf("夹具前提不成立：中文正文应检测成 zh, got %q", srcDetected)
+	}
+	mCJK, _ := s.estimateTokens(estimateReq{Text: estCJKText, TargetLangs: []string{"he"}, Mode: "pro", UILang: "en"}, "pro", 0)
+	emCJK, _ := engine.EstimateChatTokens(estCJKText, []string{"he"}, "pro", srcDetected, "en")
+	if mCJK != emCJK {
+		t.Fatalf("中文正文必须按检测到的源语言算：%d vs %d", mCJK, emCJK)
+	}
+	oldCJK, _ := engine.EstimateChatTokens(estCJKText, []string{"he"}, "pro", "", "en")
+	if oldCJK >= emCJK {
+		t.Fatalf("量级条款没进固定开销（空源语言档 %d 应小于中文源文档 %d）", oldCJK, emCJK)
+	}
 	// 只有段数 → 文件/工单那一腿
 	m2, x2 := s.estimateTokens(estimateReq{SegmentCount: 12, TargetLangs: []string{"en"}, Mode: "fast"}, "fast", 0)
 	em2, ex2 := engine.EstimateSegmentTokens(12, []string{"en"}, "fast", "", "")
@@ -218,7 +236,7 @@ func TestEstimateHandlerNoOldFormula(t *testing.T) {
 	//   "引唯一判定现场 s.chatEstimateAndPlan"（分段与报价必须同一次判定）。
 	//   反证锚点跟着搬——抓的还是同一件事：**有人在接口里自己算一份公式**。
 	unhooked := strings.Replace(src,
-		"_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, \"\", req.UILang)",
+		"_, minTokens, maxTokens = s.chatEstimateAndPlan(tid, req.Text, req.TargetLangs, mode, srcLang, req.UILang)",
 		"minTokens, maxTokens = int64(len(req.Text)), int64(len(req.Text))*2", 1)
 	if unhooked == src {
 		t.Fatal("反证② 未命中锚点（estimateTokens 的委托形态变了，请同步本锁）")

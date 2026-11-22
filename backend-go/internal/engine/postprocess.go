@@ -360,7 +360,12 @@ func StripChineseInNonZh(text, langCode string) string {
 //  2. 目标脚本恒保留——日文 Han+Kana 混排里 Kana 是目标的一部分（复用 TargetConsistency 口径）；
 //  3. 只删连续 ≥2 的外来字母串——孤立单字母可能是标点/符号误分类，宁可放过不误删。
 //
-// 参数 text 已过 StripChineseInNonZh；langCode 目标语言。返回清洗后的文本。
+// ★ 2026-11-22 真值验收 L143 补腿：上一条纪律只挡"孤立单字母"，而模型串语时吐出的
+// 泰文残片是「组合符（Mn）＋单字母＋组合符」形态（实测 `ั้ ื: vs ผู้่`）——组合符不是字母，
+// 整串被原样放行，交付物里留下看不懂的脏字符，而闸门只报"脚本一致"不说是什么。故：
+//   - 外来脚本的**组合标记**（Mn/Mc/Me）一并纳入清洗：`ั้` 这种纯组合符簇直接删；
+//   - 单字母 + 组合符的簇（`ผู้่`）整簇删——带变音符号的孤立外来字母不可能是正常符号；
+//   - 孤立**无**组合符的单字母仍保留（数学符号 α、品牌首字母等，误删代价更大）。
 func StripForeignScriptsInNonTarget(text, langCode string) string {
 	want := textscript.LangToScript(langCode)
 	if want == textscript.Other || want == textscript.Latin {
@@ -369,29 +374,59 @@ func StripForeignScriptsInNonTarget(text, langCode string) string {
 	isTarget := func(s textscript.Script) bool {
 		return s == want || s == textscript.Latin || s == textscript.Other || (want == textscript.Han && s.Kana())
 	}
+	// foreign 判一个字符是否属于「外来书写体系的字母或组合标记」。
+	// Other 刻意不算：它装的是 Common/Inherited（emoji 变体选择符、拉丁组合重音符等），
+	// 那两族不是"某个书写体系的残留"，按脚本删会把正常符号与重音一起抹掉。
+	foreign := func(r rune) (textscript.Script, bool) {
+		s := textscript.Of(r)
+		if s == textscript.Other || isTarget(s) {
+			return s, false
+		}
+		return s, unicode.IsLetter(r) || unicode.IsMark(r)
+	}
 	var b strings.Builder
 	b.Grow(len(text))
 	runes := []rune(text)
 	i := 0
 	for i < len(runes) {
-		r := runes[i]
-		s := textscript.Of(r)
-		if isTarget(s) || !unicode.IsLetter(r) {
-			b.WriteRune(r)
+		s, ok := foreign(runes[i])
+		if !ok {
+			b.WriteRune(runes[i])
 			i++
 			continue
 		}
-		// 外来脚本字母：数连续同脚本字母个数
-		j := i + 1
-		for j < len(runes) && unicode.IsLetter(runes[j]) && textscript.Of(runes[j]) == s {
+		// 外来脚本簇：连续同脚本的字母/组合标记
+		j := i
+		letters, marks := 0, 0
+		for j < len(runes) {
+			s2, ok2 := foreign(runes[j])
+			if !ok2 || s2 != s {
+				break
+			}
+			if unicode.IsLetter(runes[j]) {
+				letters++
+			} else {
+				marks++
+			}
 			j++
 		}
-		if j-i >= 2 {
-			// 连续 ≥2 外来字母：整串删除（这正是 신호/канал 的形态）
+		if letters >= 2 || marks > 0 {
+			// ≥2 字母（신호/канал 成词残留）、字母+组合符（ผู้่）、纯组合符（ั้）⇒ 整簇删除
 			i = j
 			continue
 		}
-		b.WriteRune(r) // 孤立单字母保留
+		// ★ 2026-11-22 真值验收 tv8 的 L45：`מפ춘` —— 一个韩文音节夹在希伯来词中间。
+		//   旧实现只数「连续同脚本字母数」，单个外来字母一律按"孤立"放行（理由是误删代价大于放过，
+		//   见下面 α 那一档的反向对照）。但「孤立」应当按**它是不是夹在目标语单词里**判：
+		//   紧贴目标脚本字母时它已经是那个词的一部分，删掉是恢复原词；只有两侧都不是目标脚本
+		//   （空白/标点/数字/别的外来脚本）时才算真正孤立，才保留。
+		prevIsTarget := i > 0 && textscript.Of(runes[i-1]) == want
+		nextIsTarget := j < len(runes) && textscript.Of(runes[j]) == want
+		if prevIsTarget || nextIsTarget {
+			i = j
+			continue
+		}
+		b.WriteRune(runes[i]) // 孤立单字母（无组合符、且不嵌在目标语单词里）保留
 		i++
 	}
 	return b.String()

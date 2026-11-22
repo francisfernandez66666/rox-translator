@@ -13,6 +13,7 @@
 package gate
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -339,6 +340,8 @@ func TestNumberKeepCrossLanguageMagnitude(t *testing.T) {
 		//    本批不碰、也不假装它能过：真出现时是 warning 级（不拦交付）。
 		{"俄语_区间百万", "150–250 万", "1.5–2.5 \u043c\u0438\u043b\u043b\u0438\u043e\u043d\u0430"},
 		{"韩语_万", "25–50 万", "25\ub9cc\u201350\ub9cc"},
+		// ★ 2026-11-22 真值验收 tv8 的 L159：希伯来语用「千」而不是「百万」时同样要认得出。
+		{"希伯来_区间千", "25–50 万", "250–500 \u05d0\u05dc\u05e3"},
 	}
 	for _, c := range pass {
 		t.Run("pass_"+c.name, func(t *testing.T) {
@@ -350,6 +353,8 @@ func TestNumberKeepCrossLanguageMagnitude(t *testing.T) {
 	fail := []struct{ name, src, tr string }{
 		{"希伯来_丢了量级", "150–250 万", "1.5–2.5"},
 		{"希伯来_只翻一半", "150–250 万", "1.5 \u05de\u05d9\u05dc\u05d9\u05d5\u05df"},
+		// 反向对照：加了「千」这一档之后，真丢了量级的译文仍必须判缺失（闸门不能变成摆设）。
+		{"希伯来_千丢了量级", "25–50 万", "250–500"},
 		{"俄语_丢了量级", "150–250 万", "1,5–2,5"},
 	}
 	for _, c := range fail {
@@ -436,6 +441,65 @@ func TestPlausibleRangeLeftUnit(t *testing.T) {
 	for _, c := range cases {
 		if got := plausibleRangeLeft(c.v, c.mult, c.rv); got != c.want {
 			t.Errorf("%s: plausibleRangeLeft(%g,%g,%g)=%v want %v", c.name, c.v, c.mult, c.rv, got, c.want)
+		}
+	}
+}
+
+// TestNumberExpectations 换算目标值：只收需要换算量级的数，且源文写法与值成对给出。
+//
+// ★ 为什么必须有这条：上下文重译会把这里的值原样写进提示词（"300 万" = 3000000）。
+// 一旦它把普通数字（40、2.1、2026）也列进来，提示词就被噪音撑长；一旦漏掉区间左端，
+// 模型仍会写出 `300` 那一类丢量级的译文——而两种坏法在屏幕上都没有任何读数。
+func TestNumberExpectations(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want []NumberExpectation
+	}{
+		{"单个万", "年费 300 万+", []NumberExpectation{{Source: "300 万", Value: 3e6}}},
+		{"区间共用末端量级词", "45–80 万", []NumberExpectation{
+			{Source: "45 万", Value: 450000},
+			{Source: "80 万", Value: 800000},
+		}},
+		{"千分位不需要换算", "共 1,000 件，2.1 版本，2026 年", nil},
+		{"目标语量级词（源文即希伯来语）", "1.5 מיליון", []NumberExpectation{{Source: "1.5 מיליון", Value: 1.5e6}}},
+		{"去重", "300 万 与 300 万", []NumberExpectation{{Source: "300 万", Value: 3e6}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := NumberExpectations(c.src)
+			if len(got) != len(c.want) {
+				t.Fatalf("NumberExpectations(%q) 条数=%d，want %d：%+v", c.src, len(got), len(c.want), got)
+			}
+			for i := range got {
+				if got[i].Source != c.want[i].Source {
+					t.Errorf("[%d] Source=%q，want %q", i, got[i].Source, c.want[i].Source)
+				}
+				if d := got[i].Value - c.want[i].Value; d > 1e-6 || d < -1e-6 {
+					t.Errorf("[%d] Value=%v，want %v", i, got[i].Value, c.want[i].Value)
+				}
+			}
+		})
+	}
+}
+
+// TestNumberExpectationsAgreeWithJudge 同一把尺子：提示词给出的换算值必须能过判据本身。
+//
+// 反过来的坏法是"提示词教模型写一个判据仍判缺失的数"——那比不提示更坏（模型照做还是被驳）。
+// 所以这条按 missingNumbers 现算，不写死期望值（判据改了这条跟着改）。
+func TestNumberExpectationsAgreeWithJudge(t *testing.T) {
+	for _, src := range []string{"年费 300 万+", "45–80 万", "1.5 מיליון", "总计 2 亿", "80–120 万/年"} {
+		exps := NumberExpectations(src)
+		if len(exps) == 0 {
+			t.Fatalf("NumberExpectations(%q) 应至少给出一条换算（判据已改形？）", src)
+		}
+		vals := make([]string, 0, len(exps))
+		for _, e := range exps {
+			vals = append(vals, strconv.FormatFloat(e.Value, 'f', -1, 64))
+		}
+		tr := strings.Join(vals, "–")
+		if miss := missingNumbers(src, tr); len(miss) != 0 {
+			t.Fatalf("按提示词给的换算值写（%q）仍被判缺失 %v（两把尺子分叉）", tr, miss)
 		}
 	}
 }

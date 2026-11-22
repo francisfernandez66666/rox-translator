@@ -89,8 +89,11 @@ func instructionCorpus(targetLang, uiLang string) string {
 	if v, ok := instructionCorpusCache.Load(key); ok {
 		return v.(string)
 	}
-	zh := translateInstruction("", targetLang, "zh") + outputContractNote("zh")
-	en := translateInstruction("", targetLang, "en") + outputContractNote("en")
+	// ★ 2026-11-22：源语言取 zh（而不是空串）——`magnitudeInstructionNote` 只在中文源文时追加，
+	// 而真实中文工单/即时翻译的提示词正是 source=zh；语料用空串会让那条尾注落在回显检测的射程之外
+	// （模型把它原样念回来时，corpus 里没有那段 4-gram，判据看不见）。
+	zh := translateInstruction("zh", targetLang, "zh") + outputContractNote("zh")
+	en := translateInstruction("zh", targetLang, "en") + outputContractNote("en")
 	corpus := zh + "\n" + en
 	instructionCorpusCache.Store(key, corpus)
 	return corpus

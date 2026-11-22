@@ -204,13 +204,94 @@ func mdParseProseLine(line string) []mdSpan {
 	if mdIsLinkDefinition(line, bodyStart) {
 		return nil // 参考式链接定义行整行是骨架（id + 地址），翻任何一半都会断引用
 	}
-	for _, cell := range mdSplitCells(line[bodyStart:]) {
+	// ★ 2026-11-22 真值验收 L143/L190：标题开头的「编号骨架」不进翻译片段。
+	//   源文实测形态 `### **0****6****  组织与岗位要求**`（Word/飞书导出时每个数字各包一层加粗，
+	//   相邻的闭/开标记连写成 `****`）。旧实现把整段 `**0****6****  组织与岗位要求**` 当可译键送模型：
+	//   模型看见的是一串畸形标记，于是把标记合并成 `******…******` 并把编号 `06` 一起丢掉
+	//   （L190 实测 `******ארגון ודרישות תפקיד******`；L143 更坏，正文整段被译成泰文残片）。
+	//   编号与标记都是**结构**不是文案：与 `### ` 前缀、表格管道同口径留在 span 之外，
+	//   写回时逐字节不动 ⇒ 编号不会丢、标记不会变形，模型只面对干净正文。
+	//   判据刻意窄：只认「标题 + 以强调标记起手 + 含数字 + 以空白收尾」的编号块，
+	//   `**A** 与 **B**`、`|**指标**|`、`**2\.1**` 这类合法形态一个字节都不碰。
+	bodyEnd := len(line)
+	if mdIsHeadingLine(line) {
+		if n := mdHeadingNumberBlock(line, bodyStart); n > 0 {
+			bodyStart += n
+			// 编号块后面的收尾强调标记（`…组织与岗位要求**` 的那一对）同样是骨架：
+			// 留在键里会诱导模型"补齐"标记，正是 L190 变形形态的来源。
+			if e := mdHeadingTrailingMarkers(line, len(line)); e > bodyStart {
+				bodyEnd = e
+			}
+		}
+	}
+	if bodyStart >= bodyEnd {
+		return nil
+	}
+	for _, cell := range mdSplitCells(line[bodyStart:bodyEnd]) {
 		cs, ce := bodyStart+cell.start, bodyStart+cell.end
 		for _, seg := range mdSegmentsExcludingTargets(line[cs:ce]) {
 			spans = mdAppendSpan(spans, line, cs+seg.start, cs+seg.end, cell.cell)
 		}
 	}
 	return spans
+}
+
+// mdHeadingNumberBlock 识别标题正文开头的「编号骨架」长度（字节数，含收尾空白；0＝不是这种形态）。
+//
+// 形态（真值验收 L143/L190 实测，Word/飞书导出中文档常见）：
+//
+//	### **0****6****  组织与岗位要求**
+//	### **01  为什么要做**
+//	### **05** 研发预算与选型
+//
+// 判定四条件（缺一不可，宁可漏认也不误吞正文）：
+//  1. 必须以强调标记 `*`/`_` 起手——纯数字开头的标题（`2024 年度回顾`）不在此列，
+//     它的数字本来就该由"数字保持"那条判据管，不需要这里动；
+//  2. 块内只允许强调标记、数字、空白——一旦出现字母/汉字/标点即停；
+//  3. 块内至少有一个数字（编号才是骨架；`**加粗标题**` 这种没有编号，走既有标记守恒）；
+//  4. 块必须**以空白收尾**——`**5G 网络**` 这类 `**5` 紧跟字母的形态不算（否则会把 `5G` 劈成两半）。
+func mdHeadingNumberBlock(line string, bodyStart int) int {
+	if bodyStart >= len(line) || (line[bodyStart] != '*' && line[bodyStart] != '_') {
+		return 0
+	}
+	j := bodyStart
+	hasDigit := false
+	for j < len(line) {
+		c := line[j]
+		switch {
+		case c == '*' || c == '_':
+		case c >= '0' && c <= '9':
+			hasDigit = true
+		case c == ' ' || c == '\t':
+		default:
+			goto done
+		}
+		j++
+	}
+done:
+	if !hasDigit || j <= bodyStart {
+		return 0
+	}
+	// 必须以空白收尾：编号块与正文之间要有分隔，否则 `**5G` 会被误判成编号骨架。
+	if line[j-1] != ' ' && line[j-1] != '\t' {
+		return 0
+	}
+	return j - bodyStart
+}
+
+// mdHeadingTrailingMarkers 返回标题行尾强调标记串的起点（从 end 往前吃 `*`/`_`）。
+// 只在「已认定编号骨架」的标题上调用：此时收尾标记与开头编号是同一对加粗，
+// 留在翻译键里会诱导模型自行补齐/合并（L190 的 `******…******` 就是这么来的）。
+// 少于 2 个标记（孤立的单个 `*` 可能是字面量）不动，返回 end。
+func mdHeadingTrailingMarkers(line string, end int) int {
+	i := end
+	for i > 0 && (line[i-1] == '*' || line[i-1] == '_') {
+		i--
+	}
+	if end-i < 2 {
+		return end
+	}
+	return i
 }
 
 // mdIsLinkDefinition 判定参考式链接定义行 `[id]: URL "标题"`（正文里用 `[id][..]` 引用它）。

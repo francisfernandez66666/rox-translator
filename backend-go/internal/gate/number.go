@@ -69,6 +69,12 @@ var numSuffixMults = []struct {
 	{"مليون", 1e6}, {"ملايين", 1e6}, {"مليار", 1e9}, {"مليارات", 1e9},
 	// 希伯来语
 	{"מיליון", 1e6}, {"מיליונים", 1e6}, {"מיליארד", 1e9}, {"מיליארדים", 1e9},
+	// ★ 2026-11-22 真值验收 tv8 的 L159：`25–50 万` → `250–500 אלף`（千）被判「数字保持（缺失: 25, 50）」。
+	//   与上面「目标语量级词」同一条修法，漏的是「千」这一档：缺 `אלף` 时判据拿 250 去比 25，
+	//   差一个量级 ⇒ 报缺失。数字一个没丢，错的是尺子的语种射程；
+	//   代价是这条假警会写进 gate_warnings 变成客户看到的「质检存疑」，把同批真漏译淹掉。
+	//   复数形 `אלפים` 与单数同乘子，放前面只为可读性（遮蔽守卫只在乘子不同时才判红）。
+	{"אלפים", 1e3}, {"אלף", 1e3},
 	// 单字母缩写放最后（必须晚于上面的整词）
 	{"k", 1e3}, {"K", 1e3}, {"M", 1e6}, {"B", 1e9},
 	// 「mil」=西/葡「千」：必须排在 milione/miliard/milion/milhar 之后，
@@ -138,6 +144,16 @@ func stripMarkdownNumberEscapes(s string) string {
 // 拉丁词缀后若紧跟字母（km / MB / Millions）视为普通单词不认领，
 // 避免 "5 km" 被当成 5000、"3MB" 被当成 3e6。
 func suffixMultiplier(rest string) float64 {
+	_, mult := suffixEntry(rest)
+	return mult
+}
+
+// suffixEntry 与 suffixMultiplier 同一把尺子，额外返回**命中的词面**（无词缀返回空串）。
+//
+// 为什么要有词面：上下文重译要把「源文写的 `300 万` 必须写成 3000000」原样告诉模型，
+// 光有乘子拼不出那句话；而另写一份"找词缀"的实现就是第二把尺子
+// （AGENTS §一·11——两处对「万」的识别迟早分叉，症状是提示词里的换算值与判据不一致）。
+func suffixEntry(rest string) (string, float64) {
 	r := strings.TrimLeft(rest, " \t")
 	for _, e := range numSuffixMults {
 		if !strings.HasPrefix(r, e.suf) {
@@ -152,9 +168,9 @@ func suffixMultiplier(rest string) float64 {
 				}
 			}
 		}
-		return e.mult
+		return e.suf, e.mult
 	}
-	return 1
+	return "", 1
 }
 
 // numRangeSeps 数值区间的连接符（半角/全角/波浪/中文「至」）。
@@ -168,26 +184,26 @@ const numRangeSeps = "-–—－~～至"
 // 于是拿 45 去比 450000 ⇒ 报「数字保持（缺失: 45, 80）」——数字其实一个没丢，错的是尺子。
 // 判据方向：区间内所有数字共用末端那一个量级词（中文/英文都是这个读法）。
 func rangeSuffixMultiplier(srcNorm string, end int) float64 {
-	m, _ := rangeSuffixInfo(srcNorm, end)
+	m, _, _ := rangeSuffixInfo(srcNorm, end)
 	return m
 }
 
-// rangeSuffixInfo 与 rangeSuffixMultiplier 同口径，额外给出**区间右端的数值**（含它自己的量级词），
-// 供调用方判断「共用末端量级词」这条规则是否成立（见 plausibleRangeLeft）。
-func rangeSuffixInfo(srcNorm string, end int) (mult float64, rightVal float64) {
+// rangeSuffixInfo 与 rangeSuffixMultiplier 同口径，额外给出**区间右端的数值**（含它自己的量级词）
+// 与**命中的词面**（供上下文重译把换算说给模型听，见 suffixEntry 的说明）。
+func rangeSuffixInfo(srcNorm string, end int) (mult float64, rightVal float64, word string) {
 	i := end
 	// 允许数字与区间符之间有空格
 	for i < len(srcNorm) && (srcNorm[i] == ' ' || srcNorm[i] == '\t') {
 		i++
 	}
 	if i >= len(srcNorm) {
-		return 1, 0
+		return 1, 0, ""
 	}
 	// ★ 必须按 rune 解码，不能拿单字节转 rune：区间符（–—～至）是多字节字符，
 	//   按字节取会把首字节当 rune，`ContainsRune` 永远判不中（本批首跑真踩）。
 	r, size := utf8.DecodeRuneInString(srcNorm[i:])
 	if !strings.ContainsRune(numRangeSeps, r) {
-		return 1, 0
+		return 1, 0, ""
 	}
 	i += size
 	// 跳过区间符后的空格
@@ -200,14 +216,14 @@ func rangeSuffixInfo(srcNorm string, end int) (mult float64, rightVal float64) {
 		i++
 	}
 	if i == start {
-		return 1, 0
+		return 1, 0, ""
 	}
 	rv, err := strconv.ParseFloat(srcNorm[start:i], 64)
 	if err != nil {
-		return 1, 0
+		return 1, 0, ""
 	}
-	m := suffixMultiplier(srcNorm[i:])
-	return m, rv * m
+	w, m := suffixEntry(srcNorm[i:])
+	return m, rv * m, w
 }
 
 // plausibleRangeLeft 「区间共用末端量级词」这条规则的合理性检查。
@@ -243,7 +259,7 @@ func extractNumValues(s string) []float64 {
 		mult := suffixMultiplier(s[loc[1]:])
 		if mult == 1 {
 			// 第一个数后面跟的是区间符 ⇒ 取区间末端的量级词（仅在量级对得上时才共用，见 plausibleRangeLeft）
-			if rm, right := rangeSuffixInfo(s, loc[1]); plausibleRangeLeft(v, rm, right) {
+			if rm, right, _ := rangeSuffixInfo(s, loc[1]); plausibleRangeLeft(v, rm, right) {
 				mult = rm
 			}
 		}
@@ -428,7 +444,7 @@ func missingNumbers(source, translation string) []string {
 		if mult == 1 {
 			// 区间形态（"45–80 万"）：第一个数后面跟的是区间符，量级词在区间末端。
 			// 只在量级对得上时共用（混写形态 `650,000–1.2 מיליון` 左端已写全，不该再乘）。
-			if rm, right := rangeSuffixInfo(srcNorm, loc[1]); plausibleRangeLeft(v, rm, right) {
+			if rm, right, _ := rangeSuffixInfo(srcNorm, loc[1]); plausibleRangeLeft(v, rm, right) {
 				mult = rm
 			}
 		}
@@ -450,4 +466,58 @@ func missingNumbers(source, translation string) []string {
 		}
 	}
 	return missing
+}
+
+// NumberExpectation 源文一个数字的**归一化目标值**（供上下文重译把"该写成什么"说给模型听）。
+type NumberExpectation struct {
+	Source string  // 源文写法（数字字面量 + 量级词，已剥千分位与反斜杠转义）
+	Value  float64 // 换算后的绝对值（"300 万" → 3000000）
+}
+
+// NumberExpectations 返回源文中**需要换算量级**的数字目标值（去重、按源文出现序）。
+//
+// ★ 2026-11-22 第九轮真值复跑（tv9）实证：`年费 300 万+` 被交付成 `300 שנק' ומעלה`
+// （量级整个丢了）。产品闸门判出来了、这一段也确实进了上下文重译（reason=数字保持），
+// 但提示词里只有**通用示例**（"300 万+ means 3,000,000+"），模型照旧写 300。
+// 这一族的修法不是再加一道闸（判据已经判对），而是把**这一段的换算结果**直接给它：
+// 「"300 万" 必须写成 3000000」比"万 是 10000 倍"近得多。
+//
+// 只收 mult != 1 的那些：普通数字（"40"、"2.1"）写出来就是它自己，列进去只是噪音，
+// 而提示词越长越容易把纯翻译模型带偏（同 segmentContextNote 头注第 3 条）。
+//
+// ⚠️ 归一化必须与 missingNumbers **同一套**（reNumbers／suffixEntry／rangeSuffixInfo／
+// plausibleRangeLeft）：这里给出的目标值与判据要求的值永远相等，否则提示词会教模型写一个
+// 判据仍然判缺失的数——那是比不提示更坏的一族（AGENTS §一·11「多把尺子」）。
+func NumberExpectations(source string) []NumberExpectation {
+	srcNorm := stripNumSeparators(stripMarkdownNumberEscapes(source))
+	locs := reNumbers.FindAllStringIndex(srcNorm, -1)
+	out := make([]NumberExpectation, 0, len(locs))
+	seen := make(map[string]bool, len(locs))
+	for _, loc := range locs {
+		lit := srcNorm[loc[0]:loc[1]]
+		if seen[lit] {
+			continue
+		}
+		v, err := strconv.ParseFloat(lit, 64)
+		if err != nil {
+			continue // 畸形字面量不参与（与 missingNumbers 同口径）
+		}
+		word, mult := suffixEntry(srcNorm[loc[1]:])
+		if mult == 1 {
+			// 区间形态：左端数字的量级词写在右端（与 missingNumbers 同一条规则、同一个合理性检查）。
+			if rm, right, rw := rangeSuffixInfo(srcNorm, loc[1]); plausibleRangeLeft(v, rm, right) {
+				mult, word = rm, rw
+			}
+		}
+		seen[lit] = true
+		if mult == 1 {
+			continue // 无需换算的数字不列（噪音）
+		}
+		src := lit
+		if word != "" {
+			src = lit + " " + word
+		}
+		out = append(out, NumberExpectation{Source: src, Value: v * mult})
+	}
+	return out
 }
