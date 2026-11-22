@@ -76,6 +76,8 @@ run "11-22:上下文重译分档"    ./internal/engine/ -run 'TestFileCtxRetryTa
 run "11-22:救援段复核evals"   ./internal/engine/ -run 'TestRescueReviewEvalDegradesQuietly|TestReviewScope'
 # ★ 2026-11-22 诊断日志：救援段被拒原因名必须与采纳布尔同源（单一判据）
 run "11-22:被拒诊断同源"      ./internal/engine/ -run 'TestRejectReason'
+# ★ 2026-11-22 tv12：数量表达豁免（正确纯数字译文不被骨架/回显误杀，错量级仍拒）
+run "11-22:数量交付豁免"      ./internal/engine/ -run 'TestQuantityDelivery|TestRejectReasonNamesSkeleton'
 # 全量 -race 四处红灯修复（提交 d4edb4bf）：SQL 方言包装 + D3 字面量门禁 + 守卫反证
 run "11-22:SQL方言包装守卫"   ./internal/db/ -run 'TestNoRawSQLOutsideDialectWrapper|TestRawSQLPatternHasTeeth|TestNoRawUniqueViolationLiteralOutsideHelper|TestUniqueViolationLiteralScanHasTeeth|TestNoUncoveredDialectConstructs|TestDialectScanPatternsActuallyFire'
 run "11-22:方言裸SQL修复回归" ./internal/store/ -run 'TestOutboundNoAntiPatterns'

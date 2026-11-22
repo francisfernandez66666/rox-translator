@@ -38,26 +38,39 @@ func TestRejectReasonMatchesUsable(t *testing.T) {
 	}
 }
 
-// TestRejectReasonNamesSkeleton B 腿：真实成因必须**点名到具体判据**而不是空串，
-// 让诊断日志能区分"骨架拒"与"回显拒"——这正是加日志要解决的归因问题。
-// 实测两族：`65–120 万<br>`+纯数字 → IsSkeletonForLang；
-// `45–80 万`+纯数字 → isProseInstructionEcho（数字全同被当回显）。两者都属"纯数字格"形态。
+// TestRejectReasonNamesSkeleton B 腿（★ 2026-11-22 tv12 数量豁免修复后更新契约）：
+//   - 正向：tv12 诊断日志钓出的三格**正确纯数字译文**必须全部放行（原因空串）——
+//     修复前分别被 IsSkeletonForLang／isProseInstructionEcho 误杀，这正是本批修的缺陷。
+//   - 反向：丢量级（`45–80 万`→`45–80`）、数字不匹配、源带实义修饰词的纯数值译文，
+//     以及真正的提示词回显，仍必须被拒——豁免不许变成万能放行。
 func TestRejectReasonNamesSkeleton(t *testing.T) {
 	e := &Engine{}
-	cases := []struct {
-		src, out, want string
-	}{
-		{"65–120 万<br>", "650,000–1,200,000<br>", "IsSkeletonForLang"},
-		{"45–80 万", "450,000–800,000", "isProseInstructionEcho"},
-	}
-	for _, c := range cases {
-		got := e.fileTranslationRejectReason(context.Background(), c.src, c.out, "he")
-		if got != c.want {
-			t.Errorf("src=%q 纯数字译文应报 %q，实得 %q", c.src, c.want, got)
+	ctx := context.Background()
+	// 正向：三格正确换算（tv12 真实模型输出，逐字抄自诊断日志）。
+	for _, c := range []struct{ src, out string }{
+		{"65–120 万<br>", "650,000–1,200,000<br>"},
+		{"45–80 万", "450,000–800,000"},
+		{"25–50 万", "250,000–500,000"},
+		{"45–80 万", "0.45–0.8 מיליון"}, // 带单位词的形态照旧放行
+	} {
+		if got := e.fileTranslationRejectReason(ctx, c.src, c.out, "he"); got != "" {
+			t.Errorf("正确数量译文 src=%q out=%q 不该被拒，实得 %q", c.src, c.out, got)
 		}
 	}
-	// 反向对照：带目标语单位词的形态必须放行（原因空串）。
-	if got := e.fileTranslationRejectReason(context.Background(), "45–80 万", "0.45–0.8 מיליון", "he"); got != "" {
-		t.Errorf("带单位词的正确译文不该被拒，实得 %q", got)
+	// 反向一：丢量级／数字被改（45 万写成 45，差 10000 倍）——必须拒。
+	for _, c := range []struct{ src, out string }{
+		{"45–80 万", "45–80"},
+		{"45–80 万", "450,000–8,000"},
+		{"65–120 万<br>", "65–120<br>"},
+	} {
+		if got := e.fileTranslationRejectReason(ctx, c.src, c.out, "he"); got == "" {
+			t.Errorf("错量级/错数字 src=%q out=%q 必须被拒，实得放行", c.src, c.out)
+		}
+	}
+	// 反向二：真正的指令语料回显仍必须被拒（豁免只认"数字占主导源"）。
+	echoSrc := "请把下面内容翻译成英文，并保持术语一致，不要解释。"
+	echoOut := "Please translate the following content into English and keep terminology consistent, do not explain."
+	if got := e.fileTranslationRejectReason(ctx, echoSrc, echoOut, "he"); got == "" {
+		t.Error("真正的指令回显必须被拒，数量豁免不许放行长句")
 	}
 }

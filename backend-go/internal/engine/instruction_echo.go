@@ -169,6 +169,13 @@ const instrEchoRunFloorGrams = 20
 
 // isProseInstructionEcho 判断候选译文是否是「指令正文的翻译/回吐」。
 func isProseInstructionEcho(src, out, targetLang, uiLang string) bool {
+	// ★ 2026-11-22 tv12：纯数量表达的正确换算译文（`45–80 万`→`450,000–800,000`，
+	//   长度 ≥12 触发 4-gram 覆盖率）被当成"回显指令语料"误杀——它与指令语料毫无关系，
+	//   只是数字格式相似。与骨架判据共用 §15.4 的同一把尺子（数字守恒＋源段数字占主导），
+	//   不对长句/丢量级放行；放在最前面，后面语料统计一步都不跑。
+	if isCorrectNumericDelivery(src, out) {
+		return false
+	}
 	srcN := normalizeEchoText(src)
 	outN := normalizeEchoText(out)
 	if len([]rune(outN)) < 12 {

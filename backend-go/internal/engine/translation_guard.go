@@ -217,15 +217,36 @@ func cjkEchoWashedToSkeleton(src, out string) bool {
 	//        （`כ-20%` 只有一个字母，够不到 hasLetterRun 的两个）那一档；数字同样必须没丢。
 	//   ⚠️ 这两档都要求源段「数字占主导」：`已实现=加权成本重放…30s刷新` 那种长句源文
 	//      letters 远多于数字，豁免完全不适用，原有骨架判据一字不动（E 腿钉住）。
-	if isNumericDominantSource(src) && gate.NumbersPreserved(src, out) {
-		if isNumericOnlyText(out) && !hasNonQuantityLetter(src) {
-			return false
-		}
-		if hasAnyLetter(out) {
-			return false
-		}
+	if isCorrectNumericDelivery(src, out) {
+		return false
 	}
 	return !hasLetterRun(out, 2)
+}
+
+// isCorrectNumericDelivery 「源段是纯数量表达、译文把数字按量级正确换算出来」的公共豁免。
+//
+// ★ 2026-11-22 tv12 诊断日志实证：三格纯数字金额格被复核模型正确译成
+//
+//	`650,000–1,200,000`／`450,000–800,000`／`250,000–500,000`，却分别被
+//	`IsSkeletonForLang` 与 `isProseInstructionEcho` 当"骨架/回显"丢弃——
+//	而 §15.4 早有的数量豁免只挂在 cjkEchoWashedToSkeleton 上，另外两条判据够不到。
+//	现在把这套口径抽成公共出口，三个判据共用同一把尺子（AGENTS §一·11）：
+//
+//	- 源段必须"数字占主导"（isNumericDominantSource，字母 ≤6）——长句源文永不适用；
+//	- 数字必须一个没丢且量级换算正确（gate.NumbersPreserved，与闸门同一口径）——
+//	  把 45 万写成 45 是 10000 倍错，绝不许放行；
+//	- 形态二选一：① 纯数值译文且源段除量级/单位外无实义修饰词（约/左右/以上必须由译文带出）；
+//	  ② 译文含任一字母（覆盖希伯来语单字母前缀 כ- 那一档）。
+//
+// 只判"这段是正确数量交付"，不判语言/风格；任何一条不满足都交回各判据原逻辑，射程不变。
+func isCorrectNumericDelivery(src, out string) bool {
+	if !isNumericDominantSource(src) || !gate.NumbersPreserved(src, out) {
+		return false
+	}
+	if isNumericOnlyText(out) && !hasNonQuantityLetter(src) {
+		return true
+	}
+	return hasAnyLetter(out)
 }
 
 // quantityWordRunes 纯数量表达里允许出现的「非数字文字」：量级词、货币、常见单位、区间连接词。
@@ -344,6 +365,13 @@ func countCJKFullWidthPunct(s string) int {
 // 上方长注释含完整推导与误杀边界，本函数由 fileTranslationUsable 调用。
 func IsSkeletonForLang(src, out, lang string) bool {
 	if !sourceHasTranslatableLetters(src) {
+		return false
+	}
+	// ★ 2026-11-22 tv12：纯数量表达的正确换算译文（如 `65–120 万`→`650,000–1,200,000`）
+	//   没有目标语字母、却有数字 ⇒ 旧逻辑按"中文被洗成数字骨架"拒收，把正确译文丢了。
+	//   与 §15.4 的 cjkEchoWashedToSkeleton 共用同一把尺子（数字守恒＋源段数字占主导），
+	//   不对长句/丢量级/丢数字放行——反向对照见 quantity_delivery_gate_test.go。
+	if isCorrectNumericDelivery(src, out) {
 		return false
 	}
 	want := textscript.LangToScript(lang)
