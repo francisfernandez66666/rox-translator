@@ -258,6 +258,11 @@ func (e *Engine) fileTranslationRejectReason(ctx context.Context, src, out, targ
 	if IsSkeletonForLang(src, out, targetLang) {
 		return "IsSkeletonForLang"
 	}
+	// ★ 2026-11-22 tv13 终轮：数字格被吞成 1–3 个字母的静默垃圾（L150 → `ו`），
+	//   旧判据全放行。放在 echo 应急档之前——交付正确性问题不受 echo 开关影响。
+	if isNumericCellShortLetterGarbage(src, out) {
+		return "isNumericCellShortLetterGarbage"
+	}
 	if e.echoGuardOff() {
 		return ""
 	}

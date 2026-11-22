@@ -232,7 +232,17 @@ func AppendUntranslatedNotes(outPath string, items []UntranslatedItem) error {
 		return "行" // 空值/其它按"行"兼容旧调用
 	}
 	firstUnit := unitOf(items[0].Unit)
-	fmt.Fprintf(&sb, "\n## 未译出内容（共 %d %s）\n", len(items), firstUnit)
+	// ★ 2026-11-22 tv13 终轮：一行表格会拆成多段，清单逐段点名（信息不丢），
+	//   但标题的「共 N 行」必须按**唯一物理行**数，否则写 52 行而正文只回落 26 行。
+	count := len(items)
+	if firstUnit == "行" {
+		seen := make(map[int]bool, len(items))
+		for _, it := range items {
+			seen[it.Line] = true
+		}
+		count = len(seen)
+	}
+	fmt.Fprintf(&sb, "\n## 未译出内容（共 %d %s）\n", count, firstUnit)
 	for _, it := range items {
 		fmt.Fprintf(&sb, "- 第 %d %s：原文「%s」，%s\n", it.Line, unitOf(it.Unit), it.Source, it.Reason)
 	}

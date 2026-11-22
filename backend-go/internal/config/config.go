@@ -27,6 +27,10 @@ type ProviderConfig struct {
 	APIKey   string `json:"api_key"`  // 供应商 API 密钥
 	Model    string `json:"model"`    // 该供应商下使用的模型名
 	Weight   int    `json:"weight"`   // 权重，越高越优先（0 表示仅作 fallback）
+	// ★ 2026-11-22：该账户的配额读数（RPM/TPM，0=未声明）。同端点同模型配多把 Key 时，
+	//   引擎按调用轮次均衡分拨，避免单账户 RPM 撞顶；字段为可选，老配置零值行为不变。
+	RPM int `json:"rpm,omitempty"`
+	TPM int `json:"tpm,omitempty"`
 	// ★ H2：供应商声明支持术语约束解码（logit/guided 扩展）。全部启用路由都为 true 时，
 	//   引擎随请求注入 x_term_constraints；否则保持 H1 事后强制闭环（双轨降级）。
 	SupportsConstraints bool `json:"supports_constraints"`
@@ -91,11 +95,13 @@ func AllStages() []string {
 // 字段与 StageModel 主档一致，weight 用于阶段内定主次（降序，越大越优先）。
 // 注意：api_key 存库时为 enc:v1: 密文，读出后由调用方解密。
 type StageCandidate struct {
-	Provider string `json:"provider"` // 供应商标识（计量分组用，可为空自动推断）
-	APIBase  string `json:"api_base"` // OpenAI 兼容 API 基地址
-	APIKey   string `json:"api_key"`  // API 密钥（为空继承全局默认密钥；存库为密文）
-	Model    string `json:"model"`    // 模型名
-	Weight   int    `json:"weight"`   // 阶段内主次，降序；相等时按配置顺序
+	Provider string `json:"provider"`      // 供应商标识（计量分组用，可为空自动推断）
+	APIBase  string `json:"api_base"`      // OpenAI 兼容 API 基地址
+	APIKey   string `json:"api_key"`       // API 密钥（为空继承全局默认密钥；存库为密文）
+	Model    string `json:"model"`         // 模型名
+	Weight   int    `json:"weight"`        // 阶段内主次，降序；相等时按配置顺序
+	RPM      int    `json:"rpm,omitempty"` // 该账户每分钟请求配额（0=未声明）
+	TPM      int    `json:"tpm,omitempty"` // 该账户每分钟 token 配额（0=未声明）
 }
 
 // StageModel 单个流程阶段的模型配置（stage_models 中的一项）。

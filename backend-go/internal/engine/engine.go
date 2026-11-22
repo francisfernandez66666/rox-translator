@@ -68,6 +68,10 @@ type Engine struct {
 	// ★ 主模型熔断恢复：Hunyuan 连续失败超阈值 → 直接降级；冷却后自动恢复
 	breaker *Breaker
 
+	// ★ 2026-11-22 多账户 API Key 均衡：同 (api_base, model) 的多把 Key 按调用轮次轮转，
+	//   突破单账户 RPM/TPM。key = "primary|base|model" 或 "stage|base|model"。
+	routeRotators sync.Map // map[string]*atomic.Uint64
+
 	// ★ 2026-10-29：③（ocr_fix）**模型腿自己的熔断**。
 	//   现网实证：这条腿连着六次运行全是 `calls:3, tokens:0, latency_ms:44998`——
 	//   配了的模型答不出这份判定题，却每张图白等满 45 秒预算（译文第一的原则下，
@@ -1855,7 +1859,17 @@ func (e *Engine) resolveStageModel(ctx context.Context, stage string) (base, key
 	if len(cands) == 0 {
 		return "", "", "", false
 	}
-	c := cands[0]
+	// 同阶段同端点同模型的多把 Key 也按轮次均衡（复核模型 50 RPM 那一档尤其需要拆账户）。
+	top := cands[0]
+	n := 0
+	for _, c := range cands {
+		if c.Weight == top.Weight && c.APIBase == top.APIBase && c.Model == top.Model {
+			n++
+		} else if n > 0 {
+			break // 同池候选按配置顺序连续排列（stageCandidates 已稳定排序）
+		}
+	}
+	c := cands[e.balancedIndex("stage|"+routeKey(top.APIBase, top.Model), n)]
 	return c.APIBase, c.APIKey, c.Model, true
 }
 
@@ -1879,7 +1893,30 @@ func (e *Engine) stageFallbackCandidates(ctx context.Context, stage, primaryBase
 	return out
 }
 
-// pickPrimaryRoute 按权重选取主路由（权重最高者；全为 0 时取第一个）
+// balancedIndex 同一组内的轮转序号（线程安全，进程级；热加载换配置不影响计数语义）。
+func (e *Engine) balancedIndex(group string, n int) int {
+	if n <= 1 {
+		return 0
+	}
+	balanceLogOnce.Do(func() {
+		observability.Info(context.Background(), "多账户 API Key 均衡调用已启用")
+	})
+	v, _ := e.routeRotators.LoadOrStore(group, &atomic.Uint64{})
+	return int((v.(*atomic.Uint64).Add(1) - 1) % uint64(n))
+}
+
+// balanceLogOnce 只打一次，避免每次选路刷日志；也是发版特征串的稳定锚点。
+var balanceLogOnce sync.Once
+
+// routeKey 同一上游端点和模型下的多把 Key 视为一个池；不同端点/模型不合并。
+func routeKey(base, model string) string { return base + "\x00" + model }
+
+// pickPrimaryRoute 按权重选主路由，并在同 (api_base, model) 的多把 Key 间轮转。
+//
+// ★ 2026-11-22 用户令：主模型账户 1000 RPM / 80k TPM、复核账户 50 RPM / 200万 TPM，
+//
+//	单账户轮次会卡住长任务。运营在 model_routes 里把同一端点/模型配多把 Key（不同 api_key），
+//	这里按调用轮次均衡分拨；权重仍决定"哪一组上游优先"，轮转只在同一组内部发生。
 func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 	// ★ 路由列表同样只从快照读（〇-AR 第 5 波）：这张切片会被热加载整份换掉，
 	//   读快照是"拿到发布出去的那一整份"，读共享 cfg 字段则可能拼出新旧混合的 slice 头。
@@ -1887,18 +1924,54 @@ func (e *Engine) pickPrimaryRoute() config.ProviderConfig {
 	if len(rs) == 0 {
 		return config.ProviderConfig{}
 	}
-	// ★ H7：动态模式按实时 P95/错误率/token 成本重打分选主
+	// ★ H7：动态模式按实时 P95/错误率/token 成本重打分选主，再在同级 Key 池内轮转
 	if config.C != nil && config.C.DynamicRouting {
-		return e.pickPrimaryRouteDynamic(rs)
+		p := e.pickPrimaryRouteDynamic(rs)
+		return e.rotateWithinGroup("primary", rs, p.Weight, p.APIBase, p.Model)
 	}
-	best, bestW := rs[0], rs[0].Weight
-	// 线性扫描取权重最高者（权重相等时优先前面的配置）
+	maxW := rs[0].Weight
 	for _, r := range rs[1:] {
-		if r.Weight > bestW {
-			best, bestW = r, r.Weight
+		if r.Weight > maxW {
+			maxW = r.Weight
 		}
 	}
-	return best
+	return e.rotateWithinGroup("primary", rs, maxW, "", "")
+}
+
+// rotateWithinGroup 取 weight 档（或指定 base/model）下的一组同端点模型路由并轮转。
+// wantBase/wantModel 都为空时选最高权重档里按配置顺序的第一组；
+// 指定端点模型时只在该端点模型的 Key 池内轮转（动态选路场景）。
+func (e *Engine) rotateWithinGroup(prefix string, rs []config.ProviderConfig, weight int, wantBase, wantModel string) config.ProviderConfig {
+	var pool []config.ProviderConfig
+	var key string
+	if wantBase != "" {
+		for _, r := range rs {
+			if r.APIBase == wantBase && r.Model == wantModel {
+				pool = append(pool, r)
+			}
+		}
+		key = prefix + "|" + routeKey(wantBase, wantModel)
+	} else {
+		var first config.ProviderConfig
+		found := false
+		for _, r := range rs {
+			if r.Weight != weight {
+				continue
+			}
+			if !found {
+				first = r
+				key = prefix + "|" + routeKey(r.APIBase, r.Model)
+				found = true
+			}
+			if r.APIBase == first.APIBase && r.Model == first.Model {
+				pool = append(pool, r)
+			}
+		}
+	}
+	if len(pool) == 0 {
+		return config.ProviderConfig{}
+	}
+	return pool[e.balancedIndex(key, len(pool))]
 }
 
 // pickPrimaryRouteDynamic ★ H7 成本/延迟感知动态权重：

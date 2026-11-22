@@ -16,6 +16,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -24,6 +25,7 @@ import (
 
 	"translator/internal/fileproc"
 	"translator/internal/gate"
+	"translator/internal/observability"
 	"translator/internal/textscript"
 )
 
@@ -280,6 +282,43 @@ func isNumericDominantSource(src string) bool {
 	}
 	return hasDigit
 }
+
+// isNumericCellShortLetterGarbage 数字格静默垃圾：源段数字占主导，译文却只剩 1–3 个字母、
+// 一个数字都没有且整格很短（tv13 终轮 L150 `65–120 万` → `ו` 就是这一形态）。
+//
+// ★ 为什么必须单列一条：这类产物既不是空串（IsTranslationUsable 放行）、也不是骨架
+// （有字母）、更不是指令回显，旧判据全放行，于是客户拿到一个看不出漏译的短字母格。
+// 与数量豁免相反的方向——豁免救正确纯数字，本条拦"数字被吞只剩残字"。
+// 射程收窄为数字主导源 ≤6 字母，长句含数字不在此判；数字还在的译文（20%、
+// 450,000–800,000、0.45 מיליון）一律放行。
+func isNumericCellShortLetterGarbage(src, out string) bool {
+	if !isNumericDominantSource(src) {
+		return false
+	}
+	core := numericGarbageStripper.Replace(out)
+	core = strings.TrimSpace(core)
+	if core == "" {
+		return false // 空串交给 IsTranslationUsable 报，不在这里抢归因
+	}
+	for _, r := range core {
+		if r >= '0' && r <= '9' {
+			return false // 数字仍在 ⇒ 不是"被吞成残字"
+		}
+	}
+	letters := 0
+	for _, r := range core {
+		if unicode.IsLetter(r) {
+			letters++
+		}
+	}
+	return letters >= 1 && letters <= 3 && len([]rune(core)) <= 6
+}
+
+// numericGarbageStripper 只剥标记类字符，避免把一个合法的短词误判成垃圾；
+// 不剥普通标点，短到 ≤6 字符的窗口里标点本身就是异常信号。
+var numericGarbageStripper = strings.NewReplacer(
+	"<br>", "", "<br/>", "", "<BR>", "", "**", "", "`", "", "|", "",
+)
 
 // hasNonQuantityLetter 源段里有没有「量级/单位之外的字」（约/左右/本季度…）。
 // 有 ⇒ 纯数值译文属于丢义，必须由译文把那个词带出来。
@@ -936,6 +975,74 @@ func sameFoldAll(lines []string) bool {
 	return true
 }
 
+// deterministicNumericDelivery 数量格的确定性交付：源段数字占主导且能算出绝对值时，
+// 直接按 gate.NumberExpectations 的结果生成「原分隔符 + 绝对值」形态，不走模型。
+//
+// ★ 2026-11-22 tv13 三轮实证：模型对同一格会给出 `65–120 万`（回落）、`65–120 מיליון`
+// （量级错 100 倍）、`ו`（静默残字）三种形态，判据修完仍挡不住上游漂移。金额格是
+// 确定性换算，不该赌模型；这里在交付面直接按源文算绝对值，数字不过闸/残字一律不出现。
+// 射程只到数字主导源（≤6 字母）且有 mult≠1 的量级词；百分比、年份、长句一律不适用。
+func deterministicNumericDelivery(src string) string {
+	if !isNumericDominantSource(src) {
+		return ""
+	}
+	exps := gate.NumberExpectations(src)
+	if len(exps) == 0 {
+		return ""
+	}
+	vals := make([]string, 0, len(exps))
+	for _, e := range exps {
+		vals = append(vals, formatNumberWithCommas(e.Value))
+	}
+	idx := 0
+	var sb strings.Builder
+	rs := []rune(src)
+	for i := 0; i < len(rs); {
+		r := rs[i]
+		if r >= '0' && r <= '9' {
+			// 整段十进制字面量（含千分位）按一个期望值替换
+			j := i
+			for j < len(rs) && ((rs[j] >= '0' && rs[j] <= '9') || rs[j] == ',' || rs[j] == '.') {
+				j++
+			}
+			if idx < len(vals) {
+				sb.WriteString(vals[idx])
+				idx++
+			} else {
+				sb.WriteString(string(rs[i:j]))
+			}
+			i = j
+			continue
+		}
+		if r > unicode.MaxASCII && unicode.IsLetter(r) {
+			i++ // 源语量级/单位词不进目标语产物（<br> 这类 ASCII 标签原样保留）
+			continue
+		}
+		sb.WriteRune(r)
+		i++
+	}
+	// 源语量级词被剥掉后留下的空格一并收掉（`3,000,000 +` → `3,000,000+`）；
+	// 绝对值形态本身不需要空格，ASCII 标签与区间连接号都保留。
+	out := strings.ReplaceAll(sb.String(), " ", "")
+	out = strings.TrimRight(out, " /")
+	return out
+}
+
+func formatNumberWithCommas(v float64) string {
+	s := strconv.FormatFloat(v, 'f', 0, 64)
+	if len(s) <= 3 {
+		return s
+	}
+	neg := ""
+	if s[0] == '-' {
+		neg, s = "-", s[1:]
+	}
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return neg + s
+}
+
 // deliveryTranslations 交付前统一过一遍回绝话术剥离（采纳判据之外的第二道，口径见 stripRefusalSentences）。
 func deliveryTranslations(lc string, langTr map[string]string) map[string]string {
 	if len(langTr) == 0 {
@@ -944,7 +1051,29 @@ func deliveryTranslations(lc string, langTr map[string]string) map[string]string
 	// 回绝话术那一档与目标语言无关，先逐段剥；标识符那一档要看「交付给谁」，放在后面。
 	out := make(map[string]string, len(langTr))
 	for src, v := range langTr {
-		out[src] = stripTrailingSymbolGarbage(stripRefusalSentences(src, v))
+		// 金额/量级格先走确定性换算，模型那一版只作兜底不可用时的参考；
+		// 这一支直接产出绝对值，量级漂移与短字母残字都进不了交付物。
+		if det := deterministicNumericDelivery(src); det != "" {
+			if det != v {
+				// 只在模型产物与确定性换算不一致时出声：这正是量级漂移/残字被拦下的现场读数。
+				observability.Info(context.Background(), "金额格按确定性换算交付", "src_chars", len([]rune(src)))
+			}
+			out[src] = det
+			continue
+		}
+		cleaned := stripTrailingSymbolGarbage(stripRefusalSentences(src, v))
+		// ★ 2026-11-22 tv13 终轮 L150：采纳判据在写入前判过，但交付前的剥尾巴/
+		//   回拒绝话术是**第二道改写**，能把一个本来可用的译文改成短字母残片。
+		//   这里在最后一道交付面上再问一次"数字格是不是被吞成残字"：
+		//   剥后垃圾但原文可用 ⇒ 回退未剥版本；连原文也是垃圾 ⇒ 回落源文并进未译出清单。
+		if isNumericCellShortLetterGarbage(src, cleaned) {
+			if !isNumericCellShortLetterGarbage(src, v) {
+				cleaned = v
+			} else {
+				cleaned = src
+			}
+		}
+		out[src] = cleaned
 	}
 	enforceLatinIdentifierVerbatim(lc, out)
 	return out

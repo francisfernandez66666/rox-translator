@@ -109,12 +109,18 @@ func (s *TicketService) Stop() {
 
 // 单任务执行上限（★ 2026-10-26 用户令）：
 //   - 文本：25 分钟（旧口径，保持）；
-//   - 图片：60 分钟；音频：90 分钟——OCR/ASR/TTS/原位回填是本地子进程或大模型，
-//     耗时不该被 25 分钟的翻译预算一刀切掉（否则回填阶段必然 context deadline exceeded）。
+//   - 图片：120 分钟；音频：180 分钟——OCR/ASR/TTS/原位回填是本地子进程或大模型。
+//
+// ★ 2026-11-22 质量达标后整体加长（用户令）：原文本 25 分钟被 199 行文件实测 25.7 分钟
+//
+//	撞穿，末段复核调用全吃 "context deadline exceeded" ⇒ 52/271 段未译出。
+//	四档统一抬升：文本 25→60、文件 60→120、图片 60→120、音频 90→180 分钟；
+//	60s 租约心跳继续兜住长任务，不会被 RecoverStale 误回收。
 const (
-	ticketJobTimeout     = 25 * time.Minute
-	mediaImageJobTimeout = 60 * time.Minute
-	mediaAudioJobTimeout = 90 * time.Minute
+	ticketJobTimeout     = 60 * time.Minute
+	fileJobTimeout       = 120 * time.Minute
+	mediaImageJobTimeout = 120 * time.Minute
+	mediaAudioJobTimeout = 180 * time.Minute
 )
 
 // mediaTimeoutForFiles 返回图片/音频文件的专属执行上限；无媒体文件返回 0。
@@ -157,12 +163,13 @@ func (s *TicketService) jobExecTimeout(job *queue.Job) time.Duration {
 		if d := mediaTimeoutForFiles(files); d > 0 {
 			return d
 		}
-		return ticketJobTimeout
+		return fileJobTimeout // 文件工单（含 .md/.docx/.pdf）不受 25 分钟文本预算限制
 	}
 	if t, terr := s.Store.GetTicketGlobal(id); terr == nil && t != nil && strings.TrimSpace(t.FilePath) != "" {
 		if d := mediaTimeoutForFiles([]*store.TicketFile{{FileName: t.FilePath}}); d > 0 {
 			return d
 		}
+		return fileJobTimeout
 	}
 	return ticketJobTimeout
 }
@@ -195,15 +202,13 @@ func (s *TicketService) workerLoop(workerID string) {
 			}
 			continue
 		}
-		// 执行 ctx 与领取 ctx 完全分离：默认 25 分钟是「单个文本任务最长执行时间」的硬上限，
-		// 刻意小于默认租约窗口（30min），保证任务正常超时收尾时租约还在，
-		// 不会被 RecoverStale/其他实例判成死任务而双跑。
-		// ★ 2026-10-26 用户令：图片/音频处理时间不按翻译预算卡——媒体工单放宽到
-		//   图片 60 分钟 / 音频 90 分钟；租约心跳每 60s 续期，长任务不会被误回收。
+		// 执行 ctx 与领取 ctx 完全分离：默认 25 分钟只管**文本任务**；
+		// 文件任务（.md/.docx/.pdf，含 199 行表格这种 25 分钟量级）放宽到 60 分钟，
+		// 媒体任务图片 60 / 音频 90 分钟。租约心跳每 60s 续期，长任务不会被误回收。
 		execTimeout := s.jobExecTimeout(job)
 		if execTimeout != ticketJobTimeout {
 			// 这一行同时是对外排障读数与发版验收证据（换件后这里必须能被打出来）。
-			observability.Info(context.Background(), "媒体工单执行上限已放宽（图片/音频不受文本预算限制）",
+			observability.Info(context.Background(), "工单执行上限已放宽（文件/媒体不受文本预算限制）",
 				"ticket", job.ID, "timeout", execTimeout.String())
 		}
 		jctx, jcancel := context.WithTimeout(context.Background(), execTimeout)

@@ -81,6 +81,23 @@ run "11-22:数量交付豁免"      ./internal/engine/ -run 'TestQuantityDeliver
 # 全量 -race 四处红灯修复（提交 d4edb4bf）：SQL 方言包装 + D3 字面量门禁 + 守卫反证
 run "11-22:SQL方言包装守卫"   ./internal/db/ -run 'TestNoRawSQLOutsideDialectWrapper|TestRawSQLPatternHasTeeth|TestNoRawUniqueViolationLiteralOutsideHelper|TestUniqueViolationLiteralScanHasTeeth|TestNoUncoveredDialectConstructs|TestDialectScanPatternsActuallyFire'
 run "11-22:方言裸SQL修复回归" ./internal/store/ -run 'TestOutboundNoAntiPatterns'
+# ★ 2026-11-22 tv13 终轮：静默垃圾格、金额格确定性换算、标注节按行去重
+run "11-22:金额格确定性交付" ./internal/engine/ -run 'TestDeterministicNumericDelivery|TestNumericCellShortLetterGarbage|TestDeliveryTranslationsNoShortLetterGarbage'
+run "11-22:标注节按行去重" ./internal/engine/ -run 'TestUntranslatedNotesKeepEverySegment|TestUntranslatedNotesHeaderCountsUniqueLines|TestUntranslatedNotesNoMapKeepsSegments'
+run "11-22:工单时限放宽" ./internal/service/ -run 'TestJobExecTimeout|TestMediaTimeoutForFiles|TestLongTaskBudgetsRaised'
+run "11-22:多Key均衡调用" ./internal/engine/ -run 'TestPickPrimaryRotatesKeysInSamePool|TestPickPrimaryDoesNotMixDifferentPools|TestRouteQuotaFieldsOptional'
+
+# ★ 2026-11-22 tv13：判读脚本「区间共享量级词」假红锁。
+#   v1 把正确译文 `1.5–2.5 מיליון` 读成 [1.5, 2.5e6] ⇒ L160 假红；v3 修后
+#   必须同时保证 65–120 מיליון / 300 מיליון+ 这类真量级错仍判红（反向对照在自锁里）。
+if python3 "$REPO_ROOT/output/tv_acceptance_20261121/tv_compare_selftest.py" >/tmp/tv_compare_selftest.log 2>&1; then
+  PASS=$((PASS+1))
+  printf '%s\n' "OK:11-22:判读脚本量级词假红锁"
+else
+  echo "FAIL:11-22:判读脚本量级词假红锁"
+  tail -12 /tmp/tv_compare_selftest.log
+  FAILN=$((FAILN+1))
+fi
 
 echo "============================================================"
 echo "PASS=$PASS FAIL=$FAILN"
