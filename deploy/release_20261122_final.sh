@@ -63,10 +63,13 @@ echo "===== P0-B 后端件 ====="
 #   · 「instant_review_enabled」= 复核开关（再上一批，回归哨兵）。
 W_SCORE=$(feat_count "$SERVER_BIN" "救援段复核评估记分")
 W_WARN=$(feat_count "$SERVER_BIN" "救援段复核评估失败")
+# ★ 诊断批新增：被判据丢弃的救援段日志（src/out/reject 三字段），确认编译的是含诊断的树。
+W_DIAG=$(feat_count "$SERVER_BIN" "救援段译文被判据丢弃")
 W_EXPECT=$(feat_count "$SERVER_BIN" "exact converted values")
 W_BUDGET=$(feat_count "$SERVER_BIN" "上下文重译预算不足")
 W_INST=$(feat_count "$SERVER_BIN" "instant_review_enabled")
-echo "server size=$(wc -c <"$SERVER_BIN" | tr -d ' ') sha=$(sha_local "$SERVER_BIN") ｜ 救援记分=${W_SCORE} 救援记分失败=${W_WARN} 换算注入=${W_EXPECT} 预算点名=${W_BUDGET} 复核开关=${W_INST}（期望都 ≥1）"
+echo "server size=$(wc -c <"$SERVER_BIN" | tr -d ' ') sha=$(sha_local "$SERVER_BIN") ｜ 救援记分=${W_SCORE} 救援记分失败=${W_WARN} 被拒诊断=${W_DIAG} 换算注入=${W_EXPECT} 预算点名=${W_BUDGET} 复核开关=${W_INST}（期望都 ≥1）"
+[ "$W_DIAG" != "0" ] || { echo "ABORT=3 缺「救援段译文被判据丢弃」⇒ 编译的不是含诊断日志的树"; exit 3; }
 [ "$W_SCORE" != "0" ] || { echo "ABORT=3 缺「救援段复核评估记分」⇒ 编译的不是含本批评分腿的树"; exit 3; }
 [ "$W_WARN" != "0" ] || { echo "ABORT=3 缺「救援段复核评估失败」⇒ 评分降级 WARN 未进件"; exit 3; }
 [ "$W_EXPECT" != "0" ] || { echo "ABORT=3 缺「exact converted values」⇒ 换算注入（含缺失档）未进件"; exit 3; }
