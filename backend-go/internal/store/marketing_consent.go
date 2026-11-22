@@ -91,7 +91,7 @@ func (s *Store) SetConsentStatus(tid int64, email, status, source string) error 
 // ConsentStatus 读订阅状态；无行返回 (\"\", false)＝从未订阅（按未授权处理）。
 func (s *Store) ConsentStatus(tid int64, email string) (string, bool, error) {
 	var status string
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT status FROM marketing_consents WHERE tenant_id=? AND customer_email=?`,
 		tid, strings.ToLower(strings.TrimSpace(email))).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -133,7 +133,7 @@ func (s *Store) InSuppression(tid int64, email string) (bool, error) {
 		domain = email[at+1:]
 	}
 	var cnt int
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT COUNT(*) FROM suppression_list WHERE tenant_id=? AND match_value IN (?, ?)`,
 		tid, email, domain).Scan(&cnt)
 	return cnt > 0, err
@@ -166,7 +166,7 @@ func (s *Store) SaveSequenceNode(tid int64, n OutboundSequenceNode) error {
 
 // ListSequenceNodes 列本租户全部序列节点（管理面编辑用，按 delay_hours 升序）。
 func (s *Store) ListSequenceNodes(tid int64) ([]OutboundSequenceNode, error) {
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT id, tenant_id, node_key, name, delay_hours, subject, body, enabled, updated_at
 		 FROM outbound_sequences WHERE tenant_id=? ORDER BY delay_hours ASC, id ASC`, tid)
 	if err != nil {
@@ -189,7 +189,7 @@ func (s *Store) ListOutboundSends(tid, limit int64) ([]OutboundSendRow, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT id, tenant_id, customer_email, node_key, status, reason, claimed_at, sent_at, created_at
 		 FROM outbound_sends WHERE tenant_id=? ORDER BY id DESC LIMIT ?`, tid, limit)
 	if err != nil {
@@ -256,7 +256,7 @@ func (s *Store) MarkOutboundSkipped(tid, id int64, reason string) error {
 func (s *Store) DailySendCount(tid int64, email string) (int64, error) {
 	day := time.Now().UTC().Format("2006-01-02")
 	var cnt int64
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT COUNT(*) FROM outbound_sends
 		 WHERE tenant_id=? AND customer_email=? AND status IN (?, ?) AND claimed_at LIKE ?`,
 		tid, strings.ToLower(strings.TrimSpace(email)), OutboundStatusSent, OutboundStatusClaimed, day+"%").Scan(&cnt)
@@ -271,7 +271,7 @@ func (s *Store) ListOptedInEmails(tid, limit int64) ([]string, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT customer_email FROM marketing_consents WHERE tenant_id=? AND status=? ORDER BY id ASC LIMIT ?`,
 		tid, ConsentOptedIn, limit)
 	if err != nil {

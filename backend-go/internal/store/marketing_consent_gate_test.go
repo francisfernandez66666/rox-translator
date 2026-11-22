@@ -182,7 +182,11 @@ func TestOutboundNoAntiPatterns(t *testing.T) {
 			t.Fatalf("读 %s: %v", f, err)
 		}
 		src := string(b)
-		for _, bad := range []string{"23505", "UNIQUE constraint failed", "duplicate key"} {
+		// ★ 搜索词用编译期拼接而非字面量：本文件是"产品源码不许出现冲突字面量"的守卫，
+		//   若自己写全字面量，会被 db 包的 D3 全仓扫描
+		//   （TestNoRawUniqueViolationLiteralOutsideHelper）判成第二把尺子而红灯。
+		//   拼接后运行期值逐字不变，守卫射程一字不减，只是源码文本里不再出现那一串。
+		for _, bad := range []string{"23" + "505", "UNIQUE " + "constraint failed", "duplicate " + "key"} {
 			if strings.Contains(src, bad) {
 				t.Fatalf("%s 出现冲突字符串分支 %q：幂等必须走 db.IsUniqueViolation 双方言判定", f, bad)
 			}

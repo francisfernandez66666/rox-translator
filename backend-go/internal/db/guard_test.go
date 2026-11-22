@@ -89,6 +89,29 @@ func TestNoRawSQLOutsideDialectWrapper(t *testing.T) {
 	}
 }
 
+// TestRawSQLPatternHasTeeth ★ 反证（2026-11-22 存量红灯修复批）：合成样本逐形态必须被
+// rawSQLPatterns 抓到。没有这条，TestNoRawSQLOutsideDialectWrapper 的绿无法区分
+// 「源码真干净」与「正则写坏了永不命中」。三形态：DB() 访问器、RawDB()、同包私有句柄 s.db。
+// 只在内存里跑，不落盘、不碰仓库。
+func TestRawSQLPatternHasTeeth(t *testing.T) {
+	samples := []struct {
+		name string
+		line string
+	}{
+		{"DB 访问器", `rows, err := s.DB().Query(` + "`SELECT 1 WHERE id=?`" + `, id)`},
+		{"RawDB 访问器", `err := s.RawDB().QueryRow(` + "`SELECT 1`" + `).Scan(&x)`},
+		{"同包私有句柄", `err := s.db.QueryRow(` + "`SELECT 1 WHERE id=?`" + `, id).Scan(&x)`},
+		{"带方言包装的合法形态", `err := db.QueryRow(s.db, db.CurrentDialect(), ` + "`SELECT 1`" + `)`},
+	}
+	for _, s := range samples {
+		got := rawSQLPatterns.MatchString(s.line)
+		want := s.name != "带方言包装的合法形态"
+		if got != want {
+			t.Errorf("%s：rawSQLPatterns 命中=%v，期望=%v（line=%s）", s.name, got, want, s.line)
+		}
+	}
+}
+
 // findRepoGoRoot 从测试工作目录（internal/db）上溯到 module 根 backend-go。
 func findRepoGoRoot(t *testing.T) string {
 	t.Helper()

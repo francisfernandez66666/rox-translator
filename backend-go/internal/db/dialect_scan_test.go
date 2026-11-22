@@ -89,6 +89,12 @@ var dialectScanExempt = map[string]int{
 	"internal/store/artifacts.go#PRAGMA":      2, // ArtifactsMigrate 的 `if d == DialectSQLite {` 块内：index_list/index_info 探测
 	"internal/kb/db.go#PRAGMA":                7, // ensurePackScopeUnique / rebuildTableWithTripleUnique / rebuildUniqueIndex / isSingleUniqueOnZhHash：均在 PG 早退之后的 SQLite 重建路径
 	"cmd/migrate-sqlite-to-pg/main.go#PRAGMA": 1, // 一次性搬迁工具：源端**只读 SQLite**，用 PRAGMA 取列名是它的本职
+	// ★ 2026-11-22 存量红灯归因（本批未改此文件，命中文件最后改动 11-21 `1a3dbf69`）：
+	//   `INSERT OR REPLACE` 位于 `if d.IsPostgres() { … UpsertUpdate(ON CONFLICT) } else { … }` 的
+	//   **else 分支**——PG 走 db.UpsertUpdate 生成的 ON CONFLICT DO UPDATE，OR REPLACE 只在 SQLite 侧执行，
+	//   正是豁免表要求的「已按方言分支包好」形态，不是漏分支。等值锁同时是复查提醒：该分支一旦被挪出
+	//   else（PG 也会跑到）或改写，命中数变化即红灯，届时必须改走 db 包装而非直接放行。
+	"internal/api/assist_session_migrate.go#INSERT OR REPLACE/ROLLBACK/ABORT/FAIL": 1,
 }
 
 // dialectScanSkipDirs 与 guard_test.go 同口径：vendor/构建产物/assist 子服务不参与双方言纪律。

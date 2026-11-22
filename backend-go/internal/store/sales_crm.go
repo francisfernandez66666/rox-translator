@@ -87,7 +87,7 @@ func (s *Store) EnsureHandoffSession(tid int64, sessionID string, messageID int6
 		return 0, errors.New("会话映射必须带有效租户与会话 id")
 	}
 	var id int64
-	err := s.db.QueryRow(
+	err := db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT id FROM handoff_sessions WHERE tenant_id=? AND session_id=?`, tid, sessionID).Scan(&id)
 	if err == nil {
 		return id, nil
@@ -102,7 +102,7 @@ func (s *Store) EnsureHandoffSession(tid int64, sessionID string, messageID int6
 		// 并发建行撞唯一键：回读赢家行（幂等语义，不是错误）。
 		if db.IsUniqueViolation(err) {
 			var wid int64
-			if e2 := s.db.QueryRow(
+			if e2 := db.QueryRow(s.db, db.CurrentDialect(),
 				`SELECT id FROM handoff_sessions WHERE tenant_id=? AND session_id=?`, tid, sessionID).Scan(&wid); e2 == nil {
 				return wid, nil
 			}
@@ -161,7 +161,7 @@ func (s *Store) ListHandoffSessions(tid int64, onlyPending bool, limit int64) ([
 		q += ` AND pending_human=1`
 	}
 	q += ` ORDER BY id DESC LIMIT ?`
-	rows, err := s.db.Query(q, tid, limit)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, tid, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func (s *Store) ListInboxEvents(tid int64, status string, limit int64) ([]InboxE
 	}
 	q += ` ORDER BY id DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (s *Store) UpsertCustomerFromEmail(tid int64, email, displayName string) (i
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	var id int64
-	err := s.db.QueryRow(`SELECT id FROM sales_customers WHERE tenant_id=? AND email=?`, tid, email).Scan(&id)
+	err := db.QueryRow(s.db, db.CurrentDialect(), `SELECT id FROM sales_customers WHERE tenant_id=? AND email=?`, tid, email).Scan(&id)
 	if err == nil {
 		return id, nil
 	}
@@ -228,7 +228,7 @@ func (s *Store) UpsertCustomerFromEmail(tid int64, email, displayName string) (i
 	if err != nil {
 		if db.IsUniqueViolation(err) {
 			var wid int64
-			if e2 := s.db.QueryRow(`SELECT id FROM sales_customers WHERE tenant_id=? AND email=?`, tid, email).Scan(&wid); e2 == nil {
+			if e2 := db.QueryRow(s.db, db.CurrentDialect(), `SELECT id FROM sales_customers WHERE tenant_id=? AND email=?`, tid, email).Scan(&wid); e2 == nil {
 				return wid, nil
 			}
 		}
@@ -257,7 +257,7 @@ func (s *Store) UpsertLeadFromEmail(tid int64, email, stage string, score int) e
 	var id int64
 	var curStage string
 	var curScore int
-	err = s.db.QueryRow(
+	err = db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT id, stage, score FROM sales_leads WHERE tenant_id=? AND email=?`, tid, email).
 		Scan(&id, &curStage, &curScore)
 	if err == nil {
@@ -321,7 +321,7 @@ func (s *Store) ListLeads(tid int64, stage string, onlyPendingHuman bool, limit 
 	}
 	q += ` ORDER BY updated_at DESC, id DESC LIMIT ?`
 	args = append(args, limit)
-	rows, err := s.db.Query(q, args...)
+	rows, err := db.Query(s.db, db.CurrentDialect(), q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +340,7 @@ func (s *Store) ListLeads(tid int64, stage string, onlyPendingHuman bool, limit 
 // LeadFunnelCounts 漏斗扩段的读数：五阶段各档线索数 + 待人工数。
 func (s *Store) LeadFunnelCounts(tid int64) (map[string]int64, error) {
 	out := map[string]int64{}
-	rows, err := s.db.Query(
+	rows, err := db.Query(s.db, db.CurrentDialect(),
 		`SELECT stage, COUNT(*) FROM sales_leads WHERE tenant_id=? GROUP BY stage`, tid)
 	if err != nil {
 		return nil, err
@@ -358,7 +358,7 @@ func (s *Store) LeadFunnelCounts(tid int64) (map[string]int64, error) {
 		return nil, err
 	}
 	var pending int64
-	_ = s.db.QueryRow(
+	_ = db.QueryRow(s.db, db.CurrentDialect(),
 		`SELECT COUNT(*) FROM sales_leads WHERE tenant_id=? AND pending_human=1`, tid).Scan(&pending)
 	out["pending_human"] = pending
 	return out, nil
