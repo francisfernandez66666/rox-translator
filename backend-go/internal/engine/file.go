@@ -714,6 +714,30 @@ func (e *Engine) translateSegmentWithContext(ctx context.Context, seg, targetLan
 	return v, true
 }
 
+// recordRescueReviewEval 给「上下文重译救回的段」跑一次复核 evals（校对评估）并记分。
+//
+// ★ 2026-11-22 用户令「加入校对+复核流程」：救援段过去只过确定性闸门（fileTranslationUsable），
+//
+//	复核链路里的 **复核 evals**（StageReviewEvals）不在这一腿上。现把评分纳入同一条链——
+//	但严格只记分、不改采纳：
+//	  · 采纳仍只由确定性闸门决定（换腿不是换尺子）；LLM 主观分不做自动打回
+//	    （orchestrator.runEvalsReview 同款既有决策：主观分重译易震荡烧钱、仅人工决策）；
+//	  · 评分失败/无 Judge Key/抽样未命中一律静默跳过，只记 INFO/WARN，绝不影响已救回的译文；
+//	  · 与复核模型腿同档开关：ReviewEnabled=false 时整条复核链不跑，这里也不跑。
+//
+// 参数：ctx=请求上下文；src=源段；tr=救援译文；lc=目标语言。
+func (e *Engine) recordRescueReviewEval(ctx context.Context, src, tr, lc string) {
+	if e == nil || e.Evals == nil || !e.ReviewEnabled(ctx) || !e.Evals.ShouldSample() {
+		return
+	}
+	total, _, err := e.Evals.Evaluate(ctx, src, tr, lc, "review")
+	if err != nil {
+		observability.Warn(ctx, "文件翻译：救援段复核评估失败（不影响采纳）", "lang", lc, "err", err.Error(), "mark", ctxRetryMarker)
+		return
+	}
+	observability.Info(ctx, "文件翻译：救援段复核评估记分", "lang", lc, "score", total, "mark", ctxRetryMarker)
+}
+
 // ctxRetryReasonMissing 「该段根本没有译文」这一档的成因名。
 // 只进日志与分档计数，不进提示词（提示词侧由 segmentHintNote 按形态决定）。
 const ctxRetryReasonMissing = "缺失"
@@ -864,7 +888,14 @@ func (e *Engine) retranslateWithContextTargets(ctx context.Context, lc string, t
 		// ★ 2026-11-22 tv9：数字档再带上**这一段**的换算结果。
 		//   通用示例（"300 万+ means 3,000,000+"）在场时模型仍交付 `300 שנק' ומעלה`，
 		//   因为它还得自己做一次「万→10000」的乘法；把结果直接给它，这一跳就不需要算术。
-		if tg.reason == gate.CheckNumberKeep {
+		//
+		// ★ 2026-11-22 tv10 漏注入修复：缺失档（第一枪就没译文）过去**不带**换算结果，
+		//   于是 `65–120 万`／`45–80 万` 这两格从没收到 `65 万=650000` 这个具体拐杖，
+		//   反复补译仍给不出可用译文 ⇒ 按原文回落。它们不是"模型算不出"（gate 判据实证
+		//   输出 `650,000–1,200,000` 立刻放行），是重译链没把换算结果喂进去。
+		//   现把缺失档也纳入注入：gate.NumberExpectations 天然只收 mult≠1 的量级词数字，
+		//   无数字／普通数字段返回空切片 ⇒ 提示词与改造前逐字一致，不误伤。
+		if tg.reason == gate.CheckNumberKeep || tg.reason == ctxRetryReasonMissing {
 			if exps := gate.NumberExpectations(tg.text); len(exps) > 0 {
 				cctx = WithSegmentNumberExpectations(cctx, formatNumberExpectations(exps))
 			}
@@ -1650,6 +1681,9 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 						addTrans(lc, m, v)
 						addModelHit() // 复核模型译出的段同样是模型译文，计数必须跟着写入走
 						se.done(lc, m, v)
+						// ★ 2026-11-22「加入校对+复核流程」：救回的段纳入复核 evals 评分记录。
+						//   只记分不改采纳（见 recordRescueReviewEval 注释），失败静默降级。
+						e.recordRescueReviewEval(ctx, m, v, lc)
 					}
 					if len(got) > 0 {
 						observability.Info(ctx, "文件翻译：上下文重译救回未译段", "lang", lc, "rescued", len(got),

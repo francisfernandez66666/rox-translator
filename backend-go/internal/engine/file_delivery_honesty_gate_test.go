@@ -68,6 +68,12 @@ var fdhAllow = map[string]string{
 	//   applySegmentGates 逐条记 gate_warnings。本 WARN 补的是**预算读数**（该调 fileCtxRetryMax 了），
 	//   不改变任何客户可见结论。若哪天被截掉的段不再走那两条记账，这条豁免必须同批删除。
 	"文件翻译：上下文重译预算不足，部分候选未送": "被截段状态不变：缺失段进 untranslated、形态不过段由 applySegmentGates 记 gate_warnings；本 WARN 只出预算读数",
+	// ★ 2026-11-22「加入校对+复核流程」：救援段跑复核 evals 评分失败时出 WARN。
+	//   评分是可选增强（记录/看板用），按用户定案严格不改采纳——救援段仍照常写入译文、
+	//   与其余救援段同走 addTrans/addModelHit/se.done，客户交付面一字不少。
+	//   本 WARN 只说明"这次少了一个质量读数"，不是交付退化；若哪天评分变成硬闸（低分拒绝采纳），
+	//   这条豁免必须同批删除并把失败段计入 untranslated/gate_warnings。
+	"文件翻译：救援段复核评估失败（不影响采纳）": "评分是可选增强不改采纳：救援段照常写入并点名模型命中；本 WARN 只记质量读数缺失",
 }
 
 // fdhSite 一处「出声」点位及其记账配对情况。

@@ -66,6 +66,12 @@ func (f *ctxRetryFake) handler(w http.ResponseWriter, r *http.Request) {
 	src := strings.TrimSpace(lines[len(lines)-1])
 	out, ok := f.replies[src]
 	if !ok {
+		// 极简指令档会给源段挂 ⟦P0⟧ 尾标（见 translateSegmentWithContext），
+		// 测试桩按去标记后的源文再找一次；精确匹配优先，故不影响既有腿的断言。
+		bare := strings.TrimSpace(strings.TrimSuffix(src, "⟦P0⟧"))
+		out, ok = f.replies[bare]
+	}
+	if !ok {
 		out = "Translated: " + src
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -463,8 +469,8 @@ func TestFileCtxRetryTargetsTierOrder(t *testing.T) {
 //
 // tv9 实证：通用示例（"300 万+ means 3,000,000+"）在场时模型仍交付 `300 שנק' ומעלה`，
 // 因为换算那一步还得它自己做；把结果直接给它，才叫"带上下文"。
-// 反向对照同样重要：缺失段一个换算字都不许带——多一句不该有的指令会把纯翻译模型带偏，
-// 也让这条腿在缺失段上的提示词与改造前不再逐字一致。
+// 反向对照同样重要：**无数字的**缺失段不许带换算句——多一句不该有的指令会把纯翻译模型带偏，
+// 也让这类段在缺失档上的提示词与改造前逐字一致。含量级词的缺失段是例外（tv10 修复，见下 M 腿）。
 func TestFileCtxRetryNumberExpectationsInPrompt(t *testing.T) {
 	const src = "年费 300 万+"
 	const good = "דמי מנוי שנתיים 3,000,000+"
@@ -483,7 +489,7 @@ func TestFileCtxRetryNumberExpectationsInPrompt(t *testing.T) {
 		t.Fatalf("提示词必须给出这一段的换算结果（不是通用示例）：%q", users[0])
 	}
 
-	// 反向对照：缺失段不许带换算句。
+	// 反向对照：无数字的缺失段不许带换算句（提示词与改造前逐字一致）。
 	const missSrc = "第二行原文"
 	fake2 := &ctxRetryFake{replies: map[string]string{missSrc: "Second line"}}
 	eng2 := newCtxRetryEngine(t, fake2)
@@ -493,6 +499,51 @@ func TestFileCtxRetryNumberExpectationsInPrompt(t *testing.T) {
 		t.Fatalf("应拨 1 次，实得 %d", len(u2))
 	}
 	if strings.Contains(u2[0], "exact converted values") {
-		t.Fatalf("缺失段不该带数字换算句（提示词必须与改造前逐字一致）：%q", u2[0])
+		t.Fatalf("无数字的缺失段不该带数字换算句（提示词必须与改造前逐字一致）：%q", u2[0])
+	}
+}
+
+// TestFileCtxRetryMissingSegmentGetsNumberExpectations M 腿（★ 2026-11-22 tv10）：
+// 缺失档（第一枪就没译文）的段，源文含中文量级词时必须带数字换算结果。
+// tv10 实证：`65–120 万`／`45–80 万` 两格走的是缺失档，过去不带换算 ⇒ deepseek 从未收到
+// `65 万=650000` 的具体拐杖，反复补译仍回落原文。正反对照明：
+//   - 含数字的缺失段：必须出现 `65 万" = 650000` 等值；
+//   - 无数字的缺失段：不得出现换算句（L 腿已覆盖）。
+func TestFileCtxRetryMissingSegmentGetsNumberExpectations(t *testing.T) {
+	const src = "65–120 万<br>"
+	// 译文必须带目标语文字（纯数字会被 IsSkeletonForLang 判骨架拒绝——闸门正确行为，不是缺陷）。
+	const good = "650,000–1,200,000 שקלים<br>"
+	// 极简指令档把 <br> 保护成 ⟦P0⟧，假上游按裸源段匹配（M 腿的断言重点在提示词里的换算句，
+	// 救援采纳只是顺带验证；这里登记两种形态的回复，避免被测试桩细节干扰）。
+	fake := &ctxRetryFake{replies: map[string]string{
+		src:        good,
+		"65–120 万": "650,000–1,200,000 שקלים",
+	}}
+	eng := newCtxRetryEngine(t, fake)
+	got := eng.retranslateMissingWithContext(context.Background(), "he", []string{src}, map[string]string{}, "| 方案 | 金额 |", 20)
+	if v := got[src]; !strings.Contains(v, "650,000–1,200,000") {
+		t.Fatalf("缺失档含数字的段应被带换算重译救回，实得 %v", got)
+	}
+	users := fake.snapshotUsers()
+	if len(users) == 0 {
+		t.Fatal("一次都没拨模型")
+	}
+	// 极简指令档可能因保护令牌还原多拨一轮；只要任意一次带了具体换算句即证明注入生效。
+	joined := strings.Join(users, "\n")
+	for _, want := range []string{`"65 万" = 650000`, `"120 万" = 1200000`} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("缺失档提示词必须给出这一段的换算结果 %s（不是通用示例）：%q", want, joined)
+		}
+	}
+
+	// 第二格：45–80 万同样要带换算（区间共享后缀，两个数字都要给）。
+	const src2 = "45–80 万"
+	const good2 = "450,000–800,000 שקלים"
+	fake2 := &ctxRetryFake{replies: map[string]string{src2: good2}}
+	eng2 := newCtxRetryEngine(t, fake2)
+	_ = eng2.retranslateMissingWithContext(context.Background(), "he", []string{src2}, map[string]string{}, "| 科目 | 金额 |", 20)
+	u2 := fake2.snapshotUsers()
+	if len(u2) == 0 || !strings.Contains(strings.Join(u2, "\n"), `"45 万" = 450000`) {
+		t.Fatalf("45–80 万 缺失段必须带换算结果：%q", u2)
 	}
 }
