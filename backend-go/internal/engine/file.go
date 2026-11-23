@@ -2235,6 +2235,14 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 			mdIsOriginal := false
 			if ext == ".md" {
 				if werr := fileproc.ApplyAlignedText(".md", filePath, outPath, tr); werr == nil {
+					// ★ 2026-11-23：写回后的最终产物再过一遍数字守恒（长句格 +150% 那一族）。
+					// 缺数格逐字节回落源文，并并入未译出点名；这一步的位置必须在 appendNotes 之前。
+					if extra, dwarn, derr := verifyDeliveredNumbers(filePath, outPath, lc); derr != nil {
+						observability.Warn(ctx, "交付件数字守恒复核失败", "lang", lc, "error", derr.Error())
+					} else {
+						notes = append(notes, extra...)
+						gateWarnings = append(gateWarnings, dwarn...)
+					}
 					appendUntranslatedNotes(lc, outPath, notes)
 					appendComplianceNotes(lc, outPath) // ★ 2026-11-03 裁决②：源文件即 .md 的交付口同样要点名
 					mdPaths[lc] = outPath

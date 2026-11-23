@@ -86,6 +86,8 @@ run "11-22:金额格确定性交付" ./internal/engine/ -run 'TestDeterministicN
 run "11-22:标注节按行去重" ./internal/engine/ -run 'TestUntranslatedNotesKeepEverySegment|TestUntranslatedNotesHeaderCountsUniqueLines|TestUntranslatedNotesNoMapKeepsSegments'
 run "11-22:工单时限放宽" ./internal/service/ -run 'TestJobExecTimeout|TestMediaTimeoutForFiles|TestLongTaskBudgetsRaised'
 run "11-22:多Key均衡调用" ./internal/engine/ -run 'TestPickPrimaryRotatesKeysInSamePool|TestPickPrimaryDoesNotMixDifferentPools|TestRouteQuotaFieldsOptional'
+run "11-23:交付数字守恒" ./internal/engine/ -run 'TestVerifyDeliveredNumbers'
+run "11-23:相邻加粗骨架" ./internal/fileproc/ -run 'TestRestoreAdjacentBoldSkeleton'
 
 # ★ 2026-11-22 tv13：判读脚本「区间共享量级词」假红锁。
 #   v1 把正确译文 `1.5–2.5 מיליון` 读成 [1.5, 2.5e6] ⇒ L160 假红；v3 修后

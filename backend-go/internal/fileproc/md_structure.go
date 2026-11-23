@@ -1055,6 +1055,34 @@ func mdRestoreMarkers(srcKey, tr string) string {
 	return out
 }
 
+// mdRestoreAdjacentBoldSkeleton 还原源片段自带的 `****：` 加粗骨架。
+//
+// ★ 2026-11-23 tv13 终轮 L85：源 `**3\.3 AI 搭建****：**正文` 含 4 个 `**` token，
+// 中间那个 `****` 是文档自身的合法骨架；模型常归一成 `****标题: 正文**`（3 个）。
+// mdTrimExcessMarkers 刻意跳过"源含相邻同标记"的形态，mdRestoreMarkers 又只按首尾补，
+// 于是少一对。这里只在"源含 **** 且译文 token 更少"时做定点还原：
+// 开头 `****` 收敛成 `**`、冒号前补 `**`、末尾补齐差额；只动标记，不动任何正文字符。
+func mdRestoreAdjacentBoldSkeleton(srcKey, tr string) string {
+	if !strings.Contains(srcKey, "****") || tr == "" {
+		return tr
+	}
+	srcN, trN := strings.Count(srcKey, "**"), strings.Count(tr, "**")
+	if trN >= srcN {
+		return tr
+	}
+	out := tr
+	if strings.HasPrefix(out, "****") {
+		out = "**" + out[4:]
+	}
+	if idx := strings.Index(out, ":"); idx >= 0 {
+		out = out[:idx] + "**" + out[idx:]
+	}
+	for strings.Count(out, "**") < srcN {
+		out += "**"
+	}
+	return out
+}
+
 // mdEscapeCellPipes 把 cell 译文里的裸分隔符中和成 markdown 转义形式 `\|`
 // （渲染后仍是 `|`，但不再被当作列边界 ⇒ 列数守恒）。
 // ★ 为什么不能简单 ReplaceAll("|", `\|`)：源 cell 里本来就可能写的是 `\|`（表格内的转义竖线），

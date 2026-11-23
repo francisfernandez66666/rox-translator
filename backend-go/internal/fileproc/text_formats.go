@@ -88,6 +88,8 @@ func ApplyAlignedText(ext, srcPath, outPath string, translations map[string]stri
 	for i, raw := range lines {
 		if md {
 			lines[i] = mdApplyLine(raw, ctx, translations)
+			// 源自带 `****：` 骨架时，模型常把中间那对标记归一掉；按源 token 数定点补回。
+			lines[i] = mdRestoreAdjacentBoldSkeleton(raw, lines[i])
 			continue
 		}
 		t := strings.TrimSpace(raw)
