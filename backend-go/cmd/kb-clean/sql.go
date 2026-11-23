@@ -68,15 +68,29 @@ func loadCleanEntries(raw *sql.DB, lang string, limit int, doneIDs map[int64]boo
 	return out, rows.Err()
 }
 
-// clearTMSegment 删除条目后清翻译检索层对应语种列（与 store.kbscrape.go:948 同形态）。
-// 用 module+zh_hash 定位，避免误伤同包其它来源的同源文本。
-func clearTMSegment(raw *sql.DB, e cleanEntry) {
+// syncTMSegment 回写后同步翻译检索层对应语种列。
+// ★ 必须显式调用：store.SaveEntry 命中已存在条目时只 UPDATE kb_entries 就 return（kbpackages.go:525-529），
+//
+//	不同步 tm_segments。清洗只改 kb_entries 会让 TM 检索仍召回旧错译——等于没洗干净。
+//
+// 定位用 tm_segments 唯一键 (zh_hash, tenant_id, pack_id)，不用 module
+// （实测同词在 kb_entries 是 scrape:542、在 tm_segments 却是 scrape:454/534/446，module 对不上）。
+func syncTMSegment(raw *sql.DB, e cleanEntry, fixed string) {
 	if !isValidLangColumn(e.TgtLang) {
 		return // 列名白名单：tgtLang 拼进 SQL 标识符位置，必须校验
 	}
-	// zh_hash = md5(zh)（与 store.SaveEntry 同算法）
-	h := md5Hex(e.SrcText)
 	_, _ = db.Exec(raw, db.CurrentDialect(),
-		fmt.Sprintf("UPDATE tm_segments SET %s='' WHERE zh_hash=? AND tenant_id=? AND pack_id=? AND module=?", e.TgtLang),
-		h, 0, e.PackageID, e.Module)
+		fmt.Sprintf("UPDATE tm_segments SET %s=?, module=? WHERE zh_hash=? AND tenant_id=0 AND pack_id=?", e.TgtLang),
+		fixed, e.Module, md5Hex(e.SrcText), e.PackageID)
+}
+
+// clearTMSegment 删除条目后清翻译检索层对应语种列（与 store.kbscrape.go:948 同形态）。
+// 同样按唯一键 (zh_hash, tenant_id=0, pack_id) 定位，不按 module（理由见 syncTMSegment）。
+func clearTMSegment(raw *sql.DB, e cleanEntry) {
+	if !isValidLangColumn(e.TgtLang) {
+		return // 列名白名单
+	}
+	_, _ = db.Exec(raw, db.CurrentDialect(),
+		fmt.Sprintf("UPDATE tm_segments SET %s='' WHERE zh_hash=? AND tenant_id=0 AND pack_id=?", e.TgtLang),
+		md5Hex(e.SrcText), e.PackageID)
 }

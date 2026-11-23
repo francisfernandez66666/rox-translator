@@ -108,3 +108,35 @@ func TestClearTMSegmentGuard(t *testing.T) {
 		t.Fatalf("合法 he 列应被清空，实得 %q", he)
 	}
 }
+
+func TestSyncTMSegmentWritesBackHeap(t *testing.T) {
+	raw := cleanFixture(t)
+	entry := cleanEntry{TgtLang: "he", SrcText: "粉丝", PackageID: 25, Module: "scrape:542"}
+	_, _ = raw.Exec(`INSERT INTO tm_segments(zh_hash,zh,tenant_id,pack_id,he,module) VALUES(?,?,?,?,?,?)`,
+		md5Hex("粉丝"), "粉丝", 0, 25, "קהל עוקבים", "scrape:534")
+	syncTMSegment(raw, entry, "מעריצים")
+	var he, module string
+	if err := raw.QueryRow(`SELECT he,module FROM tm_segments WHERE zh_hash=? AND pack_id=?`, md5Hex("粉丝"), 25).Scan(&he, &module); err != nil {
+		t.Fatal(err)
+	}
+	if he != "מעריצים" {
+		t.Fatalf("TM he 列必须同步为新译文，实得 %q", he)
+	}
+	if module != "scrape:542" {
+		t.Fatalf("TM module 应同步，实得 %q", module)
+	}
+}
+
+func TestClearTMSegmentIgnoresModuleMismatch(t *testing.T) {
+	raw := cleanFixture(t)
+	entry := cleanEntry{TgtLang: "he", SrcText: "流量统计", PackageID: 25, Module: "scrape:542"}
+	// tm 里 module 是别的源 ID（实测形态），仍必须清掉
+	_, _ = raw.Exec(`INSERT INTO tm_segments(zh_hash,zh,tenant_id,pack_id,he,module) VALUES(?,?,?,?,?,?)`,
+		md5Hex("流量统计"), "流量统计", 0, 25, "מדידה", "scrape:454")
+	clearTMSegment(raw, entry)
+	var he string
+	_ = raw.QueryRow(`SELECT he FROM tm_segments WHERE zh_hash=? AND pack_id=?`, md5Hex("流量统计"), 25).Scan(&he)
+	if he != "" {
+		t.Fatalf("module 不匹配也必须按唯一键清空，实得 %q", he)
+	}
+}

@@ -203,6 +203,9 @@ func main() {
 					stat.errSkip++
 					continue
 				}
+				// ★ SaveEntry 命中已存在条目时不同步 tm_segments（kbpackages.go:525-529），
+				//   必须显式同步，否则 TM 检索仍召回旧错译＝没洗干净。
+				syncTMSegment(raw, e, fixed)
 			}
 			stat.repaired++
 			writeRec(bf, changeRec{Time: nowStr(), ID: e.ID, Src: e.SrcText, Lang: e.TgtLang,
