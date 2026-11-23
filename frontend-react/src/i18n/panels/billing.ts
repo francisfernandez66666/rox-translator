@@ -112,6 +112,11 @@ export const zh: Record<string, string> = {
   'billing.estConfirmReset': '确认清空这六项预估系数、回落到代码缺省？',
   'billing.estNeedAll': '六项系数必须一次填齐：线性系数 K 要大于 0（清零＝预检全放行），固定项 F0/F1 可为 0 但不能为负',
   'billing.estPoints': '积分换算：1 积分 = {n} token',
+  // ★ 2026-11-23 tier3 采集语义闸回译模型的超管配置。
+  'billing.scrapeBackSection': '采集语义闸 · 回译模型',
+  'billing.scrapeBackHint': '知识库自动采集的语义闸先把译文用此模型翻回中文，再交给评估模型打分判错译。只有经过希伯来语→中文回译实测的翻译模型可选；配错会让错译词条混入术语硬闸。保存后立即生效，无需重启。',
+  'billing.scrapeBackDefault': '库里未配置，走代码缺省 {v}',
+  'billing.scrapeBackConfirmReset': '确认清空回译模型配置、回落到代码缺省？',
   'billing.tlSection': '逐行翻译重试档位（影响每一单的消耗与等待）',
   'billing.tlHint': '平台级档位，对所有租户的每一单生效。补译轮数＝一行翻不出时最多再单独打几枪；连续空行数＝多少行连着拿不到东西才判上游不可用、停止逐行重试。',
   'billing.tlRetryMax': '单行补译轮数（1~5）',
@@ -321,6 +326,11 @@ export const en: Record<string, string> = {
   'billing.estConfirmReset': 'Clear these six estimate coefficients and fall back to code defaults?',
   'billing.estNeedAll': 'All six coefficients must be submitted together: linear K must be greater than 0 (zero disables the pre-flight check), fixed F0/F1 may be 0 but never negative',
   'billing.estPoints': 'Conversion: 1 credit = {n} tokens',
+  // ★ 2026-11-23 Tier-3 collection semantic gate back-translation model admin config.
+  'billing.scrapeBackSection': 'Collection semantic gate · back-translation model',
+  'billing.scrapeBackHint': 'The collection gate first back-translates each term into Chinese with this model, then an evaluator scores it to catch mistranslations. Only translation models verified for Hebrew→Chinese back-translation are selectable; a wrong pick lets bad terms into the terminology hard gate. Saving takes effect immediately, no restart.',
+  'billing.scrapeBackDefault': 'Not stored, using code default {v}',
+  'billing.scrapeBackConfirmReset': 'Clear the back-translation model setting and fall back to the code default?',
   'billing.tlSection': 'Per-line translation retry tiers (affects the cost and latency of every job)',
   'billing.tlHint': 'Platform-wide tiers applied to every job of every tenant. Retry rounds: how many extra single-line attempts a line gets. Dead streak: how many consecutive empty lines it takes to declare the upstream unavailable and stop retrying line by line.',
   'billing.tlRetryMax': 'Retry rounds per line (1-5)',

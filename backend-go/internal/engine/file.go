@@ -2239,6 +2239,7 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 					// 缺数格逐字节回落源文，并并入未译出点名；这一步的位置必须在 appendNotes 之前。
 					if extra, dwarn, derr := e.verifyDeliveredNumbers(ctx, filePath, outPath, lc); derr != nil {
 						observability.Warn(ctx, "交付件数字守恒复核失败", "lang", lc, "error", derr.Error())
+						gateWarnings = append(gateWarnings, fmt.Sprintf("%s 交付件数字守恒复核失败（%s）；本次跳过数字兜底", config.LangNames[lc], derr.Error()))
 					} else {
 						notes = append(notes, extra...)
 						gateWarnings = append(gateWarnings, dwarn...)

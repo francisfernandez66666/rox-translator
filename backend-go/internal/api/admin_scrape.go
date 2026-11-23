@@ -24,6 +24,7 @@ import (
 	"translator/internal/crawler"
 	apierrors "translator/internal/errors"
 	"translator/internal/gate"
+	"translator/internal/llm"
 	"translator/internal/store"
 )
 
@@ -153,6 +154,8 @@ func (s *Server) handleKBScrapeSourceRun(w http.ResponseWriter, r *http.Request)
 	// 复用全局引擎的 LLM 客户端，供 llm_gen 类数据源生成条目
 	if s.Engine != nil {
 		c.LLM = s.Engine.LLM
+		// ★ 2026-11-23 tier3 质量治理：与定时采集同口径注入语义门（自解密 Key）
+		c.Quality = newQualityJudge(s.Cfg, llm.NewClient(s.Cfg), s.Store)
 	}
 	c.Probe = func() bool { return s.lowOccupancyForScrape() }
 	// ★ 2026-09-29 〇-AD：这里传的是 r.Context()，而 withTenant 中间件在超管带

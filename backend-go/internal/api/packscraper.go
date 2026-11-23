@@ -18,6 +18,7 @@ import (
 	"translator/internal/crawler"
 	"translator/internal/infra/distlock"
 	"translator/internal/infra/redis"
+	"translator/internal/llm"
 	"translator/internal/observability"
 	"translator/internal/store"
 )
@@ -88,6 +89,9 @@ func (s *Server) runPackScrapeOnce() error {
 	c := crawler.New(s.Store)
 	if s.Engine != nil {
 		c.LLM = s.Engine.LLM
+		// ★ 2026-11-23 tier3 质量治理：注入语义门（initial_evals 档 Judge，自解密 Key），
+		// 阈值/抽样由 system_config 控制，Judge 缺失时 newQualityJudge 返回 nil 自动降级。
+		c.Quality = newQualityJudge(s.Cfg, llm.NewClient(s.Cfg), s.Store)
 	}
 	// 低占用探针：无进行中翻译任务 + LLM 错误率低 + RSS 低于水位
 	// （Probe 返回 true=低占用可采集，与 Crawler.Idle 契约一致）

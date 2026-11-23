@@ -214,7 +214,12 @@ func (p *llmProducer) buildPrompt(deps *SourceDeps, batch int) string {
 	sb.WriteString(fmt.Sprintf(
 		"你是资深行业翻译专家。请针对行业「%s」与目标语言「%s」（%s）输出第 %d 批「行业常用术语 zh→%s 对照」。\n"+
 			"严格只输出 JSON，格式：{\"entries\":[{\"src\":\"中文\",\"tgt\":\"%s\"}]}\n"+
-			"每批 %d 条术语（高频、地道、避免直译腔），共输出一次 JSON，不要任何多余文字。",
+			"每批最多 %d 条术语，共输出一次 JSON，不要任何多余文字。\n"+
+			"质量要求（违反任一条就不要输出该词，宁可少给）：\n"+
+			"1. 只给该行业**真实存在的标准译法**；拿不准、词典里查不到、母语者不会这么说的词，一律不输出；\n"+
+			"2. 禁止生造词、禁止按字面硬拼、禁止把音译当术语（如把 component 写成 komponentnaya 这类转写绝不接受）；\n"+
+			"3. 品牌名与拉丁缩写保留原文（ROX/NLU/CRM/SUV 等），不翻译、不转写；\n"+
+			"4. 每条 tgt 必须是目标语母语者认可的行业规范用词，不是逐字直译。",
 		industry, langName, tgtLang, batch+1, tgtLang, langName, llmBatchSize))
 	return sb.String()
 }

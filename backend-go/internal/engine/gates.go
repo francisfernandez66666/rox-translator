@@ -245,6 +245,37 @@ func (g *gateCtx) check(source, lang, translated string, retry bool, e *Engine, 
 	return tr, warnings
 }
 
+// enforceTermDrift 术语漂移硬闸（★ 2026-11-23 用户令三项升级之一）：
+// 整篇一致性后检（CheckTermConsistency）此前只出 WARN，漂移照样交付。
+// 这里在**单段层面**跑同一把尺子：漂移段先带术语反馈重译一次（与 gc.check 的
+// 采纳门槛同一把尺子：可用性 ∧ 漂移消除 ∧ 过 RunWithTerms），仍漂移才回落为 WARN——
+// 不静默交付，也不无上限烧调用（一次重译封顶，与 gateRecheckMax 口径一致）。
+func (g *gateCtx) enforceTermDrift(ctx context.Context, e *Engine, source, lang, tr string, retry bool, terms []gate.TermRequirement, snap []gate.TermRequirement) (string, []string) {
+	var warnings []string
+	if len(snap) == 0 || strings.TrimSpace(tr) == "" || strings.TrimSpace(source) == "" {
+		return tr, warnings
+	}
+	drifts := gate.CheckTermConsistency(source, tr, snap)
+	if len(drifts) == 0 {
+		return tr, warnings
+	}
+	if retry && e.ReviewEnabled(ctx) {
+		msg := "请修正以下术语一致性问题后重新翻译：" + drifts[0].Detail
+		if fixed := e.TranslateWithFeedback(ctx, source, lang, msg, config.StageReview); strings.TrimSpace(fixed) != "" &&
+			e.fileTranslationUsable(ctx, source, fixed, lang) &&
+			len(gate.CheckTermConsistency(source, fixed, snap)) == 0 &&
+			gate.RunWithTerms(source, lang, fixed, terms).Pass {
+			return fixed, warnings
+		}
+	}
+	for _, c := range drifts {
+		if !c.Pass {
+			warnings = append(warnings, fmt.Sprintf("%s %s（%s）", langLabel(lang), c.Name, c.Detail))
+		}
+	}
+	return tr, warnings
+}
+
 // applyOutputGates 文本主路径（HandleText）：对全部目标语言译文做一次性质量闸门校验。
 func (e *Engine) applyOutputGates(ctx context.Context, source string, translations map[string]string, retry bool) []string {
 	if len(translations) == 0 {
@@ -301,12 +332,21 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 	}
 	var warnings []string
 	for lc, m := range langTranslations {
+		// ★ 2026-11-23：新硬闸的运营配置读数（拉丁白名单 / 全角标点容忍度）。
+		//   缺省=内置词表+0 容忍；白名单键 `latin_allowlist_<lang>` 逗号分隔，运营自助扩。
+		if e.St != nil {
+			if raw, cerr := e.St.GetConfig("latin_allowlist_" + lc); cerr == nil && strings.TrimSpace(raw) != "" {
+				gate.SetLatinAllowlist(lc, strings.Split(raw, ","))
+			}
+			gate.SetCJKPunctMax(lc, e.St.ConfigIntAllowZero("cjk_punct_max", 0))
+		}
 		// ★ P3：按语言收集全篇源段，构建一次高频词表（KB 已剔除），整篇一致性后检。
 		sources := make([]string, 0, len(m))
 		for orig := range m {
 			sources = append(sources, orig)
 		}
 		hfCtx := withHighfreqTerms(ctx, e.BuildHighfreqTermTable(ctx, sources, lc, &gc))
+		hfSnap := highfreqTermsFromCtx(hfCtx).AsSnapshot()
 		for orig, tr := range m {
 			if tr == SensitivePlaceholderText { // ★ S8：拦截占位段不进质量闸门
 				continue
@@ -324,6 +364,12 @@ func (e *Engine) applySegmentGates(ctx context.Context, langTranslations map[str
 				m[orig] = fixed
 			}
 			warnings = append(warnings, ws...)
+			// ★ 术语漂移硬闸（2026-11-23）：单段层面先重译一次，仍漂移才回落 WARN。
+			driftTr, dw := gc.enforceTermDrift(ctx, e, orig, lc, fixed, retry, gc.termReqs(segCtx, orig, lc), hfSnap)
+			if driftTr != fixed {
+				m[orig] = driftTr
+			}
+			warnings = append(warnings, dw...)
 		}
 		// 整篇一致性后检（跨段分歧必须整篇看）。
 		joinedSrc, joinedTr := strings.Join(sources, "\n"), ""

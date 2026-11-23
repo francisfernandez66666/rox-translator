@@ -1,6 +1,6 @@
 // ============ 本文件职责中文说明 ============
 // 后端用户提示 zh→en 词条表（★ 2026-09-24 〇-S #12 后端语言识别）。
-// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（577 条，
+// EXACT：全仓 internal/api 非测试代码里出现的静态中文 message 字面量（581 条，
 //
 //	由脚本从源码盘点生成，键与源码逐字节一致，含「保存失败: 」这类带尾空格的前缀键）。
 //
@@ -59,6 +59,7 @@ var exactEN = map[string]string{
 	"lang 必须为 zh 或 en":                                      "lang must be zh or en",
 	"links 需为合法 JSON 数组":                                    "links must be a valid JSON array",
 	"merged 文件名非法":                                          "Invalid merged file name",
+	"model 不能为空；恢复缺省用 {\"reset\":true}":                     "model must not be empty; use {\"reset\":true} to restore the default",
 	"name 不能为空":                                             "name must not be empty",
 	"name 必填":                                               "name is required",
 	"pack_type 仅支持 industry/locale/persona":                 "pack_type supports industry/locale/persona only",
@@ -213,6 +214,7 @@ var exactEN = map[string]string{
 	"品牌静态件内容异常":                   "Brand asset content is invalid",
 	"回写仅支持 docx 结果文件（当前结果非 docx）": "Write-back supports only docx results (current result is not docx)",
 	"回写失败: ":                      "Write-back failed: ",
+	"回译模型不在白名单内：只允许 ":             "Back-translation model is not in the allowlist; allowed: ",
 	"回调 URL 不能为空":                 "Callback URL must not be empty",
 	"回调渠道与订单渠道不符":                 "Callback channel does not match the order channel",
 	"回调签名校验未通过":                   "Callback signature verification failed",
@@ -523,6 +525,7 @@ var exactEN = map[string]string{
 	"请求格式错误或 fields 为空":                                      "Malformed request or empty fields",
 	"请求格式错误（kind 必填）":                                        "Malformed request (kind required)",
 	"请求格式错误：需为 {\"currency\":\"USD\",\"rates\":{...}}":       "Malformed request: expected {\"currency\":\"USD\",\"rates\":{...}}",
+	"请求格式错误：需为 {\"model\":\"tencent/Hunyuan-MT-7B\"}":        "Invalid request format: expected {\"model\":\"tencent/Hunyuan-MT-7B\"}",
 	"请求格式错误：需为 {\"retry_max\":3,\"upstream_dead_streak\":3}": "Bad request format: expected {\"retry_max\":3,\"upstream_dead_streak\":3}",
 	"请求过于频繁，请稍后再试":                                           "Too many requests; please retry later",
 	"请输入原邮箱验证码":                                              "Enter the current email's verification code",
@@ -592,6 +595,7 @@ var exactEN = map[string]string{
 	"默认租户不可删除":                         "The default tenant cannot be deleted",
 	"默认租户不可清除":                         "The default tenant cannot be purged",
 	"齐备度读取失败":                          "Failed to read readiness",
+	"；其它模型未经 he→zh 回译实测，配置上去等于把语义闸打断":  "; other models have not been verified for he→zh back-translation and would silently break the semantic gate",
 }
 
 // patternEN 模式词条：中文 fmt 模板 → 英文 fmt 模板（占位符种类与顺序两侧一致）。

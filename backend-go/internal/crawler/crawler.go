@@ -36,9 +36,10 @@ type LLMCaller interface {
 
 // Crawler 采集器：驱动每日采集循环。
 type Crawler struct {
-	St    *store.Store // 平台存储（数据源/待审池/断点）
-	LLM   LLMCaller    // LLM 客户端（tier3 用；可为 nil 则跳过 llm_gen 源）
-	Probe LoadProbe    // 低占用探针（可为 nil=始终视为低占用）
+	St      *store.Store // 平台存储（数据源/待审池/断点）
+	LLM     LLMCaller    // LLM 客户端（tier3 用；可为 nil 则跳过 llm_gen 源）
+	Quality QualityJudge // 语义质量门（tier3 用；可为 nil 则只跑结构化闸，跳过语义门）
+	Probe   LoadProbe    // 低占用探针（可为 nil=始终视为低占用）
 	// ★ D14（2026-09-12）：跨批次/跨源复用同一 fetchBase——主机限频窗口、
 	// robots 缓存、HTTP 连接池全程有效（旧实现每批新建，限频形同虚设）。
 	fetchMu sync.Mutex
@@ -273,13 +274,37 @@ func (c *Crawler) resolvePack(src *store.KBScrapeSource) (*SourceDeps, error) {
 
 // flushEntries 处理一批待审条目：autoApprove=true 时自动清洗+审批+落正式库并留痕；
 // 否则写入待审池等人工审批。返回落库/新增条数。
+//
+// ★ 2026-11-23 tier3 质量治理：autoApprove 路径在落库前对 Tier=3 条目跑两道闸——
+//
+//	闸2 结构化校验（书写系统/拉丁转写/全角标点/源译同形，确定性拒绝）；
+//	闸3 语义质量门（QualityJudge term/semantic 低分拒绝，Judge 不可用时 fail-open + WARN）。
+//
+// 落在咽喉处而非 store：与人工审批 admin_scrape.go:259 的书写系统校验同口径，
+// 且保持 store 不 import gate 的依赖方向。tier1/tier2 产出不过闸（可信度不同）。
 func (c *Crawler) flushEntries(batch []*store.KBStagedEntry, autoApprove bool) (int, error) {
 	if len(batch) == 0 {
 		return 0, nil
 	}
 	if autoApprove {
+		qcfg := loadQualityConfig(c.St)
 		n := 0
 		for _, e := range batch {
+			if e.Tier == 3 {
+				if reason := structuralReject(e.SrcLang, e.SrcText, e.TgtLang, e.TgtText); reason != "" {
+					observability.Warn(context.Background(), "tier3 条目被结构化闸拒绝",
+						"src", e.SrcText, "tgt", e.TgtText, "reason", reason)
+					continue
+				}
+				if fixed, keep := c.passSemanticGate(context.Background(), qcfg, e); !keep {
+					continue
+				} else if fixed != "" {
+					// ★ 判错后 HY 正向重译修正成功：回写译文再落库（不是丢弃）。
+					observability.Warn(context.Background(), "tier3 条目语义闸修正后回写",
+						"src", e.SrcText, "old", e.TgtText, "fixed", fixed)
+					e.TgtText = fixed
+				}
+			}
 			if err := c.St.AutoApproveEntry(1, e); err != nil {
 				// 单条落库失败不阻断整批（如目标语言不在白名单列），计入失败并继续
 				log.Printf("[crawler] 自动审批条目失败（src=%q）: %v", e.SrcText, err)
@@ -290,6 +315,57 @@ func (c *Crawler) flushEntries(batch []*store.KBStagedEntry, autoApprove bool) (
 		return n, nil
 	}
 	return c.St.StageEntriesBatch(batch)
+}
+
+// passSemanticGate 闸3：语义质量门（判错→重译修正→验证→回写）。
+// 返回 (fixed, keep)：keep=false 丢弃；fixed 非空表示译文已被修正，调用方须回写 e.TgtText。
+// Judge 未注入 / 语义门关闭 / 抽样未命中 / Judge 报错 ⇒ ("", true) 放行（fail-open + WARN）。
+func (c *Crawler) passSemanticGate(ctx context.Context, cfg qualityGateConfig, e *store.KBStagedEntry) (fixed string, keep bool) {
+	if c.Quality == nil || cfg.MinScore <= 0 || cfg.Sample <= 0 {
+		return "", true // 未配置或关闭：只走结构化闸
+	}
+	if cfg.Sample < 1 && !sampleByHash(e.SrcText, e.TgtText, cfg.Sample) {
+		return "", true // 抽样未命中
+	}
+	pass, reason, err := c.Quality.JudgeTerm(ctx, e.SrcText, e.TgtText, e.TgtLang)
+	if err != nil {
+		observability.Warn(ctx, "tier3 语义质量门 Judge 失败，放行（fail-open）",
+			"src", e.SrcText, "tgt", e.TgtText, "err", err.Error())
+		return "", true
+	}
+	if pass {
+		return "", true
+	}
+	// ★ 判错：不直接丢，先用中文源词经 HY 正向重译生成正确译文，再验证。
+	fixed, ok, rerr := c.Quality.RepairTerm(ctx, e.SrcText, e.TgtLang)
+	if rerr != nil || !ok || fixed == "" {
+		observability.Warn(ctx, "tier3 条目语义闸判错且重译修正失败，丢弃",
+			"src", e.SrcText, "tgt", e.TgtText, "reason", reason,
+			"repair_err", func() string {
+				if rerr != nil {
+					return rerr.Error()
+				}
+				return ""
+			}())
+		return "", false
+	}
+	return fixed, true
+}
+
+// sampleByHash 用内容 hash 做确定性抽样（同一词条跨轮同判定），避免引入全局 rand 状态。
+func sampleByHash(src, tgt string, rate float64) bool {
+	if rate >= 1 {
+		return true
+	}
+	if rate <= 0 {
+		return false
+	}
+	var h uint32 = 2166136261 // FNV-1a
+	for _, r := range src + "\x00" + tgt {
+		h ^= uint32(r)
+		h *= 16777619
+	}
+	return float64(h%10000)/10000 < rate
 }
 
 // flushPhrases 处理一批待审安全句：autoApprove=true 时自动审批+落正式库并留痕；否则入待审池。

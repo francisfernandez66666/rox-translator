@@ -359,6 +359,33 @@ export async function adminEstTokensSave(
 }
 
 // ============================================================================
+// ★ 2026-11-23 tier3 采集语义闸「回译模型」的超管配置口。
+// 回译腿用哪个模型决定错译拦不拦得住（配错＝语义闸静默失效），故调档不该发版。
+// 后端＝internal/api/scrape_quality_config.go，白名单由后端唯一声明、前端从 GET 回显取。
+// ============================================================================
+export interface ScrapeBacktranslateCfg {
+  model?: string      // 生效值（库里配了用它，没配走代码缺省）
+  stored?: string     // 库内原值（空＝走代码缺省）
+  default?: string    // 代码缺省
+  allowed?: string[]  // 白名单（后端唯一声明，前端下拉直接取）
+  config_key?: string
+}
+
+/** 管理台：回显采集回译模型的生效值／库内原值／缺省／白名单 */
+export async function adminScrapeBacktranslate(): Promise<AdminResp & ScrapeBacktranslateCfg> {
+  return bizResp(() => request('/api/admin/config/scrape-backtranslate', { headers: authHeaders() }))
+}
+
+/** 管理台：保存采集回译模型（必须白名单内）；传 { reset: true } 回落代码缺省 */
+export async function adminScrapeBacktranslateSave(
+  data: { model?: string; reset?: boolean },
+): Promise<AdminResp & ScrapeBacktranslateCfg> {
+  return bizResp(() => request('/api/admin/config/scrape-backtranslate', {
+    method: 'POST', headers: authHeaders(), body: JSON.stringify(data),
+  }))
+}
+
+// ============================================================================
 // ★ 2026-10-26（用户追加裁决九-4）逐行翻译两条档位的运营配置口
 // （形态照上面的 est-tokens，后端＝internal/api/text_line_config.go）。
 // 两键对应 system_config 的 text_line_retry_max（一行翻不出时最多再单独打几枪）与

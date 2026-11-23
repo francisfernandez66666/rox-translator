@@ -58,8 +58,10 @@ import {
   adminEstTokens, adminEstTokensSave, EST_TOKEN_FIELDS, type EstTokenField,
   // ★ 2026-10-26 裁决九-4：逐行翻译两条档位的运营配置口（形态与上面预估系数同一族）。
   adminTextLineTiers, adminTextLineTiersSave,
-  // ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两条档位（走不走分段／分段总积分上限）的运营配置口。
-  adminChatSegTiers, adminChatSegTiersSave,
+    // ★ 2026-11-01 DEF-P1-05 B2：即时翻译分段两条档位（走不走分段／分段总积分上限）的运营配置口。
+    adminChatSegTiers, adminChatSegTiersSave,
+    // ★ 2026-11-23 tier3 采集语义闸回译模型的超管配置口（白名单由后端唯一声明）。
+    adminScrapeBacktranslate, adminScrapeBacktranslateSave,
   adminGrowthFunnel, // ★ F-64②（批 I-10）：漏斗看板原先裸调 request()，后端已改诚实状态码 ⇒ 收进接口层（内部包 bizResp）
   authHeaders,
   API_BASE,
@@ -266,6 +268,12 @@ export function PlansP() {
     formula: string
     pointsRate: number
   }>({ ready: false, rows: {}, formula: '', pointsRate: 0 })
+  // ★ 2026-11-23 tier3 采集语义闸回译模型：与 estMeta 同一口径——表单填**生效值**，
+  //   库内原值/白名单另存，界面才能区分"配了"与"走缺省"；没回显成功就禁提交。
+  const [scrapeBackModel, setScrapeBackModel] = useState('')
+  const [scrapeBackMeta, setScrapeBackMeta] = useState<{
+    ready: boolean; stored: string; def: string; allowed: string[]
+  }>({ ready: false, stored: '', def: '', allowed: [] })
   // ★ 2026-10-26（裁决九-4）逐行翻译两条档位。与 estMeta 同一口径，两条判据都不许省：
   //   ① 表单填的是**生效值**（后端按读侧钳位回显），不是库里那个字面量——库里躺着脏值时
   //      若把脏值塞进输入框，管理员原样点保存就等于把一个系统从没在用过的数钉成正式配置；
@@ -465,6 +473,19 @@ function stopPolling() { if (payTimer.current) { clearInterval(payTimer.current)
       setEstMeta({ ready: true, rows, formula: String(et.formula || ''), pointsRate: Number(et.points_tokens_rate) || 0 })
     } else {
       setEstMeta((m) => ({ ...m, ready: false }))
+    }
+    // ★ 2026-11-23 采集语义闸回译模型回显：表单填生效值，库内原值/白名单另存做标注。
+    const sb: Any = await guardRead(adminScrapeBacktranslate)
+    if (sb.success) {
+      setScrapeBackModel(String(sb.model || ''))
+      setScrapeBackMeta({
+        ready: true,
+        stored: String(sb.stored || '').trim(),
+        def: String(sb.default || ''),
+        allowed: Array.isArray(sb.allowed) ? sb.allowed.map(String) : [],
+      })
+    } else {
+      setScrapeBackMeta((m) => ({ ...m, ready: false }))
     }
   }, [isSuper, guardRead])
 
@@ -1009,6 +1030,27 @@ async function savePayChannels() {
     if (!(await confirmDialog({ body: t('billing.estConfirmReset'), danger: true }))) return
     try {
       const r: Any = await adminEstTokensSave({ reset: true })
+      if (toastResp(r, t('common.save'))) await loadPkgs()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+
+  // saveScrapeBack 保存采集回译模型。前端只做白名单预拦（与后端同口径，白名单从 GET 回显取），
+  // 真正判据仍在后端——前端这层只是让非法选项点不动，不写第二份模型清单。
+  async function saveScrapeBack() {
+    const model = String(scrapeBackModel || '').trim()
+    if (!model || (scrapeBackMeta.allowed.length > 0 && !scrapeBackMeta.allowed.includes(model))) {
+      void toastWarn(t('billing.scrapeBackHint'))
+      return
+    }
+    try {
+      const r: Any = await adminScrapeBacktranslateSave({ model })
+      if (toastResp(r, t('common.save'))) await loadPkgs()
+    } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
+  }
+  async function resetScrapeBack() {
+    if (!(await confirmDialog({ body: t('billing.scrapeBackConfirmReset'), danger: true }))) return
+    try {
+      const r: Any = await adminScrapeBacktranslateSave({ reset: true })
       if (toastResp(r, t('common.save'))) await loadPkgs()
     } catch (e: any) { void toastError(e?.message || t('common.saveFail')) }
   }
@@ -1568,6 +1610,32 @@ async function savePayChannels() {
             {estMeta.pointsRate > 0 ? (
               <div style={{ fontSize: 14, color: 'var(--adm-faint)', marginTop: 8 }}>{tpl('billing.estPoints', { n: String(estMeta.pointsRate) })}</div>
             ) : null}
+          </div>
+
+          {/* ★ 2026-11-23 tier3 采集语义闸回译模型：与预估系数同一面板同一形态。
+              回译腿用哪个模型决定错译拦不拦得住——配个只会原样吐回的等于语义闸静默失效，
+              所以下拉只给后端白名单里的模型，并把「库里配了什么 vs 走缺省」分开标注。 */}
+          <div style={{ marginTop: 12, borderTop: '1px dashed var(--adm-line)', paddingTop: 10 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ fontWeight: 600, fontSize: 16 }}>{t('billing.scrapeBackSection')}</span>
+              <Button onClick={saveScrapeBack} disabled={!scrapeBackMeta.ready}>{t('common.save')}</Button>
+              <Button onClick={resetScrapeBack} disabled={!scrapeBackMeta.ready}>{t('billing.estReset')}</Button>
+            </div>
+            <div style={{ fontSize: 15, color: 'var(--adm-faint)', margin: '4px 0 8px' }}>{t('billing.scrapeBackHint')}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 15, color: 'var(--adm-hint)', width: 300 }}>{t('billing.scrapeBackSection')}</span>
+              <select className="lc-input" style={{ width: 260 }} value={scrapeBackModel} disabled={!scrapeBackMeta.ready}
+                      onChange={(e) => setScrapeBackModel(e.target.value)}>
+                {(scrapeBackMeta.allowed.length > 0 ? scrapeBackMeta.allowed : [scrapeBackModel].filter(Boolean)).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {!scrapeBackMeta.stored ? (
+                <span style={{ fontSize: 14, color: 'var(--adm-faint)' }}>
+                  {tpl('billing.scrapeBackDefault', { v: scrapeBackMeta.def })}
+                </span>
+              ) : null}
+            </div>
           </div>
 
           {/* ★ 2026-10-26（裁决九-4）逐行翻译两条档位：与预估系数同一面板同一形态（同为

@@ -15,6 +15,10 @@
 import json
 
 T = {
+"model 不能为空；恢复缺省用 {\"reset\":true}": "model must not be empty; use {\"reset\":true} to restore the default",
+"回译模型不在白名单内：只允许 ": "Back-translation model is not in the allowlist; allowed: ",
+"；其它模型未经 he→zh 回译实测，配置上去等于把语义闸打断": "; other models have not been verified for he→zh back-translation and would silently break the semantic gate",
+"请求格式错误：需为 {\"model\":\"tencent/Hunyuan-MT-7B\"}": "Invalid request format: expected {\"model\":\"tencent/Hunyuan-MT-7B\"}",
 "缺少 session_id": "Missing session_id",
 "退订通道未启用": "Unsubscribe channel is not enabled",
 "退订链接无效": "Invalid unsubscribe link",

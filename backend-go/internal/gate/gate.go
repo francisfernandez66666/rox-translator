@@ -197,6 +197,28 @@ func RunWithTerms(source, target, translation string, terms []TermRequirement) *
 		res.Pass = false
 	}
 
+	// 12. 无拉丁转写（★ 2026-11-23 用户令三项升级之二；tv13 外部审计 L151 坐实）：
+	//   非拉丁目标语里混入 ≥4 连续拉丁字母且不在白名单 ⇒ 机翻引擎串串/俄语转写典型痕迹。
+	//   白名单三源：内置技术词表 ∪ system_config `latin_allowlist_<lang>` ∪ 命中 KB 词条。
+	if viols := LatinTransliterationViolations(target, tr, terms); len(viols) > 0 {
+		res.Checks = append(res.Checks, Check{"无拉丁转写", false,
+			fmt.Sprintf("译文混入未登记拉丁串：%s", dedupeJoin(viols))})
+		res.Pass = false
+	} else {
+		res.Checks = append(res.Checks, Check{"无拉丁转写", true, ""})
+	}
+
+	// 13. 标点体系（★ 同批第三项；审计坐实 9 行全角标点残留）：
+	//   非拉丁/非 CJK 目标语里出现全角标点 ⇒ 中文标点残留。容忍度 cjk_punct_max 默认 0；
+	//   命中 KB 词条 target_text 里出现过的标点字符按词条豁免。
+	if pv := CJKPunctViolations(target, tr, terms); len(pv) > cjkPunctMaxFor(target) {
+		res.Checks = append(res.Checks, Check{"标点体系", false,
+			fmt.Sprintf("译文含 %d 个全角标点（%s）", len(pv), dedupeJoin(pv))})
+		res.Pass = false
+	} else {
+		res.Checks = append(res.Checks, Check{"标点体系", true, ""})
+	}
+
 	return res
 }
 

@@ -578,6 +578,9 @@ func (s *Server) routesBilling() {
 	//   同一形态照 text-lines／est-tokens（白名单枚举＋校验先行整批落库），不新造页面；
 	//   与那一族的**唯一判据差异**是这一族 0 是真实档位（关分段＝0，不设上限＝0），见该文件头 ①②③。
 	s.mux.HandleFunc("/api/admin/config/chat-segments", s.handleAdminChatSegConfig)
+	// ★ 2026-11-23 tier3 语义闸回译模型的超管配置口（GET 回显 / POST 保存，白名单枚举）。
+	//   回译腿用哪个模型决定错译拦不拦得住，调档不该要求发版；形态照 text-lines/est-tokens。
+	s.mux.HandleFunc("/api/admin/config/scrape-backtranslate", s.handleAdminScrapeBacktranslate)
 	s.mux.HandleFunc("/api/qr-image/", s.handleQRImage)
 	// 通用二维码文本渲染（收银台把 mock/wechat/alipay 的 qr_content 渲染为可扫码图片；需登录）
 	s.mux.HandleFunc("/api/qr/render", s.handleQRRender)
