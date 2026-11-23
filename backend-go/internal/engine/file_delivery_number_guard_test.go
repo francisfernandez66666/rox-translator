@@ -5,6 +5,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,7 @@ func TestVerifyDeliveredNumbersFallsBackMissingDigitCell(t *testing.T) {
 	// 第二格丢了 150，第三格金额已正确换算（650,000–1,200,000）。
 	write(out, "# כותרת\n|מדד|ערך|\n|פרסום|כמות לידים זהה|\n|סכום|650,000–1,200,000|\n")
 
-	notes, warnings, err := verifyDeliveredNumbers(src, out, "he")
+	notes, warnings, err := (&Engine{}).verifyDeliveredNumbers(context.Background(), src, out, "he")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func TestVerifyDeliveredNumbersNoFalsePositive(t *testing.T) {
 	out := filepath.Join(dir, "out.md")
 	os.WriteFile(src, []byte("|金额|150–250 万|\n"), 0o644)
 	os.WriteFile(out, []byte("|סכום|1,500,000–2,500,000|\n"), 0o644)
-	notes, warnings, err := verifyDeliveredNumbers(src, out, "he")
+	notes, warnings, err := (&Engine{}).verifyDeliveredNumbers(context.Background(), src, out, "he")
 	if err != nil || len(notes) != 0 || len(warnings) != 0 {
 		t.Fatalf("正确换算不该触发兜底：notes=%+v warnings=%+v err=%v", notes, warnings, err)
 	}

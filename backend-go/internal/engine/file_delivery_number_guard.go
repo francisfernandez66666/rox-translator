@@ -7,6 +7,7 @@
 package engine
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"regexp"
@@ -19,7 +20,7 @@ import (
 
 // verifyDeliveredNumbers 校验并修正 .md 交付件的数字守恒。
 // 返回：需要点名的回落条目、告警、错误。只处理源/产物行号对齐且列数相同的行。
-func verifyDeliveredNumbers(srcPath, outPath, lang string) ([]fileproc.UntranslatedItem, []string, error) {
+func (e *Engine) verifyDeliveredNumbers(ctx context.Context, srcPath, outPath, lang string) ([]fileproc.UntranslatedItem, []string, error) {
 	sb, err := os.ReadFile(srcPath)
 	if err != nil {
 		return nil, nil, err
@@ -66,7 +67,15 @@ func verifyDeliveredNumbers(srcPath, outPath, lang string) ([]fileproc.Untransla
 				changedRepair = true
 				continue
 			}
-			dc[j] = sc[j] // 补不回来 ⇒ 逐字节回落源文，随后进未译出清单
+			// 就地补不齐 ⇒ 先对该格单独重译一次（最小指令腿；现网最小样本实证该格可翻对），
+			// 重译产物必须同时过可用性与数字守恒两把尺子；仍不行才逐字节回落源文并点名。
+			if v, ok := e.translateSegmentMinimal(ctx, sc[j], lang); ok &&
+				e.fileTranslationUsable(ctx, sc[j], v, lang) && gate.NumbersPreserved(sc[j], v) {
+				dc[j] = v
+				lineChanged, changed, changedRepair = true, true, true
+				continue
+			}
+			dc[j] = sc[j] // 仍不行 ⇒ 逐字节回落源文，随后进未译出清单
 			lineChanged, changed = true, true
 			notes = append(notes, fileproc.UntranslatedItem{
 				Line: i + 1, Source: sc[j], Unit: "行",
