@@ -61,6 +61,21 @@ describe('审计动作码 i18n 覆盖（棘轮，只减不增）', () => {
     expect(fresh, `新增未翻译的审计动作码：${fresh.join(', ')}`).toEqual([])
   })
 
+  it('回译模型审计动作必须逐语种有文案（前两个参数含助手调用，旧正则会漏扫）', () => {
+    const files = [
+      './dicts.zh.ts', './dicts.en.ts',
+      ...['ar', 'de', 'es', 'fr', 'ja', 'ko', 'pt', 'ru', 'th', 'zh-hant'].map(code => `./locales/${code}.ts`),
+    ]
+    const backend = readFileSync(new URL('../../../backend-go/internal/api/scrape_quality_config.go', import.meta.url), 'utf8')
+    for (const action of ['scrape_backtranslate_save', 'scrape_backtranslate_reset']) {
+      expect(backend, `后端已不写 ${action}，这条专项锁成了空靶子`).toContain(`"${action}"`)
+      for (const file of files) {
+        const source = readFileSync(new URL(file, import.meta.url), 'utf8')
+        expect(source, `${file} 缺 ${action} 的本地化文案`).toContain(`audit.action.${action}`)
+      }
+    }
+  })
+
   it('基线只减不增：漏译总数不得超过建立时的存量', () => {
     expect(unmapped.length, `漏译动作数 ${unmapped.length} > 基线 ${UNMAPPED_BASELINE.length}`).toBeLessThanOrEqual(UNMAPPED_BASELINE.length)
   })

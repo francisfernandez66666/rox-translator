@@ -19,6 +19,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import TicketsPage from './TicketsPage'
 
+// 详情接口与下载行为的最小替身，避免测试依赖真实后端。
 const mocks = vi.hoisted(() => ({
   detail: {} as Record<string, unknown>,
   download: vi.fn(async () => undefined),
@@ -60,11 +61,12 @@ afterEach(cleanup)
 async function openDetail(no: string) {
   const cells = await screen.findAllByText(no)
   const row = cells[0].closest('tr') as HTMLElement
-  const btns = [...row.querySelectorAll('button')]
+  const btns = [...row.querySelectorAll('td')[6].querySelectorAll('button')]
   fireEvent.click(btns[btns.length - 1])
   await waitFor(() => expect(document.querySelector('[data-testid="tk-progress-dialog"]')).toBeTruthy())
 }
 
+// 列表与详情共用的已完成工单夹具。
 const ticket = { id: 11, ticket_no: 'T-1', title: 't', status: 'completed', target_langs: 'en', created_at: '2026-10-19T00:00:00Z' }
 
 describe('工单详情面 · 交付件清单与退化露出', () => {
@@ -128,7 +130,7 @@ describe('工单详情面 · 交付件清单与退化露出', () => {
     render(<TicketsPage />)
     const cells = await screen.findAllByText('T-1')
     const row = cells[0].closest('tr') as HTMLElement
-    fireEvent.click(row.querySelectorAll('button')[0]) // 操作列第一个＝下载
+    fireEvent.click(row.querySelectorAll('td')[6].querySelectorAll('button')[0]) // 操作列第一个＝下载
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalled())
     // 文案走 i18n 键（key 由另一 agent 补译），此处只要求它**不是**空、且确实弹了一次
     expect(String(mocks.toastError.mock.calls[0][0])).not.toEqual('')
@@ -171,7 +173,7 @@ describe('工单详情面 · 交付件清单与退化露出', () => {
     render(<TicketsPage />)
     const cells = await screen.findAllByText('T-1')
     const row = cells[0].closest('tr') as HTMLElement
-    fireEvent.click(row.querySelectorAll('button')[0])
+    fireEvent.click(row.querySelectorAll('td')[6].querySelectorAll('button')[0])
     await waitFor(() => expect(document.querySelector('[data-testid="tk-dl-progress"]')).toBeTruthy())
     resolve()
     await waitFor(() => expect(document.querySelector('[data-testid="tk-dl-progress"]')).toBeNull())

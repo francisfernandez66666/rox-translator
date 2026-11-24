@@ -40,6 +40,7 @@ const (
 	highfreqMaxRunes = 6 // 中文词最长 6 字
 )
 
+// latinWordReHF 提取拉丁高频候选词，允许数字、连字符与下划线作为词内字符。
 var latinWordReHF = regexp.MustCompile(`[A-Za-z][A-Za-z0-9_-]{1,}`)
 
 // highfreqCandidates 从源文片段集合抽高频词候选（纯逻辑，无模型调用）。

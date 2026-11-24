@@ -41,6 +41,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/observability"
+	"translator/internal/secret"
 	"translator/internal/store"
 )
 
@@ -157,6 +158,10 @@ func resolveRoutesFromRaw(raw string) []config.ProviderConfig {
 	alive := make([]config.ProviderConfig, 0, len(routes))
 	for _, rt := range routes {
 		dec := store.DecryptSecret(rt.APIKey)
+		if secret.IsSecretMasked(dec) {
+			observability.Warn(context.Background(), "路由密钥为掩码值，该路由停用", "provider", rt.Provider, "model", rt.Model)
+			continue
+		}
 		if dec == "" && strings.HasPrefix(rt.APIKey, store.SecretEncPrefix) {
 			observability.Warn(context.Background(), "路由密钥解密失败，该路由停用",
 				"provider", rt.Provider, "model", rt.Model)
@@ -226,6 +231,9 @@ func cfgRoutesFor(cfg *config.Config) []config.ProviderConfig {
 // 返回: 不可变快照。副作用: 无（要产生"三档皆空"的告警请调用 Publish＋上层显式处理）。
 func Resolve(cfg *config.Config, st *store.Store) *Snapshot {
 	base, key, model, placeholder, origin := baseFromCfg(cfg)
+	if secret.IsSecretMasked(key) {
+		key = ""
+	}
 	snap := &Snapshot{
 		OnlineAPIBase: base, OnlineAPIKey: key, OnlineModel: model,
 		Placeholder: placeholder,
@@ -293,7 +301,7 @@ func Resolve(cfg *config.Config, st *store.Store) *Snapshot {
 
 	// —— ② 后台库配置：运营在管理台显式保存过的那一份 ——
 	if v := strings.TrimSpace(vals[KeyOnlineKey]); v != "" {
-		if dec := store.DecryptSecret(v); dec != "" {
+		if dec := store.DecryptSecret(v); dec != "" && !secret.IsSecretMasked(dec) {
 			snap.OnlineAPIKey = dec
 			snap.Placeholder = false
 		}
@@ -314,8 +322,8 @@ func Resolve(cfg *config.Config, st *store.Store) *Snapshot {
 
 	// —— ③ 主路由兜腿：库里也没给出可用 Key 时才走 ——
 	for _, r := range snap.Routes {
-		// 掩码值（sk-****）不是密钥；空值更不是
-		if r.APIKey != "" && !strings.HasPrefix(r.APIKey, "sk-****") {
+		// 掩码值不是密钥；空值更不是
+		if r.APIKey != "" && !secret.IsSecretMasked(r.APIKey) {
 			// 只接密钥这一件（与改造前完全一致）：端点/模型名跟着路由条本身走，
 			// resolveModel 命中路由时用的就是那条路由自己的端点，不必再抄进全局三件套。
 			snap.OnlineAPIKey = r.APIKey

@@ -60,3 +60,10 @@
 #   不是运行代码。本批的 `output/tv_acceptance_20261121/compare.txt` 就是被本地文档提交带进 BASE..HEAD
 #   之后被当成"代码"的（干跑清单只它一个）——同族第 N 次，按目录整条排除。
 :(exclude)output/
+# 本地运行/测试数据库（含 SQLite WAL/SHM）不是代码，任何情况下都不进公开仓库
+:(exclude)data/*.db
+:(exclude)data/*.db-shm
+:(exclude)data/*.db-wal
+# 前端历史构建目录与交付 tar 属生成物，不随纯代码推送
+:(exclude)frontend-react/dist_*/
+:(exclude)frontend-react/frontend-dist*.tar.gz

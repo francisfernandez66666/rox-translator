@@ -56,6 +56,7 @@ func (s *Server) authOK(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) == 1
 }
 
+// dispatch 是契约端点唯一分发口：先校验 POST 与共享密钥，再按路径交给读/写处理器。
 func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "method_not_allowed", "")
@@ -85,12 +86,14 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// writeJSON 统一写 JSON 响应；状态码在写体前显式提交，避免编码失败造成半截响应。
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeErr 统一写契约错误体；5xx 同时留结构化日志，4xx 不记录为服务异常。
 func writeErr(w http.ResponseWriter, status int, errCode, reason string) {
 	if status >= http.StatusInternalServerError {
 		observability.Warn(context.Background(), "知识服务异常响应",

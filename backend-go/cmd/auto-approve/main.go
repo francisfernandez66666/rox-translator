@@ -20,7 +20,9 @@
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 
@@ -29,6 +31,10 @@ import (
 	"translator/internal/config"
 	"translator/internal/crawler"
 	"translator/internal/db"
+	"translator/internal/gate"
+	"translator/internal/llm"
+	"translator/internal/observability"
+	"translator/internal/qualityjudge"
 	"translator/internal/store"
 )
 
@@ -87,6 +93,43 @@ func reconcileStagedHashes(st *store.Store) (int, int) {
 // pageSize 待审数据分页拉取页大小。
 const pageSize = 500
 
+// tier3Judge 是历史审批工具所需的最小语义判据面，便于注入替身与失败场景测试。
+type tier3Judge interface {
+	Evaluate(context.Context, string, string, string) (qualityjudge.Result, error)
+	Repair(context.Context, string, string) (string, bool, error)
+}
+
+// approveTier3 让历史审批工具与实时 crawler 走同一质量口径；无法判定一律拒绝。
+func approveTier3(ctx context.Context, judge tier3Judge, e *store.KBStagedEntry) (string, bool, error) {
+	if judge == nil {
+		return "", false, fmt.Errorf("tier3 语义质量门未注入")
+	}
+	if reason := gate.StructuralReject(e.SrcLang, e.SrcText, e.TgtLang, e.TgtText); reason != "" {
+		return "", false, fmt.Errorf("结构化闸拒绝: %s", reason)
+	}
+	r, err := judge.Evaluate(ctx, e.SrcText, e.TgtText, e.TgtLang)
+	if err != nil {
+		return "", false, err
+	}
+	if !r.Conclusive {
+		return "", false, fmt.Errorf("语义闸未给出有效裁决: %s", r.Reason)
+	}
+	if r.Pass {
+		return "", true, nil
+	}
+	fixed, ok, err := judge.Repair(ctx, e.SrcText, e.TgtLang)
+	if err != nil {
+		return "", false, err
+	}
+	if !ok || fixed == "" {
+		return "", false, fmt.Errorf("重译修正未通过")
+	}
+	if reason := gate.StructuralReject(e.SrcLang, e.SrcText, e.TgtLang, fixed); reason != "" {
+		return "", false, fmt.Errorf("重译产物结构化闸拒绝: %s", reason)
+	}
+	return fixed, true, nil
+}
+
 // main 一次性采集待审数据「清洗+自动审批+嵌入正式库」回填工具入口：
 //   - 解析 -dsn（缺省取环境变量 DB_DSN）与 -dryrun（仅预览不落库）；
 //   - 连接目标 PostgreSQL（写库直接使用，务必先 pg_dump 备份）；
@@ -106,12 +149,15 @@ func main() {
 	}
 
 	prevC := config.C
+	cfg := config.Default()
+	cfg.DatabaseDriver = "postgres"
+	cfg.DatabaseDSN = *dsn
 	conn, err := db.Open(db.Config{Driver: db.DriverPostgres, DSN: *dsn})
 	if err != nil {
 		log.Fatalf("[auto-approve] 连接数据库失败: %v", err)
 	}
 	defer conn.Close()
-	config.C = &config.Config{DatabaseDriver: "postgres"}
+	config.C = cfg
 	defer func() { config.C = prevC }()
 
 	st, err := store.New(conn)
@@ -119,6 +165,7 @@ func main() {
 		log.Fatalf("[auto-approve] 初始化 Store 失败: %v", err)
 	}
 	var tid int64 = store.SharedHostTenant // 采集内容宿主=平台共享包宿主租户（行业包/语言文化包，store.SharedHostTenant=0）
+	judge := qualityjudge.New(cfg, llm.NewClient(cfg), st)
 
 	log.Printf("[auto-approve] 开始清洗+审批待审数据（dryrun=%v）", *dry)
 
@@ -174,7 +221,21 @@ func main() {
 				}
 			}
 			if *dry {
+				if e.Tier == 3 {
+					fmt.Printf("[dry] 条目 #%d Tier3 需过结构化+语义质量闸后才可审批\n", e.ID)
+				}
 				continue
+			}
+			if e.Tier == 3 {
+				fixed, keep, qerr := approveTier3(context.Background(), judge, e)
+				if qerr != nil || !keep {
+					observability.Warn(context.Background(), "auto-approve Tier3 质量闸拒绝", "id", e.ID, "err", qerr.Error())
+					continue
+				}
+				if fixed != "" {
+					e.TgtText = fixed
+					entryCleaned++
+				}
 			}
 			// 2. 嵌入正式库（重新嵌入已回收的、或首次嵌入 pending 的）
 			if err := st.AutoApproveEntry(tid, e); err != nil {

@@ -12,6 +12,7 @@
 // ================================================
 package contract
 
+// 知识四表的固定表名；迁移、指纹与路由只许引用这里，禁止各写一份。
 const (
 	TableProducts        = "products"
 	TableProductFacts    = "product_facts"

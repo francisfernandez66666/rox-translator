@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "색인 등록 설정",
   "audit.action.product_status": "제품 상태 변경",
   "audit.action.login_sso": "SSO 로그인",
+  "audit.action.scrape_backtranslate_save": "수집 역번역 모델 저장",
+  "audit.action.scrape_backtranslate_reset": "수집 역번역 모델 재설정",
   "audit.action.model_routes_save": "모델 라우팅 저장",
   "audit.action.model_save": "모델 설정 저장",
   "audit.action.openapi_docs_save": "OpenAPI 문서 저장",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "플랫폼 기본값 보충",
   "sales.config.lexicon.empty": "어휘 목록이 없습니다",
   "sales.config.lexicon.platform": "플랫폼 기본값",
+  "billing.scrapeBackConfirmReset": "역번역 모델 설정을 지우고 코드 기본값으로 되돌릴까요?",
+  "billing.scrapeBackDefault": "데이터베이스에 설정되지 않아 코드 기본값을 사용합니다: {v}",
+  "billing.scrapeBackHint": "지식 베이스 자동 수집의 의미 게이트는 먼저 이 모델로 번역문을 중국어로 역번역한 뒤 평가 모델에 전달하여 오역을 감지합니다. 히브리어에서 중국어로의 역번역을 검증한 번역 모델만 선택할 수 있습니다. 잘못된 모델을 설정하면 오역된 용어가 엄격한 용어 게이트에 유입됩니다. 저장하면 즉시 적용되며 재시작은 필요하지 않습니다.",
+  "billing.scrapeBackSection": "수집 의미 게이트 · 역번역 모델",
 }

@@ -27,6 +27,7 @@ NUM = re.compile(r'^(\s*)(\d+)([.、\)])\s*(.*)$')
 # （A16/T34/T39 三条红的真身）。这是 §三 那条「假上游按我以为的契约实现＝给缺陷发证件」的又一形态：
 # 桩错了不是产品错了，但桩错了会让**产品侧正确的降级链**看起来像缺陷。
 BATCH_MARK = re.compile(r'^(\s*)<s(\d+)>(.*)</s\2>\s*$')
+PRODUCT_FACT_MARK = '【产品事实】'
 
 # ---------------------------------------------------------------------------
 # ★ 0AR 第 8 波（㊶）· 译文脚本纯度触发器（UAT T70 段的耗材，别的段一个都不碰）
@@ -134,6 +135,18 @@ def pick_payload(prompt_all):
     return han_payload if any(m in prompt_all for m in CJK_TARGET_MARKS) else latin_payload
 
 
+def product_fact_response(prompt_all):
+    """产品页提示词带公开事实时，桩按该事实回一句可被出站守卫核验的话。"""
+    if PRODUCT_FACT_MARK not in prompt_all:
+        return None
+    tail = prompt_all.split(PRODUCT_FACT_MARK, 1)[1]
+    for line in tail.splitlines():
+        m = re.match(r'^- \[[^\]]+\]\s*(.+)$', line.strip())
+        if m:
+            return '该产品的公开信息：' + m.group(1).strip()
+    return None
+
+
 def fake_translate(text, prompt_all=''):
     kind = prompt_kind(text)
     pinned = purity_response(kind, text)
@@ -228,7 +241,8 @@ class H(BaseHTTPRequestHandler):
             #   而 prompt_kind/purity_response 两条判腿逻辑**照旧只看 last**，
             #   免得把分腿锚点的射程悄悄扩进系统提示词、改变定点触发腿的判定结果。
             all_text = '\n'.join(str(m.get('content', '')) for m in msgs if isinstance(m, dict))
-            content = fake_translate(last, all_text)
+            product_reply = product_fact_response(all_text)
+            content = product_reply if product_reply is not None else fake_translate(last, all_text)
             pt = max(1, len(last) // 4 + 50)
             ct = max(1, len(content) // 4)
             # ★ 2026-11-01：`stream:true` 必须回 SSE（口径与为什么不回 JSON 那条见 _send_sse 的注释）。

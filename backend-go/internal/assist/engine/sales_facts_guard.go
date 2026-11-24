@@ -13,6 +13,7 @@ package engine
 
 import (
 	"context"
+	"strings"
 
 	mainengine "translator/internal/engine"
 )
@@ -21,4 +22,30 @@ import (
 // 参数 ctx=上下文；set=已验签事实集；返回派生 ctx。
 func InjectSalesFacts(ctx context.Context, set mainengine.SalesFactsSet) context.Context {
 	return mainengine.WithSalesFacts(ctx, set)
+}
+
+// salesFactsPromptBlock 把已验签的公开产品事实放进模型提示词；无事实时整段不出现。
+func salesFactsPromptBlock(ctx context.Context) string {
+	set, ok := mainengine.SalesFactsFromContext(ctx)
+	if !ok || len(set.Facts) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("【产品事实】\n")
+	for _, f := range set.Facts {
+		key := strings.Join(strings.Fields(f.Key), " ")
+		value := strings.Join(strings.Fields(f.Value), " ")
+		if key == "" || value == "" {
+			continue
+		}
+		sb.WriteString("- [")
+		sb.WriteString(key)
+		sb.WriteString("] ")
+		sb.WriteString(value)
+		sb.WriteString("\n")
+	}
+	if sb.Len() == len("【产品事实】\n") {
+		return ""
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }

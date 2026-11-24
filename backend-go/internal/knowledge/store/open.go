@@ -29,6 +29,7 @@ type KnowledgeStore struct {
 	Dialect db.Dialect
 }
 
+// dialectOf 按独立连接自身 driver 钉方言，不读主库全局 config.C。
 func dialectOf(driver string) db.Dialect {
 	if driver == db.DriverPostgres || driver == "pgx" {
 		return db.DialectPostgres

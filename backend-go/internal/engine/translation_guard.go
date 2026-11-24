@@ -1028,6 +1028,7 @@ func deterministicNumericDelivery(src string) string {
 	return out
 }
 
+// formatNumberWithCommas 把整数形态浮点数格式化为千分位字符串，保留负号且不引入小数位。
 func formatNumberWithCommas(v float64) string {
 	s := strconv.FormatFloat(v, 'f', 0, 64)
 	if len(s) <= 3 {

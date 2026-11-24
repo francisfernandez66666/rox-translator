@@ -178,9 +178,10 @@ log "mock chain 就绪（${i}s，已确认为全新实例）"
 #   并把 ASSIST_BASE_URL / ASSIST_ADMIN_TOKEN 同值喂给主服务，模拟生产同源部署。
 ASSIST_PORT="${ASSIST_PORT:-8898}"
 ASSIST_TOKEN="uat-assist-token-34"
+ASSIST_PROFILE_KEY="uat-assist-profile-key-34"
 log "构建并启动 assist-server :${ASSIST_PORT}..."
 (cd backend-go && go build -o "$WORK/assist-server" ./cmd/assist-server) || { echo "assist-server 构建失败"; exit 1; }
-ASSIST_ADDR="127.0.0.1:${ASSIST_PORT}" ASSIST_DB="$WORK/assist.db" ASSIST_ADMIN_TOKEN="$ASSIST_TOKEN" \
+ASSIST_ADDR="127.0.0.1:${ASSIST_PORT}" ASSIST_DB="$WORK/assist.db" ASSIST_ADMIN_TOKEN="$ASSIST_TOKEN" ASSIST_PROFILE_KEY="$ASSIST_PROFILE_KEY" \
   ASSIST_LLM_BASE_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1" ASSIST_LLM_API_KEY=mock-key ASSIST_LLM_MODEL=mock-llm \
   nohup "$WORK/assist-server" > "$WORK/assist.log" 2>&1 < /dev/null &
 ASSIST_PID=$!
@@ -191,6 +192,9 @@ for i in $(seq 1 15); do
 done
 [ "${OK:-0}" = "1" ] || { echo "assist-server 启动失败"; tail -10 "$WORK/assist.log"; kill $ASSIST_PID $MOCK_PID $CHAIN_PID 2>/dev/null; exit 1; }
 log "assist-server 就绪（${i}s）"
+# 产品对外页接待链路：主服务签事实头，assist 侧也要开事实注入消费档。
+sqlite3 "$WORK/assist.db" "INSERT INTO configs(key,value) VALUES('sales_facts_injection_enabled','1'),('sales_claim_guard_enabled','1') ON CONFLICT(key) DO UPDATE SET value='excluded.value';" \
+  || { echo "assist 事实注入配置写入失败"; exit 1; }
 
 # ---------- 3. 后端（全新库 + 探活自指向 + 固定超管密码；方言随 DB_DRIVER） ----------
 log "启动后端 :${UAT_PORT}（方言 ${DB_DRIVER}）..."
@@ -201,6 +205,8 @@ rm -f "$WORK/dev.db"*
 #   c.UploadDir = UserDataDir/_uploads），不钉则分片上传（T28）写进本机真实应用数据目录，
 #   既污染生产数据又随沙箱权限时红时绿（EPERM 假红），钝化对真回归的敏感度。
 printf "# UAT T36 测试词包\n紫火核弹T36\n" > "$WORK/sensitive_words.txt"
+# ★ 本地接待引擎不喂 ASSIST_LLM_*，刻意走主服务 online→llmsource 动态快照；
+#   独立 assist-server 仍喂显式 env，供旧代理/管理面回归。两条路径都必须能答出产品事实。
 # ★ 2026-10-11（慢 SQL 批 P2⑤）：SYSTEM_CONFIG_CACHE_TTL_SEC=0 —— 矩阵的档位/配置注入走
 #   dblib.sh 的 dbcfg（psql/sqlite3 **外部裸写**，绕开服务端 SetConfig 写穿），TTL 缓存档下
 #   外部裸写要 ≤5 秒才在 GetConfig 现形；多条断言（T64 脏值回落缺省、T66/T69 防薅压格子、
@@ -213,7 +219,10 @@ ADMIN_INIT_PASSWORD=$ADMIN_INIT_PASSWORD SELFCHECK_URL="${BASE_URL}/status" \
   SENSITIVE_WORDS_FILE="$WORK/sensitive_words.txt" \
   MAIL_NOOP_PRINT_BODY=1 \
   USDT_TRON_BASE="http://127.0.0.1:${MOCK_CHAIN_PORT}" USDT_SCAN_INTERVAL_SEC=5 \
-  ASSIST_BASE_URL="http://127.0.0.1:${ASSIST_PORT}" ASSIST_ADMIN_TOKEN="$ASSIST_TOKEN" \
+  ASSIST_BASE_URL="http://127.0.0.1:${ASSIST_PORT}" ASSIST_ADMIN_TOKEN="$ASSIST_TOKEN" ASSIST_PROFILE_KEY="$ASSIST_PROFILE_KEY" \
+  ASSIST_DB="$WORK/assist.db" \
+  ONLINE_API_BASE="http://127.0.0.1:${MOCK_LLM_PORT}/v1" ONLINE_API_KEY=mock-key ONLINE_MODEL=mock-llm \
+  LLM_CONFIG_RELOAD_TTL_SEC=0 \
   USER_DATA_DIR="$WORK/udata" \
   SYSTEM_CONFIG_CACHE_TTL_SEC=0 \
   nohup "$WORK/uat-server" -addr "127.0.0.1:${UAT_PORT}" -frontend frontend-react/dist -kbdb "$WORK/dev.db" \
@@ -240,6 +249,9 @@ dbcfg register_device_daily_limit 100000
 dbcfg register_global_daily_limit 100000
 dbcfg billing_enforced 1
 dbcfg pay_mode mock
+# 产品 /p/ 接待链路的 signed sales facts 注入（夹具专开，生产仍按后台灰度）。
+dbcfg sales_facts_injection_enabled 1
+dbcfg sales_claim_guard_enabled 1
 # ★ T42 USDT：默认开启收款（trc20 单链，地址占位 base58 合规），对账器 2s 轮询；tx 唯一/尾数依赖后端逻辑本身
 dbcfg usdt_enabled 0   # T42 自开自关（避免影响后续前端 E2E 收银台用例）
 dbcfg usdt_chains trc20
@@ -261,6 +273,11 @@ TXN_TAIL=$(grep -oE 'T-PASS=[0-9]+ FAIL=[0-9]+' "$WORK/api_uat_txn.log" | tail -
 TXN_PASS=$(echo "$TXN_TAIL" | grep -oE 'PASS=[0-9]+' | cut -d= -f2)
 TXN_FAIL=$(echo "$TXN_TAIL" | grep -oE 'FAIL=[0-9]+' | cut -d= -f2)
 
+# 产品 R3 刻意清掉 assist DB 的 LLM 四键，验证本地引擎走主服务 online→llmsource 动态快照；
+# 独立 assist-server 的 T52 回归已在上游跑完，之后不再依赖这份配置。
+sqlite3 "$WORK/assist.db" "UPDATE configs SET value='' WHERE key IN ('llm_base_url','llm_api_key','llm_model','llm_model_backup');" \
+  || { echo "assist LLM 配置清空失败"; exit 1; }
+
 # ---------- 5.9 产品对外页 e2e 夹具（★ 2026-11-06 补：三条 PRODUCT_* 判据此前恒 skip＝有代码无调度） ----------
 # 为什么必须在这里建：`e2e/product_public.spec.ts` 与 `product_shelf.spec.ts` 的两段短码是后端
 # crypto/rand 签发的不可枚举值（猜一个号正是这套设计要堵的口子），只能由夹具现建现取；
@@ -271,6 +288,8 @@ JSON_CT='Content-Type: application/json'
 PROD_ID=""
 PROD_F_PUB=""
 PROD_F_GATE=""
+PROD2_ID=""
+PROD2_F_PUB=""
 E2E_TOK=$(curl -s -m 10 "$BASE_URL/api/auth/login" -H "$JSON_CT" \
   -d '{"username":"uatuser_a","password":"uatpass123"}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)
 if [ -n "$E2E_TOK" ]; then
@@ -285,15 +304,65 @@ if [ -n "$E2E_TOK" ]; then
   FPUB=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/upsert" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
     -d "{\"product_id\":\"$PROD_ID\",\"kind\":\"spec\",\"key\":\"lead_time\",\"value\":\"E2E公开交期 9 天\",\"visibility\":\"public\"}")
   FPIG=$(printf '%s' "$FPUB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
-  curl -s -m 10 -X POST "$BASE_URL/api/product/fact/confirm" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
-    -d "{\"id\":$FPIG}" >/dev/null
+  FCONF=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/confirm" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"id\":$FPIG}")
+  FCONF_OK=$(printf '%s' "$FCONF" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || true)
+  I18N_COUNT=$(dbq "SELECT COUNT(*) FROM product_fact_i18n WHERE fact_id=$FPIG" | tr -dc '0-9')
+  ZH_I18N_COUNT=$(dbq "SELECT COUNT(*) FROM product_fact_i18n WHERE fact_id=$FPIG AND lang='zh' AND source_hash IS NOT NULL AND value <> ''" | tr -dc '0-9')
+  FACT_ELIGIBLE=$(dbq "SELECT COUNT(*) FROM product_facts WHERE id=$FPIG AND status='confirmed' AND visibility='public' AND locked=0" | tr -dc '0-9')
+  FACT_VALUE=$(dbq "SELECT value FROM product_facts WHERE id=$FPIG")
+  ZH_HASH=$(dbq "SELECT source_hash FROM product_fact_i18n WHERE fact_id=$FPIG AND lang='zh'")
+  HASH_OK=$(python3 -c 'import hashlib,sys;print("1" if hashlib.sha256(sys.argv[1].encode()).hexdigest()==sys.argv[2] else "0")' "$FACT_VALUE" "$ZH_HASH")
+  if [ "$FCONF_OK" != "1" ] || [ "${I18N_COUNT:-0}" -lt 12 ] || [ "${ZH_I18N_COUNT:-0}" -ne 1 ] || [ "${FACT_ELIGIBLE:-0}" -ne 1 ] || [ "$HASH_OK" != "1" ]; then
+    log "⚠️ 产品事实确认/译文夹具失败（success=${FCONF_OK:-0} i18n=${I18N_COUNT:-0} zh=${ZH_I18N_COUNT:-0} eligible=${FACT_ELIGIBLE:-0} hash=${HASH_OK:-0}）⇒ R3 不许跳过"
+    PROD_FIXTURE_OK=0
+  else
+    PROD_FIXTURE_OK=1
+  fi
   FGATE=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/upsert" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
     -d "{\"product_id\":\"$PROD_ID\",\"kind\":\"price\",\"key\":\"list_price\",\"value\":\"E2E受控价 7111\",\"visibility\":\"gated\"}")
   PROD_F_PUB=$FPIG
   PROD_F_GATE=$(printf '%s' "$FGATE" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
-  if [ -n "$PROD_ID" ] && [ -n "$TC" ] && [ -n "$PC" ]; then
+  GATE_OK=$(printf '%s' "$FGATE" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || true)
+  GATE_ELIGIBLE=$(dbq "SELECT COUNT(*) FROM product_facts WHERE id=$PROD_F_GATE AND visibility='gated' AND value='E2E受控价 7111'" | tr -dc '0-9')
+  if [ "$GATE_OK" != "1" ] || [ "${GATE_ELIGIBLE:-0}" -ne "1" ]; then
+    log "⚠️ 受控事实夹具未真实落库（success=${GATE_OK:-0} rows=${GATE_ELIGIBLE:-0}）⇒ R3 负向对照不许当通过"
+    PROD_FIXTURE_OK=0
+  fi
+
+  # 第二产品公开事实：R3 的负向串必须来自另一产品，不能拿同一产品的受控价冒充跨产品隔离。
+  P2J=$(curl -s -m 10 -X POST "$BASE_URL/api/product/save" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d '{"name":"UAT-E2E-另一产品","code":"uat_e2e_other","tagline":"E2E 第二产品"}')
+  PROD2_ID=$(printf '%s' "$P2J" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(((d.get("product") or {}).get("id")) or d.get("id") or "")' 2>/dev/null || true)
+  P2TC=$(printf '%s' "$P2J" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("product") or {}).get("tenant_code",""))' 2>/dev/null || true)
+  P2PC=$(printf '%s' "$P2J" | python3 -c 'import sys,json;d=json.load(sys.stdin);print((d.get("product") or {}).get("page_code",""))' 2>/dev/null || true)
+  P2STATUS=$(curl -s -m 10 -X POST "$BASE_URL/api/product/status" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"id\":\"$PROD2_ID\",\"status\":\"live\"}")
+  P2STATUS_OK=$(printf '%s' "$P2STATUS" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || true)
+  P2PUB=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/upsert" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"product_id\":\"$PROD2_ID\",\"kind\":\"spec\",\"key\":\"lead_time\",\"value\":\"E2E另一产品交期 99 天\",\"visibility\":\"public\"}")
+  PROD2_F_PUB=$(printf '%s' "$P2PUB" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("id",""))' 2>/dev/null || true)
+  P2CONF=$(curl -s -m 10 -X POST "$BASE_URL/api/product/fact/confirm" -H "Authorization: Bearer $E2E_TOK" -H "$JSON_CT" \
+    -d "{\"id\":$PROD2_F_PUB}")
+  P2CONF_OK=$(printf '%s' "$P2CONF" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin).get("success") else "0")' 2>/dev/null || true)
+  P2_I18N=$(dbq "SELECT COUNT(*) FROM product_fact_i18n WHERE fact_id=$PROD2_F_PUB" | tr -dc '0-9')
+  P2_ZH_COUNT=$(dbq "SELECT COUNT(*) FROM product_fact_i18n WHERE fact_id=$PROD2_F_PUB AND lang='zh' AND source_hash IS NOT NULL AND value<>''" | tr -dc '0-9')
+  P2_EN_COUNT=$(dbq "SELECT COUNT(*) FROM product_fact_i18n WHERE fact_id=$PROD2_F_PUB AND lang='en' AND source_hash IS NOT NULL AND value<>''" | tr -dc '0-9')
+  P2_VALUE=$(dbq "SELECT value FROM product_facts WHERE id=$PROD2_F_PUB")
+  P2_ZH_HASH=$(dbq "SELECT source_hash FROM product_fact_i18n WHERE fact_id=$PROD2_F_PUB AND lang='zh'")
+  P2_HASH_OK=$(python3 -c 'import hashlib,sys;print("1" if hashlib.sha256(sys.argv[1].encode()).hexdigest()==sys.argv[2] else "0")' "$P2_VALUE" "$P2_ZH_HASH")
+  P2_ELIGIBLE=$(dbq "SELECT COUNT(*) FROM product_facts WHERE id=$PROD2_F_PUB AND status='confirmed' AND visibility='public' AND locked=0 AND value='E2E另一产品交期 99 天'" | tr -dc '0-9')
+  P2_LIVE=$(dbq "SELECT COUNT(*) FROM products WHERE id='$PROD2_ID' AND status='live'" | tr -dc '0-9')
+  P2FACE=$(curl -s -m 10 "$BASE_URL/api/product/public?tenant_code=$P2TC&page_code=$P2PC")
+  P2FACE_OK=$(printf '%s' "$P2FACE" | python3 -c 'import sys,json; s=sys.stdin.read(); d=json.loads(s); print("1" if d.get("found") and "E2E另一产品交期 99 天" in s else "0")' 2>/dev/null || true)
+  if [ "$P2STATUS_OK" != "1" ] || [ "${P2_LIVE:-0}" -ne 1 ] || [ "$P2FACE_OK" != "1" ] || [ "$P2CONF_OK" != "1" ] || [ "${P2_I18N:-0}" -lt 12 ] || [ "${P2_ZH_COUNT:-0}" -ne 1 ] || [ "${P2_EN_COUNT:-0}" -ne 1 ] || [ "$P2_HASH_OK" != "1" ] || [ "${P2_ELIGIBLE:-0}" -ne 1 ]; then
+    log "⚠️ 第二产品事实夹具失败（live=${P2STATUS_OK:-0}/${P2_LIVE:-0} public=${P2FACE_OK:-0} confirm=${P2CONF_OK:-0} i18n=${P2_I18N:-0} zh=${P2_ZH_COUNT:-0} en=${P2_EN_COUNT:-0} hash=${P2_HASH_OK:-0} eligible=${P2_ELIGIBLE:-0}）⇒ R3 跨产品负向对照不许当通过"
+    PROD_FIXTURE_OK=0
+  fi
+  if [ "$PROD_FIXTURE_OK" = "1" ] && [ -n "$PROD_ID" ] && [ -n "$TC" ] && [ -n "$PC" ]; then
     export PRODUCT_ID="$PROD_ID" PRODUCT_TENANT_CODE="$TC" PRODUCT_PAGE_CODE="$PC"
     export PRODUCT_PUBLIC_VALUE='E2E公开交期 9 天' PRODUCT_GATED_VALUE='E2E受控价 7111'
+    export PRODUCT_OTHER_VALUE='E2E另一产品交期 99 天'
     # 登录态 storageState：token 存 sessionStorage（core.ts 的持久化口径），origins 必须等于 BASE_URL
     PROD_STATE="$WORK/prod-auth-state.json"
     python3 -c '
@@ -313,7 +382,7 @@ open(path, "w", encoding="utf-8").write(json.dumps({
     PROD_FIXTURE_OK=1
     log "产品 e2e 夹具就绪：product=${PROD_ID} 短码=${TC}/${PC}（受控值只经 env 交判据，不进日志正文之外的任何地方）"
   else
-    log "⚠️ 产品 e2e 夹具建不起来（id/tenant_code/page_code 取空）⇒ 三条 PRODUCT_* 判据将整段跳过，本项计入闸门"
+    log "⚠️ 产品 e2e 夹具不完整（身份/短码/事实译文至少一项失败）⇒ 三条 PRODUCT_* 判据不许当通过"
   fi
 else
   log "⚠️ uatuser_a 登录失败 ⇒ 产品 e2e 夹具没建，三条 PRODUCT_* 判据将整段跳过，本项计入闸门"
@@ -362,20 +431,71 @@ if [ "${PW_EXIT:-1}" -ne 0 ]; then
   fi
 fi
 [ "$PW_FAIL" = "1" ] && echo "❌ 前端 E2E 失败（exit=${PW_EXIT}），发布闸门拦截"
+case "${PW_TARGET:-e2e/}" in
+  e2e/|*product_reception*)
+    if ! grep -Eq 'assist.engine LLM 配置热加载生效.*"source":"main:(env|db|route)"' "$WORK/server.log"; then
+      PW_FAIL=1
+      echo "❌ 本地 assist 未走主服务 llmsource 动态快照（缺 main:env/db/route 热加载日志）"
+    fi
+    if [ "${PROD_FIXTURE_OK:-0}" = "1" ]; then
+      dbcfg online_model mock-llm-2
+      (cd frontend-react && PW_OUTPUT_DIR="$PW_OUT_DIR" PWTEST_CHILD_PROCESS_TIMEOUT=60000 BASE_URL="$BASE_URL" API_URL="$BASE_URL" PRODUCT_EXPECT_MODEL=mock-llm-2 npx playwright test e2e/product_reception.spec.ts --grep 'R3 /p/' --reporter=line) | tee "$WORK/pixel_uat_reload.log"
+      PW_RELOAD_EXIT=${PIPESTATUS[0]}
+      dbcfg online_model mock-llm
+      if [ "${PW_RELOAD_EXIT:-1}" -ne 0 ] || ! grep -q '"model":"mock-llm-2"' "$WORK/server.log"; then
+        PW_FAIL=1
+        echo "❌ 本地 assist 未跟随主服务模型热更新（R3 二跑或 mock-llm-2 日志缺失）"
+      fi
+    fi
+    ;;
+esac
 
 # ---------- 6.9 产品 e2e 夹具清场（★ 按显式 id 逐条摘；绝不"按 tenant_id 横扫整租户蒸发"） ----------
-if [ -n "$PROD_ID" ]; then
-  for _fid in "${PROD_F_PUB:-}" "${PROD_F_GATE:-}"; do
-    [ -n "$_fid" ] && dbq "DELETE FROM product_facts WHERE id=$_fid" >/dev/null 2>&1 || true
+if [ -n "$PROD_ID" ] || [ -n "$PROD2_ID" ]; then
+  fixture_cleanup() {
+    if ! dbq "$1" >/dev/null 2>&1; then
+      PW_FAIL=1
+      echo "❌ 产品 e2e 夹具清理失败：$1"
+    fi
+  }
+  fixture_count() {
+    local v
+    v=$(dbq "$1" 2>/dev/null | tr -d '\r')
+    case "$v" in
+      ''|*[!0-9]*) echo "❌ 产品 e2e 夹具残留计数失败：$1" >&2; echo E ;;
+      *) echo "$v" ;;
+    esac
+  }
+  for _fid in "${PROD_F_PUB:-}" "${PROD_F_GATE:-}" "${PROD2_F_PUB:-}"; do
+    [ -n "$_fid" ] || continue
+    fixture_cleanup "DELETE FROM product_fact_i18n WHERE fact_id=$_fid"
+    fixture_cleanup "DELETE FROM product_facts WHERE id=$_fid"
   done
-  dbq "DELETE FROM product_assets WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
-  dbq "DELETE FROM product_facts WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
-  dbq "DELETE FROM kb_packages WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
-  dbq "DELETE FROM feedbacks WHERE product_id='$PROD_ID'" >/dev/null 2>&1 || true
-  dbq "DELETE FROM products WHERE id='$PROD_ID'" >/dev/null 2>&1 || true
-  PROD_LEFT=$(dbq "SELECT COUNT(1) FROM products WHERE id='$PROD_ID'" 2>/dev/null | tr -dc '0-9')
-  log "产品 e2e 夹具清场：残留产品行数=${PROD_LEFT:-0}（必须 0）"
-  [ "${PROD_LEFT:-1}" != "0" ] && PW_FAIL=1 && echo "❌ 产品 e2e 夹具没摘干净（残留 ${PROD_LEFT} 行），发布闸门拦截"
+  for _pid in "${PROD_ID:-}" "${PROD2_ID:-}"; do
+    [ -n "$_pid" ] || continue
+    fixture_cleanup "DELETE FROM product_assets WHERE product_id='$_pid'"
+    fixture_cleanup "DELETE FROM product_facts WHERE product_id='$_pid'"
+    fixture_cleanup "DELETE FROM kb_packages WHERE product_id='$_pid'"
+    fixture_cleanup "DELETE FROM feedbacks WHERE product_id='$_pid'"
+    fixture_cleanup "DELETE FROM products WHERE id='$_pid'"
+  done
+  PROD_IDS="'${PROD_ID:-}','${PROD2_ID:-}'"
+  FACT_IDS="${PROD_F_PUB:-0},${PROD_F_GATE:-0},${PROD2_F_PUB:-0}"
+  LEFT_PRODUCTS=$(fixture_count "SELECT COUNT(1) FROM products WHERE id IN ($PROD_IDS)")
+  LEFT_FACTS=$(fixture_count "SELECT COUNT(1) FROM product_facts WHERE product_id IN ($PROD_IDS)")
+  LEFT_ASSETS=$(fixture_count "SELECT COUNT(1) FROM product_assets WHERE product_id IN ($PROD_IDS)")
+  LEFT_PACKAGES=$(fixture_count "SELECT COUNT(1) FROM kb_packages WHERE product_id IN ($PROD_IDS)")
+  LEFT_FEEDBACKS=$(fixture_count "SELECT COUNT(1) FROM feedbacks WHERE product_id IN ($PROD_IDS)")
+  LEFT_I18N=$(fixture_count "SELECT COUNT(1) FROM product_fact_i18n WHERE fact_id IN ($FACT_IDS)")
+  case "$LEFT_PRODUCTS$LEFT_FACTS$LEFT_ASSETS$LEFT_PACKAGES$LEFT_FEEDBACKS$LEFT_I18N" in
+    *E*) PW_FAIL=1; CLEAN_LEFT=1 ;;
+    *) CLEAN_LEFT=$(( LEFT_PRODUCTS + LEFT_FACTS + LEFT_ASSETS + LEFT_PACKAGES + LEFT_FEEDBACKS + LEFT_I18N )) ;;
+  esac
+  log "产品 e2e 夹具清场：六类残留合计=${CLEAN_LEFT}（产品=${LEFT_PRODUCTS:-0} 事实=${LEFT_FACTS:-0} 物料=${LEFT_ASSETS:-0} 包=${LEFT_PACKAGES:-0} 反馈=${LEFT_FEEDBACKS:-0} 译文=${LEFT_I18N:-0}）"
+  if [ "$CLEAN_LEFT" -ne 0 ]; then
+    PW_FAIL=1
+    echo "❌ 产品 e2e 夹具没摘干净（六类残留合计=${CLEAN_LEFT}），发布闸门拦截"
+  fi
 fi
 
 # 跳过点名（★ 2026-11-03 新腿）：从本次 json 报告里把 status=skipped 的用例与它自己的理由摘出来。

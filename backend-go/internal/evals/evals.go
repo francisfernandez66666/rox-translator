@@ -135,15 +135,9 @@ func (e *Evaluator) resolveJudge(taskType string) (base, key, model string) {
 	return snap.OnlineAPIBase, snap.OnlineAPIKey, snap.OnlineModel
 }
 
-// Evaluate LLM-as-Judge 5 维评分；返回总分（0-100）与各维分数。
-// 参数：source=原文，translation=译文，targetLang=目标语言，taskType=任务类型。
-// 返回：加权总分、各维分数 map（term/grammar/semantic/numunit/style）与错误。
-func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLang, taskType string) (float64, map[string]float64, error) {
-	if !e.Enabled {
-		return 0, nil, fmt.Errorf("evals 未启用（无 Judge Key）")
-	}
-	// 构造评估提示词：请求 Judge 按 5 维打分并只输出 JSON
-	prompt := fmt.Sprintf(`你是翻译质量评估员。请对下面译文按 5 维评分（每维 0-100 分）：
+// EvaluatePrompt 返回五维评估链真实发送的 user 提示词，供探针同源复用。
+func EvaluatePrompt(source, targetLang, translation string) string {
+	return fmt.Sprintf(`你是翻译质量评估员。请对下面译文按 5 维评分（每维 0-100 分）：
 
 【原文】(中文)
 %s
@@ -160,6 +154,16 @@ func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLan
 
 只输出 JSON，格式: {"term":0,"grammar":0,"semantic":0,"numunit":0,"style":0,"total":0}`,
 		source, targetLang, translation)
+}
+
+// Evaluate LLM-as-Judge 5 维评分；返回总分（0-100）与各维分数。
+// 参数：source=原文，translation=译文，targetLang=目标语言，taskType=任务类型。
+// 返回：加权总分、各维分数 map（term/grammar/semantic/numunit/style）与错误。
+func (e *Evaluator) Evaluate(ctx context.Context, source, translation, targetLang, taskType string) (float64, map[string]float64, error) {
+	if !e.Enabled {
+		return 0, nil, fmt.Errorf("evals 未启用（无 Judge Key）")
+	}
+	prompt := EvaluatePrompt(source, targetLang, translation)
 
 	base, key, model := e.resolveJudge(taskType)
 	// 动态可用性判定：占位/掩码 Key 直接跳过，避免必失败的空转调用

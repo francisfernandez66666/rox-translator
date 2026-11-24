@@ -3,8 +3,8 @@
 //
 //	闸2 结构化校验：书写系统不符 / 拉丁转写 / 全角标点 / 源译同形 → 确定性拒绝。
 //	闸3 语义质量门：回译腿（HY 把译文译回中文）+ evals 打分腿对每条候选打
-//	    term/semantic 分，低于阈值拒绝；Judge 不可用/报错 → fail-open（沿用 evals 降级口径），
-//	    只记 WARN 不阻断采集。
+//	    term/semantic 分，低于阈值拒绝；Judge 未注入/无法判定/报错 → fail-closed 丢弃，
+//	    只记 WARN，不把上游抖动当质量合格自动审批。
 //
 // 依赖倒置：语义门只依赖 QualityJudge 接口，具体 evaluator 由 api 层注入，
 // 让 crawler 包可单测（替身）且不 import evals/evaluator 具体实现。
@@ -13,7 +13,6 @@ package crawler
 
 import (
 	"context"
-	"strings"
 
 	"translator/internal/gate"
 	"translator/internal/store"
@@ -49,7 +48,7 @@ func loadQualityConfig(st *store.Store) qualityGateConfig {
 		cfg.MinScore = float64(v)
 	}
 	// 抽样率以百分整数存（100=全量），ConfigInt 口径与项目其它抽样键一致
-	if v := st.ConfigInt("scrape_tier3_quality_sample", 100); v >= 0 && v <= 100 {
+	if v := st.ConfigIntAllowZero("scrape_tier3_quality_sample", 100); v >= 0 && v <= 100 {
 		cfg.Sample = float64(v) / 100
 	}
 	return cfg
@@ -58,17 +57,5 @@ func loadQualityConfig(st *store.Store) qualityGateConfig {
 // structuralReject 闸2：返回非空字符串表示该候选应被拒绝（说明原因）。
 // 只依赖确定性纯函数，无 LLM 成本。
 func structuralReject(srcLang, srcText, tgtLang, tgtText string) string {
-	if strings.TrimSpace(srcText) == strings.TrimSpace(tgtText) {
-		return "源译同形（疑似原样吐回）"
-	}
-	if !gate.TargetTextMatchesLang(tgtLang, tgtText) {
-		return "目标书写系统与语种不符"
-	}
-	if viols := gate.LatinTransliterationViolations(tgtLang, tgtText, nil); len(viols) > 0 {
-		return "拉丁转写：" + strings.Join(viols, ",")
-	}
-	if viols := gate.CJKPunctViolations(tgtLang, tgtText, nil); len(viols) > 0 {
-		return "全角标点残留：" + strings.Join(viols, ",")
-	}
-	return ""
+	return gate.StructuralReject(srcLang, srcText, tgtLang, tgtText)
 }

@@ -6,8 +6,12 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	"translator/internal/qualityjudge"
 )
 
 func TestExtractQualityJSON(t *testing.T) {
@@ -30,6 +34,45 @@ func TestExtractQualityJSON(t *testing.T) {
 		if tc.hasObj && got != tc.want {
 			t.Fatalf("输入 %q: got=%q want=%q", tc.in, got, tc.want)
 		}
+	}
+}
+
+type fakeQualityJudgeAPI struct {
+	result qualityjudge.Result
+	err    error
+}
+
+func (f fakeQualityJudgeAPI) Evaluate(context.Context, string, string, string) (qualityjudge.Result, error) {
+	return f.result, f.err
+}
+
+func (f fakeQualityJudgeAPI) Repair(context.Context, string, string) (string, bool, error) {
+	return "", false, f.err
+}
+
+func TestAPIQualityJudgeKeepsRescueMetadata(t *testing.T) {
+	a := &apiQualityJudge{j: fakeQualityJudgeAPI{result: qualityjudge.Result{
+		Pass: true, Conclusive: true, RescuedByReview: true, ReviewNote: "复核改判通过",
+	}}}
+	pass, reason, err := a.JudgeTerm(context.Background(), "用户互动", "תגובות", "he")
+	if err != nil || !pass || reason != "复核改判通过" {
+		t.Fatalf("救回元数据在适配层丢失: pass=%v reason=%q err=%v", pass, reason, err)
+	}
+}
+
+func TestAPIQualityJudgeErrorIsFailClosed(t *testing.T) {
+	a := &apiQualityJudge{j: fakeQualityJudgeAPI{err: errors.New("judge down")}}
+	pass, reason, err := a.JudgeTerm(context.Background(), "数据备份", "Rezerwacja danych", "pl")
+	if err == nil || pass || !strings.Contains(reason, "无法判定") {
+		t.Fatalf("无法判定必须 fail-closed：pass=%v reason=%q err=%v", pass, reason, err)
+	}
+}
+
+func TestAPIQualityJudgeInconclusiveIsFailClosed(t *testing.T) {
+	a := &apiQualityJudge{j: fakeQualityJudgeAPI{result: qualityjudge.Result{Pass: false, Reason: "两腿都不可用"}}}
+	pass, reason, err := a.JudgeTerm(context.Background(), "数据备份", "Rezerwacja danych", "pl")
+	if err == nil || pass || !strings.Contains(reason, "无法判定") {
+		t.Fatalf("Conclusive=false 即使 err=nil 也必须 fail-closed：pass=%v reason=%q err=%v", pass, reason, err)
 	}
 }
 

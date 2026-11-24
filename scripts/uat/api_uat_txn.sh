@@ -1365,7 +1365,8 @@ else
     G40=$(( (N40 + 1000) * RATE ))
     NOW40=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     dbq "INSERT INTO quota_grants (tenant_id,kind,total,\"left\",expires_at,source,ref_id,created_at) VALUES ($T40TID,'uat',$G40,$G40,'2099-12-31T23:59:59Z','uat_t40_topup',0,'$NOW40')" >/dev/null
-    ckq T40-grant-landed-in-session-tenant 1 "$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$T40TID AND source='uat_t40_topup'" | tr -dc '0-9')"
+    G40_LANDED=$(dbq "SELECT COUNT(*) FROM quota_grants WHERE tenant_id=$T40TID AND source='uat_t40_topup'" | tr -dc '0-9')
+    if [ "$G40_LANDED" = "1" ]; then PASS=$((PASS+1)); echo "PASS|T40-grant-landed-in-session-tenant(1)"; else FAIL=$((FAIL+1)); echo "FAIL|T40-grant-landed-in-session-tenant|want=1|got=${G40_LANDED:-<空>}"; fi
     R40T=$(curl -s $B/api/tickets/create-file -H "$H40" -F "files=@$TMPD40/t40_small.pdf" -F "target_langs=en" -F "mode=fast")
     ck T40-pdf-allowed-after-topup '"success":true' "$R40T"
     # 收尾：把自己插的那份额度撤掉，别把它留给后面的段当余额（同文件 T40 之后还有超支判据）。
@@ -6036,6 +6037,7 @@ ckq T94-two-ends-same-ruler "${T94FILECODE:-?}" "${R3ST:-?}"
 # 注：上传件落在 UAT 实例自己的 UploadDir/_product_assets 下，随实例销毁一起回收，
 #     脚本不猜服务端磁盘路径（猜路径＝第二把尺子，同 §一·12 不许把远端路径拼进判据）。
 [ -n "${T94AID:-}" ] && dbq "DELETE FROM product_assets WHERE id=$T94AID" >/dev/null 2>&1 || true
+[ -n "${T94FID:-}" ] && dbq "DELETE FROM product_fact_i18n WHERE fact_id=$T94FID" >/dev/null 2>&1 || true
 [ -n "${T94FID:-}" ] && dbq "DELETE FROM product_facts WHERE id=$T94FID" >/dev/null 2>&1 || true
 [ -n "${T94PID:-}" ] && dbq "DELETE FROM kb_packages WHERE product_id='$T94PID'" >/dev/null 2>&1 || true
 [ -n "${T94PID:-}" ] && dbq "DELETE FROM products WHERE id='$T94PID'" >/dev/null 2>&1 || true
@@ -6046,6 +6048,8 @@ T94LEFTA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE product_id
 ckq T94-cleanup-asset-gone 0 "${T94LEFTA:-0}"
 T94LEFTF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id='${T94PID:-__none__}'" 2>/dev/null | tr -d '\r')")
 ckq T94-cleanup-fact-gone 0 "${T94LEFTF:-0}"
+T94LEFTI=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_fact_i18n WHERE fact_id=${T94FID:-0}" 2>/dev/null | tr -d '\r')")
+ckq T94-cleanup-i18n-gone 0 "${T94LEFTI:-0}"
 
 # ============================================================================
 # T95 卖家写侧全链路（★ 一期 X1 2026-11-06：卖家今天第一次能自己走完的那条路）
@@ -6098,6 +6102,7 @@ ckq T95-seo-roundtrip-same-code "$(mny_norm "$(printf '%s' "$T95SM0" | python3 -
 
 # ---------- T95 清场（按本段显式 id 逐条摘，反验计数归 0；禁整租户蒸发） ----------
 [ -n "${T95AID:-}" ] && dbq "DELETE FROM product_assets WHERE id=$T95AID" >/dev/null 2>&1 || true
+[ -n "${T95FID:-}" ] && dbq "DELETE FROM product_fact_i18n WHERE fact_id=$T95FID" >/dev/null 2>&1 || true
 [ -n "${T95FID:-}" ] && dbq "DELETE FROM product_facts WHERE id=$T95FID" >/dev/null 2>&1 || true
 [ -n "${T95PID:-}" ] && dbq "DELETE FROM kb_packages WHERE product_id='$T95PID'" >/dev/null 2>&1 || true
 [ -n "${T95PID:-}" ] && dbq "DELETE FROM products WHERE id='$T95PID'" >/dev/null 2>&1 || true
@@ -6107,6 +6112,8 @@ T95LEFTA=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_assets WHERE product_id
 ckq T95-cleanup-asset-gone 0 "${T95LEFTA:-0}"
 T95LEFTF=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_facts WHERE product_id='${T95PID:-__none__}'" 2>/dev/null | tr -d '\r')")
 ckq T95-cleanup-fact-gone 0 "${T95LEFTF:-0}"
+T95LEFTI=$(mny_norm "$(dbq "SELECT COUNT(1) FROM product_fact_i18n WHERE fact_id=${T95FID:-0}" 2>/dev/null | tr -d '\r')")
+ckq T95-cleanup-i18n-gone 0 "${T95LEFTI:-0}"
 
 # ============================================================================
 # T96 引导流的后端半边（★ O 组 2026-11-06：目标语言**只存产品行**）
@@ -6210,6 +6217,17 @@ T97ECODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 $B/api/product/
 ckq T97-empty-text-400 400 "${T97ECODE:-0}"
 ck T97-empty-text-names-the-field '描述' "$(curl -s --max-time 120 $B/api/product/onboard/draft -H "$T97H" -H "$J" -d '{"text":"   "}')"
 ckq T97-wrong-method-405 405 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 120 -X GET $B/api/product/onboard/draft -H "$T97H")"
+
+# ---------- 快照前先排空前序工单 ----------
+# T97 与 uatuser_a 共用租户，前序工单会在后台继续完成并扣 translate；若不等排空，
+# 余额/日额前后差会把别的任务记到 onboard_draft 头上（onboard 自身留痕增量仍为 0）。
+T97_ACTIVE=1
+for _ in $(seq 1 120); do
+  T97_ACTIVE=$(dbq "SELECT COUNT(*) FROM tickets WHERE tenant_id=$T97TID AND status IN ('queued','in_progress','running','pending_approval','approved')" 2>/dev/null | tr -d '[:space:]')
+  [ "${T97_ACTIVE:-1}" = "0" ] && break
+  sleep 1
+done
+ckq T97-background-tickets-drained 0 "${T97_ACTIVE:-1}"
 
 # ---------- 快照（③ 之前取，⑤⑥ 之后比） ----------
 T97BP=$(mny_norm "$(dbq "SELECT COUNT(1) FROM products WHERE tenant_id=$T97TID" 2>/dev/null | tr -d '\r')")

@@ -39,6 +39,8 @@ const Q = vi.hoisted(() => ({
 // 另补 F-64② 之后新增的 adminGrowthFunnel——isSuper 挂载即拉漏斗，缺它会走 guardRead
 // 的 catch 分支弹红字噪声；ApiError/handleUnauthorized 给真模块语义即可，读取全成功时不触达）
 vi.mock('@/api', () => ({
+  adminScrapeBacktranslate: vi.fn(async () => ({ success: true, model: '', stored: '', default: '', allowed: [] })),
+
   // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
   // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
   // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
@@ -111,6 +113,7 @@ vi.mock('@/stores/admin', () => ({
   useAdminStore: { getState: () => ({ gotoPanel: () => {} }), setState: () => {} },
 }))
 
+// 查询全部匹配元素并转成 DOM 夹具。
 const $ = (sel: string) => Array.from(document.querySelectorAll(sel)) as HTMLElement[]
 
 // openInvoiceDialog 等首拉落定 → 点已付订单行的「开发票」链接 → 等弹窗（portal 挂 body）。

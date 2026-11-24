@@ -403,7 +403,7 @@ func main() {
 	// ★ 四期 W5 收口（2026-11-15）：assist 接待引擎并进主服务进程。
 	//   InstallAssistLocal 此前零调用者（审计 §3.3「并进程没有发生」）。
 	//   装配失败只 WARN：/assist-api/* 由 handleAssistOpen 回落旧代理，主站照常启动。
-	installAssistLocal()
+	installAssistLocal(cfg, st)
 
 	// ★ 四期 W3 KN9/KN11：装配知识服务客户端（:8791）。
 	//   LoadConfig 缺省只补 addr/baseURL/driver，绝不补 DSN；未配 KNOWLEDGE_* 时客户端存在但不可达，

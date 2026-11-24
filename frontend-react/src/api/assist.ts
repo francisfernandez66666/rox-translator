@@ -150,6 +150,7 @@ function noteAssistAuthFailure(status: number) {
  *  ★ 服务端以**头为准**、取不到再回落 query/body 的 `page`：两处同值，但"头"是唯一正式通道
  *    （body 是业务字段，未来若有人把它改名，头这条腿不该跟着一起断）。 */
 const PAGE_HEADER = 'X-LangCross-Page'
+// pageHeader 生成产品页面上下文头；空页面不占头位，避免服务端把空值误判为产品页。
 function pageHeader(page: string): Record<string, string> {
   return page ? { [PAGE_HEADER]: page } : {}
 }

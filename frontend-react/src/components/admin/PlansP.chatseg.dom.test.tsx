@@ -40,6 +40,7 @@ const S = vi.hoisted(() => ({
   csCfg: {} as Record<string, unknown>,
 }))
 
+// 构造分段配置缺省夹具。
 function segCfg() {
   return {
     success: true,
@@ -52,6 +53,8 @@ function segCfg() {
 }
 
 vi.mock('@/api', () => ({
+  adminScrapeBacktranslate: vi.fn(async () => ({ success: true, model: '', stored: '', default: '', allowed: [] })),
+
   billingQuota: vi.fn(async () => ({ success: true, qps: 10, concurrent: 3, max_daily_chars: 0, max_daily_points: 0, tenant_selected: true, unlimited: {} })),
   billingQuotaSave: vi.fn(async () => ({ success: true })),
   billingOrders: vi.fn(async () => ({ success: true, orders: [] })),
@@ -153,17 +156,20 @@ function input(i: number): HTMLInputElement {
   }
   return ins[i]
 }
+// 按可见文案定位面板按钮。
 function btn(label: string): HTMLButtonElement {
   const b = (Array.from(box().querySelectorAll('button')) as HTMLButtonElement[])
     .find((x) => (x.textContent ?? '').trim() === label)
   if (!b) throw new Error(`分段档位区块未找到按钮「${label}」`)
   return b
 }
+// 按 i18n 键定位确认弹窗按钮。
 function dialogBtn(key: 'common.ok' | 'common.cancel'): HTMLButtonElement | undefined {
   return ((Array.from(document.querySelectorAll('button')) as HTMLButtonElement[])
     .filter((b) => (b.textContent ?? '').trim() === baseZh[key])).pop()
 }
 
+// 挂载面板并等待异步回显完成。
 async function mount() {
   render(<><PlansP /><DialogHost /></>)
   await vi.waitFor(() => expect(input(0).value).toBe('1'))

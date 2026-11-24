@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "検索インデックス設定",
   "audit.action.product_status": "製品ステータス変更",
   "audit.action.login_sso": "SSO サインイン",
+  "audit.action.scrape_backtranslate_save": "採集逆翻訳モデルを保存",
+  "audit.action.scrape_backtranslate_reset": "採集逆翻訳モデルをリセット",
   "audit.action.model_routes_save": "モデルルーティングの保存",
   "audit.action.model_save": "モデル設定の保存",
   "audit.action.openapi_docs_save": "OpenAPI ドキュメントの保存",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "プラットフォーム既定を補充",
   "sales.config.lexicon.empty": "語彙リストはまだありません",
   "sales.config.lexicon.platform": "プラットフォーム既定",
+  "billing.scrapeBackConfirmReset": "逆翻訳モデルの設定をクリアし、コードのデフォルト値に戻しますか？",
+  "billing.scrapeBackDefault": "データベースで未設定のため、コードのデフォルト値を使用しています: {v}",
+  "billing.scrapeBackHint": "ナレッジベースの自動収集に使うセマンティックゲートは、まずこのモデルで訳文を中国語に逆翻訳し、その後評価モデルに渡して誤訳を検出します。選択できるのは、ヘブライ語から中国語への逆翻訳で検証済みの翻訳モデルのみです。誤ったモデルを設定すると、誤訳された用語が厳格な用語ゲートに混入します。保存後すぐに反映され、再起動は不要です。",
+  "billing.scrapeBackSection": "収集セマンティックゲート · 逆翻訳モデル",
 }

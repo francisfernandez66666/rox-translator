@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "Suchindex-Einstellung",
   "audit.action.product_status": "Produktstatus geändert",
   "audit.action.login_sso": "SSO-Anmeldung",
+  "audit.action.scrape_backtranslate_save": "Rückübersetzungsmodell für Erfassung gespeichert",
+  "audit.action.scrape_backtranslate_reset": "Rückübersetzungsmodell für Erfassung zurückgesetzt",
   "audit.action.model_routes_save": "Modellrouting speichern",
   "audit.action.model_save": "Modellkonfiguration speichern",
   "audit.action.openapi_docs_save": "OpenAPI-Dokumentation speichern",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "Plattform-Standards anlegen",
   "sales.config.lexicon.empty": "Noch keine Wortliste",
   "sales.config.lexicon.platform": "Plattform-Standard",
+  "billing.scrapeBackConfirmReset": "Konfiguration des Rückübersetzungsmodells löschen und zum Standardwert aus dem Code zurückkehren?",
+  "billing.scrapeBackDefault": "In der Datenbank nicht konfiguriert; Standardwert aus dem Code wird verwendet: {v}",
+  "billing.scrapeBackHint": "Der Semantikfilter für die automatische Erfassung in der Wissensdatenbank übersetzt die Übersetzung zuerst mit diesem Modell zurück ins Chinesische und lässt sie anschließend von einem Bewertungsmodell auf Übersetzungsfehler prüfen. Nur Übersetzungsmodelle, die für die Rückübersetzung von Hebräisch ins Chinesische getestet wurden, stehen zur Auswahl. Eine falsche Auswahl lässt fehlerhaft übersetzte Begriffe in den strengen Terminologiefilter gelangen. Die Speicherung wird sofort wirksam, ein Neustart ist nicht erforderlich.",
+  "billing.scrapeBackSection": "Semantikfilter für die Erfassung · Rückübersetzungsmodell",
 }

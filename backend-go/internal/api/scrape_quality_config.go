@@ -29,6 +29,7 @@ import (
 	"translator/internal/store"
 )
 
+// scrapeBacktranslateConfigKey 是回译模型唯一库键；读取、保存与回显必须同源。
 const scrapeBacktranslateConfigKey = "scrape_tier3_backtranslate_model"
 
 // scrapeBacktranslateAllowed 允许作为回译腿的模型白名单。

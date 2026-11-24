@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "索引收錄開關",
   "audit.action.product_status": "產品狀態變更",
   "audit.action.login_sso": "SSO 單點登入",
+  "audit.action.scrape_backtranslate_save": "儲存採集回譯模型",
+  "audit.action.scrape_backtranslate_reset": "重設採集回譯模型",
   "audit.action.model_routes_save": "儲存模型路由",
   "audit.action.model_save": "儲存模型設定",
   "audit.action.openapi_docs_save": "儲存 OpenAPI 文件",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "補種平臺預設檔",
   "sales.config.lexicon.empty": "暫無詞表",
   "sales.config.lexicon.platform": "平臺預設檔",
+  "billing.scrapeBackConfirmReset": "確認清空回譯模型設定，並回復使用程式碼預設值？",
+  "billing.scrapeBackDefault": "資料庫中未設定，改用程式碼預設值 {v}",
+  "billing.scrapeBackHint": "知識庫自動採集的語義閘會先使用此模型將譯文回譯成中文，再交給評估模型評分以判斷錯譯。只有經過希伯來語→中文回譯實測的翻譯模型可選；配錯會讓錯譯詞條混入術語硬閘。儲存後立即生效，無需重新啟動。",
+  "billing.scrapeBackSection": "採集語義閘 · 回譯模型",
 }

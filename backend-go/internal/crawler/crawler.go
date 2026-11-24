@@ -38,7 +38,7 @@ type LLMCaller interface {
 type Crawler struct {
 	St      *store.Store // 平台存储（数据源/待审池/断点）
 	LLM     LLMCaller    // LLM 客户端（tier3 用；可为 nil 则跳过 llm_gen 源）
-	Quality QualityJudge // 语义质量门（tier3 用；可为 nil 则只跑结构化闸，跳过语义门）
+	Quality QualityJudge // 语义质量门（tier3 用；nil 或无法判定均按 fail-closed 丢弃）
 	Probe   LoadProbe    // 低占用探针（可为 nil=始终视为低占用）
 	// ★ D14（2026-09-12）：跨批次/跨源复用同一 fetchBase——主机限频窗口、
 	// robots 缓存、HTTP 连接池全程有效（旧实现每批新建，限频形同虚设）。
@@ -278,7 +278,7 @@ func (c *Crawler) resolvePack(src *store.KBScrapeSource) (*SourceDeps, error) {
 // ★ 2026-11-23 tier3 质量治理：autoApprove 路径在落库前对 Tier=3 条目跑两道闸——
 //
 //	闸2 结构化校验（书写系统/拉丁转写/全角标点/源译同形，确定性拒绝）；
-//	闸3 语义质量门（QualityJudge term/semantic 低分拒绝，Judge 不可用时 fail-open + WARN）。
+//	闸3 语义质量门（QualityJudge term/semantic 低分拒绝，Judge 不可用时 fail-closed + WARN）。
 //
 // 落在咽喉处而非 store：与人工审批 admin_scrape.go:259 的书写系统校验同口径，
 // 且保持 store 不 import gate 的依赖方向。tier1/tier2 产出不过闸（可信度不同）。
@@ -305,7 +305,7 @@ func (c *Crawler) flushEntries(batch []*store.KBStagedEntry, autoApprove bool) (
 					e.TgtText = fixed
 				}
 			}
-			if err := c.St.AutoApproveEntry(1, e); err != nil {
+			if err := c.St.AutoApproveEntry(store.SharedHostTenant, e); err != nil {
 				// 单条落库失败不阻断整批（如目标语言不在白名单列），计入失败并继续
 				log.Printf("[crawler] 自动审批条目失败（src=%q）: %v", e.SrcText, err)
 				continue
@@ -319,19 +319,23 @@ func (c *Crawler) flushEntries(batch []*store.KBStagedEntry, autoApprove bool) (
 
 // passSemanticGate 闸3：语义质量门（判错→重译修正→验证→回写）。
 // 返回 (fixed, keep)：keep=false 丢弃；fixed 非空表示译文已被修正，调用方须回写 e.TgtText。
-// Judge 未注入 / 语义门关闭 / 抽样未命中 / Judge 报错 ⇒ ("", true) 放行（fail-open + WARN）。
+// 语义门关闭 / 抽样未命中 ⇒ ("", true) 放行；Judge 未注入或报错 ⇒ ("", false) 丢弃（fail-closed + WARN）。
 func (c *Crawler) passSemanticGate(ctx context.Context, cfg qualityGateConfig, e *store.KBStagedEntry) (fixed string, keep bool) {
-	if c.Quality == nil || cfg.MinScore <= 0 || cfg.Sample <= 0 {
-		return "", true // 未配置或关闭：只走结构化闸
+	if cfg.MinScore <= 0 || cfg.Sample <= 0 {
+		return "", true // 显式关闭：只走结构化闸
+	}
+	if c.Quality == nil {
+		observability.Warn(ctx, "tier3 语义质量门未注入，丢弃（fail-closed）", "src", e.SrcText, "tgt", e.TgtText)
+		return "", false
 	}
 	if cfg.Sample < 1 && !sampleByHash(e.SrcText, e.TgtText, cfg.Sample) {
 		return "", true // 抽样未命中
 	}
 	pass, reason, err := c.Quality.JudgeTerm(ctx, e.SrcText, e.TgtText, e.TgtLang)
 	if err != nil {
-		observability.Warn(ctx, "tier3 语义质量门 Judge 失败，放行（fail-open）",
+		observability.Warn(ctx, "tier3 语义质量门 Judge 失败，丢弃（fail-closed）",
 			"src", e.SrcText, "tgt", e.TgtText, "err", err.Error())
-		return "", true
+		return "", false
 	}
 	if pass {
 		return "", true
@@ -347,6 +351,11 @@ func (c *Crawler) passSemanticGate(ctx context.Context, cfg qualityGateConfig, e
 				}
 				return ""
 			}())
+		return "", false
+	}
+	if reason := structuralReject(e.SrcLang, e.SrcText, e.TgtLang, fixed); reason != "" {
+		observability.Warn(ctx, "tier3 重译修正产物被结构化闸拒绝，丢弃",
+			"src", e.SrcText, "fixed", fixed, "reason", reason)
 		return "", false
 	}
 	return fixed, true
@@ -376,7 +385,7 @@ func (c *Crawler) flushPhrases(batch []*store.KBStagedPhrase, autoApprove bool) 
 	if autoApprove {
 		n := 0
 		for _, p := range batch {
-			if err := c.St.AutoApprovePhrase(1, p); err != nil {
+			if err := c.St.AutoApprovePhrase(store.SharedHostTenant, p); err != nil {
 				log.Printf("[crawler] 自动审批安全句失败（phrase=%q）: %v", p.Phrase, err)
 				continue
 			}

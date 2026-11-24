@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "Indexación SEO modificada",
   "audit.action.product_status": "Estado del producto modificado",
   "audit.action.login_sso": "Inicio de sesión SSO",
+  "audit.action.scrape_backtranslate_save": "Modelo de traducción inversa de recopilación guardado",
+  "audit.action.scrape_backtranslate_reset": "Modelo de traducción inversa de recopilación restablecido",
   "audit.action.model_routes_save": "Guardar enrutamiento de modelos",
   "audit.action.model_save": "Guardar configuración de modelos",
   "audit.action.openapi_docs_save": "Guardar la documentación OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "Reponer valores de plataforma",
   "sales.config.lexicon.empty": "Sin léxico aún",
   "sales.config.lexicon.platform": "Valor de plataforma",
+  "billing.scrapeBackConfirmReset": "¿Confirmar que quieres borrar la configuración del modelo de traducción inversa y volver al valor predeterminado del código?",
+  "billing.scrapeBackDefault": "No configurado en la base de datos; se usa el valor predeterminado del código: {v}",
+  "billing.scrapeBackHint": "El filtro semántico de la recopilación automática en la base de conocimiento primero traduce de vuelta al chino la traducción con este modelo y luego la envía a un modelo de evaluación para detectar errores de traducción. Solo se pueden seleccionar modelos de traducción verificados en la traducción inversa de hebreo a chino. Elegir un modelo incorrecto permitiría que términos mal traducidos pasen al filtro terminológico estricto. Los cambios se aplican al guardar, sin necesidad de reiniciar.",
+  "billing.scrapeBackSection": "Filtro semántico de recopilación · modelo de traducción inversa",
 }

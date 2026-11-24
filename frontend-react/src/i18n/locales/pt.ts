@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "Indexação SEO alterada",
   "audit.action.product_status": "Estado do produto alterado",
   "audit.action.login_sso": "Login SSO",
+  "audit.action.scrape_backtranslate_save": "Modelo de retrotradução de coleta salvo",
+  "audit.action.scrape_backtranslate_reset": "Modelo de retrotradução de coleta redefinido",
   "audit.action.model_routes_save": "Salvar rotas de modelos",
   "audit.action.model_save": "Salvar configuração de modelo",
   "audit.action.openapi_docs_save": "Salvar documentação OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "Repor padrões da plataforma",
   "sales.config.lexicon.empty": "Sem léxico",
   "sales.config.lexicon.platform": "Padrão da plataforma",
+  "billing.scrapeBackConfirmReset": "Confirmar a limpeza da configuração do modelo de retrotradução e o retorno ao padrão do código?",
+  "billing.scrapeBackDefault": "Não configurado no banco de dados; usando o padrão do código: {v}",
+  "billing.scrapeBackHint": "O filtro semântico da coleta automática na base de conhecimento primeiro retrotraduz a tradução para o chinês com este modelo e depois a envia a um modelo de avaliação para detectar erros de tradução. Só podem ser selecionados modelos de tradução testados na retrotradução do hebraico para o chinês. A escolha de um modelo incorreto permite que termos mal traduzidos entrem no filtro terminológico rígido. A alteração entra em vigor imediatamente após salvar, sem reiniciar.",
+  "billing.scrapeBackSection": "Filtro semântico de coleta · modelo de retrotradução",
 }

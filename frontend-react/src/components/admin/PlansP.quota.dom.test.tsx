@@ -28,6 +28,8 @@ const Q = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api', () => ({
+  adminScrapeBacktranslate: vi.fn(async () => ({ success: true, model: '', stored: '', default: '', allowed: [] })),
+
   // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
   // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
   // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。

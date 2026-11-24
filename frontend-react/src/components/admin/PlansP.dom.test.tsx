@@ -10,8 +10,10 @@
 // ============================================================================
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, cleanup } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react'
 import { PlansP } from './PlansP'
+import { adminScrapeBacktranslate, adminScrapeBacktranslateSave } from '@/api'
+import { confirmDialog } from '@/components/uiDialogs'
 
 // ★ F-09（批G）断言开关：isSuper 控制充值面板可见性（!isSuper 才渲染收银台渠道下拉），
 //   payMode 控制 myPackage 透出的支付模式（决定 chOptions 里 mock 项的显隐）。
@@ -22,6 +24,8 @@ const mocks = vi.hoisted(() => ({ isSuper: true, payMode: 'mock' }))
 vi.mock('@/api', () => {
   const ok = (extra: Record<string, unknown> = {}) => ({ success: true, ...extra })
   return {
+    adminScrapeBacktranslate: vi.fn(async () => ok({ model: '', stored: '', default: '', allowed: [] })),
+    adminScrapeBacktranslateSave: vi.fn(async () => ok({ model: '', stored: '', default: '', allowed: [] })),
     // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口（夹具按枚举 mock，新增面必须同步补）
   // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
   //   桩给的是**代码缺省态**（开分段／上限 60／库里没表态）——这些文件测的不是这张卡，
@@ -111,6 +115,8 @@ vi.mock('@/api', () => {
   }
 })
 
+vi.mock('@/components/uiDialogs', () => ({ confirmDialog: vi.fn(async () => true) }))
+
 // ---- '@/stores/admin'：仅 PlansP 消费 isSuper（默认超管视角渲染全部管理区块；★ F-09 用例内改 false 看收银台） ----
 vi.mock('@/stores/admin', () => ({
   useAdmin: () => ({ isSuper: mocks.isSuper }),
@@ -166,6 +172,29 @@ describe('admin 计费 Hub（PlansP）', () => {
     expect(envField?.disabled).toBe(true)
     const editable = fieldList().find((f) => f.value === 'wx1234567890')
     expect(editable?.disabled).toBe(false)
+  })
+
+  it('采集回译模型：白名单下拉、保存与重置都走真实接口形状', async () => {
+    const model = 'tencent/Hunyuan-MT-7B'
+    vi.mocked(adminScrapeBacktranslate).mockResolvedValueOnce({
+      success: true, model, stored: '', default: model, allowed: [model],
+    } as any)
+    render(<PlansP />)
+    await waitFor(() => expect(screen.getByDisplayValue(model)).toBeTruthy())
+    const header = screen.getAllByText('采集语义闸 · 回译模型')[0].closest('div')!
+    const section = header.parentElement!
+    const select = section.querySelector('select') as HTMLSelectElement
+    await waitFor(() => {
+      expect(select.disabled).toBe(false)
+      expect(Array.from(select.options).map((o) => o.value)).toEqual([model])
+      expect(section.textContent).toContain('库里未配置，走代码缺省')
+    })
+
+    fireEvent.click(within(section).getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(adminScrapeBacktranslateSave).toHaveBeenCalledWith({ model }))
+    fireEvent.click(within(section).getByRole('button', { name: '恢复缺省' }))
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled())
+    await waitFor(() => expect(adminScrapeBacktranslateSave).toHaveBeenCalledWith({ reset: true }))
   })
 
   // ★ F-09（批G）：收银台「支付方式」下拉里的 mock 项（billing.chMock「模拟支付（测试）」）

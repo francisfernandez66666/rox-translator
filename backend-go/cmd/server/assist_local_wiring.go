@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"translator/internal/api"
@@ -39,18 +40,27 @@ import (
 	assistllm "translator/internal/assist/llm"
 	assistseed "translator/internal/assist/seed"
 	assiststore "translator/internal/assist/store"
+	"translator/internal/config"
+	"translator/internal/llmsource"
+	"translator/internal/secret"
+	"translator/internal/store"
 )
 
 // installAssistLocal 在 NewServer 之后、ListenAndServe 之前调一次。
-// 参数：无（配置全部读 env，与 cmd/assist-server 同源）；返回：无（失败只 WARN）。
-func installAssistLocal() {
+// 参数：mainCfg/st=主服务配置与业务库，用于 assist env 缺省时接入同一份 llmsource 热加载快照。
+func installAssistLocal(mainCfg *config.Config, st *store.Store) {
 	cfg := assistconfig.Load()
 	adb, err := assiststore.Open(cfg.DBPath)
 	if err != nil {
 		slog.Warn("assist 本地引擎未装配（库打不开，/assist-api 回落旧代理）", "path", cfg.DBPath, "err", err)
 		return
 	}
+	providers := assistLLMProviders(cfg)
 	eng := assistengine.New(adb, buildAssistLLM(cfg))
+	if len(providers) == 0 && st != nil {
+		eng.SetMainLLMResolver(mainAssistLLMResolver(st, mainCfg))
+		slog.Info("assist 本地引擎已接入主服务 LLM 热加载")
+	}
 	if err := loadAssistSeed(adb, cfg.SeedFile); err != nil {
 		slog.Warn("assist seed 跳过（不阻断主站）", "err", err)
 	}
@@ -63,11 +73,10 @@ func installAssistLocal() {
 		"db", cfg.DBPath)
 }
 
-// buildAssistLLM 照抄 cmd/assist-server 的降级链构造（主 + 备用，未配置即规则兜底）。
-// 参数：cfg=assist 配置；返回：LLM 客户端。
-func buildAssistLLM(cfg *assistconfig.Config) *assistllm.Client {
-	if cfg.MockMode || cfg.LLMAPIKey == "" || cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
-		return assistllm.New(nil, cfg.LLMTimeoutSec)
+// assistLLMProviders 只取 assist 显式 env；缺省不在这里拼主服务字段，改由 llmsource 动态解析。
+func assistLLMProviders(cfg *assistconfig.Config) []assistllm.Provider {
+	if cfg == nil || cfg.MockMode || cfg.LLMBaseURL == "" || cfg.LLMAPIKey == "" || secret.IsSecretMasked(cfg.LLMAPIKey) || cfg.LLMModel == "" {
+		return nil
 	}
 	providers := []assistllm.Provider{{
 		Name: "main", BaseURL: cfg.LLMBaseURL, APIKey: cfg.LLMAPIKey, Model: cfg.LLMModel,
@@ -77,11 +86,58 @@ func buildAssistLLM(cfg *assistconfig.Config) *assistllm.Client {
 		if key == "" {
 			key = cfg.LLMAPIKey
 		}
+		if secret.IsSecretMasked(key) {
+			return providers
+		}
 		providers = append(providers, assistllm.Provider{
 			Name: "backup", BaseURL: cfg.LLMBaseURL, APIKey: key, Model: cfg.LLMModelBackup,
 		})
 	}
-	return assistllm.New(providers, cfg.LLMTimeoutSec)
+	return providers
+}
+
+// buildAssistLLM 用 assist env providers 构造独立客户端；未配置时先空载，首次对话由主服务快照热加载。
+func buildAssistLLM(cfg *assistconfig.Config) *assistllm.Client {
+	if cfg == nil {
+		return assistllm.New(nil, 45)
+	}
+	return assistllm.New(assistLLMProviders(cfg), cfg.LLMTimeoutSec)
+}
+
+// mainAssistLLMResolver 让本地 assist 与主服务共用 llmsource 的 TTL/指纹/路由快照。
+func mainAssistLLMResolver(st *store.Store, cfg *config.Config) func(context.Context) ([]assistllm.Provider, string, string) {
+	return func(ctx context.Context) ([]assistllm.Provider, string, string) {
+		snap := llmsource.Current(ctx, st, cfg)
+		return assistProvidersFromSnapshot(snap), snap.Fingerprint, snap.From
+	}
+}
+
+// assistProvidersFromSnapshot 保留每条主路由的完整 base/key/model；路由按权重降序作为 assist 降级链。
+func assistProvidersFromSnapshot(snap *llmsource.Snapshot) []assistllm.Provider {
+	if snap == nil || snap.Placeholder {
+		return nil
+	}
+	// env/数据库全局档优先于路由；只有 FromRoute 时才读取 Routes，避免低优先级路由覆盖高优先级配置。
+	if snap.From != llmsource.FromRoute {
+		if snap.OnlineAPIBase == "" || snap.OnlineAPIKey == "" || secret.IsSecretMasked(snap.OnlineAPIKey) || snap.OnlineModel == "" {
+			return nil
+		}
+		return []assistllm.Provider{{Name: "main", BaseURL: snap.OnlineAPIBase, APIKey: snap.OnlineAPIKey, Model: snap.OnlineModel}}
+	}
+	routes := append([]config.ProviderConfig(nil), snap.Routes...)
+	sort.SliceStable(routes, func(i, j int) bool { return routes[i].Weight > routes[j].Weight })
+	out := make([]assistllm.Provider, 0, len(routes))
+	for _, r := range routes {
+		if r.APIBase == "" || r.APIKey == "" || secret.IsSecretMasked(r.APIKey) || r.Model == "" {
+			continue
+		}
+		name := "main"
+		if len(out) > 0 {
+			name = fmt.Sprintf("route-%d", len(out)+1)
+		}
+		out = append(out, assistllm.Provider{Name: name, BaseURL: r.APIBase, APIKey: r.APIKey, Model: r.Model})
+	}
+	return out
 }
 
 // assistLocalAdminToken 三级解析：env → assist 自身 configs → 进程内随机值。

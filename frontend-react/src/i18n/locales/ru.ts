@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "Настройка индексации",
   "audit.action.product_status": "Статус товара изменён",
   "audit.action.login_sso": "Вход через SSO",
+  "audit.action.scrape_backtranslate_save": "Модель обратного перевода для сбора сохранена",
+  "audit.action.scrape_backtranslate_reset": "Модель обратного перевода для сбора сброшена",
   "audit.action.model_routes_save": "Сохранение маршрутизации моделей",
   "audit.action.model_save": "Сохранение конфигурации моделей",
   "audit.action.openapi_docs_save": "Сохранение документации OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "Добавить базовые значения платформы",
   "sales.config.lexicon.empty": "Словарь пока пуст",
   "sales.config.lexicon.platform": "Базовое значение платформы",
+  "billing.scrapeBackConfirmReset": "Очистить настройки модели обратного перевода и вернуться к значению по умолчанию из кода?",
+  "billing.scrapeBackDefault": "В базе не настроено, используется значение по умолчанию из кода: {v}",
+  "billing.scrapeBackHint": "Семантический фильтр автоматического сбора в базу знаний сначала переводит полученный текст обратно на китайский с помощью этой модели, а затем передаёт его оценочной модели для выявления ошибок перевода. Можно выбрать только модели перевода, проверенные на обратном переводе с иврита на китайский. Неверный выбор позволит ошибочным терминам попасть в жёсткий терминологический фильтр. Изменения вступают в силу сразу после сохранения, перезапуск не требуется.",
+  "billing.scrapeBackSection": "Семантический фильтр сбора · модель обратного перевода",
 }

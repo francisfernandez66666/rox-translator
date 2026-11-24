@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "تغيير إعداد الفهرسة",
   "audit.action.product_status": "تغيير حالة المنتج",
   "audit.action.login_sso": "تسجيل الدخول عبر SSO",
+  "audit.action.scrape_backtranslate_save": "تم حفظ نموذج الترجمة العكسية للجمع",
+  "audit.action.scrape_backtranslate_reset": "تمت إعادة تعيين نموذج الترجمة العكسية للجمع",
   "audit.action.model_routes_save": "حفظ مسارات النماذج",
   "audit.action.model_save": "حفظ إعداد النموذج",
   "audit.action.openapi_docs_save": "حفظ مستندات OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "إعادة زرع القيم الافتراضية للمنصة",
   "sales.config.lexicon.empty": "لا توجد قوائم كلمات بعد",
   "sales.config.lexicon.platform": "الافتراضي للمنصة",
+  "billing.scrapeBackConfirmReset": "هل تريد تأكيد مسح إعدادات نموذج الترجمة العكسية والعودة إلى القيمة الافتراضية من الكود؟",
+  "billing.scrapeBackDefault": "غير مُعد في قاعدة البيانات؛ يتم استخدام القيمة الافتراضية من الكود: {v}",
+  "billing.scrapeBackHint": "تعيد بوابة الجمع التلقائي في قاعدة المعرفة ترجمة النص أولًا إلى الصينية باستخدام هذا النموذج، ثم تسلّمه إلى نموذج تقييم لاكتشاف أخطاء الترجمة. لا يمكن اختيار سوى نماذج الترجمة التي اجتازت اختبارات الترجمة العكسية من العبرية إلى الصينية. اختيار نموذج غير مناسب سيسمح للمصطلحات المترجمة خطأً بالدخول إلى بوابة المصطلحات الصارمة. يسري الحفظ فورًا دون الحاجة إلى إعادة التشغيل.",
+  "billing.scrapeBackSection": "بوابة الجمع الدلالية · نموذج الترجمة العكسية",
 }

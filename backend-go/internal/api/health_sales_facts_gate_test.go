@@ -22,6 +22,9 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"translator/internal/assist/profile"
+	mainengine "translator/internal/engine"
 )
 
 // TestHealthSalesFactsCounters F9：计数随请求变化 + 响应体不含事实值。
@@ -82,6 +85,47 @@ func TestHealthSalesFactsCounters(t *testing.T) {
 	// 也不许出 product_id / 租户名（公开面不能变枚举器）。
 	if strings.Contains(body, fx.A.ID) {
 		t.Fatalf("健康面泄露了产品主键 %q：%s", fx.A.ID, body)
+	}
+}
+
+// TestLocalAssistSalesFactsCounters 本地接待链也必须把真实注入条数记进健康面。
+// 跨进程链由 attachSalesFacts 记账；并进程后若漏掉这一步，界面能拿到事实但监控恒为 0。
+func TestLocalAssistSalesFactsCounters(t *testing.T) {
+	fx := newW1Fixture(t)
+	seedW1Facts(t, fx)
+	t.Setenv("ASSIST_PROFILE_KEY", "") // 本地链不再要求跨进程签名密钥
+	r := httptest.NewRequest(http.MethodPost, "/assist-api/api/assist/chat", strings.NewReader(`{"message":"多久发出"}`))
+	r.Header.Set(productPageHeader, w1PagePath(fx.A))
+	r.Header.Set("X-App-Lang", "zh")
+	sc := fx.srv.resolveSalesFactsScope(r, w1PagePath(fx.A))
+	before := fx.srv.salesFactsHealth()["injected"].(int64)
+
+	r2 := fx.srv.injectLocalAssistContext(r, sc)
+	set, ok := mainengine.SalesFactsFromContext(r2.Context())
+	if !ok || len(set.Facts) != 1 || set.Facts[0].Value != "MOQ-A-50" {
+		t.Fatalf("本地链路事实集未按产品页注入：ok=%v set=%+v", ok, set)
+	}
+	after := fx.srv.salesFactsHealth()["injected"].(int64)
+	if after-before != 1 {
+		t.Fatalf("本地链路 injected 增量应为 1，实际 %d（before=%d after=%d）", after-before, before, after)
+	}
+}
+
+func TestLocalAssistStripsInboundSalesFactsHeaders(t *testing.T) {
+	h := http.Header{}
+	h.Set(productPageHeader, "/p/a/b")
+	h.Set(mainengine.SalesFactsHeader, "forged")
+	h.Set(mainengine.SalesFactsTsHeader, "1")
+	h.Set(mainengine.SalesFactsSigHeader, "forged")
+	h.Set(mainengine.SalesFactsVersionHeader, mainengine.SalesFactsVersion)
+	h.Set(profile.HeaderProfile, "forged")
+	h.Set(profile.HeaderTs, "1")
+	h.Set(profile.HeaderSig, "forged")
+	stripLocalAssistHeaders(h)
+	for _, k := range []string{productPageHeader, mainengine.SalesFactsHeader, mainengine.SalesFactsTsHeader, mainengine.SalesFactsSigHeader, mainengine.SalesFactsVersionHeader, profile.HeaderProfile, profile.HeaderTs, profile.HeaderSig} {
+		if h.Get(k) != "" {
+			t.Fatalf("本地入口仍保留客户端头 %s", k)
+		}
 	}
 }
 

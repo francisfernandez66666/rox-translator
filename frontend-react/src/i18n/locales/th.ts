@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "เปลี่ยนการตั้งค่าดัชนีค้นหา",
   "audit.action.product_status": "เปลี่ยนสถานะสินค้า",
   "audit.action.login_sso": "เข้าสู่ระบบ SSO",
+  "audit.action.scrape_backtranslate_save": "บันทึกโมเดลแปลกลับสำหรับการเก็บข้อมูล",
+  "audit.action.scrape_backtranslate_reset": "รีเซ็ตโมเดลแปลกลับสำหรับการเก็บข้อมูล",
   "audit.action.model_routes_save": "บันทึกเส้นทางโมเดล",
   "audit.action.model_save": "บันทึกการตั้งค่าโมเดล",
   "audit.action.openapi_docs_save": "บันทึกเอกสาร OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "เติมค่าเริ่มต้นของแพลตฟอร์ม",
   "sales.config.lexicon.empty": "ยังไม่มีรายการคำ",
   "sales.config.lexicon.platform": "ค่าเริ่มต้นของแพลตฟอร์ม",
+  "billing.scrapeBackConfirmReset": "ยืนยันว่าต้องการล้างการกำหนดค่าโมเดลแปลกลับและกลับไปใช้ค่าเริ่มต้นจากโค้ดหรือไม่?",
+  "billing.scrapeBackDefault": "ยังไม่ได้กำหนดค่าในฐานข้อมูล กำลังใช้ค่าเริ่มต้นจากโค้ด: {v}",
+  "billing.scrapeBackHint": "ตัวกรองความหมายของการเก็บข้อมูลอัตโนมัติในฐานความรู้จะใช้โมเดลนี้แปลคำแปลกลับเป็นภาษาจีนก่อน แล้วส่งให้โมเดลประเมินให้คะแนนเพื่อตรวจจับคำแปลที่ผิด สามารถเลือกได้เฉพาะโมเดลแปลที่ผ่านการทดสอบการแปลกลับจากภาษาฮีบรูเป็นภาษาจีน หากเลือกผิด โปรดบั๊กที่แปลผิดจะได้เข้าไปในตัวกรองคำศัพท์แบบเข้มงวด การบันทึกจะมีผลทันทีโดยไม่ต้องเริ่มระบบใหม่",
+  "billing.scrapeBackSection": "ตัวกรองความหมายของการเก็บข้อมูล · โมเดลแปลกลับ",
 }

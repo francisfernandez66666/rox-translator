@@ -626,6 +626,23 @@ func ChatExtraParamsFromCtx(ctx context.Context) map[string]interface{} {
 	return m
 }
 
+// NoThinkingExtra 关掉思维链的厂商私有字段（SiliconFlow/DeepSeek 系认这一形制）。
+//
+// ★ 全仓唯一一份（2026-11-24 从 engine 上移到本包）：原来它住在
+// `internal/engine/ocr_reconcile.go` 的 noThinkingExtra，而 qualityjudge 的复核腿
+// 也需要它——再抄一份就是 AGENTS §一·11「多把尺子」的形态（两份迟早一份改了另一份没改）。
+// 下沉到 llm 的理由与 termConstraintsKey 同源：这是"某条腿知道自己打的是哪一家"的局部知识，
+// 不该让 engine 与 qualityjudge 为了三个字互相 import。
+//
+// 为什么写死、不留开关：主模型可能是推理系，先吐思维链再给 JSON 会把 max_tokens 与超时一起吃光
+// （ocr_fix 六次运行全是 tokens:0 / timeout；复核腿 64 tokens 下不关思维链 17/20 截断成空）。
+// 留一个"复开推理"的 env 开关，下一个人遇到某家回 400 就会打开它，症状原样复发。
+//
+// 每次返回**新 map**：调用方可能就地改（探针就这么干），共享一份会让下一次调用带上上一轮的字段。
+func NoThinkingExtra() map[string]interface{} {
+	return map[string]interface{}{"thinking": map[string]interface{}{"type": "disabled"}}
+}
+
 // chatReservedPayloadKeys OpenAI 兼容体的**标准字段**：厂商私有字段永远不许覆盖它们。
 //
 // 为什么要在这一层挡而不是指望调用方写对：一个写错的 extra 把 `model`/`messages` 换掉，

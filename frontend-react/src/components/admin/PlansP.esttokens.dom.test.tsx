@@ -30,6 +30,7 @@ const S = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
 }))
 
+// 构造预估系数缺省夹具。
 function defaultCfg() {
   return {
     success: true,
@@ -42,6 +43,8 @@ function defaultCfg() {
 }
 
 vi.mock('@/api', () => ({
+  adminScrapeBacktranslate: vi.fn(async () => ({ success: true, model: '', stored: '', default: '', allowed: [] })),
+
   // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
   // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
   // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
@@ -113,17 +116,20 @@ function estInput(i: number): HTMLInputElement {
   if (ins.length !== 6) throw new Error(`预估区块应有 6 个输入框，实得 ${ins.length}`)
   return ins[i]
 }
+// 定位预估系数面板按钮。
 function estButton(label: string): HTMLButtonElement {
   const btn = (Array.from(estBox().querySelectorAll('button')) as HTMLButtonElement[])
     .find((b) => (b.textContent ?? '').trim() === label)
   if (!btn) throw new Error(`预估区块未找到按钮「${label}」`)
   return btn
 }
+// 按 i18n 键定位确认弹窗按钮。
 function dialogButton(key: 'common.ok' | 'common.cancel'): HTMLButtonElement | undefined {
   return ((Array.from(document.querySelectorAll('button')) as HTMLButtonElement[])
     .filter((b) => (b.textContent ?? '').trim() === baseZh[key])).pop()
 }
 
+// 挂载面板并等待异步回显完成。
 async function mount() {
   render(<><PlansP /><DialogHost /></>)
   await vi.waitFor(() => expect(estInput(0).value).toBe('160'))

@@ -53,6 +53,7 @@ func rawStr(m map[string]any, k string) string {
 	return ""
 }
 
+// rawInt64 兼容知识服务 JSON/数据库驱动的整数形态；解析失败回 0，由调用方作用域闸拒绝。
 func rawInt64(m map[string]any, k string) int64 {
 	switch v := m[k].(type) {
 	case int64:
@@ -69,8 +70,10 @@ func rawInt64(m map[string]any, k string) int64 {
 	return 0
 }
 
+// rawInt 将通用整数读取收窄为 int，供 Product 的计数与开关字段复用。
 func rawInt(m map[string]any, k string) int { return int(rawInt64(m, k)) }
 
+// splitTargetLangs 还原产品目标语 CSV；空值回非 nil 空切片，保持出栈 [] 契约。
 func splitTargetLangs(s string) []string {
 	if strings.TrimSpace(s) == "" {
 		return []string{}
@@ -86,6 +89,7 @@ func splitTargetLangs(s string) []string {
 	return out
 }
 
+// joinTargetLangs 把目标语数组写回库内 CSV；空数组回空串。
 func joinTargetLangs(langs []string) string {
 	if len(langs) == 0 {
 		return ""
@@ -93,6 +97,7 @@ func joinTargetLangs(langs []string) string {
 	return strings.Join(langs, ",")
 }
 
+// parseFactRefsFromAny 解析物料事实引用 JSON；空值、类型错或坏 JSON 均回空切片而非 nil。
 func parseFactRefsFromAny(v any) []int64 {
 	s, ok := v.(string)
 	if !ok || strings.TrimSpace(s) == "" {

@@ -55,12 +55,12 @@ interface Item { key: PanelKey; label: string; minLevel: number; icon: IconName 
 // 菜单项配置：定义所有可展示的面板及其最低角色等级要求
 // ★ 2026-09-03 重组：协议签署并入「系统设置」；开放 API+回调通知并入「外部调用」；
 //   邀请好友+任务中心并入「个人中心」；流程引擎并入「系统设置」（修复白板）。
-// ★ 2026-09-15 Tab 精简（任务3）：一级菜单 20 → 8——「计费与套餐」Hub 收纳
+// ★ 2026-09-15 Tab 精简（任务3）：一级菜单 20 → 9；后续新增 assist 与销售域后现为 14——「计费与套餐」Hub 收纳
 //   套餐/租户/对账；「系统与运维」Hub 收纳注册触达/邮件模板/流程/协议/审计/
 //   运营策略/模型供应商/品牌页脚；用量明细并入总览、数据源并入知识库、
 //   成员并入组织；旧 key 仍保留在 renderPanel 深链兼容分支中。
 const ITEMS: Item[] = [
-  // ★ Tab 合并精简（2026-09-15）：20 个一级项 → 9 个。原一级 usage/dataSources/invites/
+  // ★ Tab 合并精简（2026-09-15）：20 个一级项 → 9 个；后续扩到 14 个。原一级 usage/dataSources/invites/
   //   tenants/plans/reconcile/alerts/audit/mailTpl/footer/brand/models/ops/workflow 等
   //   并入对应 Hub 子 tab（总览/知识库/组织/计费/外部调用/系统与运维/系统设置）；
   //   renderPanel 保留旧 key 分支以兼容历史深链/书签（渲染独立面板）。

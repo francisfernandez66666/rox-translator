@@ -2,7 +2,7 @@
 // 采集侧两道质量闸的回归锁：
 //   - 闸2 结构化校验：4 类脏候选（源译同形/书写系统不符/拉丁转写/全角标点）必须被拦，
 //     正常 he 术语必须放行（正对照，防闸门恒红）；
-//   - 闸3 语义门：Judge 低分拒绝、报错 fail-open、关闭/未注入放行、阈值边界；
+//   - 闸3 语义门：Judge 低分/报错/未注入 fail-closed，关闭/抽样未命中放行，修复产物再过结构化闸；
 //   - 提示词加固：industry 提示词含 4 条质量规则（文案回退即红）；
 //   - 抽样确定性：sampleByHash 同输入同判定。
 //
@@ -12,10 +12,14 @@ package crawler
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"translator/internal/config"
 	"translator/internal/store"
 )
 
@@ -85,6 +89,109 @@ func (f *fakeJudge) RepairTerm(ctx context.Context, source, targetLang string) (
 	return f.fixed, true, nil
 }
 
+func TestQualitySampleZeroIsReal(t *testing.T) {
+	old := config.C
+	cfg := config.Default()
+	cfg.DatabaseDriver = "sqlite"
+	config.C = cfg
+	t.Cleanup(func() { config.C = old })
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "quality.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	st, err := store.New(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetConfig("scrape_tier3_quality_sample", "0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := loadQualityConfig(st).Sample; got != 0 {
+		t.Fatalf("抽样 0 必须被读成 0，实得 %v", got)
+	}
+}
+
+func TestFlushEntriesWritesRepairedTextBeforeApprove(t *testing.T) {
+	b, err := os.ReadFile("crawler.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	gate := strings.Index(src, "c.passSemanticGate(")
+	write := strings.Index(src, "e.TgtText = fixed")
+	approve := strings.Index(src, "c.St.AutoApproveEntry(")
+	if gate < 0 || write < gate || approve < write {
+		t.Fatalf("修复译文回写接线缺失或顺序错误：gate=%d write=%d approve=%d", gate, write, approve)
+	}
+	if !strings.Contains(src, "c.St.AutoApproveEntry(store.SharedHostTenant, e)") {
+		t.Fatal("采集词条必须落平台共享宿主0；硬编码租户1会让共享包查不到采集内容")
+	}
+	if !strings.Contains(src, "c.St.AutoApprovePhrase(store.SharedHostTenant, p)") {
+		t.Fatal("采集安全句必须与词条同宿主，不能落进租户1")
+	}
+}
+
+func TestFlushEntriesLandsInSharedPackageHost(t *testing.T) {
+	old := config.C
+	cfg := config.Default()
+	cfg.DatabaseDriver = "sqlite"
+	config.C = cfg
+	t.Cleanup(func() { config.C = old })
+	raw, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "shared-host.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	st, err := store.New(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := st.CreateKBPackage(store.SharedHostTenant, 0, "auto", "汽车行业", store.PackIndustry, store.PackRoleSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Crawler{St: st, Quality: &fakeJudge{pass: true}}
+	e := &store.KBStagedEntry{
+		SourceID: 314, TargetPackID: pkg.ID, PackType: store.PackIndustry, Tier: 3, Layer: 1,
+		SrcLang: "zh", SrcText: "刹车系统", TgtLang: "he", TgtText: "מערכת בלמים",
+	}
+	n, err := c.flushEntries([]*store.KBStagedEntry{e}, true)
+	if err != nil || n != 1 {
+		t.Fatalf("采集条目应落库：n=%d err=%v", n, err)
+	}
+	for _, tc := range []struct {
+		tid  int64
+		want int
+	}{{store.SharedHostTenant, 1}, {1, 0}} {
+		var got int
+		if err := raw.QueryRow("SELECT COUNT(*) FROM kb_entries WHERE package_id=? AND tenant_id=?", pkg.ID, tc.tid).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Fatalf("共享包条目落错宿主：tenant=%d got=%d want=%d", tc.tid, got, tc.want)
+		}
+	}
+	pn, err := c.flushPhrases([]*store.KBStagedPhrase{{
+		PackageID: pkg.ID, Lang: "he", Phrase: "ביטוי", Kind: "style", Replacement: "安全表达", Tier: 2,
+	}}, true)
+	if err != nil || pn != 1 {
+		t.Fatalf("采集安全句应落库：n=%d err=%v", pn, err)
+	}
+	for _, tc := range []struct {
+		tid  int64
+		want int
+	}{{store.SharedHostTenant, 1}, {1, 0}} {
+		var got int
+		if err := raw.QueryRow("SELECT COUNT(*) FROM kb_safety_phrases WHERE package_id=? AND tenant_id=?", pkg.ID, tc.tid).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.want {
+			t.Fatalf("共享包安全句落错宿主：tenant=%d got=%d want=%d", tc.tid, got, tc.want)
+		}
+	}
+}
+
 func TestSemanticGateDecisions(t *testing.T) {
 	e := &store.KBStagedEntry{SrcText: "刹车系统", TgtText: "מערכת ברקים", TgtLang: "he", Tier: 3}
 	cfg := qualityGateConfig{MinScore: 70, Sample: 1}
@@ -103,18 +210,25 @@ func TestSemanticGateDecisions(t *testing.T) {
 			t.Fatalf("重译修正成功应保留并回写，实得 fixed=%q keep=%v", fixed, keep)
 		}
 	})
-	t.Run("Judge报错fail-open", func(t *testing.T) {
-		c := &Crawler{Quality: &fakeJudge{err: errors.New("judge down")}}
+	t.Run("重译产物仍需过结构化闸", func(t *testing.T) {
+		c := &Crawler{Quality: &fakeJudge{pass: false, reason: "semantic=30", fixed: "badlatin"}}
 		fixed, keep := c.passSemanticGate(context.Background(), cfg, e)
-		if !keep || fixed != "" {
-			t.Fatalf("Judge 报错应放行（fail-open），实得 fixed=%q keep=%v", fixed, keep)
+		if keep || fixed != "" {
+			t.Fatalf("重译产物带拉丁转写必须丢弃，实得 fixed=%q keep=%v", fixed, keep)
 		}
 	})
-	t.Run("未注入放行", func(t *testing.T) {
+	t.Run("Judge报错fail-closed", func(t *testing.T) {
+		c := &Crawler{Quality: &fakeJudge{err: errors.New("judge down")}}
+		fixed, keep := c.passSemanticGate(context.Background(), cfg, e)
+		if keep || fixed != "" {
+			t.Fatalf("Judge 无法判定时必须丢弃，不能自动审批，实得 fixed=%q keep=%v", fixed, keep)
+		}
+	})
+	t.Run("未注入fail-closed", func(t *testing.T) {
 		c := &Crawler{}
 		fixed, keep := c.passSemanticGate(context.Background(), cfg, e)
-		if !keep || fixed != "" {
-			t.Fatalf("未注入 Quality 应只走结构化闸，实得 fixed=%q keep=%v", fixed, keep)
+		if keep || fixed != "" {
+			t.Fatalf("语义门启用但 Quality 未注入时必须丢弃，实得 fixed=%q keep=%v", fixed, keep)
 		}
 	})
 	t.Run("关闭阈值放行", func(t *testing.T) {

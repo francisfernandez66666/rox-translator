@@ -72,6 +72,7 @@ func LoadConfig() Config {
 // contractReadOn 切读开关字面值（与 contract.ReadModeCutover 同值，但不引入循环 import 依赖）。
 const contractReadOn = "on"
 
+// envOr 读取去空白后的环境值；未设置或空串时返回调用方给的缺省。
 func envOr(key, def string) string {
 	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
 		return v

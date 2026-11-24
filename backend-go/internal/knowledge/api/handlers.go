@@ -32,6 +32,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// toInt64 兼容 JSON 解码后可能出现的数值形态；无法解析时回 0，由租户闸拒绝非法作用域。
 func toInt64(v any) int64 {
 	switch x := v.(type) {
 	case float64:
@@ -48,6 +49,7 @@ func toInt64(v any) int64 {
 	return 0
 }
 
+// decodeScope 读取请求体并取出 tenant_id；坏 JSON 直接返回错误，不伪装成空作用域。
 func decodeScope(r *http.Request) (map[string]any, int64, error) {
 	var m map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&m); err != nil {
@@ -56,6 +58,7 @@ func decodeScope(r *http.Request) (map[string]any, int64, error) {
 	return m, toInt64(m["tenant_id"]), nil
 }
 
+// strField 只接受字符串字段；缺字段或类型不符回空串，避免把任意 JSON 值拼进 SQL。
 func strField(m map[string]any, k string) string {
 	if s, ok := m[k].(string); ok {
 		return s

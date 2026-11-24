@@ -376,6 +376,8 @@ export const baseEn: Record<string,string> = {
   'audit.action.product_seo': 'SEO indexing toggled',
   'audit.action.product_status': 'Product status changed',
   'audit.action.login_sso': 'SSO sign-in',
+  'audit.action.scrape_backtranslate_save': 'Scrape back-translation model saved',
+  'audit.action.scrape_backtranslate_reset': 'Scrape back-translation model reset',
   'audit.action.scim_config': 'SCIM sync configured',
   'audit.action.scim_user_create': 'SCIM user created',
   'audit.action.scim_user_disable': 'SCIM user disabled',

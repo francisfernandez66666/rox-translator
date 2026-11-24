@@ -32,6 +32,7 @@ type tableSpec struct {
 	AutoInc bool // PG 侧需要 setval 复位
 }
 
+// isAutoInc 判断表是否使用整型自增主键；PG 显式 id 搬迁后只需为这些表复位序列。
 func isAutoInc(t string) bool {
 	for _, a := range contract.AutoIncrementTables {
 		if a == t {

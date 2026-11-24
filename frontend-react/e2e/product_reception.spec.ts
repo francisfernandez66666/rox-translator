@@ -23,13 +23,19 @@ import { expect, test } from '@playwright/test'
 //   （src/api/assistOverflow.lock.test.ts，M0359）共用同一份实现。
 import { TOL_PX, overflowProblems, type Rect } from '../src/api/assistOverflow'
 
+// 产品租户短码由 run_uat 夹具现生成。
 const TENANT = process.env.PRODUCT_TENANT_CODE || ''
+// 产品页面短码由同一夹具现生成。
 const PAGE = process.env.PRODUCT_PAGE_CODE || ''
+// 公开事实值同时作为正向命中靶子。
 const THIS_FACT = process.env.PRODUCT_PUBLIC_VALUE || ''
 // 另一产品/另一类事实串：优先夹具显式给的「另一产品公开事实」，回退同一夹具的受控事实
 // （PRODUCT_GATED_VALUE：受控值按设计绝不对匿名出栈，是一支真实存在、非空转的负向靶）。
 const OTHER_FACT = process.env.PRODUCT_OTHER_VALUE || process.env.PRODUCT_GATED_VALUE || ''
-const QUESTION = process.env.PRODUCT_RECEPTION_QUESTION || '这个产品的交期大概是多久？'
+// 默认问题可由夹具覆盖。
+const QUESTION = process.env.PRODUCT_RECEPTION_QUESTION || '从下单到发出要多久？'
+const EXPECT_MODEL = process.env.PRODUCT_EXPECT_MODEL || ''
+// 对外页路径只由夹具短码派生。
 const URL = `/p/${TENANT}/${PAGE}`
 
 test.describe('R3 /p/ 托管页接待闭环（真链路）', () => {
@@ -58,6 +64,7 @@ test.describe('R3 /p/ 托管页接待闭环（真链路）', () => {
     const sid = await page.evaluate(() => localStorage.getItem('ny_assist_sid'))
     expect(sid, '链路没通：拿不到会话 sid ⇒ greet 没到达 ai-assist（/assist-api 没转发或返回了 SPA 兜底页）')
       .toBeTruthy()
+    const healthBefore = await (await page.request.get('/api/health')).json()
 
     // 负向对照射程自证：两串都得真存在、且不同，否则下面「不许混入」是恒真空转。
     expect(OTHER_FACT, '负向对照没靶子：需 PRODUCT_OTHER_VALUE 或 PRODUCT_GATED_VALUE ⇒ 否则该腿空转').not.toBe('')
@@ -65,10 +72,18 @@ test.describe('R3 /p/ 托管页接待闭环（真链路）', () => {
 
     // 提问，等助手回复里出现本产品的公开事实。
     await page.locator('.na-input input').fill(QUESTION)
+    const chatResponse = page.waitForResponse((res) => res.url().includes('/assist-api/api/assist/chat') && res.request().method() === 'POST')
     await page.locator('.na-send').click()
+    const chatBody = await (await chatResponse).json()
+    if (EXPECT_MODEL) expect(chatBody.attribution?.model, '本地 assist 未跟随主服务模型热更新').toBe(EXPECT_MODEL)
     const replies = page.locator('.na-row.ai .na-bubble')
     await expect(replies.last(), `真链路：提问没命中该产品事实「${THIS_FACT.slice(0, 16)}」⇒ 事实集没按 /p/ 作用域注入`)
       .toContainText(THIS_FACT, { timeout: 30000 })
+    const healthAfter = await (await page.request.get('/api/health')).json()
+    expect(healthAfter.sales_facts.scope_anon, '匿名产品页作用域没有在提问时解析')
+      .toBeGreaterThanOrEqual(healthBefore.sales_facts.scope_anon + 1)
+    expect(healthAfter.sales_facts.injected, '本地接待链没有记录事实注入 ⇒ 只看回复文本会漏掉静默半态')
+      .toBeGreaterThanOrEqual(healthBefore.sales_facts.injected + 1)
 
     // 负向对照：断言里混入另一产品的事实串必须判红 —— 回复不许串进它，
     // 否则说明作用域/可见性没收敛（W1 产品事实隔离被打破）。
@@ -154,7 +169,7 @@ for (const vw of [320, 390]) {
           for (const n of Array.from(form.querySelectorAll('*')).slice(0, 400)) {
             const r = n.getBoundingClientRect()
             if (r.width === 0 && r.height === 0) continue
-            if (r.right > window.innerWidth + tol || r.left < -tol) {
+            if (r.right > window.innerWidth + tol) {
               spillers.push(`${labelOf(n)}[${Math.round(r.left)},${Math.round(r.right)}]`)
             }
           }

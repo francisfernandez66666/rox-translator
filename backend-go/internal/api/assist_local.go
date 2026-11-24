@@ -15,13 +15,12 @@
 //	installAssistLocal），server.go 不新增字段。生产单实例；
 //	测试可用 serveAssistOpenLocal 直接传 la，不依赖这个单例。
 //
-// parity（A1）：本地链路把事实集/画像直接注入 r.Context()，注入条件与旧代理
+// parity（A1）：本地链路把事实集/画像直接注入 r.Context()；事实集再经
 //
-//	attachSalesFacts / attachAssistProfile 的发头条件逐项对齐；事实集再经
 //	EncodeSalesFacts→DecodeSalesFacts 走一遍，与 assist 侧验签后得到的 Set
-//	逐字段同形，于是 guardSalesClaims 读到的 ok 与内容一字不差。assist 侧
-//	injectSalesFacts / visitorProfileFromRequest 在「无头」时原样透传 ctx，
-//	不会覆盖本次注入（见 sales_facts_from_request.go / profile.go）。
+//	逐字段同形，于是 guardSalesClaims 读到的 ok 与内容一字不差。事实注入不再要求
+//	跨进程签名密钥；画像 PII 仍保留密钥门。assist 侧 injectSalesFacts / visitorProfileFromRequest
+//	在「无头」时原样透传 ctx，不会覆盖本次注入（见 sales_facts_from_request.go / profile.go）。
 //
 // 本文件不得出现任何跨进程头写入 / assistClient / assistBaseURL（A4 源码锁锚定）。
 // ================================================
@@ -34,8 +33,10 @@ import (
 	"sync/atomic"
 
 	assistengine "translator/internal/assist/engine"
+	"translator/internal/assist/profile"
 	mainengine "translator/internal/engine"
 	apierrors "translator/internal/errors"
+	"translator/internal/observability"
 )
 
 // localAssist 主服务进程内本地持有的一份接待引擎 + 四端点 handler。
@@ -93,6 +94,18 @@ func (c *assistLocalResponseCapture) Write(b []byte) (int, error) {
 	return c.ResponseWriter.Write(b)
 }
 
+// stripLocalAssistHeaders 清掉页面头与客户端自带的签名事实头；本地事实只认本进程 ctx 注入。
+func stripLocalAssistHeaders(h http.Header) {
+	stripProductPageHeader(h)
+	h.Del(mainengine.SalesFactsHeader)
+	h.Del(mainengine.SalesFactsTsHeader)
+	h.Del(mainengine.SalesFactsSigHeader)
+	h.Del(mainengine.SalesFactsVersionHeader)
+	h.Del(profile.HeaderProfile)
+	h.Del(profile.HeaderTs)
+	h.Del(profile.HeaderSig)
+}
+
 // serveAssistOpenLocal 本地四端点转调：剥前缀 → 白名单/方法/限长 → ctx 注入 → 本地 handler。
 // 不构造 http.NewRequest、不调 assistClient、不写任何跨进程头（A4 锁锚定本文件）。
 func (s *Server) serveAssistOpenLocal(w http.ResponseWriter, r *http.Request, la *localAssist) {
@@ -103,7 +116,7 @@ func (s *Server) serveAssistOpenLocal(w http.ResponseWriter, r *http.Request, la
 	// 页面上下文先捕获再删（与旧代理 sales_facts_scope.go 同一卫生口径；
 	// 不是跨进程 strip，只是不让客户端自带的页面头在同一请求里继续被读到）。
 	page := pageContextOf(r)
-	stripProductPageHeader(r.Header)
+	stripLocalAssistHeaders(r.Header)
 	up := strings.TrimPrefix(r.URL.Path, assistOpenPrefix)
 	if up == "" || up[0] != '/' {
 		up = "/" + up // 容错：/assist-apiapi/... 这类畸形路径不该被拼成合法上游
@@ -138,22 +151,27 @@ func (s *Server) serveAssistOpenLocal(w http.ResponseWriter, r *http.Request, la
 
 // injectLocalAssistContext 把事实集与画像直接放进 ctx，替代跨进程签名头。
 //
-// 注入条件逐项对齐旧代理：事实集＝sc.injectable() 且共享签名密钥在位；
-// 画像＝登录用户且密钥在位。二者都不满足时 ctx 原样返回（守卫仍 fail-closed，
-// 与「无头」那一档逐字节等价）。
+// 本地事实集只由 sc.injectable() 决定：不再要求跨进程签名密钥，避免未配 ASSIST_PROFILE_KEY
+// 时公开产品事实静默消失。画像仍保留密钥门（PII 增强的显式开关）；二者都不满足时 ctx 原样返回。
 func (s *Server) injectLocalAssistContext(r *http.Request, sc salesFactsScope) *http.Request {
 	if r == nil {
 		return r
 	}
 	key := s.assistProfileKey()
-	ctx := r.Context()
-	if sc.injectable() && len(key) > 0 {
+	ctx := assistengine.WithSalesClaimGuardEnabled(r.Context(), s.salesFactsGateFullyOpen())
+	if sc.injectable() {
 		set := mainengine.LimitSalesFacts(s.buildSalesFactsSet(r, sc))
 		// ★ 与 assist 侧验签解码链同形：Encode→Decode 让 nil/空切片与 omitempty
 		//   字段跟跨进程形态逐字段一致，guardSalesClaims 读到的 ok 与内容一字不差（A1）。
 		if payload, err := mainengine.EncodeSalesFacts(set); err == nil {
 			if decoded, derr := mainengine.DecodeSalesFacts(payload); derr == nil {
 				ctx = s.localFactsContext(ctx, decoded)
+				if n := len(decoded.Facts); n > 0 {
+					s.salesFactsStats.injected.Add(int64(n))
+					observability.Info(r.Context(), "销售事实集已下发",
+						"reason", sc.Reason, "tenant_id", sc.TenantID, "product_id", sc.ProductID,
+						"facts", n, "controlled", len(decoded.Controlled))
+				}
 			}
 		}
 	}

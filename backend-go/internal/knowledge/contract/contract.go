@@ -74,20 +74,28 @@ const (
 	ProductStatusLive     = "live"
 	ProductStatusArchived = "archived"
 )
+
+// 事实确认状态枚举；只有 confirmed 可进入公开事实准入读口。
 const (
 	FactStatusUnverified = "unverified"
 	FactStatusConfirmed  = "confirmed"
 	FactStatusWithdrawn  = "withdrawn"
 )
+
+// 事实来源枚举；认证类事实只有 manual 来源具备确认资格。
 const (
 	FactSourceManual      = "manual"
 	FactSourceOCR         = "ocr"
 	FactSourceExternalRef = "external_ref"
 )
+
+// 事实可见性枚举；缺省保守档为 gated，public 必须显式选择。
 const (
 	VisibilityPublic = "public"
 	VisibilityGated  = "gated"
 )
+
+// 物料类型枚举；客户端与服务端按同一组值生成和校验素材。
 const (
 	AssetTypeTagline     = "tagline"
 	AssetTypeOnepager    = "onepager"
@@ -96,26 +104,36 @@ const (
 	AssetTypeVoiceScript = "voice_script"
 	AssetTypeQAPack      = "qa_pack"
 )
+
+// 物料审核状态枚举；unreviewed 不得当作已审核素材交付。
 const (
 	AssetReviewUnreviewed = "unreviewed"
 	AssetReviewApproved   = "approved"
 	AssetReviewRejected   = "rejected"
 )
+
+// 物料有效性枚举；expired/missing 都不能进入下载与公开出栈。
 const (
 	AssetValidityValid   = "valid"
 	AssetValidityExpired = "expired"
 	AssetValidityMissing = "missing"
 )
+
+// 译文生成引擎枚举；用于区分人工、同文与单语种模型产物。
 const (
 	I18nEngineManual     = "manual"
 	I18nEngineIdentity   = "identity"
 	I18nEngineSingleLang = "single_lang"
 )
+
+// 知识服务健康三态；主服务据此区分可用、降级与不可达。
 const (
 	HealthOK          = "ok"
 	HealthDegraded    = "degraded"
 	HealthUnavailable = "unavailable"
 )
+
+// 知识读模式枚举；shadow 可回落直读，cutover 不可回落且失败必须 503。
 const (
 	// ReadModeShadow：W3-4 影子读，服务不可达回落直读 + WARN（仅本阶段）。
 	// ReadModeCutover：W3-5 切读后，服务不可达必须 503，不许回落、不许假装空。
@@ -126,18 +144,37 @@ const (
 // ReasonNotOwnedUntilW5：W3 期 entries/query 未接管，返回 503 + 该 reason（绝不返回空结果）。
 const ReasonNotOwnedUntilW5 = "not_owned_until_w5"
 
+// ProductStatuses 是产品状态枚举的稳定清单，供契约面现算与写入侧校验共用。
 var ProductStatuses = []string{ProductStatusDraft, ProductStatusLive, ProductStatusArchived}
+
+// FactStatuses 是事实状态枚举的稳定清单，供契约面与准入判据共用。
 var FactStatuses = []string{FactStatusUnverified, FactStatusConfirmed, FactStatusWithdrawn}
+
+// FactSources 是事实来源枚举的稳定清单，供确认资格与契约面共用。
 var FactSources = []string{FactSourceManual, FactSourceOCR, FactSourceExternalRef}
+
+// Visibilities 是可见性枚举的稳定清单，禁止调用方另写 public/gated 名单。
 var Visibilities = []string{VisibilityPublic, VisibilityGated}
+
+// AssetTypes 是物料类型枚举的稳定清单，新增类型必须同步契约版本。
 var AssetTypes = []string{
 	AssetTypeTagline, AssetTypeOnepager, AssetTypeQuoteSheet,
 	AssetTypeImageCard, AssetTypeVoiceScript, AssetTypeQAPack,
 }
+
+// AssetReviews 是物料审核状态枚举的稳定清单。
 var AssetReviews = []string{AssetReviewUnreviewed, AssetReviewApproved, AssetReviewRejected}
+
+// AssetValidities 是物料有效性枚举的稳定清单，下载口按它拒绝失效素材。
 var AssetValidities = []string{AssetValidityValid, AssetValidityExpired, AssetValidityMissing}
+
+// I18nEngines 是译文引擎枚举的稳定清单，用于追溯译文生成方式。
 var I18nEngines = []string{I18nEngineManual, I18nEngineIdentity, I18nEngineSingleLang}
+
+// HealthStates 是健康状态词的稳定清单，监控与客户端只认这三档。
 var HealthStates = []string{HealthOK, HealthDegraded, HealthUnavailable}
+
+// ReadModes 是影子读/切读开关值的稳定清单，与配置解析同源。
 var ReadModes = []string{ReadModeShadow, ReadModeCutover}
 
 // I18nLangs 12 语种内部码单一真值（§4.3.3 第 3 条：预生成/读口/回避句同一张表）。

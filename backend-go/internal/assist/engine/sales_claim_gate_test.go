@@ -115,6 +115,23 @@ func TestSalesClaimGuardHalfConfigNotArmed(t *testing.T) {
 	}
 }
 
+func TestSalesClaimGuardContextOverridesAssistDB(t *testing.T) {
+	eng, adb := newClaimGuardEngine(t)
+	armGuard(t, adb, false, false)
+	rep := &Reply{Content: "价格 99 元", Source: "llm"}
+	got := eng.guardSalesClaims(WithSalesClaimGuardEnabled(factsCtx(nil), true), "zh", "/pricing", rep)
+	if got != rep {
+		t.Fatal("主库上下文双开时，assist 库关闭也不应形成半态")
+	}
+	assertAvoided(t, rep, "zh")
+
+	eng2, adb2 := newClaimGuardEngine(t)
+	armGuard(t, adb2, true, true)
+	rep2 := &Reply{Content: "价格 99 元", Source: "llm"}
+	got2 := eng2.guardSalesClaims(WithSalesClaimGuardEnabled(factsCtx(nil), false), "zh", "/pricing", rep2)
+	assertUntouched(t, rep2, got2)
+}
+
 // TestSalesClaimGuardNonSalesPageNoTouch 反证①：非销售页（翻译/客服老链路）零改动，不误伤。
 // 即便灰度全开、即便 ctx 带着事实集，也不许把老链路改写成回避话术。
 func TestSalesClaimGuardNonSalesPageNoTouch(t *testing.T) {

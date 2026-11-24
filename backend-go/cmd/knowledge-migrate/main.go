@@ -55,6 +55,7 @@ type cliArgs struct {
 	apply    bool
 }
 
+// main 解析显式开关并分派到对应迁移动作；未给开关时保持旧正向搬迁，任何失败均非零退出。
 func main() {
 	slog.SetDefault(observability.NewLogger())
 	var a cliArgs

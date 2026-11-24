@@ -36,6 +36,8 @@ const S = vi.hoisted(() => ({
 
 // @/api 整模块桩（沿用 PlansP.invoice.dom.test.tsx 已验证可行的桩集合）
 vi.mock('@/api', () => ({
+  adminScrapeBacktranslate: vi.fn(async () => ({ success: true, model: '', stored: '', default: '', allowed: [] })),
+
   // ★ 2026-10-26 裁决九-4：PlansP 新挂的逐行翻译档位口。本仓夹具按枚举 mock 接口层，
   // 新增面必须同步补——漏一处的表现不是「这条用例跳过」，而是整块超管面板渲染当场崩（本批真踩）。
   // ★ 2026-11-01 DEF-P1-05 B2：分段两档的运营配置口（PlansP 现在会读它）。
@@ -100,6 +102,7 @@ vi.mock('@/stores/admin', () => ({
   useAdminStore: { getState: () => ({ gotoPanel: () => {} }), setState: () => {} },
 }))
 
+// 查询全部匹配元素并转成 DOM 夹具。
 const $ = (sel: string) => Array.from(document.querySelectorAll(sel)) as HTMLElement[]
 
 // payModeRow 取「支付模式」下拉所在行（select 与其保存钮同容器，避免误点其他区块的保存钮）。
@@ -108,17 +111,20 @@ function payModeSelect(): HTMLSelectElement {
   if (!sel) throw new Error('未找到含 mock 选项的支付模式下拉（PlansP 结构变了？锁需随迁）')
   return sel as HTMLSelectElement
 }
+// 定位支付模式保存按钮。
 function payModeSaveButton(): HTMLButtonElement {
   const row = payModeSelect().parentElement!
   const btn = Array.from(row.querySelectorAll('button')).find((b) => (b.textContent ?? '').trim() === baseZh['common.save'])
   if (!btn) throw new Error('支付模式行内未找到保存钮')
   return btn
 }
+// 按 i18n 键定位确认弹窗按钮。
 function dialogButton(key: 'common.ok' | 'common.cancel'): HTMLButtonElement | undefined {
   // 弹窗 portal 挂 body 末尾：取**最后一个**同名钮，防背景面板同名钮干扰
   return ($('button') as HTMLButtonElement[]).filter((b) => (b.textContent ?? '').trim() === baseZh[key]).pop()
 }
 
+// 挂载支付面板并等待异步请求收尾。
 async function mountAndSettle() {
   render(<><PlansP /><DialogHost /></>)
   await vi.waitFor(() => expect(payModeSelect()).toBeTruthy())

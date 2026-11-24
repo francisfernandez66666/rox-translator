@@ -976,7 +976,7 @@ export default function TicketsPage() {
               render: (row) => <code>{row.ticket_no || row.id}</code> },
             { key: 'title', title: t('users.colName'), width: 220,
               // ★ ⑬ 显示兜底：库里空标题（改造后允许）在列表里回落到 i18n 缺省名，列表不留白
-              render: (row) => <span title={row.title}>{row.title || t('tk.defaultTitle')}</span> },
+              render: (row) => <TicketNameCell text={row.title || t('tk.defaultTitle')} /> },
             { key: 'status', title: t('users.colStatus'), width: 110,
               render: (row) => <span>{statusLabel(row.status)}</span> },
             // ★ 改造 5：质检徽标列（error/warning 计数 + 质检存疑），无质检数据不渲染
@@ -1277,6 +1277,34 @@ function TicketFeedbackModal({ target, onClose, onSubmitted }: {
   )
 }
 
+// 超长工单名保留首尾、只省略中间，避免文件扩展名和工单尾部标识被截掉。
+export function middleEllipsis(text: string, max = 48): string {
+  const chars = Array.from(text)
+  if (chars.length <= max) return text
+  const keep = Math.max(1, max - 1)
+  const left = Math.ceil(keep / 2)
+  const right = Math.floor(keep / 2)
+  return chars.slice(0, left).join('') + '…' + (right ? chars.slice(-right).join('') : '')
+}
+
+// 工单名单元格：默认两行展示，超长中间省略；Web 悬停看全文，移动端点击展开/收起。
+export function TicketNameCell({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  return (
+    <button
+      type="button"
+      className={`tk-ticket-name${expanded ? ' is-expanded' : ''}`}
+      title={text}
+      aria-label={text}
+      aria-expanded={expanded}
+      data-testid="tk-ticket-name"
+      onClick={() => setExpanded((v) => !v)}
+    >
+      {expanded ? text : middleEllipsis(text)}
+    </button>
+  )
+}
+
 // fmtTime 兼容引入（与 Vue components/admin/ui 等价）——将时间字符串格式化为本地字符串
 // ⚠ 这是本文件自带的私有版本，与 @/lib/ui 的同名 fmtTime 不是一回事：
 //   这里走 new Date(s).toLocaleString()（跟随浏览器语言与时区，异常时回退原串），
@@ -1308,19 +1336,35 @@ const CSS_TK = `
 /* transition .3s：轮询是 3s 一跳，补一段缓动让百分比看起来在平滑推进而不是硬跳 */
 .tk-progress__bar{height:100%;background:var(--lc-text-1);border-radius:999px;transition:width .3s}
 
+/* 工单表固定总宽，窄容器只在表格内部横向滚动；操作列粘在行尾（RTL 为左侧），名称列可换行。 */
+.tk-table{overflow-x:auto}
+.tk-table .lc-table{min-width:1280px;table-layout:fixed}
+.tk-table .lc-table th:last-child,
+.tk-table .lc-table td:last-child{position:sticky;inset-inline-end:0;width:280px;min-width:280px;max-width:280px;z-index:2;background:var(--lc-bg);box-shadow:-10px 0 14px -16px rgba(0,0,0,.95)}
+[dir="rtl"] .tk-table .lc-table th:last-child,
+[dir="rtl"] .tk-table .lc-table td:last-child{box-shadow:10px 0 14px -16px rgba(0,0,0,.95)}
+.tk-table .lc-table th:last-child{background:var(--lc-raised);z-index:3}
+.tk-table .lc-table td:last-child{height:auto;min-height:var(--lc-table-row-h);white-space:normal}
+.tk-table .lc-table td:nth-child(2){overflow:visible;white-space:normal}
+.tk-ticket-name{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;max-width:100%;padding:0;border:0;background:transparent;color:inherit;font:inherit;font-weight:600;line-height:1.35;text-align:start;white-space:normal;word-break:break-word;cursor:pointer}
+.tk-ticket-name.is-expanded{display:block;overflow:visible;white-space:normal}
+
 /* ★ 批3 表格转卡片（§6.2d，S 档 ≤640）：工单表不再横向滚动，改纵向记录卡——
-   首屏三行：标题(15/600/text-1 单行省略)+状态徽标同排右对齐 / 工单号 / 日期+操作；
+   首屏三行：标题(15/600/text-1，可两行展示并点击展开)+状态徽标同排右对齐 / 工单号 / 日期+操作；
    质检、语种列随卡折叠展示；完整字段仍在「详情」弹窗（每卡恒有详情钮）。
    网格显式定 row/column：不依赖 DOM 顺序，空态行（td colSpan 内联 display:table-cell）
    落到 row2 也不破版。注入时机晚于 components.css，同特异度下覆盖其通用 .lc-table 卡片规则。 */
 @media (max-width: 640px){
+  .tk-table .lc-table{min-width:0;table-layout:auto}
+  .tk-table .lc-table th:last-child,
+  .tk-table .lc-table td:last-child{position:static;width:auto;min-width:0;max-width:none;box-shadow:none}
   .tk-table thead{display:none}
   .tk-table tbody{display:block}
   .tk-table tr{display:grid;grid-template-columns:1fr auto;gap:0 10px;padding:12px 14px;border-top:1px solid var(--lc-border-card)}
   .tk-table tr:first-child{border-top:0}
   .tk-table td{display:block;height:auto;padding:3px 0;border-top:0;white-space:normal;overflow:visible;text-align:start}
-  /* 第2格=标题：单行省略 + 六档字阶「记录名 15/600/text-1」；第3格=状态：同排右对齐 */
-  .tk-table td:nth-child(2){grid-column:1;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;font-weight:600;color:var(--lc-text)}
+  /* 第2格=标题：保留两行/展开能力 + 六档字阶「记录名 15/600/text-1」；第3格=状态：同排右对齐 */
+  .tk-table td:nth-child(2){grid-column:1;grid-row:1;min-width:0;overflow:visible;text-overflow:clip;white-space:normal;font-size:15px;font-weight:600;color:var(--lc-text)}
   .tk-table td:nth-child(3){grid-column:2;grid-row:1;justify-self:end;text-align:end;font-size:13px}
   /* 第1格=工单号：meta 档 */
   .tk-table td:nth-child(1){grid-column:1 / -1;grid-row:2;font-size:13px;color:var(--lc-text-3)}

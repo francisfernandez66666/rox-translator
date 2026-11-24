@@ -29,8 +29,8 @@ import (
 //	迁移须逐条评估、不得为迁日志改动 fail-fast 语义；大头 cmd/auto-approve(10)、
 //	cmd/dbtimecheck(6)、cmd/migrate-sqlite-to-pg(5)、cmd/rebuild-kb-index(5) 属工具型，可随改动顺带清。
 var logPrintfBaselines = map[string]int{
-	"internal": 176,
-	"cmd":      69, // 2026-09-22 纳入盲区时实测值：server 40 / auto-approve 10 / dbtimecheck 6 / migrate-sqlite-to-pg 5 / rebuild-kb-index 5 / backfill-embeddings 3
+	"internal": 170, // 2026-11-25 全量竞态实测；低于旧基线时必须同步下调，禁止留过期基线。
+	"cmd":      69,  // 2026-09-22 纳入盲区时实测值：server 40 / auto-approve 10 / dbtimecheck 6 / migrate-sqlite-to-pg 5 / rebuild-kb-index 5 / backfill-embeddings 3
 }
 
 // TestLogPrintfRatchet 扫描 internal/ 与 cmd/ 全部非测试源码统计 log.Printf 出现次数，超过基线即失败。

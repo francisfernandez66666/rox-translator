@@ -46,9 +46,19 @@ func configOn(v string) bool {
 	return err == nil && b
 }
 
-// salesClaimGuardArmed 两把开关是否同时开（「注入/守卫全开」）。
-// 参数：e=引擎（持有 assist 库配置读口）；返回是否全开。
-func salesClaimGuardArmed(e *Engine) bool {
+// salesClaimGuardKey 标记本地链注入的主库销售守卫开关，避免与 assist 库配置形成半态。
+type salesClaimGuardKey struct{}
+
+// WithSalesClaimGuardEnabled 供并进程调用方注入主库同一把双开关结论，避免两库半态。
+func WithSalesClaimGuardEnabled(ctx context.Context, enabled bool) context.Context {
+	return context.WithValue(ctx, salesClaimGuardKey{}, enabled)
+}
+
+// salesClaimGuardArmed 本地链优先用主库上下文开关；跨进程链回落 assist 库双开关。
+func salesClaimGuardArmed(ctx context.Context, e *Engine) bool {
+	if enabled, ok := ctx.Value(salesClaimGuardKey{}).(bool); ok {
+		return enabled
+	}
 	if e == nil || e.db == nil {
 		return false
 	}
@@ -187,7 +197,7 @@ func (e *Engine) guardSalesClaims(ctx context.Context, answerLang, pageURL strin
 		return rep
 	}
 	// ⓪ 灰度：关 / 半套（只开一把）/ 缺省关 ⇒ 逐字节等价放行（A15）。
-	if !salesClaimGuardArmed(e) {
+	if !salesClaimGuardArmed(ctx, e) {
 		return rep
 	}
 	// ① 非销售场景（翻译/客服老链路）⇒ 零改动放行，绝不误伤。

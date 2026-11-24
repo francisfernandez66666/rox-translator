@@ -16,6 +16,7 @@ import (
 	"translator/internal/assist/llm"
 	"translator/internal/assist/store"
 	"translator/internal/observability"
+	"translator/internal/secret"
 	"translator/internal/strategytypes"
 )
 
@@ -63,6 +64,9 @@ type Engine struct {
 	llmMu      sync.Mutex
 	llmBuilt   bool
 	llmFromEnv bool
+	llmSource  string
+	// mainLLM 由组合根注入，返回主服务 llmsource 当前快照的完整 providers、指纹与来源档。
+	mainLLM func(context.Context) ([]llm.Provider, string, string)
 	// ★ R0.1 同义词归一表缓存（configs.synonyms 指纹失效重载）
 	synFP     string
 	synGroups [][]string
@@ -134,6 +138,13 @@ func New(db *store.DB, client *llm.Client) *Engine {
 	return &Engine{db: db, llm: client, llmFromEnv: client.Enabled()}
 }
 
+// SetMainLLMResolver 注入主服务 llmsource 快照解析器；显式 assist env 仍优先，管理台完整配置次之。
+func (e *Engine) SetMainLLMResolver(resolve func(context.Context) ([]llm.Provider, string, string)) {
+	e.llmMu.Lock()
+	e.mainLLM = resolve
+	e.llmMu.Unlock()
+}
+
 // ============================================================
 // ★ R0.4 LLM 热加载：configs 表 LLM 配置 → 惰性重建 client
 // 优先级：显式 env（main 构建的初始 client，providers 非空即视为 env 接管）
@@ -162,29 +173,55 @@ func (e *Engine) llmFingerprint() string {
 func (e *Engine) ensureLLM(ctx context.Context) *llm.Client {
 	e.llmMu.Lock()
 	defer e.llmMu.Unlock()
-	// env 已显式接入：固定使用初始 client，不回读 configs（避免管理台误配导致生产断链）
+	// env 已显式接入：固定使用初始 client，不回读 configs/主服务快照。
 	if e.llmFromEnv {
 		return e.llm
 	}
-	fp := e.llmFingerprint()
-	if e.llmBuilt && fp == e.llmFP {
-		return e.llm // 指纹未变，复用
+	// 组合根或测试可在 New 之后注入完整 client；首次解析必须承认这份显式初值，
+	// 否则会把已接好的模型误清成规则模式。此后仍由配置指纹接管热加载。
+	if !e.llmBuilt && e.llm != nil && e.llm.Enabled() {
+		e.llmBuilt = true
+		e.llmFP = "cfg:" + e.llmFingerprint()
+		e.llmSource = "env"
+		return e.llm
 	}
-	// configs 表有完整 LLM 配置则重建
+	fp := "cfg:" + e.llmFingerprint()
+	providers := []llm.Provider{}
+	source := "configs"
+	// configs 表有完整 LLM 配置则优先按管理台现值重建。
 	baseURL := e.db.GetConfig("llm_base_url", "")
 	apiKey := e.db.GetConfig("llm_api_key", "")
 	model := e.db.GetConfig("llm_model", "")
-	if baseURL != "" && apiKey != "" && model != "" {
-		provs := []llm.Provider{{Name: "main", BaseURL: baseURL, APIKey: apiKey, Model: model}}
+	if baseURL != "" && apiKey != "" && !secret.IsSecretMasked(apiKey) && model != "" {
+		providers = append(providers, llm.Provider{Name: "main", BaseURL: baseURL, APIKey: apiKey, Model: model})
 		if bk := e.db.GetConfig("llm_model_backup", ""); bk != "" {
-			provs = append(provs, llm.Provider{Name: "backup", BaseURL: baseURL, APIKey: apiKey, Model: bk})
+			providers = append(providers, llm.Provider{Name: "backup", BaseURL: baseURL, APIKey: apiKey, Model: bk})
 		}
-		observability.Info(ctx, "assist.engine LLM 配置经管理台热加载生效",
-			"model", model, "backup", bkName(provs))
-		e.llm = llm.New(provs, 45)
+	} else if e.mainLLM != nil {
+		// 独立 assist 退役后的默认来源：主服务同一份 llmsource 快照，TTL/指纹/路由三件套同源。
+		var mainSource string
+		providers, fp, mainSource = e.mainLLM(ctx)
+		fp = "main:" + fp
+		source = mainSource
+	}
+	if e.llmBuilt && fp == e.llmFP {
+		return e.llm
+	}
+	if len(providers) > 0 {
+		e.llm = llm.New(providers, 45)
+		logSource := source
+		if strings.HasPrefix(fp, "main:") {
+			logSource = "main:" + source
+		}
+		observability.Info(ctx, "assist.engine LLM 配置热加载生效",
+			"source", logSource, "model", providers[0].Model, "backup", bkName(providers))
+	} else {
+		// 配置被清空/解析不出可用 providers 时清掉旧 client，不能继续拿旧 Key 假装在线。
+		e.llm = llm.New(nil, 45)
 	}
 	e.llmFP = fp
 	e.llmBuilt = true
+	e.llmSource = source
 	return e.llm
 }
 
@@ -1089,6 +1126,10 @@ func (e *Engine) buildSystemPrompt(ctx context.Context, hits []entry, uiLang str
 			sb.WriteString("\n\n")
 		}
 	}
+	if sf := salesFactsPromptBlock(ctx); sf != "" {
+		sb.WriteString(sf)
+		sb.WriteString("\n\n")
+	}
 	if len(hits) > 0 {
 		sb.WriteString("【相关知识】\n")
 		for _, h := range hits {
@@ -1595,6 +1636,15 @@ func (e *Engine) LLMMode(ctx context.Context) string {
 	}
 	if e.llmFromEnv {
 		return "env" // 构造期就是 env 接管，configs 里的 LLM 四项不参与运行
+	}
+	e.llmMu.Lock()
+	source := e.llmSource
+	e.llmMu.Unlock()
+	if source != "" {
+		if source == "configs" {
+			return "db" // 对外徽标沿用 env/db 两档，日志仍保留 configs 的物理来源。
+		}
+		return source
 	}
 	return "db"
 }

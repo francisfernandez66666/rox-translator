@@ -87,6 +87,29 @@ func forceEveryProbe(t *testing.T) {
 	})
 }
 
+func TestResolveRejectsMaskedKeys(t *testing.T) {
+	st := newStore(t)
+	if snap := Resolve(envCfg("key****mask"), st); snap.From != FromNone || snap.OnlineAPIKey != "" {
+		t.Fatalf("掩码 env Key 不得生效：from=%s key=%q", snap.From, snap.OnlineAPIKey)
+	}
+	if err := st.SetConfig(KeyOnlineKey, "xx-****-yy"); err != nil {
+		t.Fatal(err)
+	}
+	if snap := Resolve(placeholderCfg(), st); snap.From != FromNone || !snap.Placeholder || snap.OnlineAPIKey != "sk-random-placeholder" {
+		t.Fatalf("掩码库 Key 不得生效：from=%s placeholder=%v key=%q", snap.From, snap.Placeholder, snap.OnlineAPIKey)
+	}
+	raw, err := json.Marshal([]config.ProviderConfig{{APIBase: "https://route.example/v1", APIKey: "route****mask", Model: "route-model"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetConfig("model_routes", string(raw)); err != nil {
+		t.Fatal(err)
+	}
+	if snap := Resolve(placeholderCfg(), st); snap.From != FromNone || !snap.Placeholder || snap.OnlineAPIKey != "sk-random-placeholder" || len(snap.Routes) != 0 {
+		t.Fatalf("掩码路由 Key 不得生效：from=%s placeholder=%v key=%q routes=%d", snap.From, snap.Placeholder, snap.OnlineAPIKey, len(snap.Routes))
+	}
+}
+
 // TestResolveEnvLegBeatsStore 环境变量档必须压过库里的运营配置（AGENTS §一·3）。
 func TestResolveEnvLegBeatsStore(t *testing.T) {
 	forceEveryProbe(t)

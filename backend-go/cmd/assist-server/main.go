@@ -120,7 +120,7 @@ func main() {
 
 // buildLLM 构建 LLM 客户端（主 + 备用）
 func buildLLM(cfg *config.Config) *llm.Client {
-	if cfg.MockMode || cfg.LLMAPIKey == "" || cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
+	if cfg.MockMode || cfg.LLMAPIKey == "" || secret.IsSecretMasked(cfg.LLMAPIKey) || cfg.LLMBaseURL == "" || cfg.LLMModel == "" {
 		return llm.New(nil, cfg.LLMTimeoutSec)
 	}
 	providers := []llm.Provider{{
@@ -130,6 +130,9 @@ func buildLLM(cfg *config.Config) *llm.Client {
 		key := cfg.LLMAPIKey2
 		if key == "" {
 			key = cfg.LLMAPIKey
+		}
+		if secret.IsSecretMasked(key) {
+			return llm.New(providers, cfg.LLMTimeoutSec)
 		}
 		providers = append(providers, llm.Provider{
 			Name: "backup", BaseURL: cfg.LLMBaseURL, APIKey: key, Model: cfg.LLMModelBackup,

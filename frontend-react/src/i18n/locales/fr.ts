@@ -338,6 +338,8 @@ export const dict: Record<string, string> = {
   "audit.action.product_seo": "Indexation SEO modifiée",
   "audit.action.product_status": "Statut du produit modifié",
   "audit.action.login_sso": "Connexion SSO",
+  "audit.action.scrape_backtranslate_save": "Modèle de rétrotraduction de collecte enregistré",
+  "audit.action.scrape_backtranslate_reset": "Modèle de rétrotraduction de collecte réinitialisé",
   "audit.action.model_routes_save": "Enregistrement du routage des modèles",
   "audit.action.model_save": "Enregistrement de la configuration des modèles",
   "audit.action.openapi_docs_save": "Enregistrement de la documentation OpenAPI",
@@ -3686,4 +3688,8 @@ export const dict: Record<string, string> = {
   "sales.config.lexicon.seed": "Réensemencer les valeurs plateforme",
   "sales.config.lexicon.empty": "Aucun lexique",
   "sales.config.lexicon.platform": "Valeur plateforme",
+  "billing.scrapeBackConfirmReset": "Confirmer la suppression de la configuration du modèle de rétrotraduction et le retour à la valeur par défaut du code ?",
+  "billing.scrapeBackDefault": "Non configuré dans la base, utilisation de la valeur par défaut du code : {v}",
+  "billing.scrapeBackHint": "Le filtre sémantique de la collecte automatique dans la base de connaissances rétrotraduit d’abord la traduction en chinois avec ce modèle, puis la soumet à un modèle d’évaluation pour détecter les erreurs de traduction. Seuls les modèles de traduction testés pour la rétrotraduction de l’hébreu vers le chinois peuvent être sélectionnés. Un mauvais choix laisserait des termes mal traduits entrer dans le filtre terminologique strict. L’enregistrement prend effet immédiatement, sans redémarrage.",
+  "billing.scrapeBackSection": "Filtre sémantique de collecte · modèle de rétrotraduction",
 }

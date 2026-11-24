@@ -1,8 +1,9 @@
 // ============ 本文件职责中文说明 ============
 // 二期 §3.1 日志口径三条断言（迁入前先立门禁，防止 189 处裸日志搬进来才顶红）：
 // LG1 迁入包生产源码 log.Printf 命中 0（按包枚举＋扫描文件数下限自证）；
-// LG2 反证塞一行裸日志必红；LG3 observability 棘轮基线仍是 internal 176 / cmd 69，
-// 既不许被顶红也不许「顺手下调基线」。
+// LG2 反证塞一行裸日志必红；LG3 observability 棘轮基线为 internal 170 / cmd 69。
+// 2026-11-25 全量竞态实测 internal 已降至 170，observability 本体按规则同步下调；
+// 这条伴生锁必须跟同一事实源，不能继续钉过期 176 把合法迁移判红。
 // ★ 位置说明：放本包而非 internal/observability，避免基础包反向 import 业务包成环。
 // ========================================
 package salesflow
@@ -55,14 +56,14 @@ func TestImportLogScanHasTeeth(t *testing.T) {
 	}
 }
 
-// LG3：棘轮基线不许被顶红，也不许被悄悄下调。
+// LG3：棘轮基线必须与 observability 本体同一读数，合法下调要同步本锁。
 func TestImportLogRatchetBaselineUnchanged(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "observability", "logratchet_test.go"))
 	if err != nil {
 		t.Fatalf("LG3 读棘轮本体失败: %v", err)
 	}
-	if !regexp.MustCompile(`"internal":\s*176`).Match(raw) ||
+	if !regexp.MustCompile(`"internal":\s*170`).Match(raw) ||
 		!regexp.MustCompile(`"cmd":\s*69`).Match(raw) {
-		t.Fatal("LG3：棘轮基线不再是 176／69；迁入不许上调基线，也不许顺手下调当优化")
+		t.Fatal("LG3：棘轮基线不再是 170／69；迁入不许上调基线，合法下调必须同步本锁")
 	}
 }

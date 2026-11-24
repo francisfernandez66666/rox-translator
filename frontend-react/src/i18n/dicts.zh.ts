@@ -269,6 +269,8 @@ export const baseZh: Record<string,string> = {
   'audit.action.product_seo': '索引收录开关',
   'audit.action.product_status': '产品状态变更',
   'audit.action.login_sso': 'SSO 单点登录',
+  'audit.action.scrape_backtranslate_save': '保存采集回译模型',
+  'audit.action.scrape_backtranslate_reset': '重置采集回译模型',
   'audit.action.scim_config': '配置 SCIM 同步',
   'audit.action.scim_user_create': 'SCIM 同步创建用户',
   'audit.action.scim_user_disable': 'SCIM 同步停用用户',

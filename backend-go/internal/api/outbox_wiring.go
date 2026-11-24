@@ -30,12 +30,14 @@ import (
 	"translator/internal/queue"
 )
 
+// outbox relay 的开关键与调度口径；真实 ticker 由 watchdog 持有，本文件只提供组合根接线。
 const (
 	outboxRelayEnv        = "OUTBOX_RELAY"
 	outboxRelayConfigKey  = "outbox_relay"
 	outboxRelaySlotPeriod = "5s" // 仅用于日志/文档口径；真实 ticker 在 watchdog.go
 )
 
+// outboxRelayPtr 保存组合根装配的 relay；watchdog 每轮现取，未装配时明确跳过。
 var outboxRelayPtr atomic.Pointer[outbox.Relay]
 
 // InstallOutboxRelay 组合根唯一装配入口（cmd/server/main.go 调用一次）。

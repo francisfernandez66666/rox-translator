@@ -28,6 +28,7 @@ import (
 	_ "modernc.org/sqlite" // SQLite 驱动（本地/测试）
 )
 
+// main 完成独立库硬校验、幂等建表后启动仅回环可达的知识服务。
 func main() {
 	slog.SetDefault(observability.NewLogger())
 

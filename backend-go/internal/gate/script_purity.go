@@ -37,6 +37,7 @@ var builtinLatinAllow = map[string]bool{
 	"salesforce": true, "einstein": true, "hubspot": true,
 }
 
+// 拉丁白名单与全角标点容忍度按语种隔离；读写锁保证并发翻译请求不互相污染。
 var (
 	latinAllowMu      sync.RWMutex
 	latinAllowByLang  = map[string]map[string]bool{}
@@ -65,12 +66,14 @@ func SetCJKPunctMax(lang string, max int) {
 	cjkPunctMaxMu.Unlock()
 }
 
+// cjkPunctMaxFor 读取某语种当前全角标点容忍数；未配置回 0，即出现残留即拦。
 func cjkPunctMaxFor(lang string) int {
 	cjkPunctMaxMu.RLock()
 	defer cjkPunctMaxMu.RUnlock()
 	return cjkPunctMaxByLang[strings.ToLower(strings.TrimSpace(lang))]
 }
 
+// reLatinWord 提取连续拉丁字母串；长度门槛确保短缩写不触发转写误判。
 var reLatinWord = regexp.MustCompile(`[A-Za-z]{4,}`)
 
 // reCJKPunct 全角标点集合：只在非 CJK 目标语里才算残留。
@@ -130,6 +133,7 @@ func CJKPunctViolations(target, tr string, terms []TermRequirement) []string {
 	return out
 }
 
+// dedupeJoin 按首次出现顺序去重拼接诊断项，保证同一组违规输出稳定可复核。
 func dedupeJoin(items []string) string {
 	seen := map[string]bool{}
 	var out []string

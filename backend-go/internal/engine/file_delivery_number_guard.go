@@ -116,6 +116,7 @@ func splitMdCells(line string) []string {
 	return p
 }
 
+// joinMdCells 按原行是否带首尾竖线重建 Markdown 表格格，避免补数字时破坏表格形状。
 func joinMdCells(cells []string, lead, tail bool) string {
 	var b strings.Builder
 	if lead {
@@ -132,6 +133,7 @@ func joinMdCells(cells []string, lead, tail bool) string {
 // 只补数字本身，不动译文的词语；Markdown 反斜杠转义先剥掉，避免把 `\+150%` 原样带进去。
 var numberTokenRe = regexp.MustCompile(`[+\-–−]?[0-9][0-9,\.]*\s*%?`)
 
+// repairMissingNumberTokens 只补源格缺失的数字字面量，不改译文词语；数字已守恒时立即收手。
 func repairMissingNumberTokens(src, dst string) string {
 	clean := strings.NewReplacer("\\+", "+", "\\-", "-", "\\%", "%", "\\.", ".").Replace(src)
 	out := dst

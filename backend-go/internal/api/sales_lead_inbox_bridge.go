@@ -36,6 +36,7 @@ import (
 	"translator/internal/observability"
 )
 
+// 留资事件主题与来源前缀；消费方据此识别产品页线索并保持幂等键形状稳定。
 const (
 	// leadCapturedTopic W4 首个消费者事件：公开页留资（对外排障契约，消费方按它订阅）。
 	leadCapturedTopic = "lead.captured"

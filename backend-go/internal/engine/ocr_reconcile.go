@@ -1047,12 +1047,10 @@ func ocrCollectorTotal(ctx context.Context) int64 {
 // （审校/补译那两腿是真的需要推理的，关了就是拿质量换延迟）。
 // noThinkingExtra 关思考的厂商私有字段——**全仓唯一一份 map**（ocr_fix 与文档级判域共用）。
 //
-// 为什么写死、不留开关：主模型可能是推理系（GLM-Z1 那一族），先吐思维链再给 JSON
-// 会把 max_tokens 与超时一起吃光（ocr_fix 六次运行全是 tokens:0 / timeout 就是这条）。
-// 留一个"复开推理"的 env 开关，下一个人遇到某家回 400 就会打开它，症状原样复发。
-func noThinkingExtra() map[string]interface{} {
-	return map[string]interface{}{"thinking": map[string]interface{}{"type": "disabled"}}
-}
+// ★ 2026-11-24 实现已下沉到 `llm.NoThinkingExtra`（qualityjudge 的复核兜底腿也要用同一份，
+// 两处各抄一份就是"改一处忘一处"）。这里保留本名做薄委托：既有三处调用点与
+// `glossary_test.go` 的接线锁（按 `noThinkingExtra()` 这个名字判）都不动。
+func noThinkingExtra() map[string]interface{} { return llm.NoThinkingExtra() }
 
 // ocrFixNoThinking ③ 的关思考参数（保留本名：既有接线与变异体锚点都按它命名）。
 func ocrFixNoThinking() map[string]interface{} { return noThinkingExtra() }
