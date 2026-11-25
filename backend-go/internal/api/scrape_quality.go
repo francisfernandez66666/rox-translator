@@ -17,6 +17,7 @@ import (
 
 	"translator/internal/config"
 	"translator/internal/crawler"
+	"translator/internal/engine"
 	"translator/internal/llm"
 	"translator/internal/observability"
 	"translator/internal/qualityjudge"
@@ -59,11 +60,19 @@ func (a *apiQualityJudge) RepairTerm(ctx context.Context, source, targetLang str
 	return a.j.Repair(ctx, source, targetLang)
 }
 
-// newQualityJudge 由 api 层构造并注入 crawler。cfg/client/store 缺失时返回 nil，采集侧按 fail-closed 丢弃。
-func newQualityJudge(cfg *config.Config, client *llm.Client, st *store.Store) crawler.QualityJudge {
-	j := qualityjudge.New(cfg, client, st)
+// qualityJudgeClient 复用主引擎客户端，确保 Judge 调用继承 OnUsage 平台成本留痕与路由统计。
+func qualityJudgeClient(cfg *config.Config, eng *engine.Engine) *llm.Client {
+	if eng != nil && eng.LLM != nil {
+		return eng.LLM
+	}
+	return llm.NewClient(cfg)
+}
+
+// newQualityJudge 由 api 层构造并注入 crawler。cfg/engine/store 缺失时返回 nil，采集侧按 fail-closed 丢弃。
+func newQualityJudge(cfg *config.Config, eng *engine.Engine, st *store.Store) crawler.QualityJudge {
+	j := qualityjudge.New(cfg, qualityJudgeClient(cfg, eng), st)
 	if j == nil {
-		observability.Warn(context.Background(), "tier3 语义质量门未注入（cfg/client/store 缺失），采集候选将按 fail-closed 丢弃")
+		observability.Warn(context.Background(), "tier3 语义质量门未注入（cfg/engine/store 缺失），采集候选将按 fail-closed 丢弃")
 		return nil
 	}
 	return &apiQualityJudge{j: j}
