@@ -8,7 +8,7 @@ set -euo pipefail
 HOST="${DEPLOY_HOST:-43.108.86.140}"
 PORT="${DEPLOY_PORT:-28022}"
 APPLY="${APPLY:-0}"
-EXPECT_BIN_SHA="${EXPECT_BIN_SHA:-c941355a567aa04028093176f87cd02c651bf9e1f1e7a944c61d8aec2d413c8e}"
+EXPECT_BIN_SHA="${EXPECT_BIN_SHA:-2de78871e59f3ede02b1091ed973477cd88dcb6791c58fad854db2a5383e8563}"
 
 ssh -p "$PORT" -o ConnectTimeout=20 -o BatchMode=yes "root@$HOST" 'bash -s' -- "$APPLY" "$EXPECT_BIN_SHA" <<'REMOTE'
 set -euo pipefail
