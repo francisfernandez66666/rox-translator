@@ -171,7 +171,7 @@ func (s *Server) handleChatASR(w http.ResponseWriter, r *http.Request) {
 	} else {
 		route := s.instantDecide(r, asrTid, asrUID, instantInput{Kind: "audio", SizeBytes: hdr.Size, DurationSec: dur, LangCount: 1})
 		if route.SuggestTicket {
-			writeJSON(w, 200, chatVoiceFailure{Error: "录音超出即时翻译上限，请交给翻译工单（上限 40 MB）", Reason: route.Reason, Suggest: "ticket"})
+			writeJSON(w, 200, chatVoiceFailure{Error: "录音超出即时翻译上限，请交给翻译工单（上限 200 MB）", Reason: route.Reason, Suggest: "ticket"})
 			return
 		}
 		asrFree = route.Free

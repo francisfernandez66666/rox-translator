@@ -253,7 +253,7 @@ export const TEXT_DELIVERY_ACCEPT = [...TRANSLATE_FILE_EXTS, ...TEXT_DELIVERY_ON
 // 单文件大小上限：事实源是后端 `fileproc.MaxUploadBytes`（api 侧的 `translateUploadMax` 只是它的薄委托）。
 // 这里不抄具体数字——档位由 `translateFormats.lock.test.ts` 的 P3 把 Go 那句 `<n> << <bits>`
 // **现读现算**再与这份常量等值钉住；抬档那天前端只改位移，写死数字的话锁就不会红。
-export const TRANSLATE_FILE_MAX_BYTES = 40 * 1024 * 1024
+export const TRANSLATE_FILE_MAX_BYTES = 200 * 1024 * 1024
 
 /**
  * 校验待翻译文件：返回错误原因字符串（含「为什么不能翻译」）或 null（通过）。

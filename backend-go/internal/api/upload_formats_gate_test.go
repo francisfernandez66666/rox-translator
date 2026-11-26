@@ -8,8 +8,8 @@
 //	   与改造前四份副本的并集逐格对账——这一腿才是"没翻对外结论"的实质证据。
 //	L3 文案同源：四处拒绝文案必须与改造前**逐字**相同（等值锁，不是"措辞相近"），
 //	   且样本清单里举出的每一个名字都必须真在准入名单里。
-//	L4 跨层现读：Go 的 40 MiB 与 Caddy 那三处 `max_size 40MB` 现读现算比档位（写死数字第二天就过时）。
-//	L5 方向锁：对外承诺的 30MB 不得高于实际闸门（承诺不得高过守得住的那条线）。
+//	L4 跨层现读：Go 的 200 MiB 与 Caddy 那三处 `max_size 200MiB` 现读现算比档位（写死数字第二天就过时）。
+//	L5 方向锁：对外承诺的 200MB 不得高于实际闸门（承诺不得高过守得住的那条线）。
 //	L6 出声对齐：「页数读数取不到」这一档在两腿（上传前置拦截／派发资格判定）都必须是 WARN 且同短语。
 //	L7 共享闸门不可被调用方抬起：拿到的 map 必须是副本，往里塞键不许影响全站判定。
 //	L8 撤除格式要给出路（★ 2026-10-30）：五档撤出后三口必须回同一句「粘贴到文本翻译」，
@@ -138,14 +138,18 @@ func TestFormatsGate01SingleSourceInPlace(t *testing.T) {
 	// 体积上限：三份字面量收成一处委托。这一档原先最坏的地方是"三个数一样但各写一遍"，
 	// 于是有人只改其中一份时，现网表现是同一份文件在上传口能过、在 OpenAPI 口被拒。
 	sizeSites := []string{"upload.go", "api_openapi_tasks.go"}
-	maxLiteral := regexp.MustCompile(`\b40\s*<<\s*20\b`)
+	// ★ 2026-11-26 抬档后原写死 `\b40\s*<<\s*20\b` 会静默钝化（匹配不到仍绿）：
+	// 改为**从唯一事实源现读档位**再构造正则，既锁住"不许第二份同值字面量"，又不误伤
+	// kbUploadMax(20<<20)/parseBuffer(32<<20)/1<<20 这三处合法异档左移。
+	gateMB := fileproc.MaxUploadBytes >> 20
+	maxLiteral := regexp.MustCompile(fmt.Sprintf(`\b%d\s*<<\s*20\b`, gateMB))
 	for _, f := range sizeSites {
 		src := readGateFile(t, f)
 		if !strings.Contains(src, "fileproc.MaxUploadBytes") {
 			t.Errorf("%s 必须委托 fileproc.MaxUploadBytes（体积上限只许一个事实源）", f)
 		}
 		if maxLiteral.MatchString(src) {
-			t.Errorf("%s 里又出现第二份 `40 << 20` 字面量 ⇒ 两份上限迟早各说各话", f)
+			t.Errorf("%s 里又出现第二份 `%d << 20` 字面量 ⇒ 两份上限迟早各说各话", f, gateMB)
 		}
 	}
 
@@ -385,16 +389,16 @@ func sampleViolation(sample string, extra ...string) string {
 
 // TestFormatsGate05UploadSizeSpansLayers 现读现算比三层档位：Go 常量 vs Caddy 那三处 `max_size`。
 //
-// 为什么必须现读而不是写死 40：写死之后 Go 侧改成 50MiB 那天这条锁还绿，
+// 为什么必须现读而不是写死数字：写死之后 Go 侧改档那天这条锁还绿，
 // 而"后端还没拒绝、反代先把请求掐了"这一段就没人守了（客户看到的是一句没有中文文案的 413）。
 //
-// ⚠️ 这一腿锁的是**档位数字与单位写法**（40MB ↔ 40<<20），不是"两层字节数逐字节相等"：
-// Caddy 的 `40MB` 按哪个基数解析（10^6 还是 2^20）本批**未在现网实测**，
-// 两种读法相差 1,943,040 字节，落在哪一侧决定"40,000,000–41,943,040 这一段被谁先拒"。
-// 那一段属对外阈值口径，已单列待决策；不许有人拿这条锁的绿灯去声明"两层字节一致"。
+// ★ 2026-11-26 抬档裁决：旧口径 `40MB ↔ 40<<20` 有 10^6/2^20 基数歧义（旧档差 1,943,040 字节）。
+// 本批统一写 `200MiB`、`m[2]=="MiB"`，只认 2^20 基数，与 Go 的 `200<<20` 严格同源；
+// 写回 `200MB` 一律判红（Caddy 按 10^6 解析时那 9.7 MB 落谁先拒的歧义不再存在）。
 func TestFormatsGate05UploadSizeSpansLayers(t *testing.T) {
-	wantMB := (fileproc.MaxUploadBytes + (1 << 20) - 1) / (1 << 20) // 档位数字（向上取整，40<<20 → 40）
-	maxSizeRe := regexp.MustCompile(`max_size\s+(\d+)([KM]?)B`)
+	wantMB := (fileproc.MaxUploadBytes + (1 << 20) - 1) / (1 << 20) // 档位数字（向上取整，200<<20 → 200）
+	// ★ 2026-11-26：`[KM]?i?B` 兼容 MiB 写法；下面判定只认 MiB，防 200MB/200MiB 基数歧义。
+	maxSizeRe := regexp.MustCompile(`max_size\s+(\d+)([KM]?i?B)`)
 	sites := []string{
 		"../../../deploy/caddy/translator.conf",
 		"../../../deploy/caddy/translator-tenant.conf",
@@ -414,7 +418,8 @@ func TestFormatsGate05UploadSizeSpansLayers(t *testing.T) {
 			}
 			// 本仓另有 10MB 档（挂件等其它路由），**不是**同一把尺子，所以这里只数"与上传同档"那一处，
 			// 而不是要求整个文件只有一处 max_size（那会把别的路由一起判死，也是下一位摘锁的理由）。
-			if m[1] == fmt.Sprint(wantMB) && m[2] == "M" {
+			// ★ 2026-11-26：只认 MiB（2^20 基数，与 Go 的 200<<20 同源）；写 MB 判红。
+			if m[1] == fmt.Sprint(wantMB) && m[2] == "MiB" {
 				matched++
 			}
 			readings = append(readings, strings.TrimSpace(m[0]))

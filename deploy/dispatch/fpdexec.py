@@ -48,6 +48,8 @@ ALLOWED_SCRIPTS = {
     "anydoc_md.py",
     "docx_translate.py",
     "docx_table_selftest.py",
+    # ★ 2026-11-26 工单分块派发（方案 §四·C-1）
+    "chunk_translate.py",
 }
 
 ROOT = Path(os.environ.get("FPD_ROOT", "/opt/fpdispatch"))
@@ -242,6 +244,11 @@ def cmd_probe():
         "script_sha": scripts,
         "work_writable": os.access(WORK, os.W_OK) if WORK.exists() else False,
         "disk_free_mb": _disk_free_mb(),
+        # ★ 2026-11-26 三条动态决策读数（规则 5/6/6b + D-8 配额）：
+        #   读不到一律 -1，主站按"不就绪"处理，不把缺失键解成零值当真值。
+        "mem_available_mb": _mem_available_mb(),
+        "cpu_load1": _cpu_load1(),
+        "workdir_used_mb": _workdir_used_mb(),
         # ★ 2026-09-29 补三条字段。三条都是同一形态：**判据写在 Go 侧、Python 侧从没吐过**，
         #   于是 json.Unmarshal 把缺失键留成零值，那道腿结构上恒通过（空转）。
         #   selftest —— 主站 fileproc_remote.go 的 DispatchProbe 里 `Selftest int` 一直在解这个键，
@@ -325,10 +332,51 @@ def _py_version():
 
 
 def _disk_free_mb():
-    """工作目录剩余空间 MB（40MB × 并发 × 语种数会吃磁盘，太小就该判不就绪）。"""
+    """工作目录剩余空间 MB（200MiB × 并发 × 语种数会吃磁盘，太小就该判不就绪）。"""
     try:
         st = os.statvfs(str(WORK if WORK.exists() else ROOT))
         return int(st.f_bavail * st.f_frsize / 1024 / 1024)
+    except Exception:
+        return -1
+
+
+def _mem_available_mb():
+    """系统可用内存 MB（/proc/meminfo 的 MemAvailable；读不到 -1）。
+
+    ★ 2026-11-26 新增：给主站决策器规则 5/6/6b 判"广州机还有多少余量"。
+    读不到报 -1 而不是 0——0 与"读不到"在值上必须能分家，免得缺失键被解成零值恒通过。
+    """
+    try:
+        with open("/proc/meminfo", "r", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) // 1024
+        return -1
+    except Exception:
+        return -1
+
+
+def _cpu_load1():
+    """整机 1 分钟负载（os.getloadavg）；读不到 -1。"""
+    try:
+        return round(os.getloadavg()[0], 3)
+    except Exception:
+        return -1
+
+
+def _workdir_used_mb():
+    """w/ 工作目录已用 MB（含所有会话目录；D-8 配额上报，读不到 -1）。"""
+    if not WORK.exists():
+        return 0
+    try:
+        total = 0
+        for dirpath, _dirs, files in os.walk(str(WORK)):
+            for name in files:
+                try:
+                    total += os.path.getsize(os.path.join(dirpath, name))
+                except OSError:
+                    pass
+        return int(total / 1024 / 1024)
     except Exception:
         return -1
 
@@ -548,9 +596,21 @@ def _resolve_rel(hdr):
     return p
 
 
-# 单个客户文件体积上限（MB）。上传闸在主站是 40MB，这里留一倍余量只为防"主站闸失效"，
-# 不是把它当第二个闸来用——真超了说明主站那侧漏了，宁可拒绝落盘也别把 50G 盘写满。
-MAX_PUT_MB = _env_int("FPD_MAX_PUT_MB", 80)
+# 单个客户文件体积上限（MB）。上传闸在主站是 200MiB（2026-11-26 抬档），这里留一倍余量
+# 只为防"主站闸失效"——不是把它当第二个闸用；真超了说明主站那侧漏了，宁可拒绝落盘也别把盘写满。
+MAX_PUT_MB = _env_int("FPD_MAX_PUT_MB", 400)
+
+# ★ 2026-11-26 w/ 目录总配额（D-8）。磁盘共用于量化服务，超限必须拒绝落盘，
+# 不能等 sweep 15 分钟后来收——那 15 分钟里量化侧可能已经因为盘满而失败。
+WORKDIR_MAX_MB = _env_int("FPD_WORKDIR_MAX_MB", 4096)
+
+
+def _check_workdir_quota(incoming_mb):
+    """落盘前检查 w/ 总配额；超限拒绝（返回 False）。-1（读不到）也拒绝，fail-closed。"""
+    used = _workdir_used_mb()
+    if used < 0 or WORKDIR_MAX_MB <= 0:
+        return False
+    return used + incoming_mb <= WORKDIR_MAX_MB
 
 
 def cmd_put(hdr, payload):
@@ -564,6 +624,10 @@ def cmd_put(hdr, payload):
         _die(78, "payload %d 字节超过上限 %dMB" % (len(payload), MAX_PUT_MB))
     if _disk_free_mb() < (len(payload) // (1024 * 1024)) * 2 + 512:
         _die(2, "磁盘余量不足（剩 %dMB），拒绝落盘" % _disk_free_mb())
+    # ★ 2026-11-26 D-8：w/ 总配额（共盘，与量化服务隔离）
+    if not _check_workdir_quota(len(payload) // (1024 * 1024) + 1):
+        _die(78, "w/ 工作目录超配额（上限 %dMB，已用 %dMB），拒绝落盘" %
+             (WORKDIR_MAX_MB, _workdir_used_mb()))
     p = _resolve_rel(hdr)
     os.makedirs(os.path.dirname(p), exist_ok=True)
     tmp = p + ".part"

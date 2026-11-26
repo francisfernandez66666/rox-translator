@@ -208,11 +208,11 @@ const openAPITaskMaxFiles = 20
 
 // openAPITaskParseBufferBytes multipart 的**内存缓冲**档位（超过部分 Go 自动落临时文件，不是拒绝阈值）。
 // 它与 openAPITaskMaxBytes（真正的体积闸）是两件事，★ #43 起分开命名，
-// 免得下一个读代码的人在这三条数字（缓冲 32 / 闸门 40 / 文案 30）里挑一个当对外承诺。
+// 免得下一个读代码的人在这三条数字（缓冲 32 / 闸门 200 / 文案 200）里挑一个当对外承诺。
 const openAPITaskParseBufferBytes = 32 << 20
 
 // openAPITaskMaxBytes 单次文件任务总体积上限（★ #43：字面量收成 `fileproc.MaxUploadBytes` 一处，
-// 与内部工单/即时翻译上传同一道闸；Caddy 那层的 `max_size 40MB` 由 upload_formats_gate_test.go L4 现读比对）
+// 与内部工单/即时翻译上传同一道闸；Caddy 那层的 `max_size 200MiB` 由 upload_formats_gate_test.go L4 现读比对）
 const openAPITaskMaxBytes = fileproc.MaxUploadBytes
 
 // openAPITaskExtWhitelist 已删除（★ 2026-10-14 #43）：OpenAPI 文件建单的格式判定改走
@@ -316,8 +316,8 @@ func (s *Server) enqueueAPITask(t *store.Ticket, mode string, ak *store.APIKey) 
 func (s *Server) openAPITaskCreateFiles(w http.ResponseWriter, r *http.Request, tid int64, ak *store.APIKey) {
 	r.Body = http.MaxBytesReader(w, r.Body, openAPITaskMaxBytes)
 	// 解析缓冲阈值 32MB 是**内存缓冲档位**而不是闸门（超过部分 Go 落临时文件，不报错）：
-	// 真正拒请求的是上面那道 MaxBytesReader（40MiB）。这一档单独命名（★ #43），
-	// 因为同一路径上"32 的缓冲 / 40 的闸 / 文案里的 30"三个数各说各话，
+	// 真正拒请求的是上面那道 MaxBytesReader（200MiB）。这一档单独命名（★ #43），
+	// 因为同一路径上"32 的缓冲 / 200 的闸 / 文案里的 200"三个数各说各话，
 	// 读代码的人会挑一个当承诺抄进文档——本文件下面那句错误文案现在只取对外承诺那一个数。
 	if err := r.ParseMultipartForm(openAPITaskParseBufferBytes); err != nil {
 		writeOpenAPIError(w, r.Context(), string(errors.OpenAPIBadRequest),

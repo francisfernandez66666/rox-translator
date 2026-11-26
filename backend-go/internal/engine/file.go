@@ -952,6 +952,11 @@ func (e *Engine) HandleFile(ctx context.Context, filePath string, options map[st
 	if err := e.tenantOK(ctx); err != nil {
 		return &FileTranslateResult{Skill: "translation", Error: err.Error()}
 	}
+	// ★ 2026-11-26 工单动态派发：开工时问一次两侧资源，整单锁定（方案 §3.1）。
+	//   派发单由广州机做完翻译/拼回/写回，这里直接返回；非派发单继续走下面原有链路逐字不变。
+	if dispatched, handled := e.MaybeDispatchTicket(ctx, filePath, options); handled {
+		return dispatched
+	}
 	ext := strings.ToLower(filepath.Ext(filePath))
 	// ★ 2026-10-28 图片版式回退批：**图片件的单批段数上限收紧到 15**（其余格式仍是 40）。
 	// 为什么只对图片：图片的交付面是「按 OCR 框原位回填的那张图」，段↔框一一对应，

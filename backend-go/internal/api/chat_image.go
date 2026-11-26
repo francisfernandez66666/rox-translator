@@ -173,7 +173,7 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	// ★ 2026-10-30 组4（C-1／P-2／G10）：免费档判定——**尺寸先定档**（第 0 步），再判身份。
 	//   · 免费档 ≤ free_image_max_mb（默认 1 MiB）：不扣积分；
 	//   · 付费即时档 ≤ image_max_mb（默认 3 MiB）：按量计费（客户自己压不到 1 MiB 时给的选择）；
-	//   · 超硬顶：不在这里硬扛，出 use_ticket 引导去翻译工单（上限 40 MB，还得还原原格式）。
+	//   · 超硬顶：不在这里硬扛，出 use_ticket 引导去翻译工单（上限 200 MB，还得还原原格式）。
 	//   体积判据吃 multipart 头里的真实字节数（hdr.Size），不靠 Content-Length 自报。
 	// ★ 2026-10-31 顺序修正：判定与闸门必须**排在落盘之前**——旧形态先把文件抄到临时目录
 	//   （最多 20 MiB）再判"超即时上限去工单"，等于为一个注定不处理的请求白写一遍磁盘。
@@ -185,7 +185,7 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 	imgRoute := s.instantDecide(r, imgTid, imgUID, instantInput{Kind: "image", SizeBytes: hdr.Size, LangCount: len(targets)})
 	if imgRoute.SuggestTicket {
 		writeJSON(w, 200, map[string]interface{}{
-			"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式",
+			"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 200 MB，译完还原原格式",
 			"reason":  imgRoute.Reason,
 			"suggest": "ticket",
 			"file":    map[string]interface{}{"name": hdr.Filename, "size": hdr.Size},
@@ -216,7 +216,7 @@ func (s *Server) handleChatImage(w http.ResponseWriter, r *http.Request) {
 		//   而响应看起来是成功的。这里显式引导到工单。
 		if errors.Is(terr, errChatFileTooLarge) {
 			writeJSON(w, 200, map[string]interface{}{
-				"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 40 MB，译完还原原格式",
+				"error":   "图片超出即时翻译上限（3 MB）。交给翻译工单：上限 200 MB，译完还原原格式",
 				"reason":  instantReasonTooLarge,
 				"suggest": "ticket",
 				"file":    map[string]interface{}{"name": hdr.Filename, "size": hdr.Size},

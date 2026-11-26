@@ -416,7 +416,7 @@ ${DEMO_DOMAIN} {
 	}
 
 	request_body {
-		max_size 40MB
+		max_size 200MiB
 	}
 }
 CADDYEOF

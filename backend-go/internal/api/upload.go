@@ -43,17 +43,19 @@ var tmxExtWhitelist = map[string]bool{
 	".xml": true,
 }
 
-// 上传大小上限（字节）——★ 2026-10-14 #43：40MiB 这一档的字面量只许写在
+// 上传大小上限（字节）——★ 2026-10-14 #43：体积档字面量只许写在
 // `fileproc.MaxUploadBytes` 一处（原先本文件两份 ＋ api_openapi_tasks.go 一份，
-// 再加上 Caddy 那层的 `max_size 40MB` 共三处 conf，四处数字靠注释维持一致）。
+// 再加上 Caddy 那层的 `max_size 200MiB` 共三处 conf，四处数字靠注释维持一致）。
+// ★ 2026-11-26 抬档：40MiB → 200MiB（配合工单分块派发，见《施工方案_工单动态派发与上传闸门抬升_20261125.md》）。
 const (
-	translateUploadMax = fileproc.MaxUploadBytes // 翻译文件 40MB（原 200MB，过大文件易撑爆 1.6G 内存服务器）
+	translateUploadMax = fileproc.MaxUploadBytes // 翻译文件 200MB（原 40MB；大件可派发到广州执行机）
 	kbUploadMax        = 20 << 20                // KB 导入 20MB（表格文件通常远小于此；与翻译上限是**两档**，刻意不同源）
 
 	// ★ 性能优化（不换库 Phase A1）：PDF 在低配机器（1G 内存）上走 pdf2docx+LibreOffice
 	// 转换极易 OOM/超时。前置拦截：体积或页数超限则直接友好拒绝，提示先转 docx 再上传。
 	pdfUploadSizeLimit = fileproc.MaxUploadBytes // 与翻译文件总上限对齐（PDF 转换高峰期仍可能顶满内存）
-	pdfPageHardLimit   = 120                     // 120 页：超出建议先转为 docx
+	// ★ 2026-11-26 放开：120 页 → 400 页（原档是为 1G 低配机设的；现大件走分块派发）。
+	pdfPageHardLimit = 400 // 400 页：超出建议先转为 docx
 )
 
 // checkPdfLimits 对 PDF 做前置安全拦截：过大或页数过多会在文件转换阶段（pdf2docx+LibreOffice）

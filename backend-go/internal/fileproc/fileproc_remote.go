@@ -234,7 +234,14 @@ type DispatchProbe struct {
 	// ExpireDate：远端配置的到期日（YYYY-MM-DD）。此前结构体里连这个键都没有，
 	// 等于「到期即拒」这件事主站侧只能靠人记住一个日期——现在它是读数。
 	ExpireDate string `json:"expire_date"`
-	Caps       struct {
+	// ★ 2026-11-26 三条动态决策读数（规则 5/6/6b + D-8 w/ 配额）。
+	// 用指针接：缺键⇒nil、-1/0⇒具体值，三者必须能分家（沿用 Selftest *int 的教训）。
+	// 判据侧统一按 `p == nil || *p <= 0` 视为不就绪/无余量，防缺失键被解成零值恒真。
+	MemAvailableMB *int64   `json:"mem_available_mb"`
+	DiskFreeMB     *int64   `json:"disk_free_mb"`
+	CPULoad1       *float64 `json:"cpu_load1"`
+	WorkDirUsedMB  *int64   `json:"workdir_used_mb"`
+	Caps           struct {
 		// RlimitAsSet：远端是否真的读到了内存帽配置（false＝fpd.env 或 fpd-bridge 那一环断了）。
 		RlimitAsSet bool `json:"rlimit_as_set"`
 		// Clamped：配置值高于系统硬上限 ⇒ setrlimit 会失败 ⇒ 「帽配了但没戴上」的现网形态。
@@ -335,6 +342,10 @@ type DispatchReadiness struct {
 	ExpireDate string `json:"dispatch_expire"`   // 远端到期日（取不到=空串，不是"没有到期"）
 	MemCap     string `json:"dispatch_mem_cap"`  // on / clamped / off / unknown
 	Selftest   string `json:"dispatch_selftest"` // pass / missing_asset / failed / unknown
+	// ★ 2026-11-26：最近一次工单派发决策状态词（off/remote_unready/below_tier/over_capacity/
+	// remote_busy/remote_disk_low/main_has_room/main_pressured/remote_idle/balanced_local）。
+	// 只出词，不含任何主机/路径/凭据；默认 off。
+	Policy string `json:"dispatch_policy"`
 }
 
 // DispatchStatusWords 把一次 probe 的实值翻成状态词（DispatchReadiness 与单测共用同一份翻译，
@@ -373,7 +384,7 @@ func DispatchStatusWords(p *DispatchProbe) (expire, memCap, selftest string) {
 //	（旧形态恰好就是这样，只是当时两次都落在同一份锁内缓存上才没露馅）。
 func DispatchReadinessSnapshot() DispatchReadiness {
 	if !DispatchEnabled() {
-		return DispatchReadiness{Status: "off"}
+		return DispatchReadiness{Status: "off", Policy: "off"}
 	}
 	p, err := displayProbe()
 	st := "online"
@@ -387,7 +398,10 @@ func DispatchReadinessSnapshot() DispatchReadiness {
 			st = "degraded"
 		}
 	}
-	r := DispatchReadiness{Status: st}
+	r := DispatchReadiness{Status: st, Policy: LastPolicyReason()}
+	if r.Policy == "" {
+		r.Policy = "off" // 闸开着但还没派过单：不是 unknown，是"没发生决策"
+	}
 	if p == nil {
 		r.ExpireDate, r.MemCap, r.Selftest = "", "unknown", "unknown"
 		return r

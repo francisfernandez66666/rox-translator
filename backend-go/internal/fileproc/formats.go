@@ -22,7 +22,7 @@
 //	改这一处＝改对外承诺：必须同批改 upload_formats_gate_test 的冻结句子、前端 translate.ts 与
 //	12 语种 `tk.fileHint`、开放 API 三面文档，并在发版说明里点名；**只改一处就是
 //	「上传口放行、执行口判不支持」的下一次**（本头注开头那一族）。
-//	对外承诺的体积数字（OpenAPI 文档写 30MB、实际闸门 40MiB）不许改成互相靠拢——那是对外口径决策，
+//	对外承诺的体积数字（OpenAPI 文档写 200MB、实际闸门 200MiB）不许改成互相靠拢——那是对外口径决策，
 //	只把它的**方向**收成一条机械判据：对外承诺 ≤ 实际闸门（承诺不得高于守得住的那条线）。
 //
 // ② **交付方式（delivery）的字符串不进本包**：调用方自己判 `delivery == "text"`，
@@ -42,23 +42,23 @@ package fileproc
 
 import "strings"
 
-// MaxUploadBytes 单个上传请求的体积闸门（40 MiB）。
+// MaxUploadBytes 单个上传请求的体积闸门（200 MiB）。
 //
 // 唯一事实源（★ #43）：原先 internal/api 里有三份同值字面量
 // （translateUploadMax / pdfUploadSizeLimit / openAPITaskMaxBytes），
-// Caddy 那层还有第三处（`request_body max_size 40MB`，两份线上 conf ＋ scripts/bootstrap-demo.sh）。
+// Caddy 那层还有第三处（`request_body max_size 200MiB`，两份线上 conf ＋ scripts/bootstrap-demo.sh）。
 // Go 侧改这一档必须同时动 Caddy，否则表现是"后端还没拒绝，反代先把请求掐了"，
 // 而客户看到的是一句没有中文文案的 413/502——这一条由
 // upload_formats_gate_test.go L4 现读三层做等值锁（跨层判据只能现读，写死数字第二天就过时）。
-const MaxUploadBytes int64 = 40 << 20
+const MaxUploadBytes int64 = 200 << 20
 
-// OpenAPIDocLimitMB 是 OpenAPI 文档面对外承诺的单请求总量（30MB）。
+// OpenAPIDocLimitMB 是 OpenAPI 文档面对外承诺的单请求总量（200MB）。
 //
 // ⚠️ 它**不是**闸门，只是文案里那一个数；真正的墙是 MaxUploadBytes。
 // 本批不许动它的数值（改它就是改对外承诺，属用户决策），只锁方向：
 // 对外承诺不得高于实际闸门（L5 判据）。要动就两个一起动、并按 §一·5 那条走发版——
 // 先抬文档后抬闸门的那一段里，客户按文档的承诺上传，会被真实闸门拒在一个没有中文文案的位置上。
-const OpenAPIDocLimitMB = 30
+const OpenAPIDocLimitMB = 200
 
 // TranslateFormatOrder 还原文件模式（delivery=restore，默认档）准入的扩展名，**顺序即出栈文案顺序**。
 //

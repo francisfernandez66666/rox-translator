@@ -28,6 +28,7 @@ import { ToastProvider } from '@/ui/langcross/src'
 import { setLang } from '@/i18n'
 import { resetInstantUpgradeThrottle } from '@/lib/instantUpsell'
 import { INSTANT_TICKET_HANDOFF_KEY } from '@/lib/instantTicketHandoff'
+import { TRANSLATE_FILE_MAX_BYTES } from '@/api/translate'
 
 const mocks = vi.hoisted(() => ({
   cap: { tts: null as boolean | null, langs: null as string[] | null, asr: null as boolean | null, ocr: true as boolean | null },
@@ -74,7 +75,10 @@ vi.mock('@/api', () => ({
   myPackage: apiMocks.myPackage, meContext: apiMocks.meContext,
   getAuthToken: () => 'tok-under-test', getActiveTenantId: () => 1,
 }))
-vi.mock('@/api/translate', () => ({ estimateTranslation: mocks.estimate }))
+vi.mock('@/api/translate', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/api/translate')>(),
+  estimateTranslation: mocks.estimate,
+}))
 vi.mock('./MessageBubble', () => ({ default: () => <div className="bubble-row" /> }))
 vi.mock('./modals', () => ({ FeedbackModalFromMessage: () => null }))
 vi.mock('@/components/LangMultiSelect', () => ({
@@ -156,13 +160,15 @@ describe('即时翻译免费档：首屏口径与墙的出路', () => {
     await waitFor(() => expect(mocks.translate).toHaveBeenCalledTimes(2))
   })
 
-  it('③ too_large：图片超硬顶 ⇒ 工单卡（点名 3 MB / 40 MB 与还原原格式）', async () => {
+  it('③ too_large：图片超硬顶 ⇒ 工单卡（点名 3 MB / 工单上限与还原原格式）', async () => {
     await rejectWith('too_large')
     const { container } = renderWindow()
     pickImage(container)
     await waitFor(() => expect(screen.getByTestId('chat-instant-guide').getAttribute('data-reason')).toBe('too_large'))
     expect(screen.getByText(/3 MB/)).toBeTruthy()
-    expect(screen.getByText(/40 MB/)).toBeTruthy()
+    // ★ 2026-11-26：工单上限从常量现算，不写死数字（抬档后本断言自动跟随）
+    const ticketMB = String(TRANSLATE_FILE_MAX_BYTES / 1024 / 1024)
+    expect(screen.getByText(new RegExp(ticketMB + ' MB'))).toBeTruthy()
     expect(screen.getByText('上传到翻译工单')).toBeTruthy()
   })
 

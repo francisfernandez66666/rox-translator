@@ -171,9 +171,9 @@ log "[5/8] 写 $FPD_ROOT/etc/fpd.env（远端侧配置，不含任何主站密�
   echo "FPD_MEM_MAX_MB=$FPD_MEM_MAX_MB"
   # ★ 转换子进程真正的内存帽：ssh 会话不落进 fpd.slice，所以靠 fpdexec 里的 setrlimit 兜
   echo "FPD_RLIMIT_AS_MB=$FPD_MEM_MAX_MB"
-  # 单个客户文件落盘上限：主站上传闸是 40MB，这里留一倍余量**只用来防"主站那道闸失效"**，
-  # 不是第二道业务闸。2G/50G 的体验机上，写满盘比拒绝一单麻烦得多。
-  echo "FPD_MAX_PUT_MB=${FPD_MAX_PUT_MB:-80}"
+  # 单个客户文件落盘上限：主站上传闸 2026-11-26 抬到 200MiB，这里留一倍余量**只用来防"主站那道闸失效"**，
+  # 不是第二道业务闸；写满盘比拒绝一单麻烦得多。
+  echo "FPD_MAX_PUT_MB=${FPD_MAX_PUT_MB:-400}"
 } > "$FPD_ROOT/etc/fpd.env"
 chmod 0644 "$FPD_ROOT/etc/fpd.env"
 [ -n "$FPD_EXPIRE_DATE" ] || warn "到期日没能自动算出（date -d 不可用？）⇒ 请手工填 FPD_EXPIRE_DATE，"

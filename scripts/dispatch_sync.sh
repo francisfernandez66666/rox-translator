@@ -46,7 +46,9 @@ warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 SSH_OPTS=(-i "$FPD_KEY" -n -o BatchMode=yes -o ConnectTimeout=15 -p "$FPD_PORT")
 RSH_STR="ssh -i $FPD_KEY -o BatchMode=yes -o ConnectTimeout=15 -p $FPD_PORT"
 
-SCRIPTS=(pdf_overlay.py pdfwrite.py anydoc_md.py docx_translate.py docx_table_selftest.py)
+# ★ 2026-11-26 工单分块派发：chunk_translate.py（协议胶水，走 SCRIPTS 同步）
+# chunkworker 是 Go 构建产物（不在源码真源目录），由下方「worker 同步」段单独构建并 scp。
+SCRIPTS=(pdf_overlay.py pdfwrite.py anydoc_md.py docx_translate.py docx_table_selftest.py chunk_translate.py)
 ASSETS=(assets/fonts/DroidSansFallbackFull.ttf assets/fonts/LICENSE-NOTE.txt)
 
 log "同步对象：${#SCRIPTS[@]} 个转换脚本 + ${#ASSETS[@]} 个随包资产 + 普惠体（可选）"
@@ -139,6 +141,18 @@ else
   warn "  未给 FPD_FONTS_DIR ⇒ 跳过普惠体。**注意**：主站有普惠体而远端没有时，"
   warn "  §5.1 的「字体族 ⊇」判据会判不就绪，派发自动回本地——这是**安全侧**，不是故障。"
 fi
+
+# ★ 2026-11-26 Go worker 构建与同步（不进 SCRIPTS/ASSETS：它是构建产物，不是源码真源）
+# 与主站 translator-server 同源 commit 构建；失败即退出，绝不允许"远端跑旧 worker"的半套同步。
+log "[2.5/4] 构建并同步 chunkworker（Go 同源 worker）"
+WORKER_BIN="${REPO_ROOT}/backend-go/chunkworker.linux"
+(
+  cd "${REPO_ROOT}/backend-go" || exit 1
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "${WORKER_BIN}" ./cmd/chunkworker
+) || { bad "chunkworker 构建失败"; exit 2; }
+scp ${SSH_OPTS[@]} "${WORKER_BIN}" "${FPD_SSH}:${STAGING}/chunkworker" || { bad "chunkworker 上传失败"; exit 5; }
+ssh "${SSH_OPTS[@]}" "$FPD_SSH" "sudo install -m 0755 '${STAGING}/chunkworker' '${FPD_REMOTE_ROOT}/bin/chunkworker'" || { bad "chunkworker 落位失败"; exit 5; }
+ok "chunkworker 已落位（${WORKER_BIN##*/}）"
 
 log "[3/4] 落到 ${FPD_REMOTE_ROOT}/bin（属主给派发账号，脚本 0755 / 资产 0644）"
 ssh "${SSH_OPTS[@]}" "$FPD_SSH" "sudo bash '${STAGING}/install.sh'" || { bad "远端安装失败"; exit 5; }

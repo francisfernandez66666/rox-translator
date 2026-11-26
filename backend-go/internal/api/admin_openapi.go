@@ -336,7 +336,7 @@ const defaultDocsMDZh = `# 能言开放 API
 
 | 方法 | 路径 | 权限 | 说明 |
 |------|------|------|------|
-| POST | /openapi/v1/tasks | translate | 创建任务：JSON=文本；multipart=文件批量（≤20个/30MB） |
+| POST | /openapi/v1/tasks | translate | 创建任务：JSON=文本；multipart=文件批量（≤20个/200MB） |
 | GET | /openapi/v1/tasks/status?id= | translate | 轮询状态与结果 |
 | GET | /openapi/v1/tasks/download?id=&file_id= | translate | 文件产物下载（缺省 zip 全部） |
 | GET | /openapi/v1/balance | * | 查询积分余额与 ≈句数 |
@@ -473,7 +473,7 @@ target_langs 传语言代码数组；缺省 ["en"]。支持以下 34 种知识�
 
 - multipart 字段名必须为 **files**，本地路径前**必须加 @**：
   curl -F 'files=@/path/手册.docx' -F 'files=@/path/清单.xlsx'
-- 单次 ≤20 个文件、总量 ≤30MB
+- 单次 ≤20 个文件、总量 ≤200MB
 - 支持 {{FORMATS}}
 - 完成后经 download 接口下载；产物保留 14 天，请及时下载
 - 下载响应头的文件名按 RFC 5987 双写（ASCII 兜底名 + filename*=UTF-8'' 百分号编码真名），
@@ -573,7 +573,7 @@ All endpoints authenticate with **Authorization: Bearer YOUR_API_KEY**. Issue ke
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| POST | /openapi/v1/tasks | translate | Create task: JSON = text; multipart = batch files (up to 20 files / 30MB) |
+| POST | /openapi/v1/tasks | translate | Create task: JSON = text; multipart = batch files (up to 20 files / 200MB) |
 | GET | /openapi/v1/tasks/status?id= | translate | Poll status & result |
 | GET | /openapi/v1/tasks/download?id=&file_id= | translate | Download artifacts (zip when omitted) |
 | GET | /openapi/v1/balance | * | Points balance & sentence estimate |
@@ -710,7 +710,7 @@ target_langs takes an array of language codes; defaults to ["en"]. Supported: 34
 
 - The multipart field must be named **files**, and local paths **must be prefixed with @**:
   curl -F 'files=@/path/manual.docx' -F 'files=@/path/list.xlsx'
-- Up to 20 files, 30MB total per request
+- Up to 20 files, 200MB total per request
 - Accepted: {{FORMATS}}
 - Download via the download endpoint when completed; artifacts are kept for 14 days
 - The download filename is written per RFC 5987 (ASCII fallback name + filename*=UTF-8'' percent-encoded real name),

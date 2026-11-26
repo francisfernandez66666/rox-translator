@@ -190,7 +190,8 @@ log "[1/5] G1 脚本指纹等值（两侧 sha256 逐字相等）"
 # ★ 比对清单与 Go 侧 DispatchRun 实际会用到的脚本保持一致。
 #   兜底字体**不在这个循环里**：远端 probe 把它单独放在 fonts.fallback_ttf_sha（不在 script_sha 里），
 #   拿脚本那把钥匙去开字体这把锁会恒等失败——它是 D5 那颗雷，下面单独判一次。
-FINGERPRINTS="pdf_overlay.py pdfwrite.py anydoc_md.py docx_translate.py docx_table_selftest.py"
+# ★ 2026-11-26 加 chunk_translate.py（块级派发协议胶水）
+FINGERPRINTS="pdf_overlay.py pdfwrite.py anydoc_md.py docx_translate.py docx_table_selftest.py chunk_translate.py"
 G1_FAIL=0
 for rel in $FINGERPRINTS; do
   local_file="$FPD_LOCAL_BIN/$rel"

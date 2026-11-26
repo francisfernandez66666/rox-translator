@@ -126,6 +126,21 @@ type extractJSON struct {
 // 恒等映射（原文→原文）刻意**不经模型**：探针要量的是传输与转换两条腿，
 // 不是上游译文的对不对；顺带把「为一次探针在现网真烧一份 token」这笔开销也省掉。
 func main() {
+	// ★ 2026-11-26 G6：--chunk 走块级派发探针（不依赖决策器放行）
+	if hasChunkFlag(os.Args) {
+		in := ""
+		for _, a := range os.Args[1:] {
+			if !strings.HasPrefix(a, "--") {
+				in = a
+				break
+			}
+		}
+		if in == "" {
+			fmt.Println("usage: fpdprobe --chunk <in.pdf>")
+			os.Exit(2)
+		}
+		os.Exit(runChunkProbe(in))
+	}
 	if len(os.Args) < 2 {
 		fmt.Println("usage: fpdprobe <in.pdf> [lang]")
 		os.Exit(2)
@@ -141,6 +156,9 @@ func main() {
 	}
 	outPath := inPath + ".fpdprobe.pdf"
 
+	// ★ 2026-11-26：FORCE 钩子只在探针/测试二进制认，生产 HandleFile 路径禁认（B-9 门禁）。
+	// 用途：新基线 load1=2.36、available=1255MB 下规则 6b 不派，真件验收需绕过决策器直接拨远端。
+	report("dispatch_force", os.Getenv("FILEPROC_DISPATCH_FORCE") == "1")
 	if !fileproc.DispatchEnabled() {
 		report("dispatch_enabled", false)
 		report("verdict", "CLOSED ⇒ 总闸关着（FILEPROC_DISPATCH / _HOST），探针无事可做")

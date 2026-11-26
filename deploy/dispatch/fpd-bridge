@@ -37,6 +37,12 @@ if [ -f "$FPD_ENV" ]; then
   set +a
 fi
 
+# ★ 2026-11-26 G-1：TMPDIR 钉在 w/ 下（双项目隔离，不写系统 /tmp）。
+# 具体会话子目录由 chunk_translate.py 再细化到 w/<sid>/tmp；这里先兜住最外层，
+# 即使胶水层没设也不会落到量化服务共用的 /tmp。
+export TMPDIR="${FPD_ROOT}/w/.session_tmp"
+mkdir -p "$TMPDIR" 2>/dev/null || true
+
 PYBIN="${FPD_PYBIN:-$FPD_ROOT/.venv/bin/python3}"
 
 # ① 交互式 TTY 一律拒
