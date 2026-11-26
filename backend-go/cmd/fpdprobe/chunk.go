@@ -11,11 +11,21 @@ import (
 	"strings"
 	"time"
 
+	"translator/internal/config"
 	"translator/internal/fileproc"
+	"translator/internal/kb"
+	"translator/internal/llmsource"
+	"translator/internal/store"
 )
 
-// runChunkProbe 用真件走 extract→translate→zip 回拉→主站逐块校验；输出与旧探针同前缀的读数行。
+// runChunkProbe env 口：Key/端点从环境变量取（默认 probe-invalid，验传输四层）。
 func runChunkProbe(inPath string) int {
+	return runChunkProbeWithKey(inPath, os.Getenv("FILEPROC_DISPATCH_PROBE_KEY"),
+		os.Getenv("FILEPROC_DISPATCH_PROBE_BASE"), "")
+}
+
+// runChunkProbeReal 用真件走 extract→translate→zip 回拉→主站逐块校验；输出与旧探针同前缀的读数行。
+func runChunkProbeWithKey(inPath, probeKey, probeBase, probeModel string) int {
 	if !fileproc.DispatchEnabled() {
 		fmt.Println("@@PROBE chunk_result=closed reason=dispatch_off")
 		return 3
@@ -48,9 +58,9 @@ func runChunkProbe(inPath string) int {
 		InputPDF:  abs,
 		Lang:      "en",
 		Bounds:    [][2]int{{0, 1}}, // 探针只需验证链路与回执，不做真翻译（恒等映射由 worker 侧开关处理）
-		Key:       "probe-invalid",
-		Base:      os.Getenv("FILEPROC_DISPATCH_PROBE_BASE"),
-		Model:     "probe-model",
+		Key:       firstNonEmpty(probeKey, "probe-invalid"),
+		Base:      firstNonEmpty(probeBase, os.Getenv("FILEPROC_DISPATCH_PROBE_BASE")),
+		Model:     firstNonEmpty(probeModel, "probe-model"),
 		OutputZip: zipPath,
 		TextsOut:  textsPath,
 	})
@@ -58,6 +68,7 @@ func runChunkProbe(inPath string) int {
 		fmt.Printf("@@PROBE chunk_result=red reason=dispatch_failed detail=%s\n", err.Error())
 		return 1
 	}
+	fmt.Printf("@@PROBE chunk_llm_key=%s\n", map[bool]string{true: "real", false: "probe-invalid"}[probeKey != "probe-invalid"])
 	// 远端证据：整段 stdout 无法在 DispatchChunkRun 之后取到，改为验产物魔数与绝对路径落点。
 	remoteEvidence := false
 	if f, e := os.Open(zipPath); e == nil {
@@ -88,6 +99,67 @@ func fileSize(p string) int64 {
 func hasChunkFlag(args []string) bool {
 	for _, a := range args {
 		if strings.TrimSpace(a) == "--chunk" {
+			return true
+		}
+	}
+	return false
+}
+
+// firstNonEmpty 返回第一个非空串（都空返回默认）。
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// runChunkProbeReal 真钥匙端到端：从主站 llmsource.Current（唯一读点）取当前生效配置，
+// Key 只在本进程内存流转——不回显、不落盘、不进 argv。复刻 server 的最小初始化形态。
+func runChunkProbeReal(inPath string) int {
+	if !fileproc.DispatchEnabled() {
+		fmt.Println("@@PROBE chunk_real=closed reason=dispatch_off")
+		return 3
+	}
+	cfg := config.Default()
+	k, err := kb.Open(cfg.DBPath)
+	if err != nil {
+		fmt.Printf("@@PROBE chunk_real=red reason=kb_open detail=%v\n", err)
+		return 1
+	}
+	defer k.Close()
+	st, err := store.New(k.RawDB())
+	if err != nil {
+		fmt.Printf("@@PROBE chunk_real=red reason=store_new detail=%v\n", err)
+		return 1
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	snap := llmsource.Current(ctx, st, cfg)
+	if snap == nil || snap.OnlineAPIKey == "" {
+		fmt.Printf("@@PROBE chunk_real=red reason=no_key source=%s\n", snap.From)
+		return 1
+	}
+	fmt.Printf("@@PROBE chunk_real llm_source=%s base_ok=%v key_ok=%v\n",
+		snap.From, snap.OnlineAPIBase != "", snap.OnlineAPIKey != "")
+	return runChunkProbeWithKey(inPath, snap.OnlineAPIKey, snap.OnlineAPIBase, snap.OnlineModel)
+}
+
+// firstPositional 取第一个非 -- 开头的位置参数（main 的 --chunk/--chunk-real 共用）。
+func firstPositional(args []string) string {
+	for _, a := range args[1:] {
+		if !strings.HasPrefix(a, "--") {
+			return a
+		}
+	}
+	return ""
+}
+
+// hasFlag 判断参数列表是否含指定 flag。
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if strings.TrimSpace(a) == flag {
 			return true
 		}
 	}

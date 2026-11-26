@@ -3502,6 +3502,7 @@ export const dict: Record<string, string> = {
   "audit.action.fact_withdraw": "Withdraw product fact",
   "audit.action.asset_review": "Review product asset",
   "audit.action.asset_download_blocked": "Block expired asset download",
+  "audit.action.kb_scrape_auto_dispose": "Tratamento automático de candidatos de raspagem da KB",
   "audit.action.knowledge_answer_served": "Serve knowledge-layer answer",
   "product.panel.shelf": "Catálogo de materiais",
   "product.panel.facts": "Fatos",

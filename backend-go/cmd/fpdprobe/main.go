@@ -126,15 +126,17 @@ type extractJSON struct {
 // 恒等映射（原文→原文）刻意**不经模型**：探针要量的是传输与转换两条腿，
 // 不是上游译文的对不对；顺带把「为一次探针在现网真烧一份 token」这笔开销也省掉。
 func main() {
-	// ★ 2026-11-26 G6：--chunk 走块级派发探针（不依赖决策器放行）
-	if hasChunkFlag(os.Args) {
-		in := ""
-		for _, a := range os.Args[1:] {
-			if !strings.HasPrefix(a, "--") {
-				in = a
-				break
-			}
+	// ★ 2026-11-26 G6：--chunk 走块级派发探针（不依赖决策器放行）；--chunk-real 走真钥匙端到端
+	if hasFlag(os.Args, "--chunk-real") {
+		in := firstPositional(os.Args)
+		if in == "" {
+			fmt.Println("usage: fpdprobe --chunk-real <in.pdf>")
+			os.Exit(2)
 		}
+		os.Exit(runChunkProbeReal(in))
+	}
+	if hasChunkFlag(os.Args) {
+		in := firstPositional(os.Args)
 		if in == "" {
 			fmt.Println("usage: fpdprobe --chunk <in.pdf>")
 			os.Exit(2)

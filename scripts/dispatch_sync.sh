@@ -13,6 +13,9 @@
 # 用法：
 #   FPD_SSH=ubuntu@1.2.3.4 FPD_KEY=~/.ssh/dispatch_ed25519 bash scripts/dispatch_sync.sh
 #   （另可 FPD_FONTS_DIR=/path/to/fonts 指定普惠体所在目录；不给就跳过并点名提醒）
+#   ★★ FPD_SSH 必须是「有 shell 且能 sudo」的账号（如 ubuntu@/root@）——不能给 fpd@：
+#     fpd 被 sshd ForceCommand 收口，任何命令行都被顶成 fpd-bridge、只认 stdin 协议，
+#     mkdir/rsync/sha256sum 全部失真（2026-11-26 广州装机实测；前置自检见 SHELL_OK）。
 #
 # ★★ 2026-09-28 重写说明（这次不是改小 bug，是把它从"文档齐全但一行跑不通"救回来）：
 #   旧版合进仓时连 `bash -n` 都没过——第 87/91 行命令替换少一个收尾引号，跑到 91 行直接
@@ -44,6 +47,8 @@ warn() { printf '\033[1;33m⚠️\033[0m %s\n' "$*"; }
 [ -d "$SRC" ] || { bad "找不到源目录 ${SRC}（请在仓库根目录下执行本脚本）"; exit 2; }
 
 SSH_OPTS=(-i "$FPD_KEY" -n -o BatchMode=yes -o ConnectTimeout=15 -p "$FPD_PORT")
+# scp 与 ssh 的 opts 分家：scp 不认 ssh 的 -n（stdin /dev/null），混用必报 invalid option
+SCP_OPTS=(-i "$FPD_KEY" -o BatchMode=yes -o ConnectTimeout=15 -P "$FPD_PORT")
 RSH_STR="ssh -i $FPD_KEY -o BatchMode=yes -o ConnectTimeout=15 -p $FPD_PORT"
 
 # ★ 2026-11-26 工单分块派发：chunk_translate.py（协议胶水，走 SCRIPTS 同步）
@@ -102,6 +107,19 @@ INST="$LOCAL/install.sh"
   printf 'echo INSTALL_DONE\n'
 } >"$INST"
 
+log "[0/4] 通道自检（FPD_SSH 必须是有 shell 且能 sudo 的账号；fpd@ 会被 ForceCommand 顶成 bridge）"
+SHELL_PROBE="$(ssh "${SSH_OPTS[@]}" "$FPD_SSH" "echo SHELL_OK" 2>&1 || true)"
+case "$SHELL_PROBE" in
+  *SHELL_OK*) ok "命令行通道可用（echo 真回显）" ;;
+  *"[fpd-bridge]"*|*"stdin 缺 header"*)
+    bad "FPD_SSH=$FPD_SSH 被 ForceCommand 收口（命令被顶成 fpd-bridge）⇒ 本脚本全部命令行形态在这台机器上结构性失效"
+    bad "改用可 sudo 的账号（ubuntu@/root@）；或把本脚本全协议化后再拨 fpd@"
+    exit 4 ;;
+  *)
+    bad "ssh 命令行不通（BatchMode=yes 下多为私钥不可读/主机键未钉/端口不对）——probe 输出：${SHELL_PROBE:0:120}"
+    exit 4 ;;
+esac
+
 log "[1/4] 传到体验机暂存区 ${STAGING}"
 ssh "${SSH_OPTS[@]}" "$FPD_SSH" "mkdir -p ${STAGING}/scripts ${STAGING}/fonts" || { bad "ssh 不通（BatchMode=yes 下多为私钥不可读/无口令不匹配，先手工 ssh -o BatchMode=yes 探一次）"; exit 4; }
 rsync -az -e "$RSH_STR" "$LOCAL/payload/" "$FPD_SSH:${STAGING}/scripts/" || { bad "脚本 rsync 失败"; exit 4; }
@@ -150,7 +168,7 @@ WORKER_BIN="${REPO_ROOT}/backend-go/chunkworker.linux"
   cd "${REPO_ROOT}/backend-go" || exit 1
   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "${WORKER_BIN}" ./cmd/chunkworker
 ) || { bad "chunkworker 构建失败"; exit 2; }
-scp ${SSH_OPTS[@]} "${WORKER_BIN}" "${FPD_SSH}:${STAGING}/chunkworker" || { bad "chunkworker 上传失败"; exit 5; }
+scp "${SCP_OPTS[@]}" "${WORKER_BIN}" "${FPD_SSH}:${STAGING}/chunkworker" || { bad "chunkworker 上传失败"; exit 5; }
 ssh "${SSH_OPTS[@]}" "$FPD_SSH" "sudo install -m 0755 '${STAGING}/chunkworker' '${FPD_REMOTE_ROOT}/bin/chunkworker'" || { bad "chunkworker 落位失败"; exit 5; }
 ok "chunkworker 已落位（${WORKER_BIN##*/}）"
 

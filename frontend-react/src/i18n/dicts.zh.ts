@@ -965,5 +965,6 @@ export const baseZh: Record<string,string> = {
   "audit.action.fact_withdraw": "撤回产品事实",
   "audit.action.asset_review": "审核产品物料",
   "audit.action.asset_download_blocked": "拦截过期物料下载",
+  "audit.action.kb_scrape_auto_dispose": "知识库抓取候选自动处置",
   "audit.action.knowledge_answer_served": "提供知识层问答",
 }

@@ -959,5 +959,6 @@ export const baseEn: Record<string,string> = {
   "audit.action.fact_withdraw": "Withdraw product fact",
   "audit.action.asset_review": "Review product asset",
   "audit.action.asset_download_blocked": "Block expired asset download",
+  "audit.action.kb_scrape_auto_dispose": "Auto-dispose KB scrape candidates",
   "audit.action.knowledge_answer_served": "Serve knowledge-layer answer",
 }

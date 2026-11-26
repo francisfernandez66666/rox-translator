@@ -81,7 +81,7 @@ log "[4/5] 装机后复核量化服务；越线则记录峰值并暂停"
 CURRENT_LOAD="$(awk '{print $1}' /proc/loadavg)"
 QUANT_ACTIVE="$(systemctl is-active quant quant-research pydata caddy 2>/dev/null | tr '\n' ' ')"
 if [ "$QUANT_ACTIVE" != "active active active active " ]; then
-  bad "量化四服务非全 active（现读：$QUANT_ACTIVE）⇒ 暂停后续步骤，记录峰值后交 owner"
+  bad "量化四服务非全 active（现读：${QUANT_ACTIVE}）⇒ 暂停后续步骤，记录峰值后交 owner"
   printf 'quant_active=%s\n' "$QUANT_ACTIVE" > "$PEAK_FILE"
   exit 7
 fi
@@ -107,7 +107,7 @@ if awk -v l="$CURRENT_LOAD" 'BEGIN{exit !(l>2.0)}'; then
     if awk -v l="$_l" 'BEGIN{exit !(l<=2.0)}'; then sustained=0; break; fi
     CURRENT_LOAD="$_l"
   done
-  [ "$sustained" -eq 1 ] && trigger_peak_record "load1 持续 60s > 2.0（末值 $CURRENT_LOAD）"
+  [ "$sustained" -eq 1 ] && trigger_peak_record "load1 持续 60s > 2.0（末值 ${CURRENT_LOAD}）"
 fi
 # 内存判据：MemoryCurrent 超 MemoryHigh 1.1 倍
 for _svc in quant quant-research pydata; do
