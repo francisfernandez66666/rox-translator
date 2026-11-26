@@ -95,7 +95,7 @@ def cmd_extract(in_pdf: str) -> int:
             if t and t.strip():
                 texts.append(t.strip())
         doc.close()
-        out = session / "texts.json"
+        out = session / "out_texts.json"  # ★ 与 DispatchRun 的 dispatchRemoteName out_ 前缀同形
         out.write_text(json.dumps({"success": True, "texts": texts}, ensure_ascii=False),
                        encoding="utf-8")
         print("CHUNK_EXTRACT ok=1 texts=%d out=%s" % (len(texts), out.name))
@@ -115,7 +115,7 @@ def cmd_translate(in_pdf: str) -> int:
     if not bounds:
         print("CHUNK_TRANSLATE ok=0 reason=bounds_missing", file=sys.stderr)
         return EXIT_REFUSED
-    texts_path = session / "texts.json"
+    texts_path = session / "out_texts.json"  # ★ extract 产物同源
     if not texts_path.exists():
         print("CHUNK_TRANSLATE ok=0 reason=texts_missing", file=sys.stderr)
         return EXIT_REFUSED
@@ -160,7 +160,7 @@ def cmd_translate(in_pdf: str) -> int:
         manifest["chunks"].append({"name": name, "sha256": hashlib.sha256(body).hexdigest()})
     (session / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
 
-    zpath = session / "result.zip"
+    zpath = session / "out_result.zip"  # ★ 与 outputs 声明的 out_ 前缀同形
     with zipfile.ZipFile(str(zpath), "w", zipfile.ZIP_DEFLATED) as z:
         z.write(str(session / "manifest.json"), "manifest.json")
         for c in manifest["chunks"]:
