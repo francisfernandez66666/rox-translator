@@ -54,7 +54,7 @@ func TestHealthDispatchReadinessKeys(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("health 出参非法 JSON: %v", err)
 	}
-	for _, k := range []string{"dispatch", "dispatch_expire", "dispatch_mem_cap", "dispatch_selftest"} {
+	for _, k := range []string{"dispatch", "dispatch_expire", "dispatch_mem_cap", "dispatch_selftest", "dispatch_policy"} {
 		v, ok := body[k]
 		if !ok {
 			t.Fatalf("健康面缺键 %q（关着也要出空串，不能省键）: %s", k, rec.Body.String())
@@ -66,11 +66,14 @@ func TestHealthDispatchReadinessKeys(t *testing.T) {
 	if body["dispatch"] != "off" {
 		t.Fatalf("未开闸时 dispatch 期望 off 实际 %v", body["dispatch"])
 	}
-	// 关着时其余三档留空：空串＝"没配"，不是"配了但坏了"（后者由 unknown 承担）
+	// 关着时其余档位：三档留空（空串＝"没配"），dispatch_policy 恒 off（不是 unknown）
 	for _, k := range []string{"dispatch_expire", "dispatch_mem_cap", "dispatch_selftest"} {
 		if body[k] != "" {
 			t.Fatalf("派发关闭时 %q 应为空串，实际 %q", k, body[k])
 		}
+	}
+	if body["dispatch_policy"] != "off" {
+		t.Fatalf("派发关闭时 dispatch_policy 应为 off，实际 %q", body["dispatch_policy"])
 	}
 	// 负向锁：配置里明明有主机与绝对路径，出栈一个都不许带
 	for _, forbidden := range []string{"203.0.113.9", "fpd@", "/opt/fpdispatch", "fpdexec", ".venv"} {

@@ -1083,6 +1083,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"dispatch_expire":   disp.ExpireDate, // 远端配置的到期日（开闸时才非空）
 		"dispatch_mem_cap":  disp.MemCap,     // on / clamped / off / unknown / 关着时为空
 		"dispatch_selftest": disp.Selftest,   // pass / missing_asset / failed / unknown / 关着时为空
+		// ★ 2026-11-26：最近一次工单派发决策状态词（off/remote_unready/below_tier/over_capacity/
+		//   remote_busy/remote_disk_low/main_has_room/main_pressured/remote_idle/balanced_local）。
+		//   同 #42 口径：只出状态词，绝不出主机/路径/凭据；关着时恒 off。
+		"dispatch_policy": disp.Policy,
 		// ★ 2026-10-30 组 6（capsvc，方案 A）：能力常驻服务的三态词与计数。
 		//   off＝没部署（正常态，所有能力走子进程）；down＝部署了但连不上（要去看）；ok＝正常。
 		//   同 #42 口径：**只出状态词与计数**，绝不出 socket 路径、权重文件名或主机名；
